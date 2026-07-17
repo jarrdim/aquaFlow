@@ -1,0 +1,45 @@
+{
+  "name": "aquaflow-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
+    "build": "tsc -p .",
+    "start": "node dist/index.js",
+    "prisma:generate": "prisma generate",
+    "prisma:pull": "prisma db pull",
+    "db:meter-upgrade": "prisma db execute --file prisma/migrations/20260714090000_complete_meter_management/migration.sql --schema prisma/schema.prisma",
+    "db:reading-upgrade": "prisma db execute --file prisma/migrations/20260714130000_meter_reading_management/migration.sql --schema prisma/schema.prisma",
+    "db:meter-event-upgrade": "prisma db execute --file prisma/migrations/20260714190000_expand_meter_event_types/migration.sql --schema prisma/schema.prisma",
+    "db:billing-upgrade": "prisma db execute --file prisma/migrations/20260714210000_billing_management/migration.sql --schema prisma/schema.prisma",
+    "db:payment-upgrade": "prisma db execute --file prisma/migrations/20260715100000_payment_revenue_management/migration.sql --schema prisma/schema.prisma",
+    "db:mpesa-upgrade": "prisma db execute --file prisma/migrations/20260715120000_mpesa_stk_push/migration.sql --schema prisma/schema.prisma",
+    "db:notification-upgrade": "prisma db execute --file prisma/migrations/20260715150000_notification_management/migration.sql --schema prisma/schema.prisma",
+    "db:arrears-upgrade": "prisma db execute --file prisma/migrations/20260717090000_arrears_debt_management/migration.sql --schema prisma/schema.prisma",
+    "db:tariff-upgrade": "prisma db execute --file prisma/migrations/20260714170000_tariff_management/migration.sql --schema prisma/schema.prisma",
+    "seed": "ts-node prisma/seed.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.20.0",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "nodemailer": "^9.0.3",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/jsonwebtoken": "^9.0.6",
+    "@types/node": "^20.14.9",
+    "@types/nodemailer": "^8.0.1",
+    "prisma": "^5.20.0",
+    "ts-node": "^10.9.2",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.5.3"
+  }
+}

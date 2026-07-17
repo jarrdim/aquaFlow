@@ -1,0 +1,1464 @@
+// AquaFlow — Prisma schema for the first working slice: auth + customer management.
+//
+// This hand-written schema mirrors aquaflow_postgresql_ddl.sql exactly (table/column
+// names, types) for the tables this slice touches. Once you've run the full DDL against
+// a real Postgres database, you can run `npm run prisma:pull` to have Prisma introspect
+// the *entire* 66-table schema and regenerate this file automatically — this file is a
+// deliberately small starting subset so you have something to build and run today.
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["multiSchema"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  schemas  = ["aquaflow"]
+}
+
+model Zone {
+  zoneId      BigInt   @id @default(autoincrement()) @map("zone_id")
+  zoneCode    String   @unique @map("zone_code")
+  zoneName    String   @map("zone_name")
+  description String?
+  status      String   @default("ACTIVE")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @default(now()) @map("updated_at")
+
+  serviceAreas       ServiceArea[]
+  routes             Route[]
+  properties         Property[]
+  meterAssignments   MeterAssignment[]
+  boreholes          Borehole[]
+  fieldOfficers      FieldOfficer[]
+  disconnectionLists DisconnectionList[]
+
+  @@map("zones")
+  @@schema("aquaflow")
+}
+
+model ServiceArea {
+  serviceAreaId BigInt   @id @default(autoincrement()) @map("service_area_id")
+  zoneId        BigInt   @map("zone_id")
+  areaCode      String   @unique @map("area_code")
+  areaName      String   @map("area_name")
+  areaType      String   @map("area_type") // ESTATE | VILLAGE | MARKET | INDUSTRIAL | OTHER
+  description   String?
+  status        String   @default("ACTIVE")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @default(now()) @map("updated_at")
+
+  zone       Zone       @relation(fields: [zoneId], references: [zoneId])
+  properties Property[]
+
+  @@map("service_areas")
+  @@schema("aquaflow")
+}
+
+model Route {
+  routeId            BigInt   @id @default(autoincrement()) @map("route_id")
+  zoneId             BigInt   @map("zone_id")
+  routeCode          String   @unique @map("route_code")
+  routeName          String   @map("route_name")
+  sequenceNumber     Int?     @map("sequence_number")
+  estimatedCustomers Int?     @map("estimated_customers")
+  status             String   @default("ACTIVE")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @default(now()) @map("updated_at")
+
+  zone               Zone              @relation(fields: [zoneId], references: [zoneId])
+  properties         Property[]
+  accounts           CustomerAccount[]
+  readingAssignments RouteAssignment[]
+
+  @@map("routes")
+  @@schema("aquaflow")
+}
+
+model CustomerCategory {
+  categoryId   BigInt   @id @default(autoincrement()) @map("category_id")
+  categoryCode String   @unique @map("category_code")
+  categoryName String   @unique @map("category_name")
+  description  String?
+  status       String   @default("ACTIVE")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @default(now()) @map("updated_at")
+
+  accounts          CustomerAccount[]
+  tariffs           Tariff[]
+  tariffAssignments TariffCategoryAssignment[]
+
+  @@map("customer_categories")
+  @@schema("aquaflow")
+}
+
+model Customer {
+  customerId         BigInt   @id @default(autoincrement()) @map("customer_id")
+  customerNumber     String   @unique @map("customer_number")
+  customerType       String   @map("customer_type") // INDIVIDUAL | ORGANIZATION
+  firstName          String?  @map("first_name")
+  middleName         String?  @map("middle_name")
+  lastName           String?  @map("last_name")
+  organizationName   String?  @map("organization_name")
+  nationalId         String?  @unique @map("national_id")
+  registrationNumber String?  @unique @map("registration_number")
+  phoneNumber        String   @map("phone_number")
+  alternativePhone   String?  @map("alternative_phone")
+  emailAddress       String?  @map("email_address")
+  preferredLanguage  String   @default("EN") @map("preferred_language")
+  status             String   @default("ACTIVE")
+  registrationDate   DateTime @default(now()) @map("registration_date") @db.Date
+  createdBy          BigInt?  @map("created_by")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @default(now()) @map("updated_at")
+
+  properties    Property[]
+  accounts      CustomerAccount[]
+  users         User[]
+  notifications Notification[]
+
+  @@map("customers")
+  @@schema("aquaflow")
+}
+
+model Property {
+  propertyId      BigInt   @id @default(autoincrement()) @map("property_id")
+  propertyCode    String   @unique @map("property_code")
+  ownerCustomerId BigInt?  @map("owner_customer_id")
+  zoneId          BigInt   @map("zone_id")
+  serviceAreaId   BigInt?  @map("service_area_id")
+  routeId         BigInt?  @map("route_id")
+  plotNumber      String?  @map("plot_number")
+  buildingName    String?  @map("building_name")
+  physicalAddress String   @map("physical_address")
+  gpsLatitude     Decimal? @map("gps_latitude") @db.Decimal(10, 7)
+  gpsLongitude    Decimal? @map("gps_longitude") @db.Decimal(10, 7)
+  occupancyStatus String   @default("OWNER_OCCUPIED") @map("occupancy_status")
+  status          String   @default("ACTIVE")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @default(now()) @map("updated_at")
+
+  owner       Customer?         @relation(fields: [ownerCustomerId], references: [customerId])
+  zone        Zone              @relation(fields: [zoneId], references: [zoneId])
+  serviceArea ServiceArea?      @relation(fields: [serviceAreaId], references: [serviceAreaId])
+  route       Route?            @relation(fields: [routeId], references: [routeId])
+  accounts    CustomerAccount[]
+
+  @@map("properties")
+  @@schema("aquaflow")
+}
+
+model CustomerAccount {
+  accountId      BigInt    @id @default(autoincrement()) @map("account_id")
+  accountNumber  String    @unique @map("account_number")
+  customerId     BigInt    @map("customer_id")
+  propertyId     BigInt    @map("property_id")
+  categoryId     BigInt    @map("category_id")
+  routeId        BigInt?   @map("route_id")
+  openingBalance Decimal   @default(0) @map("opening_balance") @db.Decimal(18, 2)
+  currentBalance Decimal   @default(0) @map("current_balance") @db.Decimal(18, 2)
+  connectionDate DateTime? @map("connection_date") @db.Date
+  accountStatus  String    @default("PENDING") @map("account_status")
+  closureDate    DateTime? @map("closure_date") @db.Date
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @default(now()) @map("updated_at")
+
+  customer             Customer                @relation(fields: [customerId], references: [customerId])
+  property             Property                @relation(fields: [propertyId], references: [propertyId])
+  category             CustomerCategory        @relation(fields: [categoryId], references: [categoryId])
+  route                Route?                  @relation(fields: [routeId], references: [routeId])
+  meterAssignments     MeterAssignment[]
+  meterReplacements    MeterReplacement[]
+  meterReadings        MeterReading[]
+  bills                Bill[]
+  payments             Payment[]
+  receipts             Receipt[]
+  suspensePayments     SuspensePayment[]
+  mpesaStkRequests     MpesaStkRequest[]
+  generalNotifications Notification[]
+  paymentPlans         PaymentPlan[]
+  promisesToPay        PromiseToPay[]
+  debtNotices          DebtNotice[]
+  disconnectionItems   DisconnectionListItem[]
+  debtWriteOffs        DebtWriteOff[]
+  arrearsActions       ArrearsAction[]
+
+  @@map("customer_accounts")
+  @@schema("aquaflow")
+}
+
+model User {
+  userId           BigInt    @id @default(autoincrement()) @map("user_id")
+  username         String    @unique
+  firstName        String    @map("first_name")
+  lastName         String    @map("last_name")
+  emailAddress     String    @unique @map("email_address")
+  phoneNumber      String?   @unique @map("phone_number")
+  passwordHash     String    @map("password_hash")
+  userType         String    @map("user_type") // STAFF | CUSTOMER | SYSTEM
+  customerId       BigInt?   @map("customer_id")
+  twoFactorEnabled Boolean   @default(false) @map("two_factor_enabled")
+  status           String    @default("PENDING")
+  lastLoginAt      DateTime? @map("last_login_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @default(now()) @map("updated_at")
+
+  customer                       Customer?                    @relation(fields: [customerId], references: [customerId])
+  userRoles                      UserRole[]
+  meterEvents                    MeterEvent[]                 @relation("MeterEventUser")
+  fieldOfficer                   FieldOfficer?
+  createdReadingCycles           ReadingCycle[]               @relation("ReadingCycleCreator")
+  assignedReadingRoutes          RouteAssignment[]            @relation("ReadingRouteAssigner")
+  approvedReadings               MeterReading[]               @relation("ReadingApprover")
+  readingEvents                  MeterReadingEvent[]          @relation("ReadingEventUser")
+  createdTariffs                 Tariff[]                     @relation("TariffCreator")
+  approvedTariffs                Tariff[]                     @relation("TariffApprover")
+  tariffEvents                   TariffEvent[]                @relation("TariffEventUser")
+  tariffSimulations              TariffSimulation[]           @relation("TariffSimulationUser")
+  tariffAssignments              TariffCategoryAssignment[]   @relation("TariffAssignmentUser")
+  createdBillingCycles           BillingCycle[]               @relation("BillingCycleCreator")
+  postedBillingCycles            BillingCycle[]               @relation("BillingCyclePoster")
+  generatedBills                 Bill[]                       @relation("BillGenerator")
+  approvedBills                  Bill[]                       @relation("BillApprover")
+  postedBills                    Bill[]                       @relation("BillPoster")
+  requestedBillingAdjustments    BillingAdjustment[]          @relation("BillingAdjustmentRequester")
+  approvedBillingAdjustments     BillingAdjustment[]          @relation("BillingAdjustmentApprover")
+  billingEvents                  BillingEvent[]               @relation("BillingEventUser")
+  sentBillNotifications          BillNotification[]           @relation("BillNotificationSender")
+  attemptedBillingAlerts         BillingSecurityAlert[]       @relation("BillingAlertAttemptUser")
+  resolvedBillingAlerts          BillingSecurityAlert[]       @relation("BillingAlertResolver")
+  receivedPayments               Payment[]                    @relation("PaymentReceiver")
+  paymentAllocations             PaymentAllocation[]          @relation("PaymentAllocator")
+  requestedPaymentReversals      PaymentReversal[]            @relation("PaymentReversalRequester")
+  approvedPaymentReversals       PaymentReversal[]            @relation("PaymentReversalApprover")
+  issuedReceipts                 Receipt[]                    @relation("ReceiptIssuer")
+  resolvedSuspensePayments       SuspensePayment[]            @relation("SuspenseResolver")
+  paymentEvents                  PaymentEvent[]               @relation("PaymentEventUser")
+  createdReconciliationBatches   PaymentReconciliationBatch[] @relation("ReconciliationCreator")
+  completedReconciliationBatches PaymentReconciliationBatch[] @relation("ReconciliationCompleter")
+  initiatedMpesaStkRequests      MpesaStkRequest[]            @relation("MpesaStkInitiator")
+  createdNotificationTemplates   NotificationTemplate[]       @relation("NotificationTemplateCreator")
+  createdNotificationProviders   NotificationProvider[]       @relation("NotificationProviderCreator")
+  requestedNotifications         Notification[]               @relation("NotificationRequester")
+  createdPaymentPlans            PaymentPlan[]                @relation("PaymentPlanCreator")
+  approvedPaymentPlans           PaymentPlan[]                @relation("PaymentPlanApprover")
+  recordedPromises               PromiseToPay[]               @relation("PromiseRecorder")
+  createdDebtNotices             DebtNotice[]                 @relation("DebtNoticeCreator")
+  approvedDebtNotices            DebtNotice[]                 @relation("DebtNoticeApprover")
+  createdDisconnectionLists      DisconnectionList[]          @relation("DisconnectionListCreator")
+  approvedDisconnectionLists     DisconnectionList[]          @relation("DisconnectionListApprover")
+  requestedDebtWriteOffs         DebtWriteOff[]               @relation("DebtWriteOffRequester")
+  decidedDebtWriteOffs           DebtWriteOff[]               @relation("DebtWriteOffApprover")
+  arrearsActions                 ArrearsAction[]              @relation("ArrearsActionUser")
+
+  @@map("users")
+  @@schema("aquaflow")
+}
+
+model Role {
+  roleId      BigInt   @id @default(autoincrement()) @map("role_id")
+  roleCode    String   @unique @map("role_code")
+  roleName    String   @unique @map("role_name")
+  description String?
+  status      String   @default("ACTIVE")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @default(now()) @map("updated_at")
+
+  userRoles       UserRole[]
+  rolePermissions RolePermission[]
+
+  @@map("roles")
+  @@schema("aquaflow")
+}
+
+model Permission {
+  permissionId   BigInt   @id @default(autoincrement()) @map("permission_id")
+  permissionCode String   @unique @map("permission_code")
+  moduleName     String   @map("module_name")
+  permissionName String   @map("permission_name")
+  description    String?
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  rolePermissions RolePermission[]
+
+  @@map("permissions")
+  @@schema("aquaflow")
+}
+
+model UserRole {
+  userRoleId    BigInt    @id @default(autoincrement()) @map("user_role_id")
+  userId        BigInt    @map("user_id")
+  roleId        BigInt    @map("role_id")
+  assignedBy    BigInt?   @map("assigned_by")
+  assignedAt    DateTime  @default(now()) @map("assigned_at")
+  effectiveFrom DateTime  @default(now()) @map("effective_from") @db.Date
+  effectiveTo   DateTime? @map("effective_to") @db.Date
+  status        String    @default("ACTIVE")
+
+  user User @relation(fields: [userId], references: [userId])
+  role Role @relation(fields: [roleId], references: [roleId])
+
+  @@map("user_roles")
+  @@schema("aquaflow")
+}
+
+model RolePermission {
+  rolePermissionId BigInt   @id @default(autoincrement()) @map("role_permission_id")
+  roleId           BigInt   @map("role_id")
+  permissionId     BigInt   @map("permission_id")
+  grantedBy        BigInt?  @map("granted_by")
+  grantedAt        DateTime @default(now()) @map("granted_at")
+
+  role       Role       @relation(fields: [roleId], references: [roleId])
+  permission Permission @relation(fields: [permissionId], references: [permissionId])
+
+  @@unique([roleId, permissionId])
+  @@map("role_permissions")
+  @@schema("aquaflow")
+}
+
+model Borehole {
+  boreholeId        BigInt    @id @default(autoincrement()) @map("borehole_id")
+  boreholeCode      String    @unique @map("borehole_code")
+  boreholeName      String    @map("borehole_name")
+  zoneId            BigInt    @map("zone_id")
+  gpsLatitude       Decimal   @map("gps_latitude") @db.Decimal(10, 7)
+  gpsLongitude      Decimal   @map("gps_longitude") @db.Decimal(10, 7)
+  depthMetres       Decimal?  @map("depth_metres") @db.Decimal(10, 2)
+  ratedCapacity     Decimal?  @map("rated_capacity_m3_hour") @db.Decimal(18, 3)
+  commissioningDate DateTime? @map("commissioning_date") @db.Date
+  status            String    @default("ACTIVE")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @default(now()) @map("updated_at")
+
+  zone        Zone              @relation(fields: [zoneId], references: [zoneId])
+  assignments MeterAssignment[]
+
+  @@map("boreholes")
+  @@schema("aquaflow")
+}
+
+model FieldOfficer {
+  fieldOfficerId     BigInt   @id @default(autoincrement()) @map("field_officer_id")
+  userId             BigInt   @unique @map("user_id")
+  employeeNumber     String   @unique @map("employee_number")
+  officerType        String   @map("officer_type")
+  phoneNumber        String   @map("phone_number")
+  homeZoneId         BigInt?  @map("home_zone_id")
+  availabilityStatus String   @default("AVAILABLE") @map("availability_status")
+  status             String   @default("ACTIVE")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @default(now()) @map("updated_at")
+
+  user             User              @relation(fields: [userId], references: [userId])
+  homeZone         Zone?             @relation(fields: [homeZoneId], references: [zoneId])
+  routeAssignments RouteAssignment[]
+  readings         MeterReading[]
+
+  @@map("field_officers")
+  @@schema("aquaflow")
+}
+
+model ReadingCycle {
+  readingCycleId BigInt   @id @default(autoincrement()) @map("reading_cycle_id")
+  cycleCode      String   @unique @map("cycle_code")
+  cycleName      String   @map("cycle_name")
+  startDate      DateTime @map("start_date") @db.Date
+  endDate        DateTime @map("end_date") @db.Date
+  billingCycleId BigInt?  @map("billing_cycle_id")
+  status         String   @default("PLANNED")
+  createdBy      BigInt?  @map("created_by")
+  remarks        String?
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @default(now()) @map("updated_at")
+
+  creator          User?             @relation("ReadingCycleCreator", fields: [createdBy], references: [userId])
+  routeAssignments RouteAssignment[]
+  readings         MeterReading[]
+  billingCycle     BillingCycle?     @relation(fields: [billingCycleId], references: [billingCycleId])
+
+  @@map("reading_cycles")
+  @@schema("aquaflow")
+}
+
+model RouteAssignment {
+  routeAssignmentId BigInt    @id @default(autoincrement()) @map("route_assignment_id")
+  readingCycleId    BigInt    @map("reading_cycle_id")
+  routeId           BigInt    @map("route_id")
+  fieldOfficerId    BigInt    @map("field_officer_id")
+  assignedDate      DateTime  @default(now()) @map("assigned_date") @db.Date
+  status            String    @default("ASSIGNED")
+  assignedBy        BigInt?   @map("assigned_by")
+  completedAt       DateTime? @map("completed_at")
+  remarks           String?
+  createdAt         DateTime  @default(now()) @map("created_at")
+
+  cycle        ReadingCycle @relation(fields: [readingCycleId], references: [readingCycleId])
+  route        Route        @relation(fields: [routeId], references: [routeId])
+  fieldOfficer FieldOfficer @relation(fields: [fieldOfficerId], references: [fieldOfficerId])
+  assigner     User?        @relation("ReadingRouteAssigner", fields: [assignedBy], references: [userId])
+
+  @@unique([readingCycleId, routeId, fieldOfficerId])
+  @@map("route_assignments")
+  @@schema("aquaflow")
+}
+
+model Meter {
+  meterId            BigInt    @id @default(autoincrement()) @map("meter_id")
+  meterNumber        String    @unique @map("meter_number")
+  meterType          String    @map("meter_type")
+  technology         String
+  brand              String?
+  model              String?
+  meterSizeMm        Decimal   @map("meter_size_mm") @db.Decimal(10, 2)
+  serialNumber       String?   @unique @map("serial_number")
+  installationDate   DateTime? @map("installation_date") @db.Date
+  purchaseDate       DateTime? @map("purchase_date") @db.Date
+  warrantyExpiryDate DateTime? @map("warranty_expiry_date") @db.Date
+  storageLocation    String?   @map("storage_location")
+  installationStatus String    @default("IN_STORE") @map("installation_status")
+  remarks            String?
+  openingReading     Decimal   @default(0) @map("opening_reading") @db.Decimal(18, 3)
+  gpsLatitude        Decimal?  @map("gps_latitude") @db.Decimal(10, 7)
+  gpsLongitude       Decimal?  @map("gps_longitude") @db.Decimal(10, 7)
+  sealNumber         String?   @map("seal_number")
+  status             String    @default("IN_STOCK")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @default(now()) @map("updated_at")
+
+  assignments     MeterAssignment[]
+  readings        MeterReading[]
+  oldReplacements MeterReplacement[]          @relation("OldMeter")
+  newReplacements MeterReplacement[]          @relation("NewMeter")
+  events          MeterEvent[]
+  evidence        MeterEvidence[]
+  materials       MeterInstallationMaterial[]
+  alerts          MeterAlert[]
+
+  @@map("meters")
+  @@schema("aquaflow")
+}
+
+model MeterAssignment {
+  assignmentId       BigInt    @id @default(autoincrement()) @map("assignment_id")
+  meterId            BigInt    @map("meter_id")
+  accountId          BigInt?   @map("account_id")
+  zoneId             BigInt?   @map("zone_id")
+  boreholeId         BigInt?   @map("borehole_id")
+  assetId            BigInt?   @map("asset_id")
+  assignmentDate     DateTime  @map("assignment_date") @db.Date
+  removalDate        DateTime? @map("removal_date") @db.Date
+  assignmentStatus   String    @default("ACTIVE") @map("assignment_status")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  installedBy        BigInt?   @map("installed_by")
+  installationPoint  String?   @map("installation_point")
+  installationStatus String    @default("COMPLETED") @map("installation_status")
+  remarks            String?
+
+  meter     Meter                       @relation(fields: [meterId], references: [meterId])
+  account   CustomerAccount?            @relation(fields: [accountId], references: [accountId])
+  zone      Zone?                       @relation(fields: [zoneId], references: [zoneId])
+  borehole  Borehole?                   @relation(fields: [boreholeId], references: [boreholeId])
+  events    MeterEvent[]
+  evidence  MeterEvidence[]
+  materials MeterInstallationMaterial[]
+
+  @@map("meter_assignments")
+  @@schema("aquaflow")
+}
+
+model MeterReading {
+  readingId        BigInt    @id @default(autoincrement()) @map("reading_id")
+  meterId          BigInt    @map("meter_id")
+  accountId        BigInt?   @map("account_id")
+  readingCycleId   BigInt    @map("reading_cycle_id")
+  fieldOfficerId   BigInt?   @map("field_officer_id")
+  previousReading  Decimal   @map("previous_reading") @db.Decimal(18, 3)
+  currentReading   Decimal   @map("current_reading") @db.Decimal(18, 3)
+  consumption      Decimal   @default(dbgenerated()) @db.Decimal(18, 3)
+  readingType      String    @map("reading_type")
+  estimationReason String?   @map("estimation_reason")
+  readingDate      DateTime  @map("reading_date")
+  photoPath        String?   @map("photo_path")
+  gpsLatitude      Decimal?  @map("gps_latitude") @db.Decimal(10, 7)
+  gpsLongitude     Decimal?  @map("gps_longitude") @db.Decimal(10, 7)
+  abnormalFlag     Boolean   @default(false) @map("abnormal_flag")
+  exceptionType    String    @default("NONE") @map("exception_type")
+  approvalStatus   String    @default("PENDING") @map("approval_status")
+  approvedBy       BigInt?   @map("approved_by")
+  approvalComments String?   @map("approval_comments")
+  approvedAt       DateTime? @map("approved_at")
+  syncId           String?   @unique @map("sync_id")
+  capturedAt       DateTime  @default(now()) @map("captured_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @default(now()) @map("updated_at")
+
+  meter        Meter                  @relation(fields: [meterId], references: [meterId])
+  account      CustomerAccount?       @relation(fields: [accountId], references: [accountId])
+  cycle        ReadingCycle           @relation(fields: [readingCycleId], references: [readingCycleId])
+  fieldOfficer FieldOfficer?          @relation(fields: [fieldOfficerId], references: [fieldOfficerId])
+  approver     User?                  @relation("ReadingApprover", fields: [approvedBy], references: [userId])
+  evidence     MeterReadingEvidence[]
+  events       MeterReadingEvent[]
+  bills        Bill[]
+
+  @@map("meter_readings")
+  @@schema("aquaflow")
+}
+
+model MeterReadingEvidence {
+  evidenceId   BigInt   @id @default(autoincrement()) @map("evidence_id")
+  readingId    BigInt   @map("reading_id")
+  evidenceType String   @map("evidence_type")
+  fileName     String?  @map("file_name")
+  mimeType     String?  @map("mime_type")
+  content      String
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  reading MeterReading @relation(fields: [readingId], references: [readingId], onDelete: Cascade)
+
+  @@map("meter_reading_evidence")
+  @@schema("aquaflow")
+}
+
+model MeterReadingEvent {
+  eventId     BigInt   @id @default(autoincrement()) @map("event_id")
+  readingId   BigInt   @map("reading_id")
+  eventType   String   @map("event_type")
+  remarks     String?
+  performedBy BigInt?  @map("performed_by")
+  metadata    Json?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  reading   MeterReading @relation(fields: [readingId], references: [readingId], onDelete: Cascade)
+  performer User?        @relation("ReadingEventUser", fields: [performedBy], references: [userId])
+
+  @@map("meter_reading_events")
+  @@schema("aquaflow")
+}
+
+model Tariff {
+  tariffId            BigInt    @id @default(autoincrement()) @map("tariff_id")
+  tariffCode          String    @unique @map("tariff_code")
+  tariffName          String    @map("tariff_name")
+  categoryId          BigInt    @map("category_id")
+  billingMethod       String    @map("billing_method")
+  minimumCharge       Decimal   @default(0) @map("minimum_charge") @db.Decimal(18, 2)
+  standingCharge      Decimal   @default(0) @map("standing_charge") @db.Decimal(18, 2)
+  meterRent           Decimal   @default(0) @map("meter_rent") @db.Decimal(18, 2)
+  flatAmount          Decimal   @default(0) @map("flat_amount") @db.Decimal(18, 2)
+  ratePerUnit         Decimal   @default(0) @map("rate_per_unit") @db.Decimal(18, 4)
+  penaltyRule         String?   @map("penalty_rule")
+  effectiveFrom       DateTime  @map("effective_from") @db.Date
+  effectiveTo         DateTime? @map("effective_to") @db.Date
+  status              String    @default("DRAFT")
+  createdBy           BigInt?   @map("created_by")
+  submittedAt         DateTime? @map("submitted_at")
+  approvedBy          BigInt?   @map("approved_by")
+  approvedAt          DateTime? @map("approved_at")
+  approvalComments    String?   @map("approval_comments")
+  simulationCompleted Boolean   @default(false) @map("simulation_completed")
+  activationMode      String?   @map("activation_mode")
+  scheduledActivation DateTime? @map("scheduled_activation")
+  activatedAt         DateTime? @map("activated_at")
+  remarks             String?
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @default(now()) @map("updated_at")
+
+  category    CustomerCategory           @relation(fields: [categoryId], references: [categoryId])
+  creator     User?                      @relation("TariffCreator", fields: [createdBy], references: [userId])
+  approver    User?                      @relation("TariffApprover", fields: [approvedBy], references: [userId])
+  bands       TariffBand[]
+  simulations TariffSimulation[]
+  events      TariffEvent[]
+  assignments TariffCategoryAssignment[]
+  bills       Bill[]
+
+  @@map("tariffs")
+  @@schema("aquaflow")
+}
+
+model TariffBand {
+  tariffBandId BigInt   @id @default(autoincrement()) @map("tariff_band_id")
+  tariffId     BigInt   @map("tariff_id")
+  bandSequence Int      @map("band_sequence")
+  lowerLimit   Decimal  @map("lower_limit") @db.Decimal(18, 3)
+  upperLimit   Decimal? @map("upper_limit") @db.Decimal(18, 3)
+  ratePerUnit  Decimal  @map("rate_per_unit") @db.Decimal(18, 4)
+  status       String   @default("ACTIVE")
+
+  tariff    Tariff     @relation(fields: [tariffId], references: [tariffId])
+  billItems BillItem[]
+
+  @@unique([tariffId, bandSequence])
+  @@map("tariff_bands")
+  @@schema("aquaflow")
+}
+
+model TariffSimulation {
+  simulationId      BigInt   @id @default(autoincrement()) @map("simulation_id")
+  tariffId          BigInt   @map("tariff_id")
+  simulationType    String   @map("simulation_type")
+  sampleConsumption Decimal  @map("sample_consumption") @db.Decimal(18, 3)
+  currentAmount     Decimal  @map("current_amount") @db.Decimal(18, 2)
+  proposedAmount    Decimal  @map("proposed_amount") @db.Decimal(18, 2)
+  differenceAmount  Decimal  @map("difference_amount") @db.Decimal(18, 2)
+  percentageChange  Decimal  @map("percentage_change") @db.Decimal(12, 4)
+  customerCount     Int      @default(1) @map("customer_count")
+  resultData        Json?    @map("result_data")
+  simulatedBy       BigInt?  @map("simulated_by")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  tariff    Tariff @relation(fields: [tariffId], references: [tariffId])
+  simulator User?  @relation("TariffSimulationUser", fields: [simulatedBy], references: [userId])
+
+  @@map("tariff_simulations")
+  @@schema("aquaflow")
+}
+
+model TariffCategoryAssignment {
+  assignmentId  BigInt    @id @default(autoincrement()) @map("assignment_id")
+  categoryId    BigInt    @map("category_id")
+  tariffId      BigInt    @map("tariff_id")
+  effectiveFrom DateTime  @map("effective_from") @db.Date
+  effectiveTo   DateTime? @map("effective_to") @db.Date
+  status        String    @default("ACTIVE")
+  reason        String?
+  assignedBy    BigInt?   @map("assigned_by")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  category CustomerCategory @relation(fields: [categoryId], references: [categoryId])
+  tariff   Tariff           @relation(fields: [tariffId], references: [tariffId])
+  assigner User?            @relation("TariffAssignmentUser", fields: [assignedBy], references: [userId])
+
+  @@map("tariff_category_assignments")
+  @@schema("aquaflow")
+}
+
+model TariffEvent {
+  eventId        BigInt   @id @default(autoincrement()) @map("event_id")
+  tariffId       BigInt   @map("tariff_id")
+  eventType      String   @map("event_type")
+  previousStatus String?  @map("previous_status")
+  newStatus      String?  @map("new_status")
+  details        String?
+  performedBy    BigInt?  @map("performed_by")
+  metadata       Json?
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  tariff    Tariff @relation(fields: [tariffId], references: [tariffId], onDelete: Cascade)
+  performer User?  @relation("TariffEventUser", fields: [performedBy], references: [userId])
+
+  @@map("tariff_events")
+  @@schema("aquaflow")
+}
+
+model BillingCycle {
+  billingCycleId      BigInt    @id @default(autoincrement()) @map("billing_cycle_id")
+  cycleCode           String    @unique @map("cycle_code")
+  cycleName           String    @map("cycle_name")
+  periodStart         DateTime  @map("period_start") @db.Date
+  periodEnd           DateTime  @map("period_end") @db.Date
+  dueDate             DateTime  @map("due_date") @db.Date
+  penaltyDate         DateTime? @map("penalty_date") @db.Date
+  frequency           String
+  status              String    @default("DRAFT")
+  defaultNotification String    @default("SMS_APP") @map("default_notification")
+  remarks             String?
+  postedBy            BigInt?   @map("posted_by")
+  postedAt            DateTime? @map("posted_at")
+  createdBy           BigInt?   @map("created_by")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @default(now()) @map("updated_at")
+
+  creator       User?          @relation("BillingCycleCreator", fields: [createdBy], references: [userId])
+  poster        User?          @relation("BillingCyclePoster", fields: [postedBy], references: [userId])
+  readingCycles ReadingCycle[]
+  bills         Bill[]
+  events        BillingEvent[]
+
+  @@map("billing_cycles")
+  @@schema("aquaflow")
+}
+
+model Bill {
+  billId                  BigInt    @id @default(autoincrement()) @map("bill_id")
+  billNumber              String    @unique @map("bill_number")
+  accountId               BigInt    @map("account_id")
+  billingCycleId          BigInt    @map("billing_cycle_id")
+  tariffId                BigInt    @map("tariff_id")
+  readingId               BigInt?   @map("reading_id")
+  previousBalance         Decimal   @default(0) @map("previous_balance") @db.Decimal(18, 2)
+  consumptionUnits        Decimal   @default(0) @map("consumption_units") @db.Decimal(18, 3)
+  consumptionCharge       Decimal   @default(0) @map("consumption_charge") @db.Decimal(18, 2)
+  minimumChargeAdjustment Decimal   @default(0) @map("minimum_charge_adjustment") @db.Decimal(18, 2)
+  standingCharge          Decimal   @default(0) @map("standing_charge") @db.Decimal(18, 2)
+  meterRent               Decimal   @default(0) @map("meter_rent") @db.Decimal(18, 2)
+  fixedCharges            Decimal   @default(0) @map("fixed_charges") @db.Decimal(18, 2)
+  penalties               Decimal   @default(0) @db.Decimal(18, 2)
+  adjustmentAmount        Decimal   @default(0) @map("adjustment_amount") @db.Decimal(18, 2)
+  paidAmount              Decimal   @default(0) @map("paid_amount") @db.Decimal(18, 2)
+  totalCurrentCharges     Decimal   @default(0) @map("total_current_charges") @db.Decimal(18, 2)
+  totalAmountDue          Decimal   @default(0) @map("total_amount_due") @db.Decimal(18, 2)
+  issueDate               DateTime  @map("issue_date") @db.Date
+  dueDate                 DateTime  @map("due_date") @db.Date
+  status                  String    @default("DRAFT")
+  generatedBy             BigInt?   @map("generated_by")
+  approvedBy              BigInt?   @map("approved_by")
+  approvedAt              DateTime? @map("approved_at")
+  approvalComments        String?   @map("approval_comments")
+  postedBy                BigInt?   @map("posted_by")
+  postedAt                DateTime? @map("posted_at")
+  notificationStatus      String    @default("NOT_SENT") @map("notification_status")
+  exceptionType           String    @default("NONE") @map("exception_type")
+  createdAt               DateTime  @default(now()) @map("created_at")
+  updatedAt               DateTime  @default(now()) @map("updated_at")
+
+  account              CustomerAccount        @relation(fields: [accountId], references: [accountId])
+  billingCycle         BillingCycle           @relation(fields: [billingCycleId], references: [billingCycleId])
+  tariff               Tariff                 @relation(fields: [tariffId], references: [tariffId])
+  reading              MeterReading?          @relation(fields: [readingId], references: [readingId])
+  generator            User?                  @relation("BillGenerator", fields: [generatedBy], references: [userId])
+  approver             User?                  @relation("BillApprover", fields: [approvedBy], references: [userId])
+  poster               User?                  @relation("BillPoster", fields: [postedBy], references: [userId])
+  items                BillItem[]
+  adjustments          BillingAdjustment[]
+  events               BillingEvent[]
+  notifications        BillNotification[]
+  generalNotifications Notification[]
+  securityAlerts       BillingSecurityAlert[]
+  paymentAllocations   PaymentAllocation[]
+
+  @@unique([accountId, billingCycleId])
+  @@map("bills")
+  @@schema("aquaflow")
+}
+
+model BillItem {
+  billItemId   BigInt  @id @default(autoincrement()) @map("bill_item_id")
+  billId       BigInt  @map("bill_id")
+  chargeType   String  @map("charge_type")
+  description  String
+  quantity     Decimal @default(1) @db.Decimal(18, 3)
+  unitRate     Decimal @default(0) @map("unit_rate") @db.Decimal(18, 4)
+  amount       Decimal @db.Decimal(18, 2)
+  tariffBandId BigInt? @map("tariff_band_id")
+
+  bill       Bill        @relation(fields: [billId], references: [billId])
+  tariffBand TariffBand? @relation(fields: [tariffBandId], references: [tariffBandId])
+
+  @@map("bill_items")
+  @@schema("aquaflow")
+}
+
+model BillingAdjustment {
+  adjustmentId       BigInt    @id @default(autoincrement()) @map("adjustment_id")
+  billId             BigInt    @map("bill_id")
+  adjustmentNumber   String    @unique @map("adjustment_number")
+  adjustmentType     String    @map("adjustment_type")
+  reason             String
+  amount             Decimal   @db.Decimal(18, 2)
+  requestedBy        BigInt    @map("requested_by")
+  approvedBy         BigInt?   @map("approved_by")
+  status             String    @default("PENDING")
+  adjustmentDate     DateTime  @default(now()) @map("adjustment_date") @db.Date
+  supportingFileName String?   @map("supporting_file_name")
+  supportingContent  String?   @map("supporting_content")
+  decisionComments   String?   @map("decision_comments")
+  approvedAt         DateTime? @map("approved_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @default(now()) @map("updated_at")
+
+  bill      Bill           @relation(fields: [billId], references: [billId])
+  requester User           @relation("BillingAdjustmentRequester", fields: [requestedBy], references: [userId])
+  approver  User?          @relation("BillingAdjustmentApprover", fields: [approvedBy], references: [userId])
+  events    BillingEvent[]
+
+  @@map("billing_adjustments")
+  @@schema("aquaflow")
+}
+
+model BillingEvent {
+  billingEventId BigInt   @id @default(autoincrement()) @map("billing_event_id")
+  billingCycleId BigInt?  @map("billing_cycle_id")
+  billId         BigInt?  @map("bill_id")
+  adjustmentId   BigInt?  @map("adjustment_id")
+  eventType      String   @map("event_type")
+  previousStatus String?  @map("previous_status")
+  newStatus      String?  @map("new_status")
+  details        String?
+  performedBy    BigInt?  @map("performed_by")
+  metadata       Json?
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  billingCycle BillingCycle?      @relation(fields: [billingCycleId], references: [billingCycleId])
+  bill         Bill?              @relation(fields: [billId], references: [billId])
+  adjustment   BillingAdjustment? @relation(fields: [adjustmentId], references: [adjustmentId])
+  performer    User?              @relation("BillingEventUser", fields: [performedBy], references: [userId])
+
+  @@map("billing_events")
+  @@schema("aquaflow")
+}
+
+model BillNotification {
+  notificationId BigInt   @id @default(autoincrement()) @map("notification_id")
+  billId         BigInt   @map("bill_id")
+  channel        String
+  recipient      String?
+  message        String
+  status         String   @default("SENT")
+  sentBy         BigInt?  @map("sent_by")
+  sentAt         DateTime @default(now()) @map("sent_at")
+
+  bill   Bill  @relation(fields: [billId], references: [billId])
+  sender User? @relation("BillNotificationSender", fields: [sentBy], references: [userId])
+
+  @@map("bill_notifications")
+  @@schema("aquaflow")
+}
+
+model NotificationTemplate {
+  templateId       BigInt   @id @default(autoincrement()) @map("template_id")
+  templateCode     String   @unique @map("template_code")
+  templateName     String   @map("template_name")
+  notificationType String   @default("GENERAL") @map("notification_type")
+  channel          String
+  subject          String?
+  messageBody      String   @map("message_body")
+  description      String?
+  variables        Json?
+  status           String   @default("ACTIVE")
+  createdBy        BigInt?  @map("created_by")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @default(now()) @map("updated_at")
+
+  creator       User?          @relation("NotificationTemplateCreator", fields: [createdBy], references: [userId])
+  notifications Notification[]
+
+  @@map("notification_templates")
+  @@schema("aquaflow")
+}
+
+model NotificationProvider {
+  providerId         BigInt    @id @default(autoincrement()) @map("provider_id")
+  providerCode       String    @unique @map("provider_code")
+  providerName       String    @map("provider_name")
+  channel            String
+  providerType       String    @default("SIMULATED") @map("provider_type")
+  endpointUrl        String?   @map("endpoint_url")
+  environmentPrefix  String?   @map("environment_prefix")
+  configuration      Json?
+  encryptedSecret    String?   @map("encrypted_secret")
+  secretConfiguredAt DateTime? @map("secret_configured_at")
+  isDefault          Boolean   @default(false) @map("is_default")
+  status             String    @default("ACTIVE")
+  remarks            String?
+  createdBy          BigInt?   @map("created_by")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @default(now()) @map("updated_at")
+
+  creator       User?                         @relation("NotificationProviderCreator", fields: [createdBy], references: [userId])
+  notifications Notification[]
+  attempts      NotificationDeliveryAttempt[]
+
+  @@map("notification_providers")
+  @@schema("aquaflow")
+}
+
+model Notification {
+  notificationId    BigInt    @id @default(autoincrement()) @map("notification_id")
+  templateId        BigInt?   @map("template_id")
+  providerId        BigInt?   @map("provider_id")
+  customerId        BigInt?   @map("customer_id")
+  accountId         BigInt?   @map("account_id")
+  billId            BigInt?   @map("bill_id")
+  notificationType  String    @map("notification_type")
+  channel           String
+  recipient         String
+  subject           String?
+  messageBody       String    @map("message_body")
+  scheduledAt       DateTime? @map("scheduled_at")
+  sentAt            DateTime? @map("sent_at")
+  deliveredAt       DateTime? @map("delivered_at")
+  lastAttemptAt     DateTime? @map("last_attempt_at")
+  deliveryStatus    String    @default("QUEUED") @map("delivery_status")
+  externalReference String?   @map("external_reference")
+  failureReason     String?   @map("failure_reason")
+  retryCount        Int       @default(0) @map("retry_count")
+  maxRetries        Int       @default(3) @map("max_retries")
+  requestedBy       BigInt?   @map("requested_by")
+  metadata          Json?
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @default(now()) @map("updated_at")
+
+  template  NotificationTemplate?         @relation(fields: [templateId], references: [templateId])
+  provider  NotificationProvider?         @relation(fields: [providerId], references: [providerId])
+  customer  Customer?                     @relation(fields: [customerId], references: [customerId])
+  account   CustomerAccount?              @relation(fields: [accountId], references: [accountId])
+  bill      Bill?                         @relation(fields: [billId], references: [billId])
+  requester User?                         @relation("NotificationRequester", fields: [requestedBy], references: [userId])
+  attempts  NotificationDeliveryAttempt[]
+
+  @@index([deliveryStatus, scheduledAt])
+  @@index([accountId, createdAt])
+  @@index([billId])
+  @@map("notifications")
+  @@schema("aquaflow")
+}
+
+model NotificationDeliveryAttempt {
+  attemptId         BigInt   @id @default(autoincrement()) @map("attempt_id")
+  notificationId    BigInt   @map("notification_id")
+  providerId        BigInt?  @map("provider_id")
+  attemptNumber     Int      @map("attempt_number")
+  status            String
+  providerReference String?  @map("provider_reference")
+  requestPayload    Json?    @map("request_payload")
+  responsePayload   Json?    @map("response_payload")
+  errorMessage      String?  @map("error_message")
+  attemptedAt       DateTime @default(now()) @map("attempted_at")
+
+  notification Notification          @relation(fields: [notificationId], references: [notificationId], onDelete: Cascade)
+  provider     NotificationProvider? @relation(fields: [providerId], references: [providerId])
+
+  @@unique([notificationId, attemptNumber])
+  @@map("notification_delivery_attempts")
+  @@schema("aquaflow")
+}
+
+model PaymentPlan {
+  paymentPlanId        BigInt    @id @default(autoincrement()) @map("payment_plan_id")
+  planReference        String    @unique @map("plan_reference")
+  accountId            BigInt    @map("account_id")
+  totalDebt            Decimal   @map("total_debt") @db.Decimal(18, 2)
+  depositAmount        Decimal   @default(0) @map("deposit_amount") @db.Decimal(18, 2)
+  installmentAmount    Decimal   @map("installment_amount") @db.Decimal(18, 2)
+  numberOfInstallments Int       @map("number_of_installments")
+  frequency            String    @default("MONTHLY")
+  startDate            DateTime  @map("start_date") @db.Date
+  endDate              DateTime  @map("end_date") @db.Date
+  status               String    @default("PROPOSED")
+  agreementFileName    String?   @map("agreement_file_name")
+  remarks              String?
+  createdBy            BigInt?   @map("created_by")
+  approvedBy           BigInt?   @map("approved_by")
+  approvedAt           DateTime? @map("approved_at")
+  decisionComments     String?   @map("decision_comments")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @default(now()) @map("updated_at")
+
+  account      CustomerAccount          @relation(fields: [accountId], references: [accountId])
+  creator      User?                    @relation("PaymentPlanCreator", fields: [createdBy], references: [userId])
+  approver     User?                    @relation("PaymentPlanApprover", fields: [approvedBy], references: [userId])
+  installments PaymentPlanInstallment[]
+
+  @@map("payment_plans")
+  @@schema("aquaflow")
+}
+
+model PaymentPlanInstallment {
+  installmentId     BigInt   @id @default(autoincrement()) @map("installment_id")
+  paymentPlanId     BigInt   @map("payment_plan_id")
+  installmentNumber Int      @map("installment_number")
+  dueDate           DateTime @map("due_date") @db.Date
+  amountDue         Decimal  @map("amount_due") @db.Decimal(18, 2)
+  amountPaid        Decimal  @default(0) @map("amount_paid") @db.Decimal(18, 2)
+  status            String   @default("PENDING")
+
+  paymentPlan PaymentPlan @relation(fields: [paymentPlanId], references: [paymentPlanId])
+
+  @@unique([paymentPlanId, installmentNumber])
+  @@map("payment_plan_installments")
+  @@schema("aquaflow")
+}
+
+model PromiseToPay {
+  promiseId           BigInt    @id @default(autoincrement()) @map("promise_id")
+  promiseReference    String    @unique @map("promise_reference")
+  accountId           BigInt    @map("account_id")
+  promisedAmount      Decimal   @map("promised_amount") @db.Decimal(18, 2)
+  promiseDate         DateTime  @default(now()) @map("promise_date") @db.Date
+  expectedPaymentDate DateTime  @map("expected_payment_date") @db.Date
+  followUpDate        DateTime? @map("follow_up_date") @db.Date
+  contactMethod       String    @default("PHONE") @map("contact_method")
+  recordedBy          BigInt    @map("recorded_by")
+  notes               String?
+  status              String    @default("OPEN")
+  resolvedAt          DateTime? @map("resolved_at")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @default(now()) @map("updated_at")
+
+  account  CustomerAccount @relation(fields: [accountId], references: [accountId])
+  recorder User            @relation("PromiseRecorder", fields: [recordedBy], references: [userId])
+
+  @@map("promises_to_pay")
+  @@schema("aquaflow")
+}
+
+model DebtNotice {
+  noticeId          BigInt    @id @default(autoincrement()) @map("notice_id")
+  noticeNumber      String    @unique @map("notice_number")
+  accountId         BigInt    @map("account_id")
+  noticeType        String    @map("notice_type")
+  noticeDate        DateTime  @default(now()) @map("notice_date") @db.Date
+  paymentDeadline   DateTime? @map("payment_deadline") @db.Date
+  outstandingAmount Decimal   @map("outstanding_amount") @db.Decimal(18, 2)
+  deliveryChannel   String    @map("delivery_channel")
+  deliveryStatus    String    @default("PENDING") @map("delivery_status")
+  noticeStatus      String    @default("DRAFT") @map("notice_status")
+  messageBody       String    @map("message_body")
+  createdBy         BigInt?   @map("created_by")
+  approvedBy        BigInt?   @map("approved_by")
+  approvedAt        DateTime? @map("approved_at")
+  decisionComments  String?   @map("decision_comments")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @default(now()) @map("updated_at")
+
+  account  CustomerAccount @relation(fields: [accountId], references: [accountId])
+  creator  User?           @relation("DebtNoticeCreator", fields: [createdBy], references: [userId])
+  approver User?           @relation("DebtNoticeApprover", fields: [approvedBy], references: [userId])
+
+  @@map("debt_notices")
+  @@schema("aquaflow")
+}
+
+model DisconnectionList {
+  disconnectionListId BigInt    @id @default(autoincrement()) @map("disconnection_list_id")
+  listReference       String    @unique @map("list_reference")
+  zoneId              BigInt?   @map("zone_id")
+  minimumBalance      Decimal   @default(0) @map("minimum_balance") @db.Decimal(18, 2)
+  minimumAgeDays      Int       @default(90) @map("minimum_age_days")
+  status              String    @default("DRAFT")
+  remarks             String?
+  createdBy           BigInt?   @map("created_by")
+  approvedBy          BigInt?   @map("approved_by")
+  approvedAt          DateTime? @map("approved_at")
+  decisionComments    String?   @map("decision_comments")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @default(now()) @map("updated_at")
+
+  zone     Zone?                   @relation(fields: [zoneId], references: [zoneId])
+  creator  User?                   @relation("DisconnectionListCreator", fields: [createdBy], references: [userId])
+  approver User?                   @relation("DisconnectionListApprover", fields: [approvedBy], references: [userId])
+  items    DisconnectionListItem[]
+
+  @@map("disconnection_lists")
+  @@schema("aquaflow")
+}
+
+model DisconnectionListItem {
+  disconnectionItemId BigInt   @id @default(autoincrement()) @map("disconnection_item_id")
+  disconnectionListId BigInt   @map("disconnection_list_id")
+  accountId           BigInt   @map("account_id")
+  outstandingAmount   Decimal  @map("outstanding_amount") @db.Decimal(18, 2)
+  arrearsAgeDays      Int      @map("arrears_age_days")
+  lastNoticeId        BigInt?  @map("last_notice_id")
+  status              String   @default("PENDING")
+  createdAt           DateTime @default(now()) @map("created_at")
+
+  list    DisconnectionList @relation(fields: [disconnectionListId], references: [disconnectionListId])
+  account CustomerAccount   @relation(fields: [accountId], references: [accountId])
+
+  @@unique([disconnectionListId, accountId])
+  @@map("disconnection_list_items")
+  @@schema("aquaflow")
+}
+
+model DebtWriteOff {
+  writeOffId         BigInt    @id @default(autoincrement()) @map("write_off_id")
+  writeOffReference  String    @unique @map("write_off_reference")
+  accountId          BigInt    @map("account_id")
+  amount             Decimal   @db.Decimal(18, 2)
+  debtAgeDays        Int       @map("debt_age_days")
+  recoveryActions    String    @map("recovery_actions")
+  reason             String
+  supportingFileName String?   @map("supporting_file_name")
+  status             String    @default("PENDING")
+  requestedBy        BigInt    @map("requested_by")
+  approvedBy         BigInt?   @map("approved_by")
+  decisionComments   String?   @map("decision_comments")
+  decidedAt          DateTime? @map("decided_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @default(now()) @map("updated_at")
+
+  account   CustomerAccount @relation(fields: [accountId], references: [accountId])
+  requester User            @relation("DebtWriteOffRequester", fields: [requestedBy], references: [userId])
+  approver  User?           @relation("DebtWriteOffApprover", fields: [approvedBy], references: [userId])
+
+  @@map("debt_write_offs")
+  @@schema("aquaflow")
+}
+
+model ArrearsAction {
+  arrearsActionId BigInt   @id @default(autoincrement()) @map("arrears_action_id")
+  accountId       BigInt?  @map("account_id")
+  actionType      String   @map("action_type")
+  referenceType   String?  @map("reference_type")
+  referenceId     BigInt?  @map("reference_id")
+  details         String
+  performedBy     BigInt?  @map("performed_by")
+  metadata        Json?
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  account   CustomerAccount? @relation(fields: [accountId], references: [accountId])
+  performer User?            @relation("ArrearsActionUser", fields: [performedBy], references: [userId])
+
+  @@index([accountId, createdAt])
+  @@map("arrears_actions")
+  @@schema("aquaflow")
+}
+
+model BillingSecurityAlert {
+  alertId         BigInt    @id @default(autoincrement()) @map("alert_id")
+  billId          BigInt?   @map("bill_id")
+  alertType       String    @map("alert_type")
+  attemptedAction String    @map("attempted_action")
+  details         String
+  attemptedBy     BigInt?   @map("attempted_by")
+  status          String    @default("OPEN")
+  resolvedBy      BigInt?   @map("resolved_by")
+  resolvedAt      DateTime? @map("resolved_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  bill      Bill? @relation(fields: [billId], references: [billId])
+  attempter User? @relation("BillingAlertAttemptUser", fields: [attemptedBy], references: [userId])
+  resolver  User? @relation("BillingAlertResolver", fields: [resolvedBy], references: [userId])
+
+  @@map("billing_security_alerts")
+  @@schema("aquaflow")
+}
+
+model PaymentChannel {
+  channelId         BigInt   @id @default(autoincrement()) @map("channel_id")
+  channelCode       String   @unique @map("channel_code")
+  channelName       String   @unique @map("channel_name")
+  requiresReference Boolean  @default(true) @map("requires_reference")
+  accountIdentifier String?  @map("account_identifier")
+  bankName          String?  @map("bank_name")
+  branchName        String?  @map("branch_name")
+  bankAccountNumber String?  @map("bank_account_number")
+  autoAllocation    Boolean  @default(true) @map("auto_allocation")
+  receiptRequired   Boolean  @default(true) @map("receipt_required")
+  remarks           String?
+  status            String   @default("ACTIVE")
+  updatedAt         DateTime @default(now()) @map("updated_at")
+
+  payments              Payment[]
+  reconciliationBatches PaymentReconciliationBatch[]
+
+  @@map("payment_channels")
+  @@schema("aquaflow")
+}
+
+model Payment {
+  paymentId            BigInt    @id @default(autoincrement()) @map("payment_id")
+  transactionReference String    @unique @map("transaction_reference")
+  accountId            BigInt?   @map("account_id")
+  channelId            BigInt    @map("channel_id")
+  payerName            String?   @map("payer_name")
+  payerPhone           String?   @map("payer_phone")
+  amount               Decimal   @db.Decimal(18, 2)
+  paymentDate          DateTime  @map("payment_date")
+  valueDate            DateTime  @map("value_date") @db.Date
+  customerReference    String?   @map("customer_reference")
+  matchingStatus       String    @default("UNMATCHED") @map("matching_status")
+  paymentStatus        String    @default("RECEIVED") @map("payment_status")
+  paymentType          String    @default("BILL_PAYMENT") @map("payment_type")
+  remarks              String?
+  unallocatedAmount    Decimal   @default(0) @map("unallocated_amount") @db.Decimal(18, 2)
+  postedAt             DateTime? @map("posted_at")
+  reconciliationStatus String    @default("UNRECONCILED") @map("reconciliation_status")
+  externalPayload      Json?     @map("external_payload")
+  receivedBy           BigInt?   @map("received_by")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @default(now()) @map("updated_at")
+
+  account     CustomerAccount?    @relation(fields: [accountId], references: [accountId])
+  channel     PaymentChannel      @relation(fields: [channelId], references: [channelId])
+  receiver    User?               @relation("PaymentReceiver", fields: [receivedBy], references: [userId])
+  allocations PaymentAllocation[]
+  suspense    SuspensePayment?
+  reversals   PaymentReversal[]
+  receipt     Receipt?
+  events      PaymentEvent[]
+  stkRequest  MpesaStkRequest?
+
+  @@map("payments")
+  @@schema("aquaflow")
+}
+
+model MpesaStkRequest {
+  stkRequestId        BigInt    @id @default(autoincrement()) @map("stk_request_id")
+  accountId           BigInt    @map("account_id")
+  paymentId           BigInt?   @unique @map("payment_id")
+  initiatedBy         BigInt?   @map("initiated_by")
+  phoneNumber         String    @map("phone_number")
+  amount              Decimal   @db.Decimal(18, 2)
+  merchantRequestId   String?   @unique @map("merchant_request_id")
+  checkoutRequestId   String?   @unique @map("checkout_request_id")
+  customerMessage     String?   @map("customer_message")
+  responseCode        String?   @map("response_code")
+  responseDescription String?   @map("response_description")
+  resultCode          Int?      @map("result_code")
+  resultDescription   String?   @map("result_description")
+  mpesaReceiptNumber  String?   @unique @map("mpesa_receipt_number")
+  transactionDate     DateTime? @map("transaction_date")
+  status              String    @default("PENDING")
+  callbackPayload     Json?     @map("callback_payload")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  completedAt         DateTime? @map("completed_at")
+  updatedAt           DateTime  @default(now()) @map("updated_at")
+
+  account   CustomerAccount @relation(fields: [accountId], references: [accountId])
+  payment   Payment?        @relation(fields: [paymentId], references: [paymentId])
+  initiator User?           @relation("MpesaStkInitiator", fields: [initiatedBy], references: [userId])
+
+  @@index([accountId, createdAt(sort: Desc)])
+  @@index([status, createdAt(sort: Desc)])
+  @@map("mpesa_stk_requests")
+  @@schema("aquaflow")
+}
+
+model PaymentAllocation {
+  allocationId    BigInt   @id @default(autoincrement()) @map("allocation_id")
+  paymentId       BigInt   @map("payment_id")
+  billId          BigInt   @map("bill_id")
+  allocatedAmount Decimal  @map("allocated_amount") @db.Decimal(18, 2)
+  allocationDate  DateTime @default(now()) @map("allocation_date") @db.Date
+  allocatedBy     BigInt?  @map("allocated_by")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  payment   Payment @relation(fields: [paymentId], references: [paymentId])
+  bill      Bill    @relation(fields: [billId], references: [billId])
+  allocator User?   @relation("PaymentAllocator", fields: [allocatedBy], references: [userId])
+
+  @@unique([paymentId, billId])
+  @@map("payment_allocations")
+  @@schema("aquaflow")
+}
+
+model SuspensePayment {
+  suspenseId        BigInt    @id @default(autoincrement()) @map("suspense_id")
+  paymentId         BigInt    @unique @map("payment_id")
+  suspenseReason    String    @map("suspense_reason")
+  receivedReference String?   @map("received_reference")
+  status            String    @default("OPEN")
+  resolvedAccountId BigInt?   @map("resolved_account_id")
+  resolvedBy        BigInt?   @map("resolved_by")
+  resolutionDate    DateTime? @map("resolution_date") @db.Date
+
+  payment         Payment          @relation(fields: [paymentId], references: [paymentId])
+  resolvedAccount CustomerAccount? @relation(fields: [resolvedAccountId], references: [accountId])
+  resolver        User?            @relation("SuspenseResolver", fields: [resolvedBy], references: [userId])
+
+  @@map("suspense_payments")
+  @@schema("aquaflow")
+}
+
+model PaymentReversal {
+  reversalId          BigInt    @id @default(autoincrement()) @map("reversal_id")
+  paymentId           BigInt    @map("payment_id")
+  reversalReference   String    @unique @map("reversal_reference")
+  reversalReason      String    @map("reversal_reason")
+  detailedExplanation String?   @map("detailed_explanation")
+  reversalAmount      Decimal   @map("reversal_amount") @db.Decimal(18, 2)
+  requestedBy         BigInt    @map("requested_by")
+  approvedBy          BigInt?   @map("approved_by")
+  reversalDate        DateTime  @default(now()) @map("reversal_date") @db.Date
+  status              String    @default("PENDING")
+  supportingFileName  String?   @map("supporting_file_name")
+  supportingContent   String?   @map("supporting_content")
+  decisionComments    String?   @map("decision_comments")
+  decidedAt           DateTime? @map("decided_at")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @default(now()) @map("updated_at")
+
+  payment   Payment        @relation(fields: [paymentId], references: [paymentId])
+  requester User           @relation("PaymentReversalRequester", fields: [requestedBy], references: [userId])
+  approver  User?          @relation("PaymentReversalApprover", fields: [approvedBy], references: [userId])
+  events    PaymentEvent[]
+
+  @@map("payment_reversals")
+  @@schema("aquaflow")
+}
+
+model Receipt {
+  receiptId      BigInt    @id @default(autoincrement()) @map("receipt_id")
+  receiptNumber  String    @unique @map("receipt_number")
+  paymentId      BigInt    @unique @map("payment_id")
+  accountId      BigInt?   @map("account_id")
+  amount         Decimal   @db.Decimal(18, 2)
+  issueDate      DateTime  @default(now()) @map("issue_date") @db.Date
+  issuedBy       BigInt?   @map("issued_by")
+  deliveryStatus String    @default("GENERATED") @map("delivery_status")
+  receiptStatus  String    @default("VALID") @map("receipt_status")
+  sentAt         DateTime? @map("sent_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  payment Payment          @relation(fields: [paymentId], references: [paymentId])
+  account CustomerAccount? @relation(fields: [accountId], references: [accountId])
+  issuer  User?            @relation("ReceiptIssuer", fields: [issuedBy], references: [userId])
+
+  @@map("receipts")
+  @@schema("aquaflow")
+}
+
+model PaymentEvent {
+  paymentEventId BigInt   @id @default(autoincrement()) @map("payment_event_id")
+  paymentId      BigInt?  @map("payment_id")
+  reversalId     BigInt?  @map("reversal_id")
+  eventType      String   @map("event_type")
+  previousStatus String?  @map("previous_status")
+  newStatus      String?  @map("new_status")
+  details        String?
+  performedBy    BigInt?  @map("performed_by")
+  metadata       Json?
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  payment   Payment?         @relation(fields: [paymentId], references: [paymentId])
+  reversal  PaymentReversal? @relation(fields: [reversalId], references: [reversalId])
+  performer User?            @relation("PaymentEventUser", fields: [performedBy], references: [userId])
+
+  @@map("payment_events")
+  @@schema("aquaflow")
+}
+
+model PaymentReconciliationBatch {
+  batchId           BigInt    @id @default(autoincrement()) @map("batch_id")
+  batchReference    String    @unique @map("batch_reference")
+  channelId         BigInt    @map("channel_id")
+  periodStart       DateTime  @map("period_start") @db.Date
+  periodEnd         DateTime  @map("period_end") @db.Date
+  statementTotal    Decimal   @default(0) @map("statement_total") @db.Decimal(18, 2)
+  systemTotal       Decimal   @default(0) @map("system_total") @db.Decimal(18, 2)
+  matchedAmount     Decimal   @default(0) @map("matched_amount") @db.Decimal(18, 2)
+  variance          Decimal   @default(0) @db.Decimal(18, 2)
+  statementFileName String?   @map("statement_file_name")
+  status            String    @default("DRAFT")
+  remarks           String?
+  createdBy         BigInt?   @map("created_by")
+  completedBy       BigInt?   @map("completed_by")
+  completedAt       DateTime? @map("completed_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @default(now()) @map("updated_at")
+
+  channel   PaymentChannel @relation(fields: [channelId], references: [channelId])
+  creator   User?          @relation("ReconciliationCreator", fields: [createdBy], references: [userId])
+  completer User?          @relation("ReconciliationCompleter", fields: [completedBy], references: [userId])
+
+  @@map("payment_reconciliation_batches")
+  @@schema("aquaflow")
+}
+
+model MeterReplacement {
+  replacementId     BigInt    @id @default(autoincrement()) @map("replacement_id")
+  accountId         BigInt    @map("account_id")
+  oldMeterId        BigInt    @map("old_meter_id")
+  newMeterId        BigInt    @map("new_meter_id")
+  replacementDate   DateTime  @map("replacement_date") @db.Date
+  oldFinalReading   Decimal   @map("old_final_reading") @db.Decimal(18, 3)
+  newOpeningReading Decimal   @default(0) @map("new_opening_reading") @db.Decimal(18, 3)
+  replacementReason String    @map("replacement_reason")
+  workOrderId       BigInt?   @map("work_order_id")
+  approvedBy        BigInt?   @map("approved_by")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  requestStatus     String    @default("PENDING") @map("request_status")
+  requestedBy       BigInt?   @map("requested_by")
+  replacedBy        BigInt?   @map("replaced_by")
+  decisionComments  String?   @map("decision_comments")
+  decidedAt         DateTime? @map("decided_at")
+  gpsLatitude       Decimal?  @map("gps_latitude") @db.Decimal(10, 7)
+  gpsLongitude      Decimal?  @map("gps_longitude") @db.Decimal(10, 7)
+  remarks           String?
+
+  account  CustomerAccount @relation(fields: [accountId], references: [accountId])
+  oldMeter Meter           @relation("OldMeter", fields: [oldMeterId], references: [meterId])
+  newMeter Meter           @relation("NewMeter", fields: [newMeterId], references: [meterId])
+  events   MeterEvent[]
+  evidence MeterEvidence[]
+
+  @@map("meter_replacements")
+  @@schema("aquaflow")
+}
+
+model MeterEvent {
+  eventId        BigInt   @id @default(autoincrement()) @map("event_id")
+  meterId        BigInt   @map("meter_id")
+  assignmentId   BigInt?  @map("assignment_id")
+  replacementId  BigInt?  @map("replacement_id")
+  eventType      String   @map("event_type")
+  previousStatus String?  @map("previous_status")
+  newStatus      String?  @map("new_status")
+  reading        Decimal? @db.Decimal(18, 3)
+  reason         String?
+  remarks        String?
+  gpsLatitude    Decimal? @map("gps_latitude") @db.Decimal(10, 7)
+  gpsLongitude   Decimal? @map("gps_longitude") @db.Decimal(10, 7)
+  performedBy    BigInt?  @map("performed_by")
+  eventDate      DateTime @default(now()) @map("event_date")
+  metadata       Json?
+
+  meter       Meter             @relation(fields: [meterId], references: [meterId])
+  assignment  MeterAssignment?  @relation(fields: [assignmentId], references: [assignmentId])
+  replacement MeterReplacement? @relation(fields: [replacementId], references: [replacementId])
+  performer   User?             @relation("MeterEventUser", fields: [performedBy], references: [userId])
+
+  @@map("meter_events")
+  @@schema("aquaflow")
+}
+
+model MeterEvidence {
+  evidenceId    BigInt   @id @default(autoincrement()) @map("evidence_id")
+  meterId       BigInt   @map("meter_id")
+  assignmentId  BigInt?  @map("assignment_id")
+  replacementId BigInt?  @map("replacement_id")
+  evidenceType  String   @map("evidence_type")
+  fileName      String?  @map("file_name")
+  contentData   String   @map("content_data")
+  description   String?
+  uploadedBy    BigInt?  @map("uploaded_by")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  meter       Meter             @relation(fields: [meterId], references: [meterId])
+  assignment  MeterAssignment?  @relation(fields: [assignmentId], references: [assignmentId])
+  replacement MeterReplacement? @relation(fields: [replacementId], references: [replacementId])
+
+  @@map("meter_evidence")
+  @@schema("aquaflow")
+}
+
+model MeterInstallationMaterial {
+  materialId   BigInt   @id @default(autoincrement()) @map("material_id")
+  meterId      BigInt   @map("meter_id")
+  assignmentId BigInt   @map("assignment_id")
+  materialName String   @map("material_name")
+  quantity     Decimal  @db.Decimal(12, 3)
+  unit         String
+  remarks      String?
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  meter      Meter           @relation(fields: [meterId], references: [meterId])
+  assignment MeterAssignment @relation(fields: [assignmentId], references: [assignmentId])
+
+  @@map("meter_installation_materials")
+  @@schema("aquaflow")
+}
+
+model MeterAlert {
+  alertId     BigInt    @id @default(autoincrement()) @map("alert_id")
+  meterId     BigInt    @map("meter_id")
+  alertType   String    @map("alert_type")
+  priority    String
+  reason      String
+  status      String    @default("OPEN")
+  detectedAt  DateTime  @default(now()) @map("detected_at")
+  dismissedBy BigInt?   @map("dismissed_by")
+  dismissedAt DateTime? @map("dismissed_at")
+  workOrderId BigInt?   @map("work_order_id")
+
+  meter Meter @relation(fields: [meterId], references: [meterId])
+
+  @@map("meter_alerts")
+  @@schema("aquaflow")
+}

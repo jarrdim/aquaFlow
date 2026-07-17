@@ -1,0 +1,309 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  --app-ink: #172033;
+  --app-border: #dbe4ef;
+  --app-focus: rgba(14, 165, 233, 0.2);
+  font-family:
+    "Segoe UI Variable", Inter, "Segoe UI", Roboto, Helvetica, Arial,
+    sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  @apply bg-slate-50 text-slate-800;
+  font-size: 15px;
+  line-height: 1.5;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+html,
+#root {
+  height: 100%;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button:not(:disabled),
+a[href],
+select:not(:disabled),
+input[type="checkbox"]:not(:disabled) {
+  cursor: pointer;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  color: var(--app-ink);
+  letter-spacing: -0.025em;
+  text-wrap: balance;
+}
+
+strong,
+.font-semibold,
+.font-bold {
+  letter-spacing: -0.01em;
+}
+
+.app-shell {
+  background:
+    radial-gradient(circle at 80% 0%, rgba(14, 165, 233, 0.055), transparent 28rem),
+    #f6f8fb;
+}
+
+.app-sidebar {
+  background:
+    linear-gradient(180deg, rgba(30, 61, 107, 0.18), transparent 15rem),
+    #0d1f3c;
+  box-shadow: 8px 0 28px rgba(15, 32, 56, 0.1);
+}
+
+.app-sidebar .nav-icon {
+  display: inline-flex;
+  width: 1.75rem;
+  height: 1.75rem;
+  flex: 0 0 1.75rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.55rem;
+  transition:
+    transform 160ms ease,
+    background-color 160ms ease,
+    color 160ms ease;
+}
+
+.app-sidebar nav > div > a,
+.app-sidebar nav > span {
+  font-size: 0.94rem;
+  line-height: 1.35rem;
+  font-weight: 500;
+}
+
+.app-sidebar nav > div > div a {
+  font-size: 0.82rem;
+  line-height: 1.15rem;
+  letter-spacing: 0.005em;
+}
+
+.app-sidebar nav > div > a[class*="bg-navy"] {
+  font-weight: 650;
+}
+
+.app-sidebar > div:last-child .text-xs {
+  font-size: 0.82rem;
+}
+
+.app-sidebar > div:last-child .text-\[10px\] {
+  font-size: 0.72rem;
+}
+
+.app-sidebar > div:last-child .text-\[11px\] {
+  font-size: 0.76rem;
+}
+
+.app-sidebar a:hover .nav-icon {
+  transform: translateY(-1px);
+}
+
+.app-sidebar nav::-webkit-scrollbar {
+  width: 5px;
+}
+
+.app-sidebar nav::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(186, 230, 253, 0.24);
+}
+
+.app-topbar {
+  border-color: rgba(203, 213, 225, 0.75);
+  box-shadow: 0 1px 10px rgba(15, 23, 42, 0.035);
+}
+
+.topbar-icon {
+  transition:
+    color 160ms ease,
+    background-color 160ms ease,
+    transform 160ms ease;
+}
+
+.topbar-icon:hover {
+  transform: translateY(-1px);
+}
+
+.app-content {
+  background:
+    linear-gradient(180deg, rgba(241, 245, 249, 0.25), transparent 14rem),
+    #f7f9fc;
+  scrollbar-color: #cbd5e1 transparent;
+  scrollbar-width: thin;
+}
+
+.app-content::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.app-content::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: #cbd5e1;
+  background-clip: padding-box;
+}
+
+.app-content section.rounded-2xl,
+.app-content .rounded-xl.border.bg-white,
+.app-content .rounded-2xl.border.bg-white {
+  border-color: var(--app-border);
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.035),
+    0 8px 24px rgba(15, 23, 42, 0.035);
+}
+
+.app-content table {
+  font-variant-numeric: tabular-nums;
+}
+
+.app-content thead {
+  background: linear-gradient(180deg, #fbfdff, #f7f9fc);
+}
+
+.app-content tbody tr {
+  transition: background-color 140ms ease;
+}
+
+.app-content tbody tr:hover {
+  background-color: rgba(240, 249, 255, 0.62);
+}
+
+.app-content input:not([type="checkbox"]):not([type="radio"]),
+.app-content select,
+.app-content textarea {
+  border-color: #d7e1ec;
+  box-shadow: inset 0 1px 1px rgba(15, 23, 42, 0.02);
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease,
+    background-color 150ms ease;
+}
+
+.app-content input:not([type="checkbox"]):not([type="radio"]):hover,
+.app-content select:hover,
+.app-content textarea:hover {
+  border-color: #b9c8d9;
+}
+
+.app-content input:not([type="checkbox"]):not([type="radio"]):focus,
+.app-content select:focus,
+.app-content textarea:focus {
+  border-color: #0ea5e9;
+  box-shadow: 0 0 0 3px var(--app-focus);
+}
+
+.app-content button,
+.app-content a.rounded-lg {
+  transition:
+    transform 150ms ease,
+    box-shadow 150ms ease,
+    filter 150ms ease,
+    background-color 150ms ease,
+    border-color 150ms ease;
+}
+
+.app-content button:not(:disabled):hover,
+.app-content a.rounded-lg:hover {
+  filter: saturate(1.05);
+  transform: translateY(-1px);
+}
+
+.app-content button:not(:disabled):active,
+.app-content a.rounded-lg:active {
+  transform: translateY(0);
+}
+
+input[type="checkbox"] {
+  width: 1.05rem;
+  height: 1.05rem;
+  flex: 0 0 auto;
+  border-radius: 0.28rem;
+  accent-color: #0284c7;
+}
+
+input[type="radio"] {
+  accent-color: #0284c7;
+}
+
+::selection {
+  color: #0c4a6e;
+  background: #bae6fd;
+}
+
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 12mm;
+  }
+
+  body.printing-invoice {
+    overflow: visible !important;
+    background: white !important;
+  }
+
+  body.printing-invoice .app-sidebar,
+  body.printing-invoice .app-topbar,
+  body.printing-invoice .page-screen-header,
+  body.printing-invoice .invoice-print-page > [role="alert"] {
+    display: none !important;
+  }
+
+  body.printing-invoice .app-shell,
+  body.printing-invoice .app-main-column,
+  body.printing-invoice .app-content {
+    display: block !important;
+    width: 100% !important;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    background: white !important;
+  }
+
+  body.printing-invoice .invoice-print-page {
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  body.printing-invoice .invoice-print-document {
+    width: 100% !important;
+    max-width: none !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    font-size: 11pt;
+    break-inside: avoid;
+  }
+
+  body.printing-invoice .invoice-print-document > div {
+    padding: 0 !important;
+  }
+
+  body.printing-invoice .invoice-print-document th,
+  body.printing-invoice .invoice-print-document td {
+    padding: 6px 8px !important;
+  }
+}
