@@ -254,16 +254,21 @@ metersRouter.post("/work-orders", async (req, res) => {
 metersRouter.get("/", async (req, res) => {
   const search = String(req.query.search ?? ""); const type = String(req.query.type ?? ""); const status = String(req.query.status ?? "");
   const zoneId = String(req.query.zoneId ?? ""); const customerId = String(req.query.customerId ?? "");
+  const requestedTake = Number(req.query.take);
+  const take = Number.isFinite(requestedTake)
+    ? Math.min(50, Math.max(1, requestedTake))
+    : undefined;
   const where: any = {};
   if (search) where.OR = [
     { meterNumber: { contains: search, mode: "insensitive" } }, { serialNumber: { contains: search, mode: "insensitive" } },
     { assignments: { some: { account: { customer: { firstName: { contains: search, mode: "insensitive" } } } } } },
+    { assignments: { some: { account: { customer: { middleName: { contains: search, mode: "insensitive" } } } } } },
     { assignments: { some: { account: { customer: { lastName: { contains: search, mode: "insensitive" } } } } } },
     { assignments: { some: { account: { customer: { organizationName: { contains: search, mode: "insensitive" } } } } } },
   ];
   if (type) where.meterType = type; if (status) where.status = status;
   if (zoneId || customerId) where.assignments = { some: { assignmentStatus: "ACTIVE", ...(customerId ? { account: { customerId: BigInt(customerId) } } : {}), ...(zoneId ? { OR: [{ zoneId: BigInt(zoneId) }, { account: { property: { zoneId: BigInt(zoneId) } } }, { borehole: { zoneId: BigInt(zoneId) } }] } : {}) } };
-  const items = await prisma.meter.findMany({ where, include: meterListInclude, orderBy: { createdAt: "desc" } });
+  const items = await prisma.meter.findMany({ where, include: meterListInclude, orderBy: { createdAt: "desc" }, take });
   res.json(items.map(presentMeter));
 });
 

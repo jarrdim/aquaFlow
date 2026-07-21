@@ -24,6 +24,10 @@ lookupsRouter.get("/routes", async (req, res) => {
   res.json(
     await prisma.route.findMany({
       where: { status: "ACTIVE", ...(zoneId ? { zoneId } : {}) },
+      include: {
+        zone: true,
+        _count: { select: { accounts: true, properties: true } },
+      },
       orderBy: { routeName: "asc" },
     })
   );

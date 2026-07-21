@@ -100,6 +100,31 @@ function Button({
     />
   );
 }
+function CycleActionButton({
+  tone = "neutral",
+  className = "",
+  ...props
+}: React.ButtonHTMLAttributes<HTMLButtonElement> & {
+  tone?: "primary" | "success" | "neutral" | "danger";
+}) {
+  const colors = {
+    primary:
+      "border-aqua-200 bg-aqua-50 text-aqua-800 hover:border-aqua-300 hover:bg-aqua-100",
+    success:
+      "border-emerald-600 bg-emerald-600 text-white hover:border-emerald-500 hover:bg-emerald-500",
+    neutral:
+      "border-slate-300 bg-white text-slate-700 hover:border-slate-400 hover:bg-slate-100",
+    danger:
+      "border-red-200 bg-red-50 text-red-700 hover:border-red-300 hover:bg-red-100",
+  };
+  return (
+    <button
+      type="button"
+      {...props}
+      className={`inline-flex min-h-9 items-center justify-center rounded-lg border px-3 py-1.5 text-sm font-semibold shadow-sm outline-none transition focus-visible:ring-2 focus-visible:ring-aqua-500/30 disabled:cursor-not-allowed disabled:opacity-50 ${colors[tone]} ${className}`}
+    />
+  );
+}
 function LinkButton({
   to,
   children,
@@ -136,6 +161,90 @@ function Notice({
     >
       {children}
     </div>
+  );
+}
+
+function MultiCheckDropdown({
+  options,
+  selected,
+  onChange,
+  placeholder,
+}: {
+  options: { value: string; label: string; detail?: string }[];
+  selected: string[];
+  onChange: (values: string[]) => void;
+  placeholder: string;
+}) {
+  const selectedLabels = options
+    .filter((option) => selected.includes(option.value))
+    .map((option) => option.label);
+  const summary =
+    selectedLabels.length === 0
+      ? placeholder
+      : selectedLabels.length <= 2
+        ? selectedLabels.join(", ")
+        : `${selectedLabels.length} selected`;
+  const allSelected =
+    options.length > 0 && options.every((option) => selected.includes(option.value));
+  return (
+    <details className="group relative">
+      <summary
+        className={`${INPUT} flex cursor-pointer list-none items-center justify-between gap-2 [&::-webkit-details-marker]:hidden`}
+      >
+        <span className={`truncate ${selected.length ? "text-slate-700" : "text-slate-400"}`}>
+          {summary}
+        </span>
+        <span className="text-xs text-slate-400 transition group-open:rotate-180">▼</span>
+      </summary>
+      <div className="absolute z-30 mt-1 max-h-72 w-full min-w-[280px] overflow-y-auto rounded-xl border border-slate-200 bg-white p-2 shadow-xl">
+        <label className="flex cursor-pointer items-center gap-3 rounded-lg border-b border-slate-100 px-3 py-2.5 font-semibold text-slate-700 hover:bg-slate-50">
+          <input
+            type="checkbox"
+            checked={allSelected}
+            onChange={() =>
+              onChange(allSelected ? [] : options.map((option) => option.value))
+            }
+          />
+          Select all
+          <span className="ml-auto text-xs font-medium text-slate-400">
+            {options.length}
+          </span>
+        </label>
+        {options.map((option) => {
+          const checked = selected.includes(option.value);
+          return (
+            <label
+              key={option.value}
+              className={`flex cursor-pointer items-start gap-3 rounded-lg px-3 py-2.5 transition ${
+                checked ? "bg-aqua-50 text-aqua-900" : "text-slate-700 hover:bg-slate-50"
+              }`}
+            >
+              <input
+                className="mt-0.5"
+                type="checkbox"
+                checked={checked}
+                onChange={() =>
+                  onChange(
+                    checked
+                      ? selected.filter((value) => value !== option.value)
+                      : [...selected, option.value],
+                  )
+                }
+              />
+              <span className="min-w-0">
+                <span className="block truncate text-sm font-semibold">{option.label}</span>
+                {option.detail && (
+                  <span className="block truncate text-xs text-slate-400">{option.detail}</span>
+                )}
+              </span>
+            </label>
+          );
+        })}
+        {!options.length && (
+          <p className="px-3 py-6 text-center text-sm text-slate-400">No options available.</p>
+        )}
+      </div>
+    </details>
   );
 }
 const tone: Record<string, string> = {
@@ -183,7 +292,7 @@ function customerName(row: Row) {
   const c = row.account?.customer;
   return (
     c?.organizationName ||
-    `${c?.firstName ?? ""} ${c?.lastName ?? ""}`.trim() ||
+    [c?.firstName, c?.middleName, c?.lastName].filter(Boolean).join(" ") ||
     "—"
   );
 }
@@ -228,6 +337,7 @@ export function ReadingDashboard() {
   const [filters, setFilters] = useState({ cycleId: "", zoneId: "" });
   const [data, setData] = useState<Row | null>(null);
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
   useEffect(() => {
     Promise.all([api.listReadingCycles(), api.listZones()])
       .then(([c, z]) => {
@@ -240,19 +350,87 @@ export function ReadingDashboard() {
       .catch((e) => setError(e.message));
   }, []);
   useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setError("");
     api
       .readingDashboard(filters)
-      .then(setData)
-      .catch((e) => setError(e.message));
+      .then((result) => {
+        if (active) setData(result);
+      })
+      .catch((e) => {
+        if (active) setError(e.message);
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
   }, [filters]);
   const stats = [
-    ["Meters in scope", data?.totalMeters, "text-slate-800"],
-    ["Captured", data?.captured, "text-blue-700"],
-    ["Approved", data?.approved, "text-emerald-700"],
-    ["Pending approval", data?.pending, "text-amber-700"],
-    ["Unread", data?.unread, "text-orange-700"],
-    ["Exceptions", data?.exceptions, "text-red-700"],
+    {
+      label: "Meters in scope",
+      value: data?.totalMeters,
+      detail: "Eligible active meters",
+      color: "text-slate-900",
+      icon: "▦",
+      iconClass: "bg-slate-100 text-slate-600",
+      accent: "border-t-slate-400",
+    },
+    {
+      label: "Captured",
+      value: data?.captured,
+      detail: "Submitted this cycle",
+      color: "text-blue-700",
+      icon: "✓",
+      iconClass: "bg-blue-50 text-blue-700",
+      accent: "border-t-blue-500",
+    },
+    {
+      label: "Approved",
+      value: data?.approved,
+      detail: "Ready for billing",
+      color: "text-emerald-700",
+      icon: "✓",
+      iconClass: "bg-emerald-50 text-emerald-700",
+      accent: "border-t-emerald-500",
+    },
+    {
+      label: "Pending approval",
+      value: data?.pending,
+      detail: "Awaiting review",
+      color: "text-amber-700",
+      icon: "◷",
+      iconClass: "bg-amber-50 text-amber-700",
+      accent: "border-t-amber-500",
+    },
+    {
+      label: "Unread",
+      value: data?.unread,
+      detail: "Still to be visited",
+      color: "text-orange-700",
+      icon: "○",
+      iconClass: "bg-orange-50 text-orange-700",
+      accent: "border-t-orange-500",
+    },
+    {
+      label: "Exceptions",
+      value: data?.exceptions,
+      detail: "Require attention",
+      color: "text-red-700",
+      icon: "!",
+      iconClass: "bg-red-50 text-red-700",
+      accent: "border-t-red-500",
+    },
   ];
+  const selectedCycle =
+    cycles.find((cycle) => String(cycle.readingCycleId) === filters.cycleId) ??
+    data?.cycle;
+  const selectedZone = zones.find(
+    (zone) => String(zone.zoneId) === filters.zoneId,
+  );
+  const completionPercent = Number(data?.completionPercent ?? 0);
   return (
     <Page
       title="Meter Reading Management"
@@ -267,15 +445,50 @@ export function ReadingDashboard() {
       }
     >
       {error && <Notice>{error}</Notice>}
-      <Card className="mb-4">
-        <div className="grid gap-3 md:grid-cols-2">
+      <section className="relative mb-4 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        {loading && (
+          <div className="absolute inset-x-0 top-0 h-1 overflow-hidden bg-aqua-100">
+            <div className="h-full w-1/3 animate-pulse rounded-full bg-aqua-600" />
+          </div>
+        )}
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3.5">
+          <div>
+            <h2 className="font-semibold text-slate-900">Dashboard scope</h2>
+            <p className="mt-0.5 text-xs text-slate-500">
+              Focus the operational totals by reading cycle and service zone.
+            </p>
+          </div>
+          <div
+            className={`inline-flex min-w-36 items-center justify-center gap-2 rounded-full px-3 py-1.5 text-xs font-semibold ${
+              loading
+                ? "bg-aqua-50 text-aqua-700"
+                : "bg-emerald-50 text-emerald-700"
+            }`}
+            role="status"
+            aria-live="polite"
+          >
+            {loading ? (
+              <>
+                <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-aqua-200 border-t-aqua-700" />
+                Updating results
+              </>
+            ) : (
+              <>
+                <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                Results up to date
+              </>
+            )}
+          </div>
+        </div>
+        <div className="grid gap-3 p-4 md:grid-cols-2">
           <Field label="Reading cycle">
             <select
               className={INPUT}
               value={filters.cycleId}
-              onChange={(e) =>
-                setFilters({ ...filters, cycleId: e.target.value })
-              }
+              onChange={(e) => {
+                setLoading(true);
+                setFilters({ ...filters, cycleId: e.target.value });
+              }}
             >
               <option value="">Current open cycle</option>
               {cycles.map((c) => (
@@ -289,9 +502,10 @@ export function ReadingDashboard() {
             <select
               className={INPUT}
               value={filters.zoneId}
-              onChange={(e) =>
-                setFilters({ ...filters, zoneId: e.target.value })
-              }
+              onChange={(e) => {
+                setLoading(true);
+                setFilters({ ...filters, zoneId: e.target.value });
+              }}
             >
               <option value="">All zones</option>
               {zones.map((z) => (
@@ -302,39 +516,80 @@ export function ReadingDashboard() {
             </select>
           </Field>
         </div>
-      </Card>
+        <div className="flex flex-wrap gap-x-6 gap-y-2 border-t border-slate-100 bg-slate-50/70 px-4 py-2.5 text-xs text-slate-500">
+          <span>
+            Cycle:{" "}
+            <strong className="font-semibold text-slate-700">
+              {selectedCycle?.cycleName ?? "Current open cycle"}
+            </strong>
+          </span>
+          <span>
+            Zone:{" "}
+            <strong className="font-semibold text-slate-700">
+              {selectedZone?.zoneName ?? "All zones"}
+            </strong>
+          </span>
+          {selectedCycle?.status && (
+            <span>
+              Status:{" "}
+              <strong className="font-semibold text-slate-700">
+                {pretty(selectedCycle.status)}
+              </strong>
+            </span>
+          )}
+        </div>
+      </section>
       <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
-        {stats.map(([label, value, color]) => (
-          <Card key={String(label)}>
-            <div className="text-sm font-medium text-slate-500">{label}</div>
-            <div className={`mt-1 text-3xl font-bold ${color}`}>
-              {value ?? 0}
+        {stats.map((stat) => (
+          <section
+            key={stat.label}
+            className={`rounded-2xl border border-slate-200 border-t-[3px] bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${stat.accent}`}
+          >
+            <div className="flex items-center justify-between gap-3">
+              <span
+                className={`flex h-9 w-9 items-center justify-center rounded-xl text-lg font-bold ${stat.iconClass}`}
+                aria-hidden="true"
+              >
+                {stat.icon}
+              </span>
+              {loading && (
+                <span className="h-2 w-2 animate-pulse rounded-full bg-aqua-500" />
+              )}
             </div>
-          </Card>
+            <div className="mt-3 text-sm font-semibold text-slate-600">
+              {stat.label}
+            </div>
+            {loading && !data ? (
+              <div className="mt-2 h-8 w-20 animate-pulse rounded-md bg-slate-100" />
+            ) : (
+              <div className={`mt-1 text-3xl font-bold ${stat.color}`}>
+                {number(stat.value ?? 0, 0)}
+              </div>
+            )}
+            <p className="mt-1 text-xs leading-4 text-slate-400">
+              {stat.detail}
+            </p>
+          </section>
         ))}
       </div>
-      <Card
-        title={`Cycle completion · ${data?.completionPercent ?? 0}%`}
-        className="mb-4"
+      <div
+        className="relative grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]"
+        aria-busy={loading}
       >
-        <div className="h-3 overflow-hidden rounded-full bg-slate-100">
-          <div
-            className="h-full rounded-full bg-aqua-600 transition-all"
-            style={{ width: `${Math.min(data?.completionPercent ?? 0, 100)}%` }}
-          />
-        </div>
-        <div className="mt-2 flex justify-between text-sm text-slate-500">
-          <span>{data?.captured ?? 0} captured</span>
-          <span>{data?.unread ?? 0} remaining</span>
-        </div>
-      </Card>
+        {loading && data && (
+          <div className="pointer-events-none absolute inset-0 z-10 flex items-start justify-center rounded-2xl bg-white/60 pt-20 backdrop-blur-[1px]">
+            <div className="flex items-center gap-3 rounded-full border border-aqua-100 bg-white px-4 py-2.5 text-sm font-semibold text-aqua-700 shadow-lg">
+              <span className="h-4 w-4 animate-spin rounded-full border-2 border-aqua-200 border-t-aqua-700" />
+              Loading selected dashboard…
+            </div>
+          </div>
+        )}
       <Card title="Recent readings">
         <div className="overflow-x-auto">
           <table className="w-full">
-            <thead>
+            <thead className="bg-slate-50/80">
               <tr>
-                <th className={TH}>Meter</th>
-                <th className={TH}>Customer</th>
+                <th className={TH}>Meter / customer</th>
                 <th className={TH}>Current</th>
                 <th className={TH}>Consumption</th>
                 <th className={TH}>Exception</th>
@@ -343,10 +598,21 @@ export function ReadingDashboard() {
             </thead>
             <tbody>
               {(data?.recent ?? []).map((r: Row) => (
-                <tr key={r.readingId} className="border-t border-slate-100">
-                  <td className={TD}>{r.meter?.meterNumber}</td>
-                  <td className={TD}>{customerName(r)}</td>
-                  <td className={TD}>{number(r.currentReading)}</td>
+                <tr
+                  key={r.readingId}
+                  className="border-t border-slate-100 transition hover:bg-slate-50/70"
+                >
+                  <td className={TD}>
+                    <div className="font-semibold text-slate-800">
+                      {r.meter?.meterNumber ?? "—"}
+                    </div>
+                    <div className="mt-0.5 text-xs text-slate-400">
+                      {customerName(r)}
+                    </div>
+                  </td>
+                  <td className={`${TD} font-semibold text-slate-800`}>
+                    {number(r.currentReading)}
+                  </td>
                   <td className={TD}>{number(r.consumption)}</td>
                   <td className={TD}>
                     <Badge value={r.exceptionType} />
@@ -356,17 +622,125 @@ export function ReadingDashboard() {
                   </td>
                 </tr>
               ))}
-              {!data?.recent?.length && (
+              {!loading && !data?.recent?.length && (
                 <tr>
-                  <td colSpan={6} className="p-8 text-center text-slate-400">
-                    No readings captured for this cycle.
+                  <td colSpan={5} className="p-10 text-center">
+                    <div className="font-semibold text-slate-700">
+                      No recent readings
+                    </div>
+                    <div className="mt-1 text-sm text-slate-400">
+                      Captured readings for this scope will appear here.
+                    </div>
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
         </div>
+        <div className="flex justify-end border-t border-slate-100 px-4 py-3">
+          <Link
+            to="/readings/register"
+            className="text-sm font-semibold text-aqua-700 hover:text-aqua-600"
+          >
+            View complete reading register →
+          </Link>
+        </div>
       </Card>
+        <div className="space-y-4">
+          <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3.5">
+              <h2 className="font-semibold text-slate-900">
+                Collection progress
+              </h2>
+              <span className="rounded-full bg-aqua-50 px-2.5 py-1 text-sm font-bold text-aqua-700">
+                {number(completionPercent, 1)}%
+              </span>
+            </div>
+            <div className="p-4">
+              <div className="h-3 overflow-hidden rounded-full bg-slate-100">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-aqua-600 to-cyan-400 transition-all duration-500"
+                  style={{ width: `${Math.min(completionPercent, 100)}%` }}
+                />
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-3">
+                <div className="rounded-xl bg-emerald-50 p-3">
+                  <div className="text-xs font-medium text-emerald-700">
+                    Captured
+                  </div>
+                  <div className="mt-1 text-xl font-bold text-emerald-800">
+                    {number(data?.captured ?? 0, 0)}
+                  </div>
+                </div>
+                <div className="rounded-xl bg-orange-50 p-3">
+                  <div className="text-xs font-medium text-orange-700">
+                    Remaining
+                  </div>
+                  <div className="mt-1 text-xl font-bold text-orange-800">
+                    {number(data?.unread ?? 0, 0)}
+                  </div>
+                </div>
+              </div>
+              <p className="mt-3 text-xs leading-5 text-slate-500">
+                Based on eligible active meters in the selected cycle and zone.
+              </p>
+            </div>
+          </section>
+          <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <div className="border-b border-slate-100 px-4 py-3.5">
+              <h2 className="font-semibold text-slate-900">Next actions</h2>
+            </div>
+            <div className="divide-y divide-slate-100">
+              <Link
+                to="/readings/approvals"
+                className="flex items-center justify-between gap-3 px-4 py-3.5 transition hover:bg-amber-50/60"
+              >
+                <div>
+                  <div className="text-sm font-semibold text-slate-700">
+                    Review pending readings
+                  </div>
+                  <div className="mt-0.5 text-xs text-slate-400">
+                    Supervisor approval queue
+                  </div>
+                </div>
+                <span className="rounded-full bg-amber-50 px-2.5 py-1 text-sm font-bold text-amber-700">
+                  {number(data?.pending ?? 0, 0)}
+                </span>
+              </Link>
+              <Link
+                to="/readings/exceptions"
+                className="flex items-center justify-between gap-3 px-4 py-3.5 transition hover:bg-red-50/60"
+              >
+                <div>
+                  <div className="text-sm font-semibold text-slate-700">
+                    Resolve exceptions
+                  </div>
+                  <div className="mt-0.5 text-xs text-slate-400">
+                    Abnormal or disputed readings
+                  </div>
+                </div>
+                <span className="rounded-full bg-red-50 px-2.5 py-1 text-sm font-bold text-red-700">
+                  {number(data?.exceptions ?? 0, 0)}
+                </span>
+              </Link>
+              <Link
+                to="/readings/worklist"
+                className="flex items-center justify-between gap-3 px-4 py-3.5 transition hover:bg-aqua-50/60"
+              >
+                <div>
+                  <div className="text-sm font-semibold text-slate-700">
+                    Continue field capture
+                  </div>
+                  <div className="mt-0.5 text-xs text-slate-400">
+                    Open the route worklist
+                  </div>
+                </div>
+                <span className="text-lg text-aqua-700">→</span>
+              </Link>
+            </div>
+          </section>
+        </div>
+      </div>
     </Page>
   );
 }
@@ -377,6 +751,9 @@ export function ReadingCycles() {
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
   const [editingId, setEditingId] = useState("");
+  const [cycleSearch, setCycleSearch] = useState("");
+  const [cyclePage, setCyclePage] = useState(1);
+  const [cyclePageSize, setCyclePageSize] = useState(10);
   const now = new Date();
   const [form, setForm] = useState({
     cycleCode: `RC-${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`,
@@ -401,6 +778,84 @@ export function ReadingCycles() {
   useEffect(() => {
     void load();
   }, []);
+  const filteredCycles = useMemo(() => {
+    const query = cycleSearch.trim().toLowerCase();
+    if (!query) return cycles;
+    return cycles.filter((cycle) =>
+      [
+        cycle.cycleCode,
+        cycle.cycleName,
+        cycle.status,
+        date(cycle.startDate),
+        date(cycle.endDate),
+      ]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(query)),
+    );
+  }, [cycles, cycleSearch]);
+  const cyclePages = Math.max(
+    1,
+    Math.ceil(filteredCycles.length / cyclePageSize),
+  );
+  const safeCyclePage = Math.min(cyclePage, cyclePages);
+  const pagedCycles = filteredCycles.slice(
+    (safeCyclePage - 1) * cyclePageSize,
+    safeCyclePage * cyclePageSize,
+  );
+  const cycleStart = filteredCycles.length
+    ? (safeCyclePage - 1) * cyclePageSize + 1
+    : 0;
+  const cycleEnd = Math.min(
+    safeCyclePage * cyclePageSize,
+    filteredCycles.length,
+  );
+  useEffect(() => {
+    setCyclePage(1);
+  }, [cycleSearch, cyclePageSize]);
+  useEffect(() => {
+    if (cyclePage > cyclePages) setCyclePage(cyclePages);
+  }, [cyclePage, cyclePages]);
+  const CyclePagination = ({ position }: { position: "top" | "bottom" }) => (
+    <div
+      className={`flex flex-wrap items-center justify-between gap-3 ${
+        position === "top"
+          ? "border-b border-slate-100 pb-3"
+          : "border-t border-slate-100 pt-3"
+      }`}
+    >
+      <p className="text-sm text-slate-500">
+        Showing <strong className="text-slate-700">{cycleStart}</strong>–
+        <strong className="text-slate-700">{cycleEnd}</strong> of{" "}
+        <strong className="text-slate-700">
+          {filteredCycles.length.toLocaleString()}
+        </strong>{" "}
+        cycle{filteredCycles.length === 1 ? "" : "s"}
+      </p>
+      <div className="flex items-center gap-2">
+        <CycleActionButton
+          tone="neutral"
+          disabled={safeCyclePage <= 1}
+          aria-label="Show previous reading-cycle page"
+          onClick={() => setCyclePage((page) => Math.max(1, page - 1))}
+        >
+          Previous
+        </CycleActionButton>
+        <span className="min-w-24 text-center text-sm font-medium text-slate-600">
+          Page {safeCyclePage} of {cyclePages}
+        </span>
+        <CycleActionButton
+          tone="neutral"
+          disabled={safeCyclePage >= cyclePages}
+          aria-label="Show next reading-cycle page"
+          onClick={() =>
+            setCyclePage((page) => Math.min(cyclePages, page + 1))
+          }
+        >
+          Next
+        </CycleActionButton>
+      </div>
+    </div>
+  );
   async function submit(e: FormEvent) {
     e.preventDefault();
     setSaving(true);
@@ -547,13 +1002,38 @@ export function ReadingCycles() {
           </form>
         </Card>
         <Card title="Cycle register">
+          <div className="mb-4 grid gap-3 sm:grid-cols-[1fr_150px]">
+            <Field label="Search cycle register">
+              <input
+                type="search"
+                className={INPUT}
+                value={cycleSearch}
+                placeholder="Cycle code, name, status or date"
+                onChange={(event) => setCycleSearch(event.target.value)}
+              />
+            </Field>
+            <Field label="Rows per page">
+              <select
+                className={INPUT}
+                value={cyclePageSize}
+                onChange={(event) =>
+                  setCyclePageSize(Number(event.target.value))
+                }
+              >
+                <option value={10}>10 rows</option>
+                <option value={25}>25 rows</option>
+                <option value={50}>50 rows</option>
+              </select>
+            </Field>
+          </div>
+          <CyclePagination position="top" />
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
                 <tr>
                   <th className={TH}>Code</th>
                   <th className={TH}>Cycle</th>
-                  <th className={TH}>Period</th>
+                  <th className={TH}>Cycle date</th>
                   <th className={TH}>Routes</th>
                   <th className={TH}>Readings</th>
                   <th className={TH}>Status</th>
@@ -561,7 +1041,7 @@ export function ReadingCycles() {
                 </tr>
               </thead>
               <tbody>
-                {cycles.map((c) => (
+                {pagedCycles.map((c) => (
                   <tr
                     key={c.readingCycleId}
                     className="border-t border-slate-100"
@@ -579,57 +1059,831 @@ export function ReadingCycles() {
                       <Badge value={c.status} />
                     </td>
                     <td className={TD}>
-                      <div className="flex gap-2">
-                        {["PLANNED", "CANCELLED"].includes(c.status) &&
-                          (c._count?.readings ?? 0) === 0 && (
-                            <button
-                              className="font-semibold text-aqua-700"
-                              onClick={() => edit(c)}
+                      {c.status === "CLOSED" ? (
+                        <span className="text-sm text-slate-400">No actions</span>
+                      ) : (
+                        <div className="inline-flex flex-wrap items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 p-1">
+                          {["PLANNED", "CANCELLED"].includes(c.status) &&
+                            (c._count?.readings ?? 0) === 0 && (
+                              <CycleActionButton
+                                tone="primary"
+                                aria-label={`Edit ${c.cycleCode}`}
+                                onClick={() => edit(c)}
+                              >
+                                Edit
+                              </CycleActionButton>
+                            )}
+                          {c.status === "PLANNED" && (
+                            <CycleActionButton
+                              tone="success"
+                              aria-label={`Open ${c.cycleCode}`}
+                              onClick={() => status(c, "OPEN")}
                             >
-                              Edit
-                            </button>
+                              Open cycle
+                            </CycleActionButton>
                           )}
-                        {c.status === "PLANNED" && (
-                          <button
-                            className="font-semibold text-emerald-700"
-                            onClick={() => status(c, "OPEN")}
-                          >
-                            Open
-                          </button>
-                        )}
-                        {c.status === "OPEN" && (
-                          <button
-                            className="font-semibold text-slate-700"
-                            onClick={() => status(c, "CLOSED")}
-                          >
-                            Close
-                          </button>
-                        )}
-                        {c.status === "CANCELLED" && (
-                          <button
-                            className="font-semibold text-aqua-700"
-                            onClick={() => status(c, "PLANNED")}
-                          >
-                            Reopen
-                          </button>
-                        )}
-                        {!["CLOSED", "CANCELLED"].includes(c.status) && (
-                          <button
-                            className="font-semibold text-red-600"
-                            onClick={() => status(c, "CANCELLED")}
-                          >
-                            Cancel
-                          </button>
-                        )}
-                      </div>
+                          {c.status === "OPEN" && (
+                            <CycleActionButton
+                              tone="neutral"
+                              aria-label={`Close ${c.cycleCode}`}
+                              onClick={() => status(c, "CLOSED")}
+                            >
+                              Close cycle
+                            </CycleActionButton>
+                          )}
+                          {c.status === "CANCELLED" && (
+                            <CycleActionButton
+                              tone="primary"
+                              aria-label={`Reopen ${c.cycleCode}`}
+                              onClick={() => status(c, "PLANNED")}
+                            >
+                              Reopen
+                            </CycleActionButton>
+                          )}
+                          {!["CLOSED", "CANCELLED"].includes(c.status) && (
+                            <CycleActionButton
+                              tone="danger"
+                              aria-label={`Cancel ${c.cycleCode}`}
+                              onClick={() => status(c, "CANCELLED")}
+                            >
+                              Cancel
+                            </CycleActionButton>
+                          )}
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ))}
+                {!pagedCycles.length && (
+                  <tr>
+                    <td
+                      colSpan={7}
+                      className="px-4 py-12 text-center text-sm text-slate-400"
+                    >
+                      No reading cycles match your search.
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
+          <div className="mt-3">
+            <CyclePagination position="bottom" />
+          </div>
         </Card>
       </div>
+    </Page>
+  );
+}
+
+function ReadingRouteAssignmentsPlanner() {
+  const today = new Date().toISOString().slice(0, 10);
+  const [cycles, setCycles] = useState<Row[]>([]);
+  const [routes, setRoutes] = useState<Row[]>([]);
+  const [officers, setOfficers] = useState<Row[]>([]);
+  const [candidates, setCandidates] = useState<Row[]>([]);
+  const [zones, setZones] = useState<Row[]>([]);
+  const [assignments, setAssignments] = useState<Row[]>([]);
+  const [cycleId, setCycleId] = useState("");
+  const [assignedDate, setAssignedDate] = useState(today);
+  const [remarks, setRemarks] = useState("");
+  const [selected, setSelected] = useState<string[]>([]);
+  const [readerByRoute, setReaderByRoute] = useState<Record<string, string>>({});
+  const [bulkReader, setBulkReader] = useState("");
+  const [routeSearch, setRouteSearch] = useState("");
+  const [zoneId, setZoneId] = useState("");
+  const [routePage, setRoutePage] = useState(1);
+  const [registerSearch, setRegisterSearch] = useState("");
+  const [registerPage, setRegisterPage] = useState(1);
+  const [showOfficer, setShowOfficer] = useState(false);
+  const [officerForm, setOfficerForm] = useState({
+    userId: "",
+    employeeNumber: "",
+    phoneNumber: "",
+    homeZoneId: "",
+  });
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+
+  async function load(targetCycleId = cycleId) {
+    setLoading(true);
+    try {
+      const [cycleRows, routeRows, officerRows, candidateRows, zoneRows] =
+        await Promise.all([
+          api.listReadingCycles(),
+          api.listRoutes(),
+          api.listReadingOfficers(),
+          api.listReadingStaffCandidates(),
+          api.listZones(),
+        ]);
+      const selectedCycleId =
+        targetCycleId ||
+        String(
+          (cycleRows.find((row: Row) => row.status === "OPEN") ?? cycleRows[0])
+            ?.readingCycleId ?? "",
+        );
+      const assignmentRows = await api.listRouteAssignments(selectedCycleId);
+      setCycles(cycleRows);
+      setRoutes(routeRows);
+      setOfficers(officerRows);
+      setCandidates(candidateRows);
+      setZones(zoneRows);
+      setAssignments(assignmentRows);
+      if (!targetCycleId) setCycleId(selectedCycleId);
+      setError("");
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void load();
+  }, []);
+  useEffect(() => {
+    if (!cycleId) return;
+    api
+      .listRouteAssignments(cycleId)
+      .then((rows) => {
+        setAssignments(rows);
+        setError("");
+      })
+      .catch((e) => setError(e.message));
+  }, [cycleId]);
+
+  const activeAssignments = useMemo(
+    () =>
+      assignments.filter((assignment) =>
+        ["ASSIGNED", "ACCEPTED"].includes(assignment.status),
+      ),
+    [assignments],
+  );
+  const assignedByRoute = useMemo(
+    () =>
+      new Map(
+        activeAssignments.map((assignment) => [
+          String(assignment.routeId),
+          assignment,
+        ]),
+      ),
+    [activeAssignments],
+  );
+  const filteredRoutes = useMemo(() => {
+    const query = routeSearch.trim().toLowerCase();
+    return routes.filter((route) => {
+      const text = [
+        route.routeName,
+        route.routeCode,
+        route.zone?.zoneName,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return (
+        (!zoneId || String(route.zoneId) === zoneId) &&
+        (!query || text.includes(query))
+      );
+    });
+  }, [routes, routeSearch, zoneId]);
+  const routePageSize = 8;
+  const routePages = Math.max(1, Math.ceil(filteredRoutes.length / routePageSize));
+  const visibleRoutes = filteredRoutes.slice(
+    (routePage - 1) * routePageSize,
+    routePage * routePageSize,
+  );
+  const visibleSelectable = visibleRoutes
+    .map((route) => String(route.routeId))
+    .filter((id) => !assignedByRoute.has(id));
+  const allVisibleSelected =
+    visibleSelectable.length > 0 &&
+    visibleSelectable.every((id) => selected.includes(id));
+
+  const filteredAssignments = useMemo(() => {
+    const query = registerSearch.trim().toLowerCase();
+    return assignments.filter((assignment) =>
+      [
+        assignment.cycle?.cycleCode,
+        assignment.cycle?.cycleName,
+        assignment.route?.routeName,
+        assignment.route?.zone?.zoneName,
+        assignment.officerName,
+        assignment.fieldOfficer?.employeeNumber,
+        assignment.status,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(query),
+    );
+  }, [assignments, registerSearch]);
+  const registerPageSize = 10;
+  const registerPages = Math.max(
+    1,
+    Math.ceil(filteredAssignments.length / registerPageSize),
+  );
+  const visibleAssignments = filteredAssignments.slice(
+    (registerPage - 1) * registerPageSize,
+    registerPage * registerPageSize,
+  );
+
+  useEffect(() => setRoutePage(1), [routeSearch, zoneId]);
+  useEffect(() => setRegisterPage(1), [registerSearch, cycleId]);
+  useEffect(() => {
+    if (routePage > routePages) setRoutePage(routePages);
+  }, [routePage, routePages]);
+  useEffect(() => {
+    if (registerPage > registerPages) setRegisterPage(registerPages);
+  }, [registerPage, registerPages]);
+
+  function toggleRoute(routeId: string) {
+    setSelected((current) =>
+      current.includes(routeId)
+        ? current.filter((id) => id !== routeId)
+        : [...current, routeId],
+    );
+  }
+  function toggleVisible() {
+    setSelected((current) =>
+      allVisibleSelected
+        ? current.filter((id) => !visibleSelectable.includes(id))
+        : [...new Set([...current, ...visibleSelectable])],
+    );
+  }
+  function applyReader() {
+    if (!bulkReader || !selected.length) return;
+    setReaderByRoute((current) => ({
+      ...current,
+      ...Object.fromEntries(selected.map((routeId) => [routeId, bulkReader])),
+    }));
+  }
+  async function submitAssignments(e: FormEvent) {
+    e.preventDefault();
+    setError("");
+    setSuccess("");
+    if (!selected.length)
+      return setError("Select at least one available route.");
+    const missing = selected.filter((routeId) => !readerByRoute[routeId]);
+    if (missing.length)
+      return setError(
+        `Select a meter reader for every route. ${missing.length} route(s) still need a reader.`,
+      );
+    setSaving(true);
+    try {
+      const result = await api.assignReadingRoutesBulk({
+        readingCycleId: cycleId,
+        assignedDate,
+        remarks: remarks || undefined,
+        assignments: selected.map((routeId) => ({
+          routeId,
+          fieldOfficerId: readerByRoute[routeId],
+        })),
+      });
+      setSuccess(`${result.created} route assignment(s) created successfully.`);
+      setSelected([]);
+      setReaderByRoute({});
+      setBulkReader("");
+      setRemarks("");
+      await load(cycleId);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+  async function createOfficer(e: FormEvent) {
+    e.preventDefault();
+    try {
+      await api.createReadingOfficer({
+        ...officerForm,
+        homeZoneId: officerForm.homeZoneId || undefined,
+      });
+      setShowOfficer(false);
+      setOfficerForm({
+        userId: "",
+        employeeNumber: "",
+        phoneNumber: "",
+        homeZoneId: "",
+      });
+      await load(cycleId);
+    } catch (e: any) {
+      setError(e.message);
+    }
+  }
+
+  const Paging = ({
+    page,
+    pages,
+    setPage,
+  }: {
+    page: number;
+    pages: number;
+    setPage: (page: number) => void;
+  }) => (
+    <div className="flex items-center gap-2">
+      <CycleActionButton disabled={page <= 1} onClick={() => setPage(page - 1)}>
+        Previous
+      </CycleActionButton>
+      <span className="px-2 text-sm font-semibold text-slate-600">
+        Page {page} of {pages}
+      </span>
+      <CycleActionButton
+        disabled={page >= pages}
+        onClick={() => setPage(page + 1)}
+      >
+        Next
+      </CycleActionButton>
+    </div>
+  );
+
+  return (
+    <Page
+      title="Route assignments"
+      subtitle="Plan cycle workloads and allocate multiple routes to meter readers"
+      actions={
+        <Button onClick={() => setShowOfficer((value) => !value)}>
+          {showOfficer ? "Close reader form" : "Add meter reader"}
+        </Button>
+      }
+    >
+      {error && <Notice>{error}</Notice>}
+      {success && <Notice tone="green">{success}</Notice>}
+      {showOfficer && (
+        <Card title="Create meter reader profile" className="mb-4">
+          <form onSubmit={createOfficer} className="grid gap-3 md:grid-cols-4">
+            <Field label="Staff user" required>
+              <select
+                required
+                className={INPUT}
+                value={officerForm.userId}
+                onChange={(e) => {
+                  const user = candidates.find(
+                    (candidate) => String(candidate.userId) === e.target.value,
+                  );
+                  setOfficerForm({
+                    ...officerForm,
+                    userId: e.target.value,
+                    phoneNumber: user?.phoneNumber ?? officerForm.phoneNumber,
+                  });
+                }}
+              >
+                <option value="">Select active staff user</option>
+                {candidates.map((user) => (
+                  <option key={user.userId} value={user.userId}>
+                    {user.firstName} {user.lastName} ({user.username})
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Employee number" required>
+              <input
+                required
+                className={INPUT}
+                value={officerForm.employeeNumber}
+                onChange={(e) =>
+                  setOfficerForm({
+                    ...officerForm,
+                    employeeNumber: e.target.value,
+                  })
+                }
+              />
+            </Field>
+            <Field label="Phone number" required>
+              <input
+                required
+                className={INPUT}
+                value={officerForm.phoneNumber}
+                onChange={(e) =>
+                  setOfficerForm({
+                    ...officerForm,
+                    phoneNumber: e.target.value,
+                  })
+                }
+              />
+            </Field>
+            <Field label="Home zone">
+              <select
+                className={INPUT}
+                value={officerForm.homeZoneId}
+                onChange={(e) =>
+                  setOfficerForm({ ...officerForm, homeZoneId: e.target.value })
+                }
+              >
+                <option value="">No home zone</option>
+                {zones.map((zone) => (
+                  <option key={zone.zoneId} value={zone.zoneId}>
+                    {zone.zoneName}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <div className="md:col-span-4 flex justify-end">
+              <Button tone="green">Create reader profile</Button>
+            </div>
+          </form>
+        </Card>
+      )}
+
+      <form onSubmit={submitAssignments}>
+        <Card className="mb-4">
+          <div className="mb-4 flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 pb-4">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[0.14em] text-aqua-700">
+                Bulk assignment planner
+              </p>
+              <h2 className="mt-1 text-lg font-bold text-slate-900">
+                Build the route workload
+              </h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Apply one reader to several routes, or select a different reader
+                on each route.
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <div className="rounded-xl bg-aqua-50 px-4 py-2 text-center">
+                <strong className="block text-lg text-aqua-800">
+                  {selected.length}
+                </strong>
+                <span className="text-xs font-semibold text-aqua-700">
+                  Selected
+                </span>
+              </div>
+              <div className="rounded-xl bg-emerald-50 px-4 py-2 text-center">
+                <strong className="block text-lg text-emerald-800">
+                  {activeAssignments.length}
+                </strong>
+                <span className="text-xs font-semibold text-emerald-700">
+                  Assigned
+                </span>
+              </div>
+            </div>
+          </div>
+          <div className="grid gap-3 lg:grid-cols-4">
+            <Field label="Reading cycle" required>
+              <select
+                required
+                className={INPUT}
+                value={cycleId}
+                onChange={(e) => {
+                  setCycleId(e.target.value);
+                  setSelected([]);
+                  setReaderByRoute({});
+                  setSuccess("");
+                }}
+              >
+                <option value="">Select cycle</option>
+                {cycles
+                  .filter((cycle) =>
+                    ["PLANNED", "OPEN"].includes(cycle.status),
+                  )
+                  .map((cycle) => (
+                    <option
+                      key={cycle.readingCycleId}
+                      value={cycle.readingCycleId}
+                    >
+                      {cycle.cycleCode} — {cycle.cycleName}
+                    </option>
+                  ))}
+              </select>
+            </Field>
+            <Field label="Assigned date">
+              <input
+                type="date"
+                className={INPUT}
+                value={assignedDate}
+                onChange={(e) => setAssignedDate(e.target.value)}
+              />
+            </Field>
+            <Field label="Reader for selected routes">
+              <select
+                className={INPUT}
+                value={bulkReader}
+                onChange={(e) => setBulkReader(e.target.value)}
+              >
+                <option value="">Choose meter reader</option>
+                {officers.map((reader) => (
+                  <option
+                    key={reader.fieldOfficerId}
+                    value={reader.fieldOfficerId}
+                  >
+                    {reader.officerName} — {reader.employeeNumber}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <div className="flex items-end">
+              <CycleActionButton
+                className="w-full"
+                tone="primary"
+                disabled={!bulkReader || !selected.length}
+                onClick={applyReader}
+              >
+                Apply to {selected.length} selected
+              </CycleActionButton>
+            </div>
+          </div>
+
+          <div className="mt-4 overflow-hidden rounded-xl border border-slate-200">
+            <div className="grid gap-3 border-b border-slate-200 bg-slate-50/80 p-3 md:grid-cols-[1fr_240px]">
+              <input
+                className={INPUT}
+                value={routeSearch}
+                onChange={(e) => setRouteSearch(e.target.value)}
+                placeholder="Search route name, code or zone"
+              />
+              <select
+                className={INPUT}
+                value={zoneId}
+                onChange={(e) => setZoneId(e.target.value)}
+              >
+                <option value="">All zones</option>
+                {zones.map((zone) => (
+                  <option key={zone.zoneId} value={zone.zoneId}>
+                    {zone.zoneName}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-slate-50">
+                  <tr>
+                    <th className={`${TH} w-12`}>
+                      <input
+                        type="checkbox"
+                        checked={allVisibleSelected}
+                        onChange={toggleVisible}
+                        aria-label="Select all available routes on this page"
+                      />
+                    </th>
+                    <th className={TH}>Zone / route</th>
+                    <th className={TH}>Workload</th>
+                    <th className={TH}>Status</th>
+                    <th className={`${TH} min-w-[280px]`}>Meter reader</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visibleRoutes.map((route) => {
+                    const id = String(route.routeId);
+                    const existing = assignedByRoute.get(id);
+                    const isSelected = selected.includes(id);
+                    const workload =
+                      route.estimatedCustomers ??
+                      Number(route._count?.accounts ?? 0) +
+                        Number(route._count?.properties ?? 0);
+                    return (
+                      <tr
+                        key={id}
+                        className={`border-t border-slate-100 transition ${
+                          isSelected ? "bg-aqua-50/60" : "hover:bg-slate-50"
+                        }`}
+                      >
+                        <td className={TD}>
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            disabled={Boolean(existing)}
+                            onChange={() => toggleRoute(id)}
+                            aria-label={`Select ${route.routeName}`}
+                          />
+                        </td>
+                        <td className={TD}>
+                          <p className="font-semibold text-slate-900">
+                            {route.routeName}
+                          </p>
+                          <p className="text-xs text-slate-500">
+                            {route.zone?.zoneName ?? "No zone"} ·{" "}
+                            {route.routeCode}
+                          </p>
+                        </td>
+                        <td className={TD}>
+                          <span className="font-semibold text-slate-800">
+                            {workload || "—"}
+                          </span>{" "}
+                          <span className="text-xs text-slate-400">accounts</span>
+                        </td>
+                        <td className={TD}>
+                          {existing ? (
+                            <span className="inline-flex rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">
+                              {existing.officerName}
+                            </span>
+                          ) : (
+                            <span className="inline-flex rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
+                              Available
+                            </span>
+                          )}
+                        </td>
+                        <td className={TD}>
+                          <select
+                            className={INPUT}
+                            value={readerByRoute[id] ?? ""}
+                            disabled={Boolean(existing)}
+                            onChange={(e) => {
+                              const value = e.target.value;
+                              setReaderByRoute((current) => ({
+                                ...current,
+                                [id]: value,
+                              }));
+                              if (value && !isSelected)
+                                setSelected((current) => [...current, id]);
+                            }}
+                          >
+                            <option value="">Select reader for this route</option>
+                            {officers.map((reader) => (
+                              <option
+                                key={reader.fieldOfficerId}
+                                value={reader.fieldOfficerId}
+                              >
+                                {reader.officerName} — {reader.employeeNumber}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {!visibleRoutes.length && (
+                    <tr>
+                      <td className={`${TD} py-10 text-center`} colSpan={5}>
+                        No routes match these filters.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 px-4 py-3">
+              <p className="text-xs font-medium text-slate-500">
+                Showing{" "}
+                {filteredRoutes.length
+                  ? (routePage - 1) * routePageSize + 1
+                  : 0}
+                –{Math.min(routePage * routePageSize, filteredRoutes.length)} of{" "}
+                {filteredRoutes.length} routes
+              </p>
+              <Paging
+                page={routePage}
+                pages={routePages}
+                setPage={setRoutePage}
+              />
+            </div>
+          </div>
+          <div className="mt-4 grid items-end gap-3 lg:grid-cols-[1fr_auto]">
+            <Field label="Assignment note (optional)">
+              <input
+                className={INPUT}
+                value={remarks}
+                onChange={(e) => setRemarks(e.target.value)}
+                placeholder="Instructions shared across this assignment batch"
+              />
+            </Field>
+            <Button
+              tone="green"
+              className="min-w-56"
+              disabled={saving || !selected.length}
+            >
+              {saving
+                ? "Assigning routes…"
+                : `Assign ${selected.length} route(s)`}
+            </Button>
+          </div>
+        </Card>
+      </form>
+
+      <Card>
+        <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-bold text-slate-900">
+              Assignment register
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">
+              {filteredAssignments.length} assignment(s) in the selected cycle
+            </p>
+          </div>
+          <input
+            className={`${INPUT} max-w-sm`}
+            value={registerSearch}
+            onChange={(e) => setRegisterSearch(e.target.value)}
+            placeholder="Search route, zone, reader or status"
+          />
+        </div>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-slate-50 px-4 py-3">
+          <p className="text-xs font-medium text-slate-500">
+            Showing{" "}
+            {filteredAssignments.length
+              ? (registerPage - 1) * registerPageSize + 1
+              : 0}
+            –
+            {Math.min(
+              registerPage * registerPageSize,
+              filteredAssignments.length,
+            )}{" "}
+            of {filteredAssignments.length}
+          </p>
+          <Paging
+            page={registerPage}
+            pages={registerPages}
+            setPage={setRegisterPage}
+          />
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead className="bg-slate-50">
+              <tr>
+                <th className={TH}>Cycle</th>
+                <th className={TH}>Zone / route</th>
+                <th className={TH}>Meter reader</th>
+                <th className={TH}>Assigned</th>
+                <th className={TH}>Status</th>
+                <th className={TH}>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visibleAssignments.map((assignment) => (
+                <tr
+                  key={assignment.routeAssignmentId}
+                  className="border-t border-slate-100 transition hover:bg-slate-50"
+                >
+                  <td className={TD}>
+                    <p className="font-semibold text-slate-900">
+                      {assignment.cycle?.cycleName}
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      {assignment.cycle?.cycleCode}
+                    </p>
+                  </td>
+                  <td className={TD}>
+                    <p className="font-semibold text-slate-800">
+                      {assignment.route?.routeName}
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      {assignment.route?.zone?.zoneName ?? "No zone"}
+                    </p>
+                  </td>
+                  <td className={TD}>
+                    <p className="font-semibold text-slate-800">
+                      {assignment.officerName}
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      {assignment.fieldOfficer?.employeeNumber}
+                    </p>
+                  </td>
+                  <td className={TD}>{date(assignment.assignedDate)}</td>
+                  <td className={TD}>
+                    <Badge value={assignment.status} />
+                  </td>
+                  <td className={TD}>
+                    {assignment.status !== "COMPLETED" && (
+                      <CycleActionButton
+                        tone="success"
+                        onClick={async () => {
+                          try {
+                            await api.updateRouteAssignmentStatus(
+                              String(assignment.routeAssignmentId),
+                              "COMPLETED",
+                            );
+                            await load(cycleId);
+                          } catch (e: any) {
+                            setError(e.message);
+                          }
+                        }}
+                      >
+                        Complete
+                      </CycleActionButton>
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {!loading && !visibleAssignments.length && (
+                <tr>
+                  <td className={`${TD} py-10 text-center`} colSpan={6}>
+                    No route assignments match this view.
+                  </td>
+                </tr>
+              )}
+              {loading && (
+                <tr>
+                  <td className={`${TD} py-10 text-center`} colSpan={6}>
+                    Loading assignments…
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        <div className="mt-3 flex items-center justify-between border-t border-slate-100 pt-3">
+          <p className="text-xs font-medium text-slate-500">
+            Page {registerPage} of {registerPages}
+          </p>
+          <Paging
+            page={registerPage}
+            pages={registerPages}
+            setPage={setRegisterPage}
+          />
+        </div>
+      </Card>
     </Page>
   );
 }
@@ -641,11 +1895,13 @@ export function ReadingRouteAssignments() {
   const [candidates, setCandidates] = useState<Row[]>([]);
   const [items, setItems] = useState<Row[]>([]);
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [selectedRouteIds, setSelectedRouteIds] = useState<string[]>([]);
+  const [selectedOfficerIds, setSelectedOfficerIds] = useState<string[]>([]);
   const [showOfficer, setShowOfficer] = useState(false);
   const [form, setForm] = useState({
     readingCycleId: "",
-    routeId: "",
-    fieldOfficerId: "",
     assignedDate: new Date().toISOString().slice(0, 10),
     remarks: "",
   });
@@ -689,12 +1945,33 @@ export function ReadingRouteAssignments() {
   }, [form.readingCycleId]);
   async function assign(e: FormEvent) {
     e.preventDefault();
+    setError("");
+    setSuccess("");
+    if (!selectedRouteIds.length)
+      return setError("Select at least one route.");
+    if (!selectedOfficerIds.length)
+      return setError("Select at least one meter reader.");
+    setSaving(true);
     try {
-      await api.assignReadingRoute(form);
+      const result = await api.assignReadingRoutesBulk({
+        readingCycleId: form.readingCycleId,
+        assignedDate: form.assignedDate,
+        remarks: form.remarks || undefined,
+        assignments: selectedRouteIds.map((routeId, index) => ({
+          routeId,
+          fieldOfficerId:
+            selectedOfficerIds[index % selectedOfficerIds.length],
+        })),
+      });
+      setSuccess(`${result.created} route assignment(s) created successfully.`);
+      setSelectedRouteIds([]);
+      setSelectedOfficerIds([]);
       await load();
-      setForm({ ...form, routeId: "", fieldOfficerId: "", remarks: "" });
+      setForm({ ...form, remarks: "" });
     } catch (e: any) {
       setError(e.message);
+    } finally {
+      setSaving(false);
     }
   }
   async function createOfficer(e: FormEvent) {
@@ -721,6 +1998,7 @@ export function ReadingRouteAssignments() {
       }
     >
       {error && <Notice>{error}</Notice>}
+      {success && <Notice tone="green">{success}</Notice>}
       {showOfficer && (
         <Card title="Create meter reader profile" className="mb-4">
           <form onSubmit={createOfficer} className="grid gap-3 md:grid-cols-4">
@@ -790,7 +2068,7 @@ export function ReadingRouteAssignments() {
           </form>
         </Card>
       )}
-      <Card title="Assign route" className="mb-4">
+      <Card title="Assign routes" className="mb-4">
         <form
           onSubmit={assign}
           className="grid gap-3 md:grid-cols-2 xl:grid-cols-5"
@@ -800,9 +2078,11 @@ export function ReadingRouteAssignments() {
               required
               className={INPUT}
               value={form.readingCycleId}
-              onChange={(e) =>
-                setForm({ ...form, readingCycleId: e.target.value })
-              }
+              onChange={(e) => {
+                setForm({ ...form, readingCycleId: e.target.value });
+                setSelectedRouteIds([]);
+                setSelectedOfficerIds([]);
+              }}
             >
               <option value="">Select cycle</option>
               {cycles
@@ -814,37 +2094,38 @@ export function ReadingRouteAssignments() {
                 ))}
             </select>
           </Field>
-          <Field label="Route" required>
-            <select
-              required
-              className={INPUT}
-              value={form.routeId}
-              onChange={(e) => setForm({ ...form, routeId: e.target.value })}
-            >
-              <option value="">Select route</option>
-              {routes.map((r) => (
-                <option key={r.routeId} value={r.routeId}>
-                  {r.routeName}
-                </option>
-              ))}
-            </select>
+          <Field label="Routes" required>
+            <MultiCheckDropdown
+              placeholder="Select one or more routes"
+              selected={selectedRouteIds}
+              onChange={setSelectedRouteIds}
+              options={routes
+                .filter(
+                  (route) =>
+                    !items.some(
+                      (assignment) =>
+                        String(assignment.routeId) === String(route.routeId) &&
+                        ["ASSIGNED", "ACCEPTED"].includes(assignment.status),
+                    ),
+                )
+                .map((route) => ({
+                  value: String(route.routeId),
+                  label: route.routeName,
+                  detail: `${route.zone?.zoneName ?? "No zone"} · ${route.routeCode}`,
+                }))}
+            />
           </Field>
-          <Field label="Meter reader" required>
-            <select
-              required
-              className={INPUT}
-              value={form.fieldOfficerId}
-              onChange={(e) =>
-                setForm({ ...form, fieldOfficerId: e.target.value })
-              }
-            >
-              <option value="">Select officer</option>
-              {officers.map((o) => (
-                <option key={o.fieldOfficerId} value={o.fieldOfficerId}>
-                  {o.officerName} · {o.employeeNumber}
-                </option>
-              ))}
-            </select>
+          <Field label="Meter readers" required>
+            <MultiCheckDropdown
+              placeholder="Select one or more readers"
+              selected={selectedOfficerIds}
+              onChange={setSelectedOfficerIds}
+              options={officers.map((reader) => ({
+                value: String(reader.fieldOfficerId),
+                label: reader.officerName,
+                detail: `${reader.employeeNumber}${reader.homeZone?.zoneName ? ` · ${reader.homeZone.zoneName}` : ""}`,
+              }))}
+            />
           </Field>
           <Field label="Assigned date">
             <input
@@ -857,8 +2138,27 @@ export function ReadingRouteAssignments() {
             />
           </Field>
           <div className="flex items-end">
-            <Button className="w-full">Assign route</Button>
+            <Button
+              className="w-full"
+              disabled={
+                saving ||
+                !form.readingCycleId ||
+                !selectedRouteIds.length ||
+                !selectedOfficerIds.length
+              }
+            >
+              {saving
+                ? "Assigning…"
+                : `Assign ${selectedRouteIds.length || 0} route(s)`}
+            </Button>
           </div>
+          {(selectedRouteIds.length > 0 || selectedOfficerIds.length > 0) && (
+            <div className="md:col-span-2 xl:col-span-5 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-sm text-blue-700">
+              {selectedRouteIds.length} route(s) and {selectedOfficerIds.length} reader(s) selected.
+              {selectedOfficerIds.length > 1 &&
+                " Routes will be distributed between the selected readers in order."}
+            </div>
+          )}
         </form>
       </Card>
       <Card title="Assignment register">
@@ -924,9 +2224,13 @@ export function ReadingWorklist() {
   const [routes, setRoutes] = useState<Row[]>([]);
   const [items, setItems] = useState<Row[]>([]);
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
   const cycleId = params.get("cycleId") ?? "";
   const routeId = params.get("routeId") ?? "";
   const search = params.get("search") ?? "";
+  const readingStatus = params.get("status") ?? "";
+  const page = Math.max(1, Number(params.get("page") ?? "1") || 1);
+  const pageSize = 25;
   useEffect(() => {
     Promise.all([api.listReadingCycles(), api.listRoutes()])
       .then(([c, r]) => {
@@ -942,30 +2246,136 @@ export function ReadingWorklist() {
   }, []);
   useEffect(() => {
     if (!cycleId) return;
-    api
-      .readingWorklist({ cycleId, routeId, search })
-      .then((nextItems) => {
-        setError("");
-        setItems(nextItems);
-      })
-      .catch((e) => setError(e.message));
+    let cancelled = false;
+    setLoading(true);
+    const timer = window.setTimeout(() => {
+      api
+        .readingWorklist({ cycleId, routeId, search: search.trim() })
+        .then((nextItems) => {
+          if (cancelled) return;
+          setError("");
+          setItems(nextItems);
+        })
+        .catch((e) => {
+          if (!cancelled) setError(e.message);
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
+    }, search ? 250 : 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, [cycleId, routeId, search]);
+
+  const selectedCycle = cycles.find(
+    (cycle) => String(cycle.readingCycleId) === cycleId,
+  );
+  const selectedRoute = routes.find((route) => String(route.routeId) === routeId);
+  const captured = items.filter((item) => item.cycleReading).length;
+  const unread = items.length - captured;
+  const filteredItems = useMemo(
+    () =>
+      items.filter((item) => {
+        if (readingStatus === "UNREAD") return !item.cycleReading;
+        if (readingStatus === "CAPTURED") return Boolean(item.cycleReading);
+        return true;
+      }),
+    [items, readingStatus],
+  );
+  const totalPages = Math.max(1, Math.ceil(filteredItems.length / pageSize));
+  const pageItems = filteredItems.slice(
+    (page - 1) * pageSize,
+    page * pageSize,
+  );
+  const pageNumbers = useMemo(() => {
+    const start = Math.max(1, Math.min(page - 2, totalPages - 4));
+    const end = Math.min(totalPages, start + 4);
+    return Array.from({ length: end - start + 1 }, (_, index) => start + index);
+  }, [page, totalPages]);
+
+  useEffect(() => {
+    if (page <= totalPages) return;
+    const next = new URLSearchParams(params);
+    totalPages > 1 ? next.set("page", String(totalPages)) : next.delete("page");
+    setParams(next, { replace: true });
+  }, [page, totalPages]);
+
   const update = (key: string, value: string) => {
     const next = new URLSearchParams(params);
     value ? next.set(key, value) : next.delete(key);
+    next.delete("page");
     setParams(next);
   };
+
+  const goToPage = (nextPage: number) => {
+    const next = new URLSearchParams(params);
+    nextPage > 1 ? next.set("page", String(nextPage)) : next.delete("page");
+    setParams(next);
+  };
+
+  const Pagination = ({ position }: { position: "top" | "bottom" }) => (
+    <nav
+      className="flex flex-wrap items-center justify-between gap-3"
+      aria-label={`Worklist ${position} pagination`}
+    >
+      <p className="text-xs font-medium text-slate-500">
+        {filteredItems.length
+          ? `Showing ${(page - 1) * pageSize + 1}–${Math.min(
+              page * pageSize,
+              filteredItems.length,
+            )} of ${filteredItems.length.toLocaleString()} meters`
+          : "No meters to display"}
+      </p>
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          disabled={page <= 1}
+          onClick={() => goToPage(page - 1)}
+          className="inline-flex h-9 items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 shadow-sm transition hover:border-sky-200 hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <span aria-hidden="true">‹</span> Previous
+        </button>
+        <div className="hidden items-center gap-1 sm:flex">
+          {pageNumbers.map((pageNumber) => (
+            <button
+              type="button"
+              key={`${position}-${pageNumber}`}
+              aria-current={pageNumber === page ? "page" : undefined}
+              onClick={() => goToPage(pageNumber)}
+              className={`h-9 min-w-9 rounded-lg border px-2 text-xs font-bold transition ${
+                pageNumber === page
+                  ? "border-aqua-700 bg-aqua-700 text-white shadow-sm"
+                  : "border-slate-200 bg-white text-slate-600 hover:border-sky-200 hover:bg-sky-50"
+              }`}
+            >
+              {pageNumber}
+            </button>
+          ))}
+        </div>
+        <button
+          type="button"
+          disabled={page >= totalPages}
+          onClick={() => goToPage(page + 1)}
+          className="inline-flex h-9 items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 shadow-sm transition hover:border-sky-200 hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Next <span aria-hidden="true">›</span>
+        </button>
+      </div>
+    </nav>
+  );
   return (
     <Page
       title="Meter reading worklist"
-      subtitle="Customer meters due for capture in the selected cycle"
+      subtitle="Review route workloads and capture customer meter readings"
       actions={
         <LinkButton to="/readings/register">Reading register</LinkButton>
       }
     >
       {error && <Notice>{error}</Notice>}
-      <Card className="mb-4">
-        <div className="grid gap-3 md:grid-cols-3">
+      <section className="mb-4 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_16px_42px_-30px_rgba(15,32,56,0.45)]">
+        <div className="grid gap-3 p-4 md:grid-cols-2 lg:grid-cols-4">
           <Field label="Reading cycle">
             <select
               className={INPUT}
@@ -999,61 +2409,180 @@ export function ReadingWorklist() {
               className={INPUT}
               value={search}
               onChange={(e) => update("search", e.target.value)}
-              placeholder="Meter, account or customer"
+              placeholder="Exact meter/account, customer no., name or phone"
             />
           </Field>
+          <Field label="Status">
+            <select
+              className={INPUT}
+              value={readingStatus}
+              onChange={(e) => update("status", e.target.value)}
+            >
+              <option value="">All meters</option>
+              <option value="UNREAD">Unread</option>
+              <option value="CAPTURED">Captured</option>
+            </select>
+          </Field>
         </div>
-      </Card>
-      <Card title={`${items.length} meter(s) in worklist`}>
+        <div className="grid border-t border-slate-100 bg-slate-50/70 sm:grid-cols-3 sm:divide-x sm:divide-slate-200">
+          <div className="px-4 py-3">
+            <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+              Selected workload
+            </div>
+            <div className="mt-1 truncate text-sm font-bold text-slate-800">
+              {selectedCycle?.cycleName ?? "Select a reading cycle"}
+              {selectedRoute ? ` · ${selectedRoute.routeName}` : " · All routes"}
+            </div>
+          </div>
+          <div className="px-4 py-3">
+            <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+              Unread meters
+            </div>
+            <div className="mt-1 text-lg font-extrabold text-orange-600">
+              {unread.toLocaleString()}
+            </div>
+          </div>
+          <div className="px-4 py-3">
+            <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+              Captured in this cycle
+            </div>
+            <div className="mt-1 text-lg font-extrabold text-emerald-600">
+              {captured.toLocaleString()}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_16px_42px_-30px_rgba(15,32,56,0.45)]">
+        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 px-5 py-4">
+          <div>
+            <h2 className="text-base font-bold text-slate-900">Route worklist</h2>
+            <p className="mt-0.5 text-xs text-slate-500">
+              {filteredItems.length.toLocaleString()} eligible meter
+              {filteredItems.length === 1 ? "" : "s"} · Page {page} of{" "}
+              {totalPages}
+            </p>
+          </div>
+          <Pagination position="top" />
+        </div>
         <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead>
+          <table className="w-full min-w-[1050px]">
+            <thead className="bg-slate-50/80">
               <tr>
-                <th className={TH}>Route</th>
-                <th className={TH}>Account / Customer</th>
-                <th className={TH}>Meter</th>
-                <th className={TH}>Previous</th>
-                <th className={TH}>Status</th>
-                <th className={TH}>Action</th>
+                {[
+                  "Route",
+                  "Account / Customer",
+                  "Meter",
+                  "Previous reading",
+                  "Current approved reading",
+                  "Status",
+                  "Action",
+                ].map((heading) => (
+                  <th
+                    key={heading}
+                    className={`px-4 py-3 text-[11px] font-bold uppercase tracking-[0.08em] text-slate-500 ${
+                      heading === "Action" ? "text-right" : "text-left"
+                    } ${heading === "Route" ? "pl-5" : ""}`}
+                  >
+                    {heading}
+                  </th>
+                ))}
               </tr>
             </thead>
-            <tbody>
-              {items.map((a) => (
-                <tr key={a.assignmentId} className="border-t border-slate-100">
+            <tbody className="divide-y divide-slate-100">
+              {loading ? (
+                <tr>
+                  <td colSpan={7} className="px-4 py-16 text-center text-slate-500">
+                    <span className="inline-flex items-center gap-2">
+                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-sky-200 border-t-sky-600" />
+                      Loading route worklist…
+                    </span>
+                  </td>
+                </tr>
+              ) : pageItems.map((a) => (
+                <tr
+                  key={a.assignmentId}
+                  className="group transition hover:bg-sky-50/40"
+                >
                   <td className={TD}>{a.route?.routeName ?? "—"}</td>
-                  <td className={TD}>
-                    <div className="font-medium text-slate-800">
-                      {a.account?.accountNumber}
-                    </div>
-                    <div className="text-sm text-slate-500">
-                      {a.customerName}
+                  <td className="px-4 py-3.5">
+                    <div className="flex items-center gap-3">
+                      <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-sky-50 to-violet-100 text-xs font-extrabold text-violet-700 ring-1 ring-violet-100">
+                        {String(a.customerName || "Customer")
+                          .split(/\s+/)
+                          .filter(Boolean)
+                          .slice(0, 2)
+                          .map((part) => part[0])
+                          .join("")
+                          .toUpperCase()}
+                      </span>
+                      <div>
+                        <div className="font-bold text-slate-900">
+                          {a.customerName || "Unnamed customer"}
+                        </div>
+                        <div className="mt-0.5 flex flex-wrap gap-x-2 text-xs">
+                          <span className="font-semibold text-aqua-700">
+                            Customer: {a.account?.customer?.customerNumber ?? "—"}
+                          </span>
+                          <span className="text-slate-400">
+                            Account: {a.account?.accountNumber ?? "—"}
+                          </span>
+                        </div>
+                      </div>
                     </div>
                   </td>
-                  <td className={TD}>{a.meter?.meterNumber}</td>
-                  <td className={TD}>
-                    {number(
-                      a.meter?.readings?.[0]?.currentReading ??
-                        a.meter?.openingReading,
+                  <td className="px-4 py-3.5">
+                    <div className="font-bold text-slate-800">
+                      {a.meter?.meterNumber}
+                    </div>
+                    <div className="mt-0.5 text-xs text-slate-400">
+                      {a.meter?.meterType ?? "Customer meter"}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3.5">
+                    <span className="font-bold tabular-nums text-slate-800">
+                      {number(
+                        a.cycleReading?.previousReading ??
+                          a.meter?.readings?.[0]?.currentReading ??
+                          a.meter?.openingReading,
+                      )}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3.5">
+                    {a.cycleReading?.approvalStatus === "APPROVED" ? (
+                      <div>
+                        <span className="font-extrabold tabular-nums text-emerald-700">
+                          {number(a.cycleReading.currentReading)}
+                        </span>
+                        <div className="mt-0.5 text-[11px] font-semibold text-emerald-600">
+                          Approved
+                        </div>
+                      </div>
+                    ) : (
+                      <span className="text-slate-400">—</span>
                     )}
                   </td>
-                  <td className={TD}>
+                  <td className="px-4 py-3.5">
                     {a.cycleReading ? (
                       <Badge value={a.cycleReading.approvalStatus} />
                     ) : (
-                      <span className="text-orange-600">Unread</span>
+                      <span className="inline-flex items-center gap-1.5 rounded-full bg-orange-50 px-2.5 py-1 text-xs font-bold text-orange-700 ring-1 ring-inset ring-orange-200">
+                        <span className="h-1.5 w-1.5 rounded-full bg-orange-500" />
+                        Unread
+                      </span>
                     )}
                   </td>
-                  <td className={TD}>
+                  <td className="px-4 py-3.5 text-right">
                     {a.cycleReading ? (
                       <Link
-                        className="font-semibold text-aqua-700"
+                        className="inline-flex rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-aqua-700 transition hover:border-sky-200 hover:bg-sky-50"
                         to={`/readings/register?search=${encodeURIComponent(a.meter.meterNumber)}`}
                       >
-                        View
+                        View reading
                       </Link>
                     ) : (
                       <Link
-                        className="font-semibold text-emerald-700"
+                        className="inline-flex rounded-lg bg-emerald-600 px-3.5 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-500"
                         to={`/readings/capture?cycleId=${cycleId}&meterId=${a.meterId}`}
                       >
                         Capture
@@ -1062,17 +2591,30 @@ export function ReadingWorklist() {
                   </td>
                 </tr>
               ))}
-              {!items.length && (
+              {!loading && !filteredItems.length && (
                 <tr>
-                  <td colSpan={6} className="p-8 text-center text-slate-400">
-                    No eligible meters found.
+                  <td colSpan={7} className="px-4 py-16 text-center">
+                    <div className="font-semibold text-slate-700">
+                      {readingStatus === "UNREAD"
+                        ? "No unread meters found"
+                        : readingStatus === "CAPTURED"
+                          ? "No captured meters found"
+                          : "No eligible meters found"}
+                    </div>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Change the status, cycle, route or search criteria and try
+                      again.
+                    </p>
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
         </div>
-      </Card>
+        <div className="border-t border-slate-200 bg-slate-50/50 px-5 py-4">
+          <Pagination position="bottom" />
+        </div>
+      </section>
     </Page>
   );
 }
@@ -1101,6 +2643,7 @@ export function CaptureReading() {
   const meterId = params.get("meterId") ?? "";
   const [item, setItem] = useState<Row | null>(null);
   const [officers, setOfficers] = useState<Row[]>([]);
+  const [loadingItem, setLoadingItem] = useState(true);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
@@ -1117,12 +2660,31 @@ export function CaptureReading() {
   });
   const [photo, setPhoto] = useState<any>();
   useEffect(() => {
-    Promise.all([api.readingWorklist({ cycleId }), api.listReadingOfficers()])
-      .then(([items, officers]) => {
-        setItem(items.find((x: Row) => String(x.meterId) === meterId) ?? null);
-        setOfficers(officers);
+    let cancelled = false;
+    setLoadingItem(true);
+    setError("");
+    api
+      .readingWorklist({ cycleId, meterId })
+      .then((items) => {
+        if (!cancelled) setItem(items[0] ?? null);
       })
-      .catch((e) => setError(e.message));
+      .catch((e) => {
+        if (!cancelled) setError(e.message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingItem(false);
+      });
+    api
+      .listReadingOfficers()
+      .then((nextOfficers) => {
+        if (!cancelled) setOfficers(nextOfficers);
+      })
+      .catch(() => {
+        // The authenticated reader can still capture without this optional list.
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [cycleId, meterId]);
   const previous = Number(
     item?.meter?.readings?.[0]?.currentReading ??
@@ -1184,15 +2746,50 @@ export function CaptureReading() {
       setSaving(false);
     }
   }
+  if (loadingItem)
+    return (
+      <Page title="Capture meter reading" subtitle="Preparing the selected meter">
+        <div className="grid gap-4 xl:grid-cols-[1fr_1.6fr]">
+          {[0, 1].map((card) => (
+            <section
+              key={card}
+              className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_16px_42px_-30px_rgba(15,32,56,0.45)]"
+            >
+              <div className="border-b border-slate-100 px-5 py-4">
+                <div className="h-4 w-36 animate-pulse rounded bg-slate-200" />
+              </div>
+              <div className="grid grid-cols-2 gap-4 p-5">
+                {Array.from({ length: card ? 6 : 4 }).map((_, index) => (
+                  <div key={index} className="space-y-2">
+                    <div className="h-3 w-20 animate-pulse rounded bg-slate-100" />
+                    <div className="h-10 animate-pulse rounded-lg bg-slate-100" />
+                  </div>
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+        <div className="mt-4 flex items-center justify-center gap-2 text-sm font-semibold text-slate-500">
+          <span className="h-4 w-4 animate-spin rounded-full border-2 border-sky-200 border-t-sky-600" />
+          Loading meter and account details…
+        </div>
+      </Page>
+    );
   if (!item)
     return (
-      <Page title="Capture meter reading" subtitle="Loading selected meter…">
+      <Page title="Capture meter reading" subtitle="Selected meter unavailable">
         {error && <Notice>{error}</Notice>}
-        <Card>
-          <p className="text-slate-500">
-            The meter is not eligible for this cycle, or the worklist is still
-            loading.
+        <Card title="Unable to open this meter">
+          <p className="text-sm text-slate-600">
+            This meter is not eligible for the selected reading cycle. It may
+            already have a reading, be inactive, or no longer have an active
+            customer assignment.
           </p>
+          <div className="mt-4">
+            <Button type="button" tone="slate" onClick={() => navigate(-1)}>
+              Return to worklist
+            </Button>
+          </div>
         </Card>
       </Page>
     );
@@ -1400,69 +2997,165 @@ export function CaptureReading() {
 function ReadingTable({
   items,
   actions,
+  loading = false,
+  selectedIds,
+  onToggle,
+  onToggleAll,
 }: {
   items: Row[];
   actions?: (row: Row) => ReactNode;
+  loading?: boolean;
+  selectedIds?: Set<string>;
+  onToggle?: (row: Row, checked: boolean) => void;
+  onToggleAll?: (checked: boolean) => void;
 }) {
+  const selectable = Boolean(selectedIds && onToggle && onToggleAll);
+  const allSelected =
+    Boolean(items.length) &&
+    items.every((item) => selectedIds?.has(String(item.readingId)));
+  const columnCount = (actions ? 10 : 9) + (selectable ? 1 : 0);
   return (
     <div className="overflow-x-auto">
-      <table className="w-full">
-        <thead>
+      <table className="w-full min-w-[1250px]">
+        <thead className="bg-slate-50/90">
           <tr>
-            <th className={TH}>Date / Cycle</th>
-            <th className={TH}>Meter / Account</th>
-            <th className={TH}>Customer</th>
-            <th className={TH}>Previous</th>
-            <th className={TH}>Current</th>
-            <th className={TH}>Consumption</th>
-            <th className={TH}>Type</th>
+            {selectable && (
+              <th className="w-12 px-4 py-3 text-center">
+                <input
+                  type="checkbox"
+                  aria-label="Select all pending readings"
+                  checked={allSelected}
+                  onChange={(event) => onToggleAll?.(event.target.checked)}
+                  className="h-4 w-4 rounded border-slate-300 text-aqua-700 focus:ring-aqua-500"
+                />
+              </th>
+            )}
+            <th className={`${TH} pl-5`}>Date / Cycle</th>
+            <th className={TH}>Customer / Account</th>
+            <th className={TH}>Meter</th>
+            <th className={`${TH} text-right`}>Previous</th>
+            <th className={`${TH} text-right`}>Current</th>
+            <th className={`${TH} text-right`}>Consumption</th>
+            <th className={TH}>Reading type</th>
             <th className={TH}>Exception</th>
             <th className={TH}>Approval</th>
-            {actions && <th className={TH}>Action</th>}
+            {actions && <th className={`${TH} text-right`}>Action</th>}
           </tr>
         </thead>
-        <tbody>
-          {items.map((r) => (
-            <tr key={r.readingId} className="border-t border-slate-100">
-              <td className={TD}>
-                <div>{date(r.readingDate)}</div>
-                <div className="text-xs text-slate-400">
+        <tbody className="divide-y divide-slate-100">
+          {loading ? (
+            <tr>
+              <td
+                colSpan={columnCount}
+                className="px-5 py-16 text-center text-slate-500"
+              >
+                <span className="inline-flex items-center gap-2 text-sm font-semibold">
+                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-sky-200 border-t-sky-600" />
+                  Loading reading records…
+                </span>
+              </td>
+            </tr>
+          ) : items.map((r) => {
+            const name = customerName(r);
+            return (
+            <tr
+              key={r.readingId}
+              className="transition odd:bg-white even:bg-slate-50/35 hover:bg-sky-50/60"
+            >
+              {selectable && (
+                <td className="w-12 px-4 py-3.5 text-center">
+                  <input
+                    type="checkbox"
+                    aria-label={`Select reading for meter ${r.meter?.meterNumber ?? ""}`}
+                    checked={selectedIds?.has(String(r.readingId)) ?? false}
+                    onChange={(event) => onToggle?.(r, event.target.checked)}
+                    className="h-4 w-4 rounded border-slate-300 text-aqua-700 focus:ring-aqua-500"
+                  />
+                </td>
+              )}
+              <td className="px-5 py-3.5">
+                <div className="font-semibold text-slate-800">
+                  {date(r.readingDate)}
+                </div>
+                <div className="mt-0.5 text-xs text-slate-400">
                   {r.cycle?.cycleName}
                 </div>
               </td>
-              <td className={TD}>
-                <div className="font-medium text-slate-800">
-                  {r.meter?.meterNumber}
-                </div>
-                <div className="text-xs text-slate-400">
-                  {r.account?.accountNumber}
+              <td className="px-4 py-3.5">
+                <div className="flex items-center gap-3">
+                  <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-sky-50 to-violet-100 text-[11px] font-extrabold text-violet-700 ring-1 ring-violet-100">
+                    {name
+                      .split(/\s+/)
+                      .filter(Boolean)
+                      .slice(0, 2)
+                      .map((part: string) => part[0])
+                      .join("")
+                      .toUpperCase()}
+                  </span>
+                  <div>
+                    <div className="font-bold text-slate-900">{name}</div>
+                    <div className="mt-0.5 flex flex-wrap gap-x-2 text-xs">
+                      <span className="font-semibold text-aqua-700">
+                        {r.account?.customer?.customerNumber ?? "No customer number"}
+                      </span>
+                      <span className="text-slate-400">
+                        Account: {r.account?.accountNumber ?? "—"}
+                      </span>
+                    </div>
+                  </div>
                 </div>
               </td>
-              <td className={TD}>{customerName(r)}</td>
-              <td className={TD}>{number(r.previousReading)}</td>
-              <td className={TD}>{number(r.currentReading)}</td>
-              <td
-                className={`${TD} font-semibold ${Number(r.consumption) < 0 ? "text-red-600" : "text-slate-800"}`}
-              >
-                {number(r.consumption)}
+              <td className="px-4 py-3.5">
+                <div className="font-bold text-slate-800">
+                  {r.meter?.meterNumber ?? "—"}
+                </div>
+                <div className="mt-0.5 text-xs text-slate-400">
+                  {r.meter?.serialNumber || pretty(r.meter?.meterType) || "Customer meter"}
+                </div>
               </td>
-              <td className={TD}>{pretty(r.readingType)}</td>
-              <td className={TD}>
+              <td className="px-4 py-3.5 text-right font-semibold tabular-nums text-slate-600">
+                {number(r.previousReading)}
+              </td>
+              <td className="px-4 py-3.5 text-right font-extrabold tabular-nums text-aqua-800">
+                {number(r.currentReading)}
+              </td>
+              <td className="px-4 py-3.5 text-right">
+                <span
+                  className={`inline-flex min-w-14 justify-end rounded-lg px-2 py-1 font-extrabold tabular-nums ${
+                    Number(r.consumption) < 0
+                      ? "bg-red-50 text-red-700"
+                      : "bg-emerald-50 text-emerald-700"
+                  }`}
+                >
+                  {number(r.consumption)}
+                </span>
+              </td>
+              <td className="px-4 py-3.5 text-sm font-medium text-slate-600">
+                {pretty(r.readingType)}
+              </td>
+              <td className="px-4 py-3.5">
                 <Badge value={r.exceptionType} />
               </td>
-              <td className={TD}>
+              <td className="px-4 py-3.5">
                 <Badge value={r.approvalStatus} />
               </td>
-              {actions && <td className={TD}>{actions(r)}</td>}
+              {actions && (
+                <td className="px-5 py-3.5 text-right">{actions(r)}</td>
+              )}
             </tr>
-          ))}
-          {!items.length && (
+          )})}
+          {!loading && !items.length && (
             <tr>
               <td
-                colSpan={actions ? 10 : 9}
-                className="p-8 text-center text-slate-400"
+                colSpan={columnCount}
+                className="px-5 py-16 text-center"
               >
-                No readings match these filters.
+                <div className="font-semibold text-slate-700">
+                  No reading records found
+                </div>
+                <p className="mt-1 text-sm text-slate-500">
+                  Change the cycle, approval, type or search filters and try again.
+                </p>
               </td>
             </tr>
           )}
@@ -1480,6 +3173,10 @@ export function ReadingRegister({
   const [params] = useSearchParams();
   const [cycles, setCycles] = useState<Row[]>([]);
   const [items, setItems] = useState<Row[]>([]);
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const pageSize = 25;
   const [error, setError] = useState("");
   const [filters, setFilters] = useState({
     cycleId: "",
@@ -1491,11 +3188,103 @@ export function ReadingRegister({
     api.listReadingCycles().then(setCycles);
   }, []);
   useEffect(() => {
-    api
-      .listReadings({ ...filters, exceptionOnly: exceptions ? "true" : "" })
-      .then(setItems)
-      .catch((e) => setError(e.message));
-  }, [filters, exceptions]);
+    let cancelled = false;
+    setLoading(true);
+    const timer = window.setTimeout(() => {
+      api
+        .listReadings({
+          ...filters,
+          search: filters.search.trim(),
+          exceptionOnly: exceptions ? "true" : "",
+          page: String(page),
+          pageSize: String(pageSize),
+        })
+        .then((result) => {
+          if (cancelled) return;
+          setError("");
+          setItems(result.items);
+          setTotal(Number(result.total));
+        })
+        .catch((e) => {
+          if (!cancelled) setError(e.message);
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
+    }, filters.search ? 250 : 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [filters, exceptions, page]);
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  const shownStart = total ? (page - 1) * pageSize + 1 : 0;
+  const shownEnd = Math.min(page * pageSize, total);
+  const approvedOnPage = items.filter(
+    (item) => item.approvalStatus === "APPROVED",
+  ).length;
+  const pendingOnPage = items.filter(
+    (item) => item.approvalStatus === "PENDING",
+  ).length;
+  const exceptionsOnPage = items.filter(
+    (item) => item.exceptionType && item.exceptionType !== "NONE",
+  ).length;
+  const pageNumbers = useMemo(() => {
+    const start = Math.max(1, Math.min(page - 2, pages - 4));
+    const end = Math.min(pages, start + 4);
+    return Array.from({ length: end - start + 1 }, (_, index) => start + index);
+  }, [page, pages]);
+  const updateFilters = (next: typeof filters) => {
+    setPage(1);
+    setFilters(next);
+  };
+  const Pagination = ({ position }: { position: "top" | "bottom" }) => (
+    <nav
+      className="flex flex-wrap items-center justify-between gap-3"
+      aria-label={`Reading register ${position} pagination`}
+    >
+      <span className="text-xs font-medium text-slate-500">
+        {total
+          ? `Showing ${shownStart.toLocaleString()}–${shownEnd.toLocaleString()} of ${total.toLocaleString()} readings`
+          : "No readings to display"}
+      </span>
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          disabled={page <= 1}
+          onClick={() => setPage((current) => Math.max(1, current - 1))}
+          className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 shadow-sm transition hover:border-sky-200 hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          ‹ Previous
+        </button>
+        <div className="hidden items-center gap-1 sm:flex">
+          {pageNumbers.map((pageNumber) => (
+            <button
+              type="button"
+              key={`${position}-${pageNumber}`}
+              aria-current={pageNumber === page ? "page" : undefined}
+              onClick={() => setPage(pageNumber)}
+              className={`h-9 min-w-9 rounded-lg border px-2 text-xs font-bold transition ${
+                pageNumber === page
+                  ? "border-aqua-700 bg-aqua-700 text-white shadow-sm"
+                  : "border-slate-200 bg-white text-slate-600 hover:border-sky-200 hover:bg-sky-50"
+              }`}
+            >
+              {pageNumber}
+            </button>
+          ))}
+        </div>
+        <button
+          type="button"
+          disabled={page >= pages}
+          onClick={() => setPage((current) => Math.min(pages, current + 1))}
+          className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 shadow-sm transition hover:border-sky-200 hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Next ›
+        </button>
+      </div>
+    </nav>
+  );
   return (
     <Page
       title={exceptions ? "Reading exceptions" : "Meter reading register"}
@@ -1532,14 +3321,14 @@ export function ReadingRegister({
       }
     >
       {error && <Notice>{error}</Notice>}
-      <Card className="mb-4">
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+      <section className="mb-4 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_16px_42px_-30px_rgba(15,32,56,0.45)]">
+        <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-4">
           <Field label="Cycle">
             <select
               className={INPUT}
               value={filters.cycleId}
               onChange={(e) =>
-                setFilters({ ...filters, cycleId: e.target.value })
+                updateFilters({ ...filters, cycleId: e.target.value })
               }
             >
               <option value="">All cycles</option>
@@ -1555,7 +3344,7 @@ export function ReadingRegister({
               className={INPUT}
               value={filters.approvalStatus}
               onChange={(e) =>
-                setFilters({ ...filters, approvalStatus: e.target.value })
+                updateFilters({ ...filters, approvalStatus: e.target.value })
               }
             >
               <option value="">All decisions</option>
@@ -1569,7 +3358,7 @@ export function ReadingRegister({
               className={INPUT}
               value={filters.readingType}
               onChange={(e) =>
-                setFilters({ ...filters, readingType: e.target.value })
+                updateFilters({ ...filters, readingType: e.target.value })
               }
             >
               <option value="">All types</option>
@@ -1583,30 +3372,64 @@ export function ReadingRegister({
               className={INPUT}
               value={filters.search}
               onChange={(e) =>
-                setFilters({ ...filters, search: e.target.value })
+                updateFilters({ ...filters, search: e.target.value })
               }
               placeholder="Meter, account or customer"
             />
           </Field>
         </div>
-      </Card>
-      <Card title={`${items.length} reading(s)`}>
+        <div className="grid border-t border-slate-100 bg-slate-50/70 sm:grid-cols-2 lg:grid-cols-4 lg:divide-x lg:divide-slate-200">
+          {[
+            ["Matching readings", total, "text-aqua-800"],
+            ["Approved on page", approvedOnPage, "text-emerald-700"],
+            ["Pending on page", pendingOnPage, "text-amber-700"],
+            ["Exceptions on page", exceptionsOnPage, "text-red-700"],
+          ].map(([label, value, color]) => (
+            <div key={String(label)} className="px-4 py-3">
+              <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                {label}
+              </div>
+              <div className={`mt-1 text-xl font-extrabold ${color}`}>
+                {Number(value).toLocaleString()}
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_16px_42px_-30px_rgba(15,32,56,0.45)]">
+        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 px-5 py-4">
+          <div>
+            <h2 className="text-base font-bold text-slate-900">
+              {exceptions ? "Exception register" : "Reading register"}
+            </h2>
+            <p className="mt-0.5 text-xs text-slate-500">
+              Page {page.toLocaleString()} of {pages.toLocaleString()} ·{" "}
+              {total.toLocaleString()} record{total === 1 ? "" : "s"}
+            </p>
+          </div>
+          <Pagination position="top" />
+        </div>
         <ReadingTable
           items={items}
+          loading={loading}
           actions={(r) =>
             r.evidence?.[0] ? (
               <button
-                className="font-semibold text-aqua-700"
+                className="inline-flex rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-aqua-700 shadow-sm transition hover:border-sky-200 hover:bg-sky-50"
                 onClick={() => openEvidence(r.evidence[0])}
               >
-                Evidence
+                View evidence
               </button>
             ) : (
-              <span className="text-slate-400">—</span>
+              <span className="text-xs text-slate-400">No evidence</span>
             )
           }
         />
-      </Card>
+        <div className="border-t border-slate-200 bg-slate-50/50 px-5 py-4">
+          <Pagination position="bottom" />
+        </div>
+      </section>
     </Page>
   );
 }
@@ -1614,14 +3437,27 @@ export function ReadingRegister({
 export function ReadingApprovals() {
   const [items, setItems] = useState<Row[]>([]);
   const [selected, setSelected] = useState<Row | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const pageSize = 50;
   const [comments, setComments] = useState("");
   const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
-  const load = () =>
-    api
-      .listReadings({ approvalStatus: "PENDING" })
-      .then((rows) => {
+  const load = () => {
+    setLoading(true);
+    return api
+      .listReadings({
+        approvalStatus: "PENDING",
+        page: String(page),
+        pageSize: String(pageSize),
+      })
+      .then((result) => {
+        const rows = result.items;
         setItems(rows);
+        setTotal(Number(result.total));
         setSelected(
           (old) =>
             rows.find((r: Row) => r.readingId === old?.readingId) ??
@@ -1629,18 +3465,34 @@ export function ReadingApprovals() {
             null,
         );
       })
-      .catch((e) => setError(e.message));
+      .catch((e) => setError(e.message))
+      .finally(() => setLoading(false));
+  };
   useEffect(() => {
     void load();
-  }, []);
+  }, [page]);
+  const pages = Math.max(1, Math.ceil(total / pageSize));
   async function decide(decision: "APPROVED" | "REJECTED") {
-    if (!selected || comments.trim().length < 3)
+    const readingIds = selectedIds.size
+      ? [...selectedIds]
+      : selected
+        ? [String(selected.readingId)]
+        : [];
+    if (!readingIds.length || comments.trim().length < 3)
       return setError("Enter approval comments before making a decision");
     setSaving(true);
+    setError("");
+    setMessage("");
     try {
-      await api.decideReading(String(selected.readingId), decision, comments);
+      await api.bulkDecideReadings(readingIds, decision, comments);
+      setMessage(
+        `${readingIds.length} reading${readingIds.length === 1 ? "" : "s"} ${
+          decision === "APPROVED" ? "approved" : "rejected"
+        } successfully.`,
+      );
       setComments("");
-      load();
+      setSelectedIds(new Set());
+      await load();
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -1653,13 +3505,82 @@ export function ReadingApprovals() {
       subtitle="Review captured and estimated readings before they become eligible for billing"
     >
       {error && <Notice>{error}</Notice>}
+      {message && <Notice tone="green">{message}</Notice>}
       <div className="grid gap-4 xl:grid-cols-[1.4fr_1fr]">
-        <Card title={`${items.length} pending reading(s)`}>
+        <Card title={`${total.toLocaleString()} pending reading(s)`}>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+            <div>
+              <div className="text-sm font-bold text-slate-800">
+                {selectedIds.size
+                  ? `${selectedIds.size} reading${selectedIds.size === 1 ? "" : "s"} selected`
+                  : "Select readings for a bulk decision"}
+              </div>
+              <p className="mt-0.5 text-xs text-slate-500">
+                Use the header checkbox to select every pending reading shown.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold text-slate-500">
+                Page {page} of {pages}
+              </span>
+              <button
+                type="button"
+                disabled={page <= 1}
+                onClick={() => {
+                  setSelectedIds(new Set());
+                  setPage((current) => Math.max(1, current - 1));
+                }}
+                className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 shadow-sm hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Previous
+              </button>
+              <button
+                type="button"
+                disabled={page >= pages}
+                onClick={() => {
+                  setSelectedIds(new Set());
+                  setPage((current) => Math.min(pages, current + 1));
+                }}
+                className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 shadow-sm hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Next
+              </button>
+              {selectedIds.size > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedIds(new Set())}
+                  className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 shadow-sm hover:bg-slate-100"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+          </div>
           <ReadingTable
             items={items}
+            loading={loading}
+            selectedIds={selectedIds}
+            onToggle={(row, checked) => {
+              setSelectedIds((current) => {
+                const next = new Set(current);
+                checked
+                  ? next.add(String(row.readingId))
+                  : next.delete(String(row.readingId));
+                return next;
+              });
+              if (checked) setSelected(row);
+            }}
+            onToggleAll={(checked) => {
+              setSelectedIds(
+                checked
+                  ? new Set(items.map((item) => String(item.readingId)))
+                  : new Set(),
+              );
+              if (checked && items[0]) setSelected(items[0]);
+            }}
             actions={(r) => (
               <button
-                className="font-semibold text-aqua-700"
+                className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-aqua-700 shadow-sm transition hover:border-sky-200 hover:bg-sky-50"
                 onClick={() => setSelected(r)}
               >
                 Review
@@ -1667,9 +3588,22 @@ export function ReadingApprovals() {
             )}
           />
         </Card>
-        <Card title="Approval decision">
+        <Card
+          title={
+            selectedIds.size
+              ? `Bulk approval decision · ${selectedIds.size} selected`
+              : "Approval decision"
+          }
+        >
           {selected ? (
             <div className="space-y-4">
+              {selectedIds.size > 1 && (
+                <Notice tone="blue">
+                  The comments and decision below will apply to all{" "}
+                  {selectedIds.size} selected readings. The batch is validated
+                  before any record is changed.
+                </Notice>
+              )}
               <div className="rounded-xl bg-slate-50 p-4">
                 <div className="flex items-start justify-between">
                   <div>
@@ -1772,14 +3706,18 @@ export function ReadingApprovals() {
                   disabled={saving}
                   onClick={() => decide("REJECTED")}
                 >
-                  Reject
+                  {selectedIds.size ? "Reject selected" : "Reject"}
                 </Button>
                 <Button
                   tone="green"
                   disabled={saving}
                   onClick={() => decide("APPROVED")}
                 >
-                  Approve reading
+                  {saving
+                    ? "Processing…"
+                    : selectedIds.size
+                      ? "Approve selected"
+                      : "Approve reading"}
                 </Button>
               </div>
             </div>
@@ -1799,19 +3737,48 @@ export function ReadingProgress() {
   const [cycles, setCycles] = useState<Row[]>([]);
   const [rows, setRows] = useState<Row[]>([]);
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
   useEffect(() => {
-    api.listReadingCycles().then((c) => {
-      setCycles(c);
-      const active = c.find((x: Row) => x.status === "OPEN") ?? c[0];
-      if (active) setCycleId(String(active.readingCycleId));
-    });
+    let cancelled = false;
+    setLoading(true);
+    api
+      .listReadingCycles()
+      .then((c) => {
+        if (cancelled) return;
+        setError("");
+        setCycles(c);
+        const active = c.find((x: Row) => x.status === "OPEN") ?? c[0];
+        if (active) setCycleId(String(active.readingCycleId));
+        else setLoading(false);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setError(e.message);
+        setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
   useEffect(() => {
-    if (cycleId)
-      api
-        .readingProgress(cycleId)
-        .then(setRows)
-        .catch((e) => setError(e.message));
+    if (!cycleId) return;
+    let cancelled = false;
+    setLoading(true);
+    setError("");
+    api
+      .readingProgress(cycleId)
+      .then((nextRows) => {
+        if (!cancelled) setRows(nextRows);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(e.message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [cycleId]);
   const totals = useMemo(
     () =>
@@ -1833,6 +3800,7 @@ export function ReadingProgress() {
       actions={
         <Button
           tone="green"
+          disabled={loading || !rows.length}
           onClick={() =>
             exportExcel(
               "reading-route-progress.xlsx",
@@ -1856,12 +3824,18 @@ export function ReadingProgress() {
       }
     >
       {error && <Notice>{error}</Notice>}
-      <Card className="mb-4">
+      <Card className="relative mb-4">
+        {loading && (
+          <div className="absolute inset-x-0 top-0 h-1 overflow-hidden rounded-t-2xl bg-aqua-100">
+            <div className="h-full w-1/3 animate-pulse rounded-full bg-aqua-600" />
+          </div>
+        )}
         <div className="grid items-end gap-3 md:grid-cols-[1fr_repeat(4,160px)]">
           <Field label="Reading cycle">
             <select
               className={INPUT}
               value={cycleId}
+              disabled={loading && !cycleId}
               onChange={(e) => setCycleId(e.target.value)}
             >
               {cycles.map((c) => (
@@ -1882,13 +3856,17 @@ export function ReadingProgress() {
               className="rounded-lg bg-slate-50 px-3 py-2"
             >
               <div className="text-xs text-slate-500">{label}</div>
-              <div className="text-xl font-bold text-slate-800">{value}</div>
+              {loading ? (
+                <div className="mt-1 h-6 w-16 animate-pulse rounded bg-slate-200" />
+              ) : (
+                <div className="text-xl font-bold text-slate-800">{value}</div>
+              )}
             </div>
           ))}
         </div>
       </Card>
-      <Card title="Progress by route">
-        <div className="overflow-x-auto">
+      <Card title="Progress by route" className="relative">
+        <div className="overflow-x-auto" aria-busy={loading}>
           <table className="w-full">
             <thead>
               <tr>
@@ -1903,35 +3881,58 @@ export function ReadingProgress() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => (
-                <tr key={r.route.routeId} className="border-t border-slate-100">
-                  <td className={TD}>
-                    {r.route.zone?.zoneName} /{" "}
-                    <span className="font-medium text-slate-800">
-                      {r.route.routeName}
+              {loading ? (
+                <tr>
+                  <td colSpan={8} className="px-4 py-20 text-center">
+                    <span className="inline-flex items-center gap-3 font-semibold text-slate-600">
+                      <span className="h-5 w-5 animate-spin rounded-full border-2 border-aqua-200 border-t-aqua-700" />
+                      Loading route progress…
                     </span>
                   </td>
-                  <td className={TD}>{r.assignedOfficer}</td>
-                  <td className={TD}>{r.totalMeters}</td>
-                  <td className={TD}>{r.captured}</td>
-                  <td className={TD}>{r.unread}</td>
-                  <td className={TD}>{r.approved}</td>
-                  <td className={TD}>{r.exceptions}</td>
-                  <td className={TD}>
-                    <div className="min-w-32">
-                      <div className="mb-1 flex justify-between text-xs">
-                        <span>{r.completionPercent}%</span>
+                </tr>
+              ) : (
+                rows.map((r) => (
+                  <tr key={r.route.routeId} className="border-t border-slate-100">
+                    <td className={TD}>
+                      {r.route.zone?.zoneName} /{" "}
+                      <span className="font-medium text-slate-800">
+                        {r.route.routeName}
+                      </span>
+                    </td>
+                    <td className={TD}>{r.assignedOfficer}</td>
+                    <td className={TD}>{r.totalMeters}</td>
+                    <td className={TD}>{r.captured}</td>
+                    <td className={TD}>{r.unread}</td>
+                    <td className={TD}>{r.approved}</td>
+                    <td className={TD}>{r.exceptions}</td>
+                    <td className={TD}>
+                      <div className="min-w-32">
+                        <div className="mb-1 flex justify-between text-xs">
+                          <span>{r.completionPercent}%</span>
+                        </div>
+                        <div className="h-2 rounded-full bg-slate-100">
+                          <div
+                            className="h-2 rounded-full bg-aqua-600"
+                            style={{ width: `${r.completionPercent}%` }}
+                          />
+                        </div>
                       </div>
-                      <div className="h-2 rounded-full bg-slate-100">
-                        <div
-                          className="h-2 rounded-full bg-aqua-600"
-                          style={{ width: `${r.completionPercent}%` }}
-                        />
-                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
+              {!loading && !rows.length && (
+                <tr>
+                  <td colSpan={8} className="px-4 py-16 text-center">
+                    <div className="font-semibold text-slate-700">
+                      No route progress found
                     </div>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Select another reading cycle and try again.
+                    </p>
                   </td>
                 </tr>
-              ))}
+              )}
             </tbody>
           </table>
         </div>

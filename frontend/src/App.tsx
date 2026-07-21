@@ -1,4 +1,11 @@
-import { Component, ErrorInfo, ReactNode } from "react";
+import {
+  Component,
+  ErrorInfo,
+  ReactNode,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   Navigate,
   Route,
@@ -8,6 +15,7 @@ import {
   useLocation,
 } from "react-router-dom";
 import Login from "./pages/Login";
+import LandingPage from "./pages/LandingPage";
 import Customers from "./pages/Customers";
 import NewCustomer from "./pages/NewCustomer";
 import CustomerDetail from "./pages/CustomerDetail";
@@ -99,7 +107,8 @@ import {
   PaymentReminders,
   PromisesToPay,
 } from "./pages/ArrearsManagement";
-import { clearToken, getSessionUser, getToken } from "./lib/api";
+import { api, clearToken, getSessionUser, getToken } from "./lib/api";
+import { encodeId } from "./lib/hashids";
 
 class PageErrorBoundary extends Component<
   { children: ReactNode; resetKey: string },
@@ -267,6 +276,11 @@ const NAV_ITEMS = [
   { label: "Settings", Icon: IcoSettings, path: null, iconClass: "bg-slate-400/10 text-slate-300" },
 ];
 
+const CUSTOMER_MENU = [
+  ["Manage Customers", "/customers"],
+  ["Register Customer", "/customers/new"],
+] as const;
+
 const METER_MENU = [
   ["Dashboard", "/meters"],
   ["Register Meter", "/meters/register"],
@@ -355,9 +369,162 @@ const ARREARS_MENU = [
   ["Arrears Audit Trail", "/arrears/audit"],
 ] as const;
 
+const SIDEBAR_CHILD_MENUS: Record<
+  string,
+  readonly (readonly [string, string])[]
+> = {
+  Customers: CUSTOMER_MENU,
+  Billing: BILLING_MENU,
+  "Meter Management": METER_MENU,
+  "Meter Readings": READING_MENU,
+  "Tariff Management": TARIFF_MENU,
+  "Payments & Revenue": PAYMENT_MENU,
+  "Arrears & Debt": ARREARS_MENU,
+  Notifications: NOTIFICATION_MENU,
+};
+
+const MODULE_LABELS: Record<string, string> = {
+  customers: "Customers",
+  billing: "Billing",
+  meters: "Meter Management",
+  readings: "Meter Readings",
+  tariffs: "Tariff Management",
+  payments: "Payments & Revenue",
+  arrears: "Arrears & Debt",
+  notifications: "Notifications",
+};
+
+const ROUTE_LABELS = new Map<string, string>([
+  ...METER_MENU.map(([label, path]) => [path, label] as const),
+  ...READING_MENU.map(([label, path]) => [path, label] as const),
+  ...TARIFF_MENU.map(([label, path]) => [path, label] as const),
+  ...BILLING_MENU.map(([label, path]) => [path, label] as const),
+  ...PAYMENT_MENU.map(([label, path]) => [path, label] as const),
+  ...NOTIFICATION_MENU.map(([label, path]) => [path, label] as const),
+  ...ARREARS_MENU.map(([label, path]) => [path, label] as const),
+  ["/customers", "Customers"],
+  ["/customers/new", "New Customer"],
+]);
+
+function detailPageLabel(pathname: string) {
+  if (/^\/customers\/[^/]+$/.test(pathname)) return "Customer Profile";
+  if (/^\/billing\/invoices\/[^/]+$/.test(pathname)) return "Invoice Details";
+  if (/^\/payments\/receipts\/[^/]+$/.test(pathname)) return "Payment Receipt";
+  if (/^\/meters\/[^/]+\/history$/.test(pathname)) return "Meter History";
+  if (/^\/meters\/[^/]+\/installation$/.test(pathname)) return "Installation Details";
+  if (/^\/meters\/[^/]+\/replace$/.test(pathname)) return "Replace Meter";
+  if (/^\/meters\/[^/]+\/status$/.test(pathname)) return "Update Meter Status";
+  if (/^\/meters\/[^/]+$/.test(pathname)) return "Meter Profile";
+  if (/^\/readings\/capture/.test(pathname)) return "Capture Meter Reading";
+  if (/^\/tariffs\/[^/]+\/bands$/.test(pathname)) return "Tariff Band Setup";
+  if (/^\/tariffs\/[^/]+\/simulate$/.test(pathname)) return "Tariff Simulation";
+  if (/^\/tariffs\/[^/]+\/audit$/.test(pathname)) return "Tariff Audit";
+  if (/^\/arrears\/accounts\/[^/]+$/.test(pathname)) return "Account Arrears Details";
+
+  const pathSegments = pathname.split("/").filter(Boolean);
+  const finalSegment = pathSegments[pathSegments.length - 1] ?? "Details";
+  if (/^\d+$/.test(finalSegment)) return "Details";
+  return finalSegment
+    .replace(/-/g, " ")
+    .replace(/\b\w/g, (letter: string) => letter.toUpperCase());
+}
+
+function AppBreadcrumbs() {
+  const location = useLocation();
+  const pathname = location.pathname.replace(/\/+$/, "") || "/";
+  const segments = pathname.split("/").filter(Boolean);
+  const moduleKey = segments[0];
+  const moduleLabel = MODULE_LABELS[moduleKey];
+  const modulePath = moduleKey ? `/${moduleKey}` : "/";
+
+  if (!moduleLabel || pathname === modulePath) return null;
+
+  const exactLabel = ROUTE_LABELS.get(pathname);
+  const parentEntry = Array.from(ROUTE_LABELS.entries())
+    .filter(
+      ([path]) =>
+        path !== modulePath &&
+        pathname.startsWith(`${path}/`),
+    )
+    .sort(([left], [right]) => right.length - left.length)[0];
+  const currentLabel = exactLabel ?? detailPageLabel(pathname);
+
+  return (
+    <nav
+      aria-label="Breadcrumb"
+      className="mx-auto flex w-full max-w-[1600px] items-center gap-2 px-5 pt-3 text-xs font-medium text-slate-500 lg:px-8"
+    >
+      <Link
+        to={modulePath}
+        className="transition-colors hover:text-aqua-700"
+      >
+        {moduleLabel}
+      </Link>
+      {parentEntry && (
+        <>
+          <span aria-hidden="true" className="text-slate-300">/</span>
+          <Link
+            to={parentEntry[0]}
+            className="transition-colors hover:text-aqua-700"
+          >
+            {parentEntry[1]}
+          </Link>
+        </>
+      )}
+      <span aria-hidden="true" className="text-slate-300">/</span>
+      <span aria-current="page" className="font-semibold text-slate-700">
+        {currentLabel}
+      </span>
+    </nav>
+  );
+}
+
+type GlobalSearchResult = {
+  id: string;
+  kind: "Customer" | "Account" | "Meter";
+  title: string;
+  detail: string;
+  path: string;
+};
+
+function entityName(entity: any) {
+  return (
+    entity?.organizationName ||
+    [entity?.firstName, entity?.middleName, entity?.lastName]
+      .filter(Boolean)
+      .join(" ") ||
+    "Unnamed customer"
+  );
+}
+
+function notificationLabel(notification: any) {
+  return String(notification?.notificationType ?? "Notification")
+    .toLowerCase()
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
 function Shell({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate();
   const location = useLocation();
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    () => localStorage.getItem("aquaflow_sidebar_collapsed") === "true",
+  );
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<GlobalSearchResult[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [notificationOpen, setNotificationOpen] = useState(false);
+  const [notificationData, setNotificationData] = useState<any>({
+    queued: 0,
+    failed: 0,
+    recent: [],
+  });
+  const [sidebarFlyout, setSidebarFlyout] = useState<string | null>(null);
+  const [sidebarFlyoutTop, setSidebarFlyoutTop] = useState(72);
+  const searchRef = useRef<HTMLDivElement>(null);
+  const notificationRef = useRef<HTMLDivElement>(null);
+  const sidebarFlyoutTimer = useRef<number | null>(null);
   const sessionUser = getSessionUser();
   const displayName =
     [sessionUser?.firstName, sessionUser?.lastName].filter(Boolean).join(" ") ||
@@ -379,16 +546,165 @@ function Shell({ children }: { children: React.ReactNode }) {
           .slice(0, 2) || "AU"
   ).toUpperCase();
 
+  useEffect(() => {
+    localStorage.setItem(
+      "aquaflow_sidebar_collapsed",
+      String(sidebarCollapsed),
+    );
+  }, [sidebarCollapsed]);
+
+  useEffect(() => {
+    let active = true;
+    async function refreshNotifications() {
+      try {
+        const data = await api.notificationDashboard();
+        if (active) setNotificationData(data);
+      } catch {
+        // The page-level API handler manages expired sessions. The navbar stays
+        // available when a role cannot load notification details.
+      }
+    }
+    void refreshNotifications();
+    const timer = window.setInterval(refreshNotifications, 60000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  useEffect(() => {
+    const query = searchQuery.trim();
+    if (query.length < 2) {
+      setSearchResults([]);
+      setSearchLoading(false);
+      return;
+    }
+    let active = true;
+    const timer = window.setTimeout(async () => {
+      setSearchLoading(true);
+      try {
+        const [customers, accounts, meters] = await Promise.all([
+          api.listCustomers(query, 1),
+          api.listAccounts(query, 6),
+          api.listMeters({ search: query, take: "6" }),
+        ]);
+        if (!active) return;
+        const customerResults: GlobalSearchResult[] = (
+          customers.items ?? []
+        )
+          .slice(0, 6)
+          .map((customer: any) => ({
+            id: `customer-${customer.customerId}`,
+            kind: "Customer",
+            title: entityName(customer),
+            detail: `${customer.customerNumber} · ${customer.phoneNumber ?? "No phone"}`,
+            path: `/customers/${encodeId(customer.customerId)}`,
+          }));
+        const accountResults: GlobalSearchResult[] = (accounts ?? []).map(
+          (account: any) => ({
+            id: `account-${account.accountId}`,
+            kind: "Account",
+            title: account.accountNumber,
+            detail: `${entityName(account.customer)} · ${account.accountStatus}`,
+            path: `/customers/${encodeId(account.customerId)}`,
+          }),
+        );
+        const meterResults: GlobalSearchResult[] = (meters ?? [])
+          .slice(0, 6)
+          .map((meter: any) => ({
+            id: `meter-${meter.meterId}`,
+            kind: "Meter",
+            title: meter.meterNumber,
+            detail: `${meter.serialNumber} · ${String(meter.status).replace(/_/g, " ")}`,
+            path: `/meters/${encodeId(meter.meterId)}`,
+          }));
+        setSearchResults([
+          ...customerResults,
+          ...accountResults,
+          ...meterResults,
+        ]);
+      } catch {
+        if (active) setSearchResults([]);
+      } finally {
+        if (active) setSearchLoading(false);
+      }
+    }, 250);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [searchQuery]);
+
+  useEffect(() => {
+    function closePopovers(event: MouseEvent) {
+      const target = event.target as Node;
+      if (!searchRef.current?.contains(target)) setSearchOpen(false);
+      if (!notificationRef.current?.contains(target))
+        setNotificationOpen(false);
+    }
+    document.addEventListener("mousedown", closePopovers);
+    return () => document.removeEventListener("mousedown", closePopovers);
+  }, []);
+
+  useEffect(() => {
+    setSearchOpen(false);
+    setNotificationOpen(false);
+    setSidebarFlyout(null);
+  }, [location.pathname]);
+
+  useEffect(() => {
+    if (!sidebarCollapsed) setSidebarFlyout(null);
+  }, [sidebarCollapsed]);
+
+  const actionNotificationCount =
+    Number(notificationData.queued ?? 0) + Number(notificationData.failed ?? 0);
+
+  function cancelSidebarFlyoutClose() {
+    if (sidebarFlyoutTimer.current !== null) {
+      window.clearTimeout(sidebarFlyoutTimer.current);
+      sidebarFlyoutTimer.current = null;
+    }
+  }
+
+  function openSidebarFlyout(label: string, element: HTMLElement) {
+    if (!sidebarCollapsed) return;
+    cancelSidebarFlyoutClose();
+    const rect = element.getBoundingClientRect();
+    setSidebarFlyoutTop(
+      Math.max(64, Math.min(rect.top, window.innerHeight - 460)),
+    );
+    setSidebarFlyout(label);
+  }
+
+  function scheduleSidebarFlyoutClose() {
+    cancelSidebarFlyoutClose();
+    sidebarFlyoutTimer.current = window.setTimeout(
+      () => setSidebarFlyout(null),
+      160,
+    );
+  }
+
+  const flyoutMenu = sidebarFlyout
+    ? SIDEBAR_CHILD_MENUS[sidebarFlyout]
+    : undefined;
+  const flyoutModule = sidebarFlyout
+    ? NAV_ITEMS.find((item) => item.label === sidebarFlyout)
+    : undefined;
+
   return (
     <div className="app-shell flex h-screen overflow-hidden bg-slate-50">
       {/* ── Sidebar ── */}
-      <aside className="app-sidebar flex h-screen w-60 flex-shrink-0 flex-col overflow-hidden bg-navy-900 text-white">
+      <aside
+        className={`app-sidebar flex h-screen flex-shrink-0 flex-col overflow-hidden bg-navy-900 text-white ${
+          sidebarCollapsed ? "app-sidebar-collapsed w-20" : "w-60"
+        }`}
+      >
         {/* Logo */}
-        <div className="px-4 py-4 border-b border-white/10 flex items-center gap-3">
+        <div className={`flex items-center border-b border-white/10 px-4 py-4 ${sidebarCollapsed ? "justify-center" : "gap-3"}`}>
           <div className="w-9 h-9 rounded-xl bg-sky-500 flex items-center justify-center flex-shrink-0">
             <IcoDroplet />
           </div>
-          <div className="min-w-0">
+          <div className={`min-w-0 ${sidebarCollapsed ? "hidden" : ""}`}>
             <div className="text-sm font-bold leading-tight">AquaFlow</div>
             <div className="text-[10px] text-blue-200/60 leading-tight truncate">
               Water Utility Management
@@ -400,20 +716,59 @@ function Shell({ children }: { children: React.ReactNode }) {
         <nav className="flex-1 space-y-0.5 overflow-y-auto px-2 py-3 text-sm">
           {NAV_ITEMS.map(({ label, Icon: NavIcon, path, iconClass }) => {
             const active = path !== null && location.pathname.startsWith(path);
-            const cls = `flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm ${
+            const cls = `flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm ${sidebarCollapsed ? "justify-center" : ""} ${
               active
                 ? "bg-navy-600 text-white font-medium"
                 : "text-blue-100/60 hover:text-white hover:bg-white/10 cursor-default"
             }`;
             return path ? (
-              <div key={label}>
-                <Link to={path} className={cls}>
+              <div
+                key={label}
+                onMouseEnter={(event) =>
+                  openSidebarFlyout(label, event.currentTarget)
+                }
+                onMouseLeave={scheduleSidebarFlyoutClose}
+                onFocus={(event) =>
+                  openSidebarFlyout(label, event.currentTarget)
+                }
+                onBlur={scheduleSidebarFlyoutClose}
+              >
+                <Link
+                  to={path}
+                  className={cls}
+                  aria-label={sidebarCollapsed ? label : undefined}
+                >
                   <span className={`nav-icon ${iconClass}`}>
                     <NavIcon />
                   </span>
-                  {label}
+                  <span className={sidebarCollapsed ? "sr-only" : ""}>
+                    {label}
+                  </span>
                 </Link>
-                {label === "Billing" && active && (
+                {!sidebarCollapsed && label === "Customers" && active && (
+                  <div className="ml-7 mt-1 space-y-0.5 border-l border-white/10 pl-2">
+                    {CUSTOMER_MENU.map(([itemLabel, itemPath]) => {
+                      const itemActive =
+                        itemPath === "/customers"
+                          ? location.pathname === itemPath
+                          : location.pathname.startsWith(itemPath);
+                      return (
+                        <Link
+                          key={itemPath}
+                          to={itemPath}
+                          className={`block rounded px-2 py-1.5 text-xs font-medium transition-colors ${
+                            itemActive
+                              ? "bg-white/10 text-white"
+                              : "text-blue-100/50 hover:bg-white/5 hover:text-white"
+                          }`}
+                        >
+                          {itemLabel}
+                        </Link>
+                      );
+                    })}
+                  </div>
+                )}
+                {!sidebarCollapsed && label === "Billing" && active && (
                   <div className="ml-7 mt-1 space-y-0.5 border-l border-white/10 pl-2">
                     {BILLING_MENU.map(([itemLabel, itemPath]) => {
                       const itemActive =
@@ -436,7 +791,7 @@ function Shell({ children }: { children: React.ReactNode }) {
                     })}
                   </div>
                 )}
-                {label === "Payments & Revenue" && active && (
+                {!sidebarCollapsed && label === "Payments & Revenue" && active && (
                   <div className="ml-7 mt-1 space-y-0.5 border-l border-white/10 pl-2">
                     {PAYMENT_MENU.map(([itemLabel, itemPath]) => {
                       const itemActive =
@@ -455,7 +810,7 @@ function Shell({ children }: { children: React.ReactNode }) {
                     })}
                   </div>
                 )}
-                {label === "Notifications" && active && (
+                {!sidebarCollapsed && label === "Notifications" && active && (
                   <div className="ml-7 mt-1 space-y-0.5 border-l border-white/10 pl-2">
                     {NOTIFICATION_MENU.map(([itemLabel, itemPath]) => {
                       const itemActive =
@@ -474,7 +829,7 @@ function Shell({ children }: { children: React.ReactNode }) {
                     })}
                   </div>
                 )}
-                {label === "Arrears & Debt" && active && (
+                {!sidebarCollapsed && label === "Arrears & Debt" && active && (
                   <div className="ml-7 mt-1 space-y-0.5 border-l border-white/10 pl-2">
                     {ARREARS_MENU.map(([itemLabel, itemPath]) => {
                       const itemActive =
@@ -497,7 +852,7 @@ function Shell({ children }: { children: React.ReactNode }) {
                     })}
                   </div>
                 )}
-                {label === "Meter Management" && active && (
+                {!sidebarCollapsed && label === "Meter Management" && active && (
                   <div className="ml-7 mt-1 space-y-0.5 border-l border-white/10 pl-2">
                     {METER_MENU.map(([itemLabel, itemPath]) => {
                       const itemActive =
@@ -520,7 +875,7 @@ function Shell({ children }: { children: React.ReactNode }) {
                     })}
                   </div>
                 )}
-                {label === "Meter Readings" && active && (
+                {!sidebarCollapsed && label === "Meter Readings" && active && (
                   <div className="ml-7 mt-1 space-y-0.5 border-l border-white/10 pl-2">
                     {READING_MENU.map(([itemLabel, itemPath]) => {
                       const itemActive =
@@ -543,7 +898,7 @@ function Shell({ children }: { children: React.ReactNode }) {
                     })}
                   </div>
                 )}
-                {label === "Tariff Management" && active && (
+                {!sidebarCollapsed && label === "Tariff Management" && active && (
                   <div className="ml-7 mt-1 space-y-0.5 border-l border-white/10 pl-2">
                     {TARIFF_MENU.map(([itemLabel, itemPath]) => {
                       const itemActive =
@@ -568,23 +923,29 @@ function Shell({ children }: { children: React.ReactNode }) {
                 )}
               </div>
             ) : (
-              <span key={label} className={cls}>
+              <span
+                key={label}
+                className={cls}
+                title={sidebarCollapsed ? label : undefined}
+              >
                 <span className={`nav-icon ${iconClass}`}>
                   <NavIcon />
                 </span>
-                {label}
+                <span className={sidebarCollapsed ? "sr-only" : ""}>
+                  {label}
+                </span>
               </span>
             );
           })}
         </nav>
 
         {/* User */}
-        <div className="px-3 py-3 border-t border-white/10">
-          <div className="flex items-center gap-2 mb-2">
+        <div className="border-t border-white/10 px-3 py-3">
+          <div className={`flex items-center ${sidebarCollapsed ? "justify-center" : "mb-2 gap-2"}`}>
             <div className="w-8 h-8 rounded-full bg-aqua-600 flex items-center justify-center text-xs font-bold flex-shrink-0">
               {initials}
             </div>
-            <div className="min-w-0">
+            <div className={`min-w-0 ${sidebarCollapsed ? "hidden" : ""}`}>
               <div className="text-xs font-medium truncate">{displayName}</div>
               <div className="text-[10px] text-blue-200/50 truncate">
                 {displayRole}
@@ -592,25 +953,83 @@ function Shell({ children }: { children: React.ReactNode }) {
             </div>
           </div>
           <button
+            title={sidebarCollapsed ? "Sign out" : undefined}
             onClick={() => {
               clearToken();
               navigate("/login");
             }}
-            className="text-[11px] text-blue-100/50 hover:text-white transition-colors"
+            className={`text-[11px] text-blue-100/50 transition-colors hover:text-white ${sidebarCollapsed ? "sr-only" : ""}`}
           >
             Sign out
           </button>
         </div>
       </aside>
 
+      {sidebarCollapsed && sidebarFlyout && flyoutModule?.path && (
+        <div
+          role="menu"
+          aria-label={`${sidebarFlyout} navigation`}
+          className="fixed left-20 z-[70] w-64 overflow-hidden rounded-xl border border-slate-200 bg-white text-slate-700 shadow-2xl"
+          style={{ top: sidebarFlyoutTop }}
+          onMouseEnter={cancelSidebarFlyoutClose}
+          onMouseLeave={scheduleSidebarFlyoutClose}
+        >
+          <Link
+            to={flyoutModule.path}
+            role="menuitem"
+            className="flex items-center justify-between border-b border-slate-100 bg-slate-50 px-4 py-3 font-bold text-slate-900 hover:bg-sky-50 hover:text-aqua-700"
+            onClick={() => setSidebarFlyout(null)}
+          >
+            <span>{sidebarFlyout}</span>
+            <span aria-hidden="true" className="text-slate-400">›</span>
+          </Link>
+          {flyoutMenu?.length ? (
+            <div className="max-h-[390px] overflow-y-auto p-2">
+              {flyoutMenu.map(([itemLabel, itemPath]) => {
+                const itemActive =
+                  itemPath === flyoutModule.path
+                    ? location.pathname === itemPath
+                    : location.pathname.startsWith(itemPath);
+                return (
+                  <Link
+                    key={itemPath}
+                    to={itemPath}
+                    role="menuitem"
+                    className={`block rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                      itemActive
+                        ? "bg-sky-50 text-aqua-700"
+                        : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+                    }`}
+                    onClick={() => setSidebarFlyout(null)}
+                  >
+                    {itemLabel}
+                  </Link>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="px-4 py-3 text-xs text-slate-500">
+              Open {sidebarFlyout}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* ── Main column ── */}
       <div className="app-main-column flex h-screen min-w-0 flex-1 flex-col overflow-hidden">
         {/* Top bar */}
         <header className="app-topbar h-14 bg-white border-b border-slate-200 flex items-center gap-3 px-4 flex-shrink-0">
-          <button className="text-slate-400 hover:text-slate-600 p-1">
+          <button
+            type="button"
+            title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            aria-expanded={!sidebarCollapsed}
+            className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+            onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
+          >
             <IcoMenu />
           </button>
-          <div className="flex-1 max-w-md">
+          <div ref={searchRef} className="relative max-w-xl flex-1">
             <div className="relative flex items-center">
               <span className="absolute left-3 text-slate-400 pointer-events-none">
                 <IcoSearch />
@@ -618,16 +1037,205 @@ function Shell({ children }: { children: React.ReactNode }) {
               <input
                 type="text"
                 placeholder="Search customers, accounts, meter..."
-                className="w-full pl-9 pr-4 py-2 text-sm bg-slate-100 rounded-full border-0 focus:outline-none focus:ring-2 focus:ring-aqua-500"
+                value={searchQuery}
+                aria-label="Global search"
+                aria-expanded={searchOpen}
+                className="w-full rounded-full border-0 bg-slate-100 py-2 pl-9 pr-10 text-[15px] focus:outline-none focus:ring-2 focus:ring-aqua-500"
+                onFocus={() => setSearchOpen(true)}
+                onChange={(event) => {
+                  setSearchQuery(event.target.value);
+                  setSearchOpen(true);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") setSearchOpen(false);
+                  if (event.key === "Enter" && searchResults[0]) {
+                    navigate(searchResults[0].path);
+                    setSearchQuery("");
+                    setSearchOpen(false);
+                  }
+                }}
               />
+              {searchQuery && (
+                <button
+                  type="button"
+                  aria-label="Clear search"
+                  className="absolute right-2 rounded-full px-2 py-1 text-slate-400 hover:bg-white hover:text-slate-700"
+                  onClick={() => {
+                    setSearchQuery("");
+                    setSearchResults([]);
+                  }}
+                >
+                  ×
+                </button>
+              )}
             </div>
+            {searchOpen && (
+              <div className="absolute left-0 top-[calc(100%+0.55rem)] z-50 w-full min-w-[340px] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl">
+                <div className="border-b border-slate-100 px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-slate-500">
+                  Global search
+                </div>
+                {searchQuery.trim().length < 2 ? (
+                  <div className="px-4 py-6 text-center text-sm text-slate-500">
+                    Enter at least two characters to search.
+                  </div>
+                ) : searchLoading ? (
+                  <div className="flex items-center justify-center gap-2 px-4 py-6 text-sm text-slate-500">
+                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-sky-200 border-t-sky-600" />
+                    Searching…
+                  </div>
+                ) : searchResults.length ? (
+                  <div className="max-h-[420px] overflow-y-auto py-1">
+                    {searchResults.map((result) => {
+                      const kindColors = {
+                        Customer: "bg-violet-50 text-violet-700",
+                        Account: "bg-emerald-50 text-emerald-700",
+                        Meter: "bg-amber-50 text-amber-700",
+                      };
+                      return (
+                        <button
+                          type="button"
+                          key={result.id}
+                          className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-sky-50"
+                          onClick={() => {
+                            navigate(result.path);
+                            setSearchQuery("");
+                            setSearchOpen(false);
+                          }}
+                        >
+                          <span
+                            className={`w-20 flex-shrink-0 rounded-full px-2 py-1 text-center text-[11px] font-semibold ${kindColors[result.kind]}`}
+                          >
+                            {result.kind}
+                          </span>
+                          <span className="min-w-0">
+                            <strong className="block truncate text-sm text-slate-800">
+                              {result.title}
+                            </strong>
+                            <span className="block truncate text-xs text-slate-500">
+                              {result.detail}
+                            </span>
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="px-4 py-6 text-center text-sm text-slate-500">
+                    No customer, account or meter matched “{searchQuery}”.
+                  </div>
+                )}
+              </div>
+            )}
           </div>
           <div className="ml-auto flex items-center gap-1">
-            <button className="topbar-icon relative rounded-lg p-2 text-amber-500 hover:bg-amber-50 hover:text-amber-600">
-              <IcoBell />
-              <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full border border-white"></span>
-            </button>
-            <button className="topbar-icon rounded-lg p-2 text-sky-600 hover:bg-sky-50 hover:text-sky-700">
+            <div ref={notificationRef} className="relative">
+              <button
+                type="button"
+                aria-label="Open notifications"
+                aria-expanded={notificationOpen}
+                className="topbar-icon relative rounded-lg p-2 text-amber-500 hover:bg-amber-50 hover:text-amber-600"
+                onClick={() => {
+                  setNotificationOpen((open) => !open);
+                  setSearchOpen(false);
+                  void api
+                    .notificationDashboard()
+                    .then(setNotificationData)
+                    .catch(() => undefined);
+                }}
+              >
+                <IcoBell />
+                {actionNotificationCount > 0 && (
+                  <span className="absolute -right-1 -top-1 flex min-h-4 min-w-4 items-center justify-center rounded-full border-2 border-white bg-red-500 px-1 text-[9px] font-bold leading-none text-white">
+                    {actionNotificationCount > 99
+                      ? "99+"
+                      : actionNotificationCount}
+                  </span>
+                )}
+              </button>
+              {notificationOpen && (
+                <div className="absolute right-0 top-[calc(100%+0.55rem)] z-50 w-[380px] max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl">
+                  <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+                    <div>
+                      <h3 className="text-base font-bold text-slate-900">
+                        Notifications
+                      </h3>
+                      <p className="text-xs text-slate-500">
+                        {notificationData.queued ?? 0} queued ·{" "}
+                        {notificationData.failed ?? 0} failed
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      className="text-xs font-semibold text-aqua-700 hover:text-aqua-600"
+                      onClick={() => navigate("/notifications/history")}
+                    >
+                      View all
+                    </button>
+                  </div>
+                  <div className="max-h-[420px] overflow-y-auto">
+                    {(notificationData.recent ?? [])
+                      .slice(0, 6)
+                      .map((notification: any) => (
+                        <button
+                          type="button"
+                          key={notification.notificationId}
+                          className="flex w-full gap-3 border-b border-slate-100 px-4 py-3 text-left last:border-0 hover:bg-sky-50"
+                          onClick={() => navigate("/notifications/history")}
+                        >
+                          <span
+                            className={`mt-1 h-2.5 w-2.5 flex-shrink-0 rounded-full ${
+                              notification.deliveryStatus === "FAILED"
+                                ? "bg-red-500"
+                                : notification.deliveryStatus === "QUEUED"
+                                  ? "bg-amber-400"
+                                  : "bg-emerald-500"
+                            }`}
+                          />
+                          <span className="min-w-0">
+                            <strong className="block truncate text-sm text-slate-800">
+                              {notificationLabel(notification)}
+                            </strong>
+                            <span className="mt-0.5 block truncate text-xs text-slate-500">
+                              {notification.recipient} ·{" "}
+                              {String(notification.deliveryStatus)
+                                .toLowerCase()
+                                .replace(/_/g, " ")}
+                            </span>
+                          </span>
+                        </button>
+                      ))}
+                    {!(notificationData.recent ?? []).length && (
+                      <div className="px-4 py-8 text-center text-sm text-slate-500">
+                        No notifications have been created yet.
+                      </div>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 border-t border-slate-100 bg-slate-50 p-3">
+                    <button
+                      type="button"
+                      className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:border-sky-200 hover:text-sky-700"
+                      onClick={() => navigate("/notifications/queue")}
+                    >
+                      Open queue
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded-lg bg-aqua-700 px-3 py-2 text-sm font-semibold text-white hover:bg-aqua-600"
+                      onClick={() => navigate("/notifications/send")}
+                    >
+                      Send notification
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+            <button
+              type="button"
+              title="Send notification"
+              aria-label="Send notification"
+              className="topbar-icon rounded-lg p-2 text-sky-600 hover:bg-sky-50 hover:text-sky-700"
+              onClick={() => navigate("/notifications/send")}
+            >
               <IcoMail />
             </button>
             <button
@@ -641,6 +1249,7 @@ function Shell({ children }: { children: React.ReactNode }) {
 
         {/* Page content */}
         <main className="app-content min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
+          <AppBreadcrumbs />
           <PageErrorBoundary resetKey={location.pathname}>
             {children}
           </PageErrorBoundary>
@@ -653,6 +1262,7 @@ function Shell({ children }: { children: React.ReactNode }) {
 export default function App() {
   return (
     <Routes>
+      <Route path="/" element={<LandingPage />} />
       <Route path="/login" element={<Login />} />
       <Route
         path="/customers"

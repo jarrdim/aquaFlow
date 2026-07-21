@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../lib/api";
 import { encodeId } from "../lib/hashids";
@@ -17,222 +17,588 @@ interface Customer {
   registrationDate: string;
 }
 
+const PAGE_SIZE = 20;
 const STATUS_COLORS: Record<string, string> = {
-  ACTIVE:    "bg-green-100 text-green-700",
-  INACTIVE:  "bg-slate-100 text-slate-500",
-  SUSPENDED: "bg-orange-100 text-orange-700",
-  CLOSED:    "bg-red-100 text-red-600",
+  ACTIVE: "border-emerald-200 bg-emerald-50 text-emerald-700",
+  INACTIVE: "border-slate-200 bg-slate-100 text-slate-600",
+  SUSPENDED: "border-amber-200 bg-amber-50 text-amber-700",
+  CLOSED: "border-red-200 bg-red-50 text-red-700",
 };
 
+function customerName(customer: Customer) {
+  return customer.customerType === "ORGANIZATION"
+    ? customer.organizationName || "Unnamed organization"
+    : [customer.firstName, customer.middleName, customer.lastName]
+        .filter(Boolean)
+        .join(" ");
+}
+
+function initials(customer: Customer) {
+  return customerName(customer)
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((part) => part.charAt(0))
+    .join("")
+    .toUpperCase();
+}
+
 function StatusBadge({ status }: { status: string }) {
-  const cls = STATUS_COLORS[status] ?? "bg-slate-100 text-slate-500";
+  const classes =
+    STATUS_COLORS[status] ?? "border-slate-200 bg-slate-100 text-slate-600";
   return (
-    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${cls}`}>
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold ${classes}`}
+    >
+      <span className="h-1.5 w-1.5 rounded-full bg-current" />
       {status.charAt(0) + status.slice(1).toLowerCase()}
     </span>
   );
 }
 
-const PAGE_SIZE = 20;
-
-export default function Customers() {
-  const [customers, setCustomers] = useState<Customer[]>([]);
-  const [search, setSearch]       = useState("");
-  const [statusFilter, setStatusFilter] = useState("");
-  const [page, setPage]           = useState(1);
-  const [total, setTotal]         = useState(0);
-  const [loading, setLoading]     = useState(true);
-  const [error, setError]         = useState<string | null>(null);
-
-  async function load(q = search, st = statusFilter, pg = page) {
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await api.listCustomers(q, pg, st);
-      setCustomers(data.items);
-      setTotal(data.total);
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => { load(search, statusFilter, page); }, [page]);
-
-  function handleSearch() {
-    setPage(1);
-    load(search, statusFilter, 1);
-  }
-
-  function handleStatusChange(st: string) {
-    setStatusFilter(st);
-    setPage(1);
-    load(search, st, 1);
-  }
-
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-
+function SummaryMetric({
+  label,
+  value,
+  tone = "slate",
+  icon,
+}: {
+  label: string;
+  value: string | number;
+  tone?: "slate" | "emerald" | "violet" | "sky";
+  icon: React.ReactNode;
+}) {
+  const tones = {
+    slate: "bg-slate-100 text-slate-600",
+    emerald: "bg-emerald-50 text-emerald-700",
+    violet: "bg-violet-50 text-violet-700",
+    sky: "bg-sky-50 text-sky-700",
+  };
   return (
-    <div className="p-6">
-      {/* ── Page header ── */}
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-xl font-semibold text-slate-800">Customers</h1>
-          <p className="text-sm text-slate-400 mt-0.5">{total} total customers</p>
-        </div>
-        <Link
-          to="/customers/new"
-          className="inline-flex items-center gap-2 bg-aqua-700 hover:bg-aqua-600 text-white text-sm font-medium px-4 py-2 rounded-lg shadow-sm transition-colors"
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 5v14M5 12h14"/></svg>
-          New Customer
-        </Link>
-      </div>
-
-      {/* ── Filters bar ── */}
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm mb-4 px-4 py-3 flex flex-wrap gap-3 items-center">
-        <div className="relative flex-1 min-w-[220px] max-w-sm">
-          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-          </span>
-          <input
-            className="w-full pl-8 pr-3 py-1.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-aqua-500 bg-slate-50"
-            placeholder="Search name, number, phone…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-          />
-        </div>
-
-        <select
-          className="text-sm border border-slate-200 rounded-lg px-3 py-1.5 bg-slate-50 focus:outline-none focus:ring-2 focus:ring-aqua-500"
-          value={statusFilter}
-          onChange={(e) => handleStatusChange(e.target.value)}
-        >
-          <option value="">All Statuses</option>
-          <option value="ACTIVE">Active</option>
-          <option value="INACTIVE">Inactive</option>
-          <option value="SUSPENDED">Suspended</option>
-          <option value="CLOSED">Closed</option>
-        </select>
-
-        <button
-          onClick={handleSearch}
-          className="text-sm border border-slate-200 bg-white hover:bg-slate-50 rounded-lg px-4 py-1.5 font-medium transition-colors"
-        >
-          Search
-        </button>
-      </div>
-
-      {error && (
-        <div className="mb-4 px-4 py-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-600">{error}</div>
-      )}
-
-      {/* ── Table ── */}
-      <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="bg-slate-50 border-b border-slate-200">
-              <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Customer No.</th>
-              <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Name</th>
-              <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Type</th>
-              <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Phone</th>
-              <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Registered</th>
-              <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Status</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {loading && (
-              <tr>
-                <td colSpan={6} className="px-4 py-8 text-center text-slate-400">
-                  <div className="flex items-center justify-center gap-2">
-                    <svg className="animate-spin w-4 h-4 text-aqua-600" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
-                    Loading…
-                  </div>
-                </td>
-              </tr>
-            )}
-            {!loading && customers.length === 0 && (
-              <tr>
-                <td colSpan={6} className="px-4 py-8 text-center text-slate-400">No customers found.</td>
-              </tr>
-            )}
-            {!loading && customers.map((c) => {
-              const name = c.customerType === "ORGANIZATION"
-                ? c.organizationName
-                : [c.firstName, c.middleName, c.lastName].filter(Boolean).join(" ");
-              return (
-                <tr key={c.customerId} className="hover:bg-slate-50 transition-colors">
-                  <td className="px-4 py-3 font-medium">
-                    <Link
-                      to={`/customers/${encodeId(c.customerId)}`}
-                      className="text-aqua-700 hover:text-aqua-600 hover:underline"
-                    >
-                      {c.customerNumber}
-                    </Link>
-                  </td>
-                  <td className="px-4 py-3 text-slate-700">{name}</td>
-                  <td className="px-4 py-3">
-                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-slate-100 text-slate-600">
-                      {c.customerType === "ORGANIZATION" ? "Organization" : "Individual"}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-slate-600">{c.phoneNumber}</td>
-                  <td className="px-4 py-3 text-slate-500">
-                    {c.registrationDate ? new Date(c.registrationDate).toLocaleDateString() : "—"}
-                  </td>
-                  <td className="px-4 py-3">
-                    <StatusBadge status={c.status} />
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-
-        {/* ── Pagination ── */}
-        {totalPages > 1 && (
-          <div className="px-4 py-3 border-t border-slate-100 flex items-center justify-between text-sm text-slate-500">
-            <span>
-              Showing {Math.min((page - 1) * PAGE_SIZE + 1, total)}–{Math.min(page * PAGE_SIZE, total)} of {total}
-            </span>
-            <div className="flex items-center gap-1">
-              <button
-                disabled={page === 1}
-                onClick={() => setPage((p) => p - 1)}
-                className="px-2.5 py-1 rounded-lg border border-slate-200 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-              >
-                ‹
-              </button>
-              {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
-                const pg = totalPages <= 7 ? i + 1 : i < 3 ? i + 1 : i >= 4 ? totalPages - (6 - i) : page;
-                return (
-                  <button
-                    key={pg}
-                    onClick={() => setPage(pg)}
-                    className={`px-3 py-1 rounded-lg border transition-colors ${
-                      pg === page
-                        ? "bg-aqua-700 text-white border-aqua-700"
-                        : "border-slate-200 hover:bg-slate-50"
-                    }`}
-                  >
-                    {pg}
-                  </button>
-                );
-              })}
-              <button
-                disabled={page === totalPages}
-                onClick={() => setPage((p) => p + 1)}
-                className="px-2.5 py-1 rounded-lg border border-slate-200 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-              >
-                ›
-              </button>
-            </div>
-          </div>
-        )}
+    <div className="flex min-w-0 items-center gap-3 px-5 py-4">
+      <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${tones[tone]}`}>
+        {icon}
+      </span>
+      <div className="min-w-0">
+        <p className="truncate text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">{label}</p>
+        <p className="mt-0.5 text-xl font-extrabold tabular-nums text-slate-900">
+          {typeof value === "number" ? value.toLocaleString() : value}
+        </p>
       </div>
     </div>
   );
 }
 
+const UsersIcon = () => (
+  <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9">
+    <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8m8 0a4 4 0 0 0 0-8m3 18v-2a4 4 0 0 0-3-3.87" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+);
+
+const CheckIcon = () => (
+  <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <path d="m5 12 4 4L19 6" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+);
+
+const BuildingIcon = () => (
+  <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9">
+    <path d="M4 21V3h12v18M8 7h4M8 11h4M8 15h4m4-6h4v12H2m16-8h.01m0 4h.01" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+);
+
+const SelectionIcon = () => (
+  <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9">
+    <path d="M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+);
+
+export default function Customers() {
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+  const [selected, setSelected] = useState<string[]>([]);
+  const [bulkStatus, setBulkStatus] = useState("ACTIVE");
+  const [updating, setUpdating] = useState(false);
+
+  async function load(q = search, status = statusFilter, currentPage = page) {
+    setLoading(true);
+    setError("");
+    try {
+      const data = await api.listCustomers(q, currentPage, status);
+      setCustomers(data.items ?? []);
+      setTotal(Number(data.total ?? 0));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Customers could not be loaded.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void load(search, statusFilter, page);
+  }, [page]);
+
+  const pageIds = customers.map((customer) => String(customer.customerId));
+  const allPageSelected =
+    pageIds.length > 0 && pageIds.every((id) => selected.includes(id));
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const shownActive = customers.filter(
+    (customer) => customer.status === "ACTIVE",
+  ).length;
+  const shownOrganizations = customers.filter(
+    (customer) => customer.customerType === "ORGANIZATION",
+  ).length;
+  const pageNumbers = useMemo(() => {
+    const start = Math.max(1, Math.min(page - 2, totalPages - 4));
+    return Array.from(
+      { length: Math.min(5, totalPages) },
+      (_, index) => start + index,
+    );
+  }, [page, totalPages]);
+
+  function submitSearch(event?: FormEvent) {
+    event?.preventDefault();
+    setPage(1);
+    void load(search, statusFilter, 1);
+  }
+
+  function changeStatusFilter(status: string) {
+    setStatusFilter(status);
+    setPage(1);
+    setSelected([]);
+    void load(search, status, 1);
+  }
+
+  function togglePage(checked: boolean) {
+    setSelected((current) =>
+      checked
+        ? Array.from(new Set([...current, ...pageIds])).slice(0, 1000)
+        : current.filter((id) => !pageIds.includes(id)),
+    );
+  }
+
+  async function applyBulkStatus() {
+    if (!selected.length) return;
+    setUpdating(true);
+    setError("");
+    setSuccess("");
+    try {
+      const result = await api.bulkUpdateCustomerStatus(selected, bulkStatus);
+      setSuccess(
+        `${result.updated} customer(s) updated to ${bulkStatus.toLowerCase()}.`,
+      );
+      setSelected([]);
+      await load(search, statusFilter, page);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "The selected customers could not be updated.",
+      );
+    } finally {
+      setUpdating(false);
+    }
+  }
+
+  return (
+    <div className="mx-auto max-w-[1600px] px-5 py-6 lg:px-8">
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
+        <div className="flex items-center gap-4">
+          <span className="hidden h-12 w-12 items-center justify-center rounded-2xl bg-navy-900 text-sky-300 shadow-lg shadow-slate-300/60 sm:flex">
+            <UsersIcon />
+          </span>
+          <div>
+            <h1 className="text-[27px] font-extrabold leading-tight text-slate-900">
+              Customers
+            </h1>
+            <p className="mt-1 text-sm text-slate-500">
+              Manage customer identities, contacts and service accounts.
+            </p>
+          </div>
+        </div>
+        <Link
+          to="/customers/new"
+          className="inline-flex items-center gap-2 rounded-xl bg-aqua-700 px-5 py-3 text-sm font-bold text-white shadow-lg shadow-sky-200/70 transition hover:-translate-y-0.5 hover:bg-aqua-600"
+        >
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+          >
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+          Add customer
+        </Link>
+      </div>
+
+      <section className="mb-5 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="grid divide-y divide-slate-100 sm:grid-cols-2 sm:divide-x sm:divide-y-0 xl:grid-cols-4">
+          <SummaryMetric label="Total customers" value={total} icon={<UsersIcon />} />
+          <SummaryMetric label="Active on page" value={shownActive} tone="emerald" icon={<CheckIcon />} />
+          <SummaryMetric label="Organizations on page" value={shownOrganizations} tone="violet" icon={<BuildingIcon />} />
+          <SummaryMetric label="Selected records" value={selected.length} tone="sky" icon={<SelectionIcon />} />
+        </div>
+      </section>
+
+      {(error || success) && (
+        <div
+          className={`mb-4 rounded-xl border px-4 py-3 text-sm ${
+            error
+              ? "border-red-200 bg-red-50 text-red-700"
+              : "border-emerald-200 bg-emerald-50 text-emerald-700"
+          }`}
+        >
+          {error || success}
+        </div>
+      )}
+
+      <form
+        onSubmit={submitSearch}
+        className="mb-4 grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:grid-cols-[minmax(260px,1fr)_220px_auto]"
+      >
+        <label className="relative block">
+          <span className="sr-only">Find a customer</span>
+          <div className="relative">
+            <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <circle cx="11" cy="11" r="8" />
+                <path d="m21 21-4.35-4.35" />
+              </svg>
+            </span>
+            <input
+              className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50 pl-10 pr-4 text-sm outline-none transition placeholder:text-slate-400 focus:border-aqua-500 focus:bg-white focus:ring-2 focus:ring-aqua-500/20"
+              placeholder="Search name, number, phone or email"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          </div>
+        </label>
+        <label>
+          <span className="sr-only">Customer status</span>
+          <select
+            className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm outline-none focus:border-aqua-500 focus:ring-2 focus:ring-aqua-500/20"
+            value={statusFilter}
+            onChange={(event) => changeStatusFilter(event.target.value)}
+          >
+            <option value="">All customer statuses</option>
+            <option value="ACTIVE">Active</option>
+            <option value="INACTIVE">Inactive</option>
+            <option value="SUSPENDED">Suspended</option>
+            <option value="CLOSED">Closed</option>
+          </select>
+        </label>
+        <button
+          className="h-11 rounded-xl bg-navy-900 px-7 text-sm font-bold text-white transition hover:bg-aqua-700"
+          type="submit"
+        >
+          Search
+        </button>
+      </form>
+
+      {selected.length > 0 && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 shadow-sm">
+          <div>
+            <strong className="text-sm text-sky-900">
+              {selected.length} customer(s) selected
+            </strong>
+            <p className="text-xs text-sky-700">
+              Selections can be retained across pages, up to 1,000 records.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              className="rounded-lg border border-sky-200 bg-white px-3 py-2 text-sm"
+              value={bulkStatus}
+              onChange={(event) => setBulkStatus(event.target.value)}
+            >
+              <option value="ACTIVE">Set Active</option>
+              <option value="INACTIVE">Set Inactive</option>
+              <option value="SUSPENDED">Set Suspended</option>
+              <option value="CLOSED">Set Closed</option>
+            </select>
+            <button
+              type="button"
+              disabled={updating}
+              onClick={applyBulkStatus}
+              className="rounded-lg bg-aqua-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+            >
+              {updating ? "Updating…" : "Apply to selected"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setSelected([])}
+              className="rounded-lg border border-sky-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600"
+            >
+              Clear
+            </button>
+          </div>
+        </div>
+      )}
+
+      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_16px_42px_-30px_rgba(15,32,56,0.45)]">
+        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 px-5 py-4">
+          <div>
+            <h2 className="text-base font-bold text-slate-900">Customer directory</h2>
+            <p className="mt-0.5 text-xs text-slate-500">
+              {total.toLocaleString()} records · Page {page} of {totalPages}
+            </p>
+          </div>
+          <nav className="flex items-center gap-1" aria-label="Customer directory top pagination">
+            <button
+              type="button"
+              aria-label="Previous customer page"
+              disabled={page <= 1}
+              onClick={() => setPage((current) => current - 1)}
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 shadow-sm transition hover:border-sky-200 hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3">
+                <path d="m15 18-6-6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              Previous
+            </button>
+            <div className="hidden items-center gap-1 sm:flex">
+              {pageNumbers.map((pageNumber) => (
+                <button
+                  type="button"
+                  key={`top-${pageNumber}`}
+                  aria-label={`Go to customer page ${pageNumber}`}
+                  aria-current={pageNumber === page ? "page" : undefined}
+                  onClick={() => setPage(pageNumber)}
+                  className={`h-9 min-w-9 rounded-lg border px-2 text-xs font-bold transition ${
+                    pageNumber === page
+                      ? "border-aqua-700 bg-aqua-700 text-white shadow-sm"
+                      : "border-slate-200 bg-white text-slate-600 hover:border-sky-200 hover:bg-sky-50"
+                  }`}
+                >
+                  {pageNumber}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              aria-label="Next customer page"
+              disabled={page >= totalPages}
+              onClick={() => setPage((current) => current + 1)}
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 shadow-sm transition hover:border-sky-200 hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Next
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3">
+                <path d="m9 18 6-6-6-6" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+          </nav>
+        </div>
+        <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50/60 px-5 py-2.5">
+          <p className="text-xs font-medium text-slate-500">
+            Showing {customers.length} customers on this page
+          </p>
+          {(search || statusFilter) && (
+            <button
+              type="button"
+              className="text-xs font-bold text-aqua-700 hover:text-aqua-600"
+              onClick={() => {
+                setSearch("");
+                setStatusFilter("");
+                setPage(1);
+                void load("", "", 1);
+              }}
+            >
+              Clear filters
+            </button>
+          )}
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[1050px]">
+            <thead className="bg-white">
+              <tr>
+                <th className="w-14 px-5 py-3 text-left">
+                  <input
+                    type="checkbox"
+                    aria-label="Select all customers on this page"
+                    checked={allPageSelected}
+                    onChange={(event) => togglePage(event.target.checked)}
+                  />
+                </th>
+                {[
+                  "Customer",
+                  "Contact",
+                  "Type",
+                  "Registered",
+                  "Status",
+                  "Actions",
+                ].map((heading) => (
+                  <th
+                    key={heading}
+                    className="px-4 py-3 text-left text-[11px] font-bold uppercase tracking-[0.08em] text-slate-500"
+                  >
+                    {heading}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {loading ? (
+                <tr>
+                  <td colSpan={7} className="px-4 py-16 text-center text-slate-500">
+                    <span className="inline-flex items-center gap-2">
+                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-sky-200 border-t-sky-600" />
+                      Loading customers…
+                    </span>
+                  </td>
+                </tr>
+              ) : customers.length ? (
+                customers.map((customer) => {
+                  const id = String(customer.customerId);
+                  const detailPath = `/customers/${encodeId(id)}`;
+                  return (
+                    <tr
+                      key={id}
+                      className={`group transition hover:bg-slate-50/80 ${
+                        selected.includes(id) ? "bg-sky-50/70" : ""
+                      }`}
+                    >
+                      <td className="px-5 py-3.5">
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${customer.customerNumber}`}
+                          checked={selected.includes(id)}
+                          onChange={(event) =>
+                            setSelected((current) =>
+                              event.target.checked
+                                ? [...current, id].slice(0, 1000)
+                                : current.filter((value) => value !== id),
+                            )
+                          }
+                        />
+                      </td>
+                      <td className="px-4 py-3.5">
+                        <div className="flex items-center gap-3">
+                          <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-sky-50 to-violet-100 text-xs font-extrabold text-violet-700 ring-1 ring-violet-100">
+                            {initials(customer)}
+                          </span>
+                          <div>
+                            <Link
+                              to={detailPath}
+                              className="text-sm font-bold text-slate-900 hover:text-aqua-700"
+                            >
+                              {customerName(customer)}
+                            </Link>
+                            <div className="mt-0.5 text-xs font-semibold text-aqua-700">
+                              {customer.customerNumber}
+                            </div>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3.5 text-sm text-slate-600">
+                        <div>{customer.phoneNumber}</div>
+                        <div className="max-w-[240px] truncate text-xs text-slate-400">
+                          {customer.emailAddress || "No email address"}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3.5">
+                        <span className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-600">
+                          {customer.customerType === "ORGANIZATION"
+                            ? "Organization"
+                            : "Individual"}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3.5 text-sm text-slate-600">
+                        {customer.registrationDate
+                          ? new Date(customer.registrationDate).toLocaleDateString(
+                              "en-KE",
+                            )
+                          : "—"}
+                      </td>
+                      <td className="px-4 py-3.5">
+                        <StatusBadge status={customer.status} />
+                      </td>
+                      <td className="px-4 py-3.5">
+                        <Link
+                          to={detailPath}
+                          className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-bold text-aqua-700 transition hover:bg-sky-50"
+                        >
+                          View
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+                            <path d="M5 12h14m-6-6 6 6-6 6" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                        </Link>
+                      </td>
+                    </tr>
+                  );
+                })
+              ) : (
+                <tr>
+                  <td colSpan={7} className="px-4 py-16 text-center">
+                    <div className="font-semibold text-slate-700">
+                      No customers matched
+                    </div>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Change the search or status filter and try again.
+                    </p>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 bg-slate-50/50 px-5 py-4 text-sm text-slate-500">
+          <span>
+            {total
+              ? `Showing ${Math.min((page - 1) * PAGE_SIZE + 1, total)}–${Math.min(
+                  page * PAGE_SIZE,
+                  total,
+                )} of ${total.toLocaleString()}`
+              : "No records to display"}
+          </span>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              disabled={page <= 1}
+              onClick={() => setPage((current) => current - 1)}
+              className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 font-semibold disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Previous
+            </button>
+            {pageNumbers.map((pageNumber) => (
+              <button
+                type="button"
+                key={pageNumber}
+                onClick={() => setPage(pageNumber)}
+                className={`h-8 min-w-8 rounded-lg border px-2 font-semibold ${
+                  pageNumber === page
+                    ? "border-aqua-700 bg-aqua-700 text-white"
+                    : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                }`}
+              >
+                {pageNumber}
+              </button>
+            ))}
+            <button
+              type="button"
+              disabled={page >= totalPages}
+              onClick={() => setPage((current) => current + 1)}
+              className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 font-semibold disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}

@@ -48,6 +48,7 @@ customersRouter.get("/", async (req, res) => {
   if (search) {
     where.OR = [
       { firstName: { contains: search, mode: "insensitive" as const } },
+      { middleName: { contains: search, mode: "insensitive" as const } },
       { lastName: { contains: search, mode: "insensitive" as const } },
       { organizationName: { contains: search, mode: "insensitive" as const } },
       { customerNumber: { contains: search, mode: "insensitive" as const } },
@@ -108,6 +109,29 @@ const updateCustomerSchema = z.object({
     .transform((v) => (v === "" ? undefined : v)),
   preferredLanguage:  z.enum(["EN", "SW"]).optional(),
   status:             z.enum(["ACTIVE", "INACTIVE", "SUSPENDED", "CLOSED"]).optional(),
+});
+
+const bulkCustomerStatusSchema = z.object({
+  customerIds: z.array(z.string().regex(/^\d+$/)).min(1).max(1000),
+  status: z.enum(["ACTIVE", "INACTIVE", "SUSPENDED", "CLOSED"]),
+});
+
+customersRouter.patch("/bulk-status", async (req, res) => {
+  const parsed = bulkCustomerStatusSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.flatten() });
+  }
+
+  const result = await prisma.customer.updateMany({
+    where: {
+      customerId: {
+        in: parsed.data.customerIds.map((id) => BigInt(id)),
+      },
+    },
+    data: { status: parsed.data.status },
+  });
+
+  res.json({ updated: result.count, status: parsed.data.status });
 });
 
 customersRouter.patch("/:id", async (req, res) => {

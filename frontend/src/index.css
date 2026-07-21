@@ -71,6 +71,9 @@ strong,
     linear-gradient(180deg, rgba(30, 61, 107, 0.18), transparent 15rem),
     #0d1f3c;
   box-shadow: 8px 0 28px rgba(15, 32, 56, 0.1);
+  transition:
+    width 180ms ease,
+    box-shadow 180ms ease;
 }
 
 .app-sidebar .nav-icon {
@@ -250,6 +253,31 @@ input[type="radio"] {
 ::selection {
   color: #0c4a6e;
   background: #bae6fd;
+}
+
+.landing-grid {
+  background-image:
+    linear-gradient(rgba(14, 116, 144, 0.055) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(14, 116, 144, 0.055) 1px, transparent 1px);
+  background-size: 36px 36px;
+  mask-image: linear-gradient(to bottom, black 5%, transparent 92%);
+}
+
+.landing-page {
+  scroll-behavior: smooth;
+  scrollbar-color: #cbd5e1 transparent;
+  scrollbar-width: thin;
+}
+
+.landing-page::-webkit-scrollbar {
+  width: 8px;
+}
+
+.landing-page::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: #cbd5e1;
+  background-clip: padding-box;
 }
 
 @media print {

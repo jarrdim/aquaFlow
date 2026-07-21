@@ -750,6 +750,267 @@ notificationsRouter.get("/", async (req, res, next) => {
   }
 });
 
+notificationsRouter.get("/audience", managers, async (req, res, next) => {
+  const parsed = z
+    .object({
+      search: z.string().trim().max(100).default(""),
+      minimumBalance: z.coerce.number().min(0).default(0.01),
+      accountStatus: z.string().trim().default("ACTIVE"),
+      page: z.coerce.number().int().min(1).default(1),
+      pageSize: z.coerce.number().int().min(10).max(100).default(25),
+    })
+    .safeParse(req.query);
+  if (!parsed.success)
+    return res.status(400).json({ error: parsed.error.flatten() });
+  try {
+    const { search, minimumBalance, accountStatus, page, pageSize } =
+      parsed.data;
+    const where: any = {
+      currentBalance: { gte: minimumBalance },
+      ...(accountStatus ? { accountStatus } : {}),
+      ...(search
+        ? {
+            OR: [
+              {
+                accountNumber: {
+                  contains: search,
+                  mode: "insensitive",
+                },
+              },
+              {
+                customer: {
+                  firstName: { contains: search, mode: "insensitive" },
+                },
+              },
+              {
+                customer: {
+                  middleName: { contains: search, mode: "insensitive" },
+                },
+              },
+              {
+                customer: {
+                  lastName: { contains: search, mode: "insensitive" },
+                },
+              },
+              {
+                customer: {
+                  organizationName: {
+                    contains: search,
+                    mode: "insensitive",
+                  },
+                },
+              },
+              { customer: { phoneNumber: { contains: search } } },
+              {
+                customer: {
+                  emailAddress: { contains: search, mode: "insensitive" },
+                },
+              },
+            ],
+          }
+        : {}),
+    };
+    const [items, total, balance] = await Promise.all([
+      prisma.customerAccount.findMany({
+        where,
+        include: { customer: true, category: true },
+        orderBy: [{ currentBalance: "desc" }, { accountNumber: "asc" }],
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      prisma.customerAccount.count({ where }),
+      prisma.customerAccount.aggregate({
+        where,
+        _sum: { currentBalance: true },
+      }),
+    ]);
+    res.json({
+      items: items.map((account) => ({
+        ...account,
+        customerName: customerName(account.customer),
+        hasSms: Boolean(account.customer.phoneNumber),
+        hasEmail: Boolean(account.customer.emailAddress),
+      })),
+      total,
+      page,
+      pageSize,
+      totalBalance: balance._sum.currentBalance ?? 0,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+notificationsRouter.post("/send-bulk", managers, async (req, res, next) => {
+  const audienceFilters = z.object({
+    search: z.string().trim().max(100).default(""),
+    minimumBalance: z.coerce.number().min(0).default(0.01),
+    accountStatus: z.string().trim().default("ACTIVE"),
+  });
+  const parsed = z
+    .object({
+      selectionMode: z.enum(["SELECTED", "FILTER"]),
+      accountIds: z.array(id).max(1000).default([]),
+      filters: audienceFilters,
+      notificationType: z.enum(["GENERAL", "BALANCE_REMINDER"]),
+      channels,
+      subject: z.string().optional(),
+      message: z.string().optional(),
+      scheduledAt: z.coerce.date().optional().nullable(),
+    })
+    .safeParse(req.body);
+  if (!parsed.success)
+    return res.status(400).json({ error: parsed.error.flatten() });
+  if (
+    parsed.data.notificationType === "GENERAL" &&
+    !parsed.data.message?.trim()
+  )
+    return res.status(400).json({
+      error: "A custom message is required for a general notification.",
+    });
+  if (
+    parsed.data.selectionMode === "SELECTED" &&
+    !parsed.data.accountIds.length
+  )
+    return res.status(400).json({ error: "Select at least one account." });
+  try {
+    const { filters } = parsed.data;
+    const filteredWhere: any = {
+      currentBalance: { gte: filters.minimumBalance },
+      ...(filters.accountStatus
+        ? { accountStatus: filters.accountStatus }
+        : {}),
+      ...(filters.search
+        ? {
+            OR: [
+              {
+                accountNumber: {
+                  contains: filters.search,
+                  mode: "insensitive",
+                },
+              },
+              {
+                customer: {
+                  firstName: {
+                    contains: filters.search,
+                    mode: "insensitive",
+                  },
+                },
+              },
+              {
+                customer: {
+                  middleName: {
+                    contains: filters.search,
+                    mode: "insensitive",
+                  },
+                },
+              },
+              {
+                customer: {
+                  lastName: {
+                    contains: filters.search,
+                    mode: "insensitive",
+                  },
+                },
+              },
+              {
+                customer: {
+                  organizationName: {
+                    contains: filters.search,
+                    mode: "insensitive",
+                  },
+                },
+              },
+            ],
+          }
+        : {}),
+    };
+    const accounts = await prisma.customerAccount.findMany({
+      where:
+        parsed.data.selectionMode === "SELECTED"
+          ? { accountId: { in: parsed.data.accountIds }, ...filteredWhere }
+          : filteredWhere,
+      include: { customer: true },
+      orderBy: { accountNumber: "asc" },
+      take: 1001,
+    });
+    if (accounts.length > 1000)
+      return res.status(400).json({
+        error:
+          "This audience contains more than 1,000 accounts. Narrow the filters and create another batch.",
+      });
+    const templateEntries = await Promise.all(
+      parsed.data.channels.map(async (channel) => ({
+        channel,
+        template: await activeTemplate(
+          parsed.data.notificationType,
+          channel,
+        ),
+      })),
+    );
+    const unavailableChannels = templateEntries
+      .filter(({ template }) => !template && !parsed.data.message)
+      .map(({ channel }) => channel);
+    const data: any[] = [];
+    const skipped = { missingSms: 0, missingEmail: 0, unavailableTemplate: 0 };
+    for (const account of accounts) {
+      const values: Record<string, string> = {
+        customer_name: customerName(account.customer),
+        account_number: account.accountNumber,
+        balance: money(account.currentBalance),
+      };
+      for (const { channel, template } of templateEntries) {
+        if (!template && !parsed.data.message) {
+          skipped.unavailableTemplate += 1;
+          continue;
+        }
+        const recipient =
+          channel === "EMAIL"
+            ? account.customer.emailAddress
+            : channel === "SMS"
+              ? account.customer.phoneNumber
+              : account.accountNumber;
+        if (!recipient) {
+          if (channel === "EMAIL") skipped.missingEmail += 1;
+          if (channel === "SMS") skipped.missingSms += 1;
+          continue;
+        }
+        data.push({
+          templateId: template?.templateId,
+          customerId: account.customerId,
+          accountId: account.accountId,
+          notificationType: parsed.data.notificationType,
+          channel,
+          recipient,
+          subject: render(parsed.data.subject ?? template?.subject, values),
+          messageBody: render(
+            parsed.data.message ?? template?.messageBody ?? "",
+            values,
+          ),
+          scheduledAt: parsed.data.scheduledAt,
+          requestedBy: uid(req),
+          metadata: {
+            targetType: "BULK_ACCOUNT",
+            selectionMode: parsed.data.selectionMode,
+          },
+        });
+      }
+    }
+    const created = data.length
+      ? await prisma.notification.createMany({ data })
+      : { count: 0 };
+    res.status(201).json({
+      accounts: accounts.length,
+      created: created.count,
+      skipped,
+      unavailableChannels,
+      queued: true,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 notificationsRouter.post("/send", managers, async (req, res, next) => {
   const parsed = z
     .object({

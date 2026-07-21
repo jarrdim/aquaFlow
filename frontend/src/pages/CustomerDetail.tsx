@@ -47,6 +47,31 @@ interface CustomerMeter {
   installationDate?: string;
   assignment?: { account?: { accountNumber?: string } };
 }
+interface CustomerBill {
+  billId: string;
+  billNumber: string;
+  accountId: string;
+  account?: { accountNumber?: string };
+  billingCycle?: { cycleName?: string };
+  issueDate: string;
+  dueDate: string;
+  totalAmountDue: number;
+  paidAmount: number;
+  status: string;
+}
+interface CustomerPayment {
+  paymentId: string;
+  transactionReference: string;
+  accountId?: string;
+  account?: { accountNumber?: string };
+  channel?: { channelName?: string };
+  receipt?: { receiptId: string; receiptNumber?: string };
+  amount: number;
+  unallocatedAmount: number;
+  paymentDate: string;
+  matchingStatus: string;
+  paymentStatus: string;
+}
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 const STATUS_COLORS: Record<string, string> = {
@@ -56,6 +81,14 @@ const STATUS_COLORS: Record<string, string> = {
   CLOSED:       "bg-red-100 text-red-600",
   OPEN:         "bg-green-100 text-green-700",
   DISCONNECTED: "bg-red-100 text-red-600",
+  APPROVED:     "bg-cyan-100 text-cyan-700",
+  POSTED:       "bg-green-100 text-green-700",
+  PAID:         "bg-emerald-100 text-emerald-700",
+  PARTIALLY_PAID: "bg-violet-100 text-violet-700",
+  MATCHED:      "bg-green-100 text-green-700",
+  UNMATCHED:    "bg-amber-100 text-amber-700",
+  REVERSED:     "bg-slate-200 text-slate-600",
+  PENDING_APPROVAL: "bg-amber-100 text-amber-700",
 };
 function StatusBadge({ status }: { status: string }) {
   const cls = STATUS_COLORS[status] ?? "bg-slate-100 text-slate-500";
@@ -67,6 +100,12 @@ function StatusBadge({ status }: { status: string }) {
 }
 const FIELD_CLS = "w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-aqua-500 bg-white";
 const LABEL_CLS = "block text-xs font-medium text-slate-600 mb-1";
+const money = (value: unknown) =>
+  `KSh ${Number(value ?? 0).toLocaleString("en-KE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const date = (value?: string) =>
+  value ? new Date(value).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "—";
+const initials = (value?: string) =>
+  (value ?? "Customer").split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("");
 function InfoRow({ label, value, valueClass }: { label: string; value: React.ReactNode; valueClass?: string }) {
   return (
     <div className="flex items-start py-1.5 border-b border-slate-100 last:border-0">
@@ -99,6 +138,9 @@ export default function CustomerDetail() {
   const [routes, setRoutes]       = useState<Lookup[]>([]);
   const [categories, setCategories] = useState<Lookup[]>([]);
   const [meters, setMeters]         = useState<CustomerMeter[]>([]);
+  const [bills, setBills]           = useState<CustomerBill[]>([]);
+  const [payments, setPayments]     = useState<CustomerPayment[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(true);
   const [error, setError]         = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>("billing");
 
@@ -135,6 +177,26 @@ export default function CustomerDetail() {
     setZones(z);
     setCategories(cats);
     setMeters(customerMeters);
+    const accountIds = (c.accounts ?? []).map((account: Account) => String(account.accountId));
+    setHistoryLoading(true);
+    try {
+      const [billGroups, paymentGroups] = await Promise.all([
+        Promise.all(accountIds.map((accountId: string) => api.listBills({ accountId }))),
+        Promise.all(accountIds.map((accountId: string) => api.listPayments({ accountId }))),
+      ]);
+      setBills(
+        billGroups
+          .flat()
+          .sort((a: CustomerBill, b: CustomerBill) => new Date(b.issueDate).getTime() - new Date(a.issueDate).getTime()),
+      );
+      setPayments(
+        paymentGroups
+          .flat()
+          .sort((a: CustomerPayment, b: CustomerPayment) => new Date(b.paymentDate).getTime() - new Date(a.paymentDate).getTime()),
+      );
+    } finally {
+      setHistoryLoading(false);
+    }
     setEditForm({
       firstName:        c.firstName ?? "",
       middleName:       c.middleName ?? "",
@@ -246,30 +308,47 @@ export default function CustomerDetail() {
 
   const primaryAccount  = customer.accounts?.[0];
   const primaryProperty = properties[0];
+  const latestPayment = payments.find((payment) => payment.paymentStatus !== "REVERSED");
+  const validPayments = payments.filter((payment) => payment.paymentStatus !== "REVERSED");
+  const totalPaid = validPayments.reduce((sum, payment) => sum + Number(payment.amount), 0);
+  const totalBilled = bills.reduce((sum, bill) => sum + Number(bill.totalAmountDue), 0);
 
   return (
-    <div className="p-4">
-      {/* Breadcrumb */}
-      <div className="flex items-center gap-1.5 text-sm text-slate-400 mb-1">
-        <Link to="/customers" className="hover:text-aqua-700 transition-colors">Customers</Link>
-        <span>›</span>
-        <span className="text-slate-600 font-medium">Customer Details</span>
-      </div>
-
-      {/* Page title + action buttons */}
-      <div className="flex items-center justify-between mb-3">
-        <h1 className="text-lg font-semibold text-slate-800">Customer Profile</h1>
+    <div className="mx-auto w-full max-w-[1600px] px-5 py-5 lg:px-8">
+      {/* Customer identity and actions */}
+      <div className="mb-5 flex flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm md:flex-row md:items-center md:justify-between">
+        <div className="flex min-w-0 items-center gap-4">
+          <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-aqua-600 to-blue-700 text-lg font-bold text-white shadow-md">
+            {initials(displayName)}
+          </div>
+          <div className="min-w-0">
+            <div className="mb-1 flex flex-wrap items-center gap-2">
+              <h1 className="truncate text-2xl font-bold tracking-tight text-slate-900">{displayName}</h1>
+              <StatusBadge status={customer.status} />
+            </div>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-slate-500">
+              <span className="font-semibold text-slate-700">{customer.customerNumber}</span>
+              {primaryAccount && <><span className="text-slate-300">•</span><span>{primaryAccount.accountNumber}</span></>}
+              <span className="text-slate-300">•</span>
+              <span>{customer.customerType === "INDIVIDUAL" ? "Individual customer" : "Organization"}</span>
+            </div>
+          </div>
+        </div>
         {!editing && (
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {primaryAccount && (
+              <Link
+                to={`/payments/mpesa?accountId=${primaryAccount.accountId}`}
+                className="rounded-lg border border-aqua-200 bg-aqua-50 px-4 py-2 text-sm font-semibold text-aqua-800 transition-colors hover:bg-aqua-100"
+              >
+                Request payment
+              </Link>
+            )}
             <button
               onClick={() => { setEditing(true); setFieldErrors({}); setError(null); }}
-              className="px-4 py-1.5 text-sm font-medium bg-aqua-700 hover:bg-aqua-600 text-white rounded-lg shadow-sm transition-colors"
+              className="rounded-lg bg-aqua-700 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-aqua-600"
             >
-              Edit
-            </button>
-            <button className="px-4 py-1.5 text-sm font-medium border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors flex items-center gap-1 text-slate-600">
-              More
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+              Edit customer
             </button>
           </div>
         )}
@@ -342,64 +421,70 @@ export default function CustomerDetail() {
 
       {/* ── Two-card row (view mode) ── */}
       {!editing && (
-        <div className="grid grid-cols-2 gap-4 mb-3">
-          {/* Left card: Customer Information */}
-          <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4">
-            <h2 className="text-sm font-semibold text-slate-700 mb-2">Customer Information</h2>
-            <InfoRow label="Customer ID"    value={customer.customerNumber} />
-            <InfoRow label="Account No."    value={primaryAccount?.accountNumber} />
-            <InfoRow label="Name"           value={displayName} />
-            <InfoRow label="Address"        value={primaryProperty?.physicalAddress} />
-            <InfoRow label="Contact No."    value={customer.phoneNumber} />
-            <InfoRow label="Email"          value={customer.emailAddress} />
-            <InfoRow label="Customer Type"  value={customer.customerType === "INDIVIDUAL" ? "Individual" : "Organization"} />
-            <InfoRow label="Status"         value={<StatusBadge status={customer.status} />} />
-            <InfoRow label="Date Registered" value={
-              customer.registrationDate
-                ? new Date(customer.registrationDate).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })
-                : undefined
-            } />
+        <div className="mb-5 space-y-4">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {[
+              { label: "Outstanding balance", value: money(primaryAccount?.currentBalance), accent: Number(primaryAccount?.currentBalance ?? 0) > 0 ? "text-rose-600" : "text-emerald-600", note: primaryAccount?.accountNumber ?? "No linked account" },
+              { label: "Total billed", value: money(totalBilled), accent: "text-slate-900", note: `${bills.length} invoice${bills.length === 1 ? "" : "s"}` },
+              { label: "Payment records", value: money(totalPaid), accent: "text-emerald-600", note: `${validPayments.length} valid payment${validPayments.length === 1 ? "" : "s"} · includes migrated receipts` },
+              { label: "Last payment", value: latestPayment ? money(latestPayment.amount) : "No payments", accent: "text-aqua-700", note: latestPayment ? `${date(latestPayment.paymentDate)} · ${latestPayment.channel?.channelName ?? "Payment"}` : "Nothing received yet" },
+            ].map((item) => (
+              <div key={item.label} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{item.label}</p>
+                <p className={`mt-2 text-xl font-bold ${item.accent}`}>{item.value}</p>
+                <p className="mt-1 truncate text-xs text-slate-500">{item.note}</p>
+              </div>
+            ))}
           </div>
 
-          {/* Right card: Account Summary */}
-          <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4">
-            <h2 className="text-sm font-semibold text-slate-700 mb-2">Account Summary</h2>
-            {primaryAccount ? (
-              <>
-                <InfoRow
-                  label="Current Balance"
-                  value={`${Number(primaryAccount.currentBalance).toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
-                  valueClass="text-red-500 font-bold"
-                />
-                <InfoRow
-                  label="Total Due"
-                  value={`${Number(primaryAccount.currentBalance).toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
-                  valueClass="text-red-500 font-bold"
-                />
-                <InfoRow label="Last Payment"    value={undefined} />
-                <InfoRow label="Payment Method"  value={undefined} />
-                <InfoRow label="Billing Cycle"   value={undefined} />
-                <InfoRow label="Category"        value={primaryAccount.category?.categoryName} />
-                <InfoRow label="Account Status"  value={<StatusBadge status={primaryAccount.accountStatus} />} />
-                <InfoRow label="Connection No."  value={primaryAccount.accountNumber} />
-              </>
-            ) : (
-              <p className="text-sm text-slate-400 py-3">No account linked yet. Add a property and account from the Properties &amp; Accounts tab.</p>
-            )}
+          <div className="grid gap-4 xl:grid-cols-2">
+            <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+              <div className="border-b border-slate-100 px-5 py-4">
+                <h2 className="font-semibold text-slate-900">Customer information</h2>
+                <p className="mt-0.5 text-xs text-slate-500">Identity and contact details</p>
+              </div>
+              <div className="grid gap-x-8 px-5 py-3 sm:grid-cols-2">
+                <InfoRow label="Customer ID" value={customer.customerNumber} />
+                <InfoRow label="Customer type" value={customer.customerType === "INDIVIDUAL" ? "Individual" : "Organization"} />
+                <InfoRow label="Phone" value={customer.phoneNumber} />
+                <InfoRow label="Email" value={customer.emailAddress} />
+                <InfoRow label="Address" value={primaryProperty?.physicalAddress} />
+                <InfoRow label="Registered" value={date(customer.registrationDate)} />
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+              <div className="border-b border-slate-100 px-5 py-4">
+                <h2 className="font-semibold text-slate-900">Account overview</h2>
+                <p className="mt-0.5 text-xs text-slate-500">Billing configuration and account state</p>
+              </div>
+              {primaryAccount ? (
+                <div className="grid gap-x-8 px-5 py-3 sm:grid-cols-2">
+                  <InfoRow label="Account number" value={primaryAccount.accountNumber} />
+                  <InfoRow label="Category" value={primaryAccount.category?.categoryName} />
+                  <InfoRow label="Status" value={<StatusBadge status={primaryAccount.accountStatus} />} />
+                  <InfoRow label="Billing cycle" value={bills[0]?.billingCycle?.cycleName} />
+                  <InfoRow label="Last payment" value={latestPayment ? date(latestPayment.paymentDate) : undefined} />
+                  <InfoRow label="Payment method" value={latestPayment?.channel?.channelName} />
+                </div>
+              ) : (
+                <p className="px-5 py-8 text-sm text-slate-500">No account linked yet. Add a property and account from the Properties &amp; Accounts tab.</p>
+              )}
+            </section>
           </div>
         </div>
       )}
 
       {/* Tabs */}
-      <div className="border-b border-slate-200 mb-3 flex">
+      <div className="mb-4 flex gap-1 overflow-x-auto rounded-xl border border-slate-200 bg-white p-1.5 shadow-sm">
         {TABS.map(({ key, label }) => (
           <button
             key={key}
             onClick={() => setActiveTab(key)}
-            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${
+            className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${
               activeTab === key
-                ? "border-aqua-700 text-aqua-700"
-                : "border-transparent text-slate-500 hover:text-slate-700"
+                ? "bg-aqua-700 text-white shadow-sm"
+                : "text-slate-500 hover:bg-slate-50 hover:text-slate-800"
             }`}
           >
             {label}
@@ -409,16 +494,120 @@ export default function CustomerDetail() {
 
       {/* Tab: Billing History */}
       {activeTab === "billing" && (
-        <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-8 text-center text-sm text-slate-400">
-          Billing history will be available in a future update.
-        </div>
+        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="flex flex-col gap-2 border-b border-slate-100 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="font-semibold text-slate-900">Billing history</h2>
+              <p className="mt-0.5 text-xs text-slate-500">Invoices raised across all linked customer accounts</p>
+            </div>
+            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">{bills.length} invoice{bills.length === 1 ? "" : "s"}</span>
+          </div>
+          {historyLoading ? (
+            <div className="p-10 text-center text-sm text-slate-500">Loading billing records…</div>
+          ) : bills.length === 0 ? (
+            <div className="p-10 text-center">
+              <p className="font-semibold text-slate-700">No invoices found</p>
+              <p className="mt-1 text-sm text-slate-500">Bills will appear here after a billing batch is generated for this account.</p>
+              <Link to="/billing/generate" className="mt-4 inline-flex rounded-lg bg-aqua-700 px-4 py-2 text-sm font-semibold text-white hover:bg-aqua-600">Open bill generation</Link>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[900px] text-sm">
+                <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                  <tr>
+                    <th className="px-5 py-3 text-left">Invoice</th>
+                    <th className="px-5 py-3 text-left">Period</th>
+                    <th className="px-5 py-3 text-left">Account</th>
+                    <th className="px-5 py-3 text-left">Issue / due</th>
+                    <th className="px-5 py-3 text-right">Amount</th>
+                    <th className="px-5 py-3 text-right">Outstanding</th>
+                    <th className="px-5 py-3 text-left">Status</th>
+                    <th className="px-5 py-3 text-right">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {bills.map((bill) => {
+                    const outstanding = Math.max(0, Number(bill.totalAmountDue) - Number(bill.paidAmount ?? 0));
+                    return (
+                      <tr key={bill.billId} className="transition-colors hover:bg-slate-50/80">
+                        <td className="px-5 py-4 font-semibold text-slate-900">{bill.billNumber}</td>
+                        <td className="px-5 py-4 text-slate-600">{bill.billingCycle?.cycleName ?? "—"}</td>
+                        <td className="px-5 py-4 text-slate-600">{bill.account?.accountNumber ?? "—"}</td>
+                        <td className="px-5 py-4 text-slate-600">{date(bill.issueDate)}<div className="mt-0.5 text-xs text-slate-400">Due {date(bill.dueDate)}</div></td>
+                        <td className="px-5 py-4 text-right font-semibold text-slate-800">{money(bill.totalAmountDue)}</td>
+                        <td className={`px-5 py-4 text-right font-semibold ${outstanding > 0 ? "text-rose-600" : "text-emerald-600"}`}>{money(outstanding)}</td>
+                        <td className="px-5 py-4"><StatusBadge status={bill.status} /></td>
+                        <td className="px-5 py-4 text-right"><Link to={`/billing/invoices/${bill.billId}`} className="font-semibold text-aqua-700 hover:text-aqua-600 hover:underline">View invoice</Link></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
       )}
 
       {/* Tab: Payments */}
       {activeTab === "payments" && (
-        <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-8 text-center text-sm text-slate-400">
-          Payment records will be available in a future update.
-        </div>
+        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="flex flex-col gap-2 border-b border-slate-100 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="font-semibold text-slate-900">Payment history</h2>
+              <p className="mt-0.5 text-xs text-slate-500">Receipts, channels, allocation and transaction status</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">{money(totalPaid)} received</span>
+              <Link to="/payments/register" className="rounded-lg bg-aqua-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-aqua-600">Payment register</Link>
+            </div>
+          </div>
+          {historyLoading ? (
+            <div className="p-10 text-center text-sm text-slate-500">Loading payment records…</div>
+          ) : payments.length === 0 ? (
+            <div className="p-10 text-center">
+              <p className="font-semibold text-slate-700">No payments received</p>
+              <p className="mt-1 text-sm text-slate-500">Cash, bank and M-Pesa transactions for this customer will appear here.</p>
+              <Link to="/payments/record" className="mt-4 inline-flex rounded-lg bg-aqua-700 px-4 py-2 text-sm font-semibold text-white hover:bg-aqua-600">Record payment</Link>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[880px] text-sm">
+                <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                  <tr>
+                    <th className="px-5 py-3 text-left">Reference</th>
+                    <th className="px-5 py-3 text-left">Date</th>
+                    <th className="px-5 py-3 text-left">Account</th>
+                    <th className="px-5 py-3 text-left">Channel</th>
+                    <th className="px-5 py-3 text-right">Amount</th>
+                    <th className="px-5 py-3 text-left">Allocation</th>
+                    <th className="px-5 py-3 text-left">Status</th>
+                    <th className="px-5 py-3 text-right">Receipt</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {payments.map((payment) => (
+                    <tr key={payment.paymentId} className="transition-colors hover:bg-slate-50/80">
+                      <td className="px-5 py-4 font-semibold text-slate-900">{payment.transactionReference}</td>
+                      <td className="px-5 py-4 text-slate-600">{date(payment.paymentDate)}</td>
+                      <td className="px-5 py-4 text-slate-600">{payment.account?.accountNumber ?? "—"}</td>
+                      <td className="px-5 py-4 text-slate-600">{payment.channel?.channelName ?? "—"}</td>
+                      <td className="px-5 py-4 text-right font-semibold text-slate-800">{money(payment.amount)}</td>
+                      <td className="px-5 py-4"><StatusBadge status={payment.matchingStatus} /></td>
+                      <td className="px-5 py-4"><StatusBadge status={payment.paymentStatus} /></td>
+                      <td className="px-5 py-4 text-right">
+                        {payment.receipt ? (
+                          <Link to={`/payments/receipts/${payment.receipt.receiptId}`} className="font-semibold text-aqua-700 hover:text-aqua-600 hover:underline">
+                            {payment.receipt.receiptNumber ?? "View receipt"}
+                          </Link>
+                        ) : <span className="text-slate-400">—</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
       )}
 
       {/* Tab: Meters */}

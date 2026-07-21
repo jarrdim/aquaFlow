@@ -3,6 +3,9 @@ import bcrypt from "bcryptjs";
 
 const prisma = new PrismaClient();
 const defaultPassword = process.env.SEED_DEFAULT_PASSWORD ?? "ChangeMe123!";
+const seedDemoGeography = process.env.SEED_DEMO_GEOGRAPHY === "true";
+const fieldOfficerZoneCode =
+  process.env.SEED_FIELD_OFFICER_ZONE_CODE?.trim() || null;
 
 const roleDefinitions = [
   ["SYSTEM_ADMIN", "System Administrator", "Full system administration"],
@@ -250,7 +253,7 @@ async function ensureFieldOfficer(
   employeeNumber: string,
   officerType: "METER_READER" | "SUPERVISOR",
   phoneNumber: string,
-  homeZoneId: bigint,
+  homeZoneId: bigint | null,
 ) {
   const existing = await prisma.fieldOfficer.findFirst({
     where: { OR: [{ userId }, { employeeNumber }] },
@@ -272,7 +275,7 @@ async function ensureFieldOfficer(
     : prisma.fieldOfficer.create({ data });
 }
 
-async function main() {
+async function main() { 
   const roles = new Map<string, { roleId: bigint }>();
   for (const [code, name, description] of roleDefinitions) {
     roles.set(code, await ensureRole(code, name, description));
@@ -293,39 +296,61 @@ async function main() {
   await ensureCategory("KIOSK", "Water Kiosk");
   await ensureCategory("CONSTRUCTION", "Construction");
 
-  const zone = await ensureZone("ZONE-01", "Zone 1");
-  const serviceArea = await ensureServiceArea(
-    "AREA-01",
-    "Central Estate",
-    "ESTATE",
-    zone.zoneId,
-  );
-  const route = await ensureRoute("ROUTE-01", "Route 1", zone.zoneId);
+  let zone: Awaited<ReturnType<typeof ensureZone>> | null = null;
+  let serviceArea: Awaited<ReturnType<typeof ensureServiceArea>> | null = null;
+  let route: Awaited<ReturnType<typeof ensureRoute>> | null = null;
+
+  if (seedDemoGeography) {
+    zone = await ensureZone("ZONE-01", "Zone 1");
+    serviceArea = await ensureServiceArea(
+      "AREA-01",
+      "Central Estate",
+      "ESTATE",
+      zone.zoneId,
+    );
+    route = await ensureRoute("ROUTE-01", "Route 1", zone.zoneId);
+  } else if (fieldOfficerZoneCode) {
+    zone = await prisma.zone.findUnique({
+      where: { zoneCode: fieldOfficerZoneCode },
+    });
+    if (!zone) {
+      throw new Error(
+        `SEED_FIELD_OFFICER_ZONE_CODE=${fieldOfficerZoneCode} does not match an imported zone. Import that zone first or remove this setting.`,
+      );
+    }
+  }
 
   await ensureFieldOfficer(
     users.get("meter.reader")!.userId,
     "MR-001",
     "METER_READER",
     "+254700000005",
-    zone.zoneId,
+    zone?.zoneId ?? null,
   );
   await ensureFieldOfficer(
     users.get("meter.supervisor")!.userId,
     "MS-001",
     "SUPERVISOR",
     "+254700000006",
-    zone.zoneId,
+    zone?.zoneId ?? null,
   );
 
-  console.log("Seeded AquaFlow test users and operational lookups:", {
+  console.log("Seeded AquaFlow users and reference data:", {
     users: staffDefinitions.map(({ username, roleCode }) => ({
       username,
       role: roleCode,
     })),
     category: category.categoryCode,
-    zone: zone.zoneCode,
-    serviceArea: serviceArea.areaCode,
-    route: route.routeCode,
+    geography: seedDemoGeography
+      ? {
+          zone: zone?.zoneCode,
+          serviceArea: serviceArea?.areaCode,
+          route: route?.routeCode,
+        }
+      : {
+          demoRecordsCreated: false,
+          fieldOfficerZone: zone?.zoneCode ?? null,
+        },
   });
   console.log(`Development password for all seeded users: ${defaultPassword}`);
   console.log(

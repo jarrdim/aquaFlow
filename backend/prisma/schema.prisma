@@ -472,7 +472,7 @@ model MeterReading {
   readingId        BigInt    @id @default(autoincrement()) @map("reading_id")
   meterId          BigInt    @map("meter_id")
   accountId        BigInt?   @map("account_id")
-  readingCycleId   BigInt    @map("reading_cycle_id")
+  readingCycleId   BigInt?   @map("reading_cycle_id")
   fieldOfficerId   BigInt?   @map("field_officer_id")
   previousReading  Decimal   @map("previous_reading") @db.Decimal(18, 3)
   currentReading   Decimal   @map("current_reading") @db.Decimal(18, 3)
@@ -496,7 +496,7 @@ model MeterReading {
 
   meter        Meter                  @relation(fields: [meterId], references: [meterId])
   account      CustomerAccount?       @relation(fields: [accountId], references: [accountId])
-  cycle        ReadingCycle           @relation(fields: [readingCycleId], references: [readingCycleId])
+  cycle        ReadingCycle?          @relation(fields: [readingCycleId], references: [readingCycleId])
   fieldOfficer FieldOfficer?          @relation(fields: [fieldOfficerId], references: [fieldOfficerId])
   approver     User?                  @relation("ReadingApprover", fields: [approvedBy], references: [userId])
   evidence     MeterReadingEvidence[]

@@ -7,8 +7,8 @@ type CustomerType = "INDIVIDUAL" | "ORGANIZATION";
 type IdType = "NATIONAL_ID" | "PASSPORT" | "OTHER";
 interface Lookup { [key: string]: any; }
 
-const FIELD_CLS = "w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-aqua-500 bg-white placeholder:text-slate-400";
-const LABEL_CLS = "block text-xs font-medium text-slate-600 mb-1";
+const FIELD_CLS = "w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-[15px] text-slate-700 outline-none transition focus:border-aqua-500 focus:ring-2 focus:ring-aqua-500/20 placeholder:text-slate-400";
+const LABEL_CLS = "mb-1.5 block text-[13px] font-semibold text-slate-600";
 
 function Field({ label, required, children }: { label: string; required?: boolean; children: React.ReactNode }) {
   return (
@@ -31,7 +31,7 @@ const STEPS = [
 
 function Stepper({ current }: { current: number }) {
   return (
-    <div className="flex items-center mb-8 select-none">
+    <div className="mb-5 flex items-center rounded-2xl border border-slate-200 bg-white px-5 py-4 shadow-sm select-none">
       {STEPS.map((step, idx) => (
         <div key={step.n} className="flex items-center flex-1 last:flex-none">
           <div className="flex flex-col items-center">
@@ -208,26 +208,42 @@ export default function NewCustomer() {
 
   // ── Render ───────────────────────────────────────────────────────────────────
   return (
-    <div className="p-6">
-      {/* Breadcrumb */}
-      <div className="flex items-center gap-1.5 text-sm text-slate-400 mb-5">
-        <Link to="/customers" className="hover:text-aqua-700 transition-colors">Customers</Link>
-        <span>›</span>
-        <span className="text-slate-600 font-medium">New Customer</span>
+    <div className="mx-auto w-full max-w-[1600px] px-5 py-5 lg:px-8">
+      <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="mb-1 text-xs font-semibold uppercase tracking-[0.16em] text-aqua-700">
+            Customer operations
+          </p>
+          <h1 className="text-2xl font-bold text-slate-900">
+            Register New Customer
+          </h1>
+          <p className="mt-1 text-[15px] text-slate-500">
+            Create the customer identity, property and account-ready record.
+          </p>
+        </div>
+        <Link
+          to="/customers"
+          className="rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+        >
+          Manage customers
+        </Link>
       </div>
-
-      <h1 className="text-xl font-semibold text-slate-800 mb-6">New Customer Registration</h1>
 
       {/* ── Stepper ── */}
       <Stepper current={step} />
 
       {/* ── Step card ── */}
-      <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-6">
+      <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm lg:p-6">
 
         {/* ════ STEP 1: Customer Info ════ */}
         {step === 1 && (
           <>
-            <h2 className="text-sm font-semibold text-slate-700 mb-4">Personal Information</h2>
+            <div className="mb-5 border-b border-slate-100 pb-3">
+              <h2 className="text-base font-bold text-slate-900">Personal Information</h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Capture the customer identity and preferred contact details.
+              </p>
+            </div>
 
             {/* Customer Type */}
             <div className="mb-4">
@@ -246,7 +262,7 @@ export default function NewCustomer() {
             {customerType === "INDIVIDUAL" ? (
               <>
                 {/* Name row */}
-                <div className="grid grid-cols-3 gap-3 mb-4">
+                <div className="mb-4 grid gap-3 md:grid-cols-3">
                   <Field label="First Name" required>
                     <input className={FIELD_CLS} value={form.firstName} onChange={(e) => upd("firstName", e.target.value)} placeholder="Mary" />
                   </Field>
@@ -259,7 +275,7 @@ export default function NewCustomer() {
                 </div>
 
                 {/* ID + Phone row */}
-                <div className="grid grid-cols-3 gap-3 mb-4">
+                <div className="mb-4 grid gap-3 md:grid-cols-3">
                   <Field label="ID Type" required>
                     <select className={FIELD_CLS} value={idType} onChange={(e) => setIdType(e.target.value as IdType)}>
                       <option value="NATIONAL_ID">National ID</option>
@@ -276,7 +292,7 @@ export default function NewCustomer() {
                 </div>
 
                 {/* Extra contact */}
-                <div className="grid grid-cols-2 gap-3 mb-4">
+                <div className="mb-4 grid gap-3 md:grid-cols-2">
                   <Field label="Alternative Phone">
                     <input className={FIELD_CLS} value={form.alternativePhone} onChange={(e) => upd("alternativePhone", e.target.value)} placeholder="Optional" />
                   </Field>
@@ -285,7 +301,7 @@ export default function NewCustomer() {
                   </Field>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid gap-3 md:grid-cols-2">
                   <Field label="Preferred Language">
                     <select className={FIELD_CLS} value={form.preferredLanguage} onChange={(e) => upd("preferredLanguage", e.target.value)}>
                       <option value="EN">English</option>
@@ -304,7 +320,7 @@ export default function NewCustomer() {
                     <input className={FIELD_CLS} value={form.organizationName} onChange={(e) => upd("organizationName", e.target.value)} placeholder="Acme Ltd." />
                   </Field>
                 </div>
-                <div className="grid grid-cols-2 gap-3 mb-4">
+                <div className="mb-4 grid gap-3 md:grid-cols-2">
                   <Field label="Registration Number">
                     <input className={FIELD_CLS} value={form.registrationNumber} onChange={(e) => upd("registrationNumber", e.target.value)} placeholder="CPR/2024/001234" />
                   </Field>
@@ -312,7 +328,7 @@ export default function NewCustomer() {
                     <input className={FIELD_CLS} value={form.phoneNumber} onChange={(e) => upd("phoneNumber", e.target.value)} placeholder="+254 7XX XXX XXX" />
                   </Field>
                 </div>
-                <div className="grid grid-cols-2 gap-3 mb-4">
+                <div className="mb-4 grid gap-3 md:grid-cols-2">
                   <Field label="Alternative Phone">
                     <input className={FIELD_CLS} value={form.alternativePhone} onChange={(e) => upd("alternativePhone", e.target.value)} placeholder="Optional" />
                   </Field>
@@ -320,7 +336,7 @@ export default function NewCustomer() {
                     <input type="email" className={FIELD_CLS} value={form.emailAddress} onChange={(e) => upd("emailAddress", e.target.value)} placeholder="info@company.com" />
                   </Field>
                 </div>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid gap-3 md:grid-cols-2">
                   <Field label="Preferred Language">
                     <select className={FIELD_CLS} value={form.preferredLanguage} onChange={(e) => upd("preferredLanguage", e.target.value)}>
                       <option value="EN">English</option>
@@ -355,7 +371,7 @@ export default function NewCustomer() {
               </Field>
             </div>
 
-            <div className="grid grid-cols-2 gap-3 mb-3">
+            <div className="mb-3 grid gap-3 md:grid-cols-2">
               <Field label="Service Area">
                 <select className={FIELD_CLS} value={form.serviceAreaId} onChange={(e) => upd("serviceAreaId", e.target.value)} disabled={!form.zoneId}>
                   <option value="">None</option>
@@ -376,7 +392,7 @@ export default function NewCustomer() {
               </Field>
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid gap-3 md:grid-cols-2">
               <Field label="Plot Number">
                 <input className={FIELD_CLS} value={form.plotNumber} onChange={(e) => upd("plotNumber", e.target.value)} placeholder="Optional" />
               </Field>
@@ -458,7 +474,7 @@ export default function NewCustomer() {
       </div>
 
       {/* ── Navigation buttons ── */}
-      <div className="flex items-center justify-between mt-5">
+      <div className="mt-4 flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
         <div>
           {step === 1 ? (
             <Link to="/customers" className="px-4 py-2 text-sm text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">
@@ -510,4 +526,3 @@ export default function NewCustomer() {
     </div>
   );
 }
-

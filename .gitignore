@@ -6,4 +6,6 @@
 !.env.example
 !**/.env.example
 *.log
+docs/
+documets-and-flow/
 

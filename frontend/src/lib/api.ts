@@ -160,6 +160,11 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(data),
     }),
+  bulkUpdateCustomerStatus: (customerIds: string[], status: string) =>
+    request("/customers/bulk-status", {
+      method: "PATCH",
+      body: JSON.stringify({ customerIds, status }),
+    }),
 
   listZones: () => request("/lookups/zones"),
   listServiceAreas: (zoneId?: string) =>
@@ -175,6 +180,10 @@ export const api = {
 
   createAccount: (data: Record<string, unknown>) =>
     request("/accounts", { method: "POST", body: JSON.stringify(data) }),
+  listAccounts: (search = "", take = 8) =>
+    request(
+      `/accounts?search=${encodeURIComponent(search)}&take=${encodeURIComponent(String(take))}`,
+    ),
 
   meterDashboard: (filters: Record<string, string> = {}) => {
     const query = new URLSearchParams(
@@ -290,6 +299,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify(data),
     }),
+  assignReadingRoutesBulk: (data: Record<string, unknown>) =>
+    request("/readings/assignments/bulk", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
   updateRouteAssignmentStatus: (id: string, status: string) =>
     request(`/readings/assignments/${id}/status`, {
       method: "PATCH",
@@ -322,6 +336,15 @@ export const api = {
     request(`/readings/${id}/decision`, {
       method: "PATCH",
       body: JSON.stringify({ decision, comments }),
+    }),
+  bulkDecideReadings: (
+    readingIds: string[],
+    decision: "APPROVED" | "REJECTED",
+    comments: string,
+  ) =>
+    request("/readings/bulk-decision", {
+      method: "PATCH",
+      body: JSON.stringify({ readingIds, decision, comments }),
     }),
   readingProgress: (cycleId: string) =>
     request(
@@ -547,6 +570,12 @@ export const api = {
     }),
   notificationDashboard: () => request("/notifications/dashboard"),
   notificationTargets: () => request("/notifications/targets"),
+  notificationAudience: (filters: Record<string, string>) => {
+    const query = new URLSearchParams(
+      Object.entries(filters).filter(([, value]) => value !== ""),
+    ).toString();
+    return request(`/notifications/audience?${query}`);
+  },
   listNotifications: (filters: Record<string, string> = {}) => {
     const query = new URLSearchParams(
       Object.entries(filters).filter(([, value]) => value),
@@ -555,6 +584,11 @@ export const api = {
   },
   sendNotification: (data: Record<string, unknown>) =>
     request("/notifications/send", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  sendBulkNotification: (data: Record<string, unknown>) =>
+    request("/notifications/send-bulk", {
       method: "POST",
       body: JSON.stringify(data),
     }),

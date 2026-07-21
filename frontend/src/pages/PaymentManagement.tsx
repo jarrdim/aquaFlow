@@ -828,10 +828,49 @@ export function MpesaStkPush() {
 export function PaymentRegister() {
   const [rows, setRows] = useState<Row[]>([]),
     [search, setSearch] = useState(""),
-    [status, setStatus] = useState("");
+    [status, setStatus] = useState(""),
+    [page, setPage] = useState(1),
+    [total, setTotal] = useState(0);
+  const pageSize = 50;
   useEffect(() => {
-    api.listPayments({ search, status }).then(setRows);
-  }, [search, status]);
+    api
+      .listPayments({
+        search,
+        status,
+        page: String(page),
+        pageSize: String(pageSize),
+      })
+      .then((result) => {
+        setRows(result.items);
+        setTotal(Number(result.total));
+      });
+  }, [search, status, page]);
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  const pagination = (
+    <div className="flex flex-wrap items-center justify-between gap-3 border-y border-slate-100 bg-slate-50/70 px-4 py-3">
+      <span className="text-sm text-slate-500">
+        Page <strong className="text-slate-700">{page}</strong> of{" "}
+        <strong className="text-slate-700">{pages}</strong> ·{" "}
+        {total.toLocaleString()} record{total === 1 ? "" : "s"}
+      </span>
+      <div className="flex gap-2">
+        <Button
+          tone="slate"
+          disabled={page <= 1}
+          onClick={() => setPage((current) => Math.max(1, current - 1))}
+        >
+          Previous
+        </Button>
+        <Button
+          tone="slate"
+          disabled={page >= pages}
+          onClick={() => setPage((current) => Math.min(pages, current + 1))}
+        >
+          Next
+        </Button>
+      </div>
+    </div>
+  );
   return (
     <Page
       title="Payment register"
@@ -851,7 +890,10 @@ export function PaymentRegister() {
             <select
               className={INPUT}
               value={status}
-              onChange={(e) => setStatus(e.target.value)}
+              onChange={(e) => {
+                setPage(1);
+                setStatus(e.target.value);
+              }}
             >
               <option value="">All statuses</option>
               <option>RECEIVED</option>
@@ -863,14 +905,19 @@ export function PaymentRegister() {
             <input
               className={INPUT}
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={(e) => {
+                setPage(1);
+                setSearch(e.target.value);
+              }}
               placeholder="Reference, customer or phone"
             />
           </Field>
         </div>
       </Card>
-      <Card title={`${rows.length} payment(s)`}>
+      <Card title={`${total.toLocaleString()} payment(s)`}>
+        {pagination}
         <PaymentTable rows={rows} />
+        {pages > 1 && pagination}
       </Card>
     </Page>
   );
@@ -890,8 +937,9 @@ export function UnmatchedPayments() {
         setRows(
           p.filter(
             (x: Row) =>
-              x.paymentStatus === "RECEIVED" ||
-              x.matchingStatus === "UNMATCHED",
+              x.paymentStatus === "RECEIVED" &&
+              x.matchingStatus === "UNMATCHED" &&
+              !x.accountId,
           ),
         );
         setAccounts(a);
@@ -1037,7 +1085,13 @@ export function PaymentReceipt() {
             ["Payment reference", r.payment.transactionReference],
             ["Amount paid", money(r.amount)],
             ["Received by", person(r.issuer)],
-            ["Allocation", pretty(r.payment.matchingStatus)],
+            [
+              "Allocation",
+              r.payment.matchingStatus === "MATCHED" &&
+              Number(r.payment.unallocatedAmount) > 0
+                ? `Matched · ${money(r.payment.unallocatedAmount)} account credit`
+                : pretty(r.payment.matchingStatus),
+            ],
           ].map(([label, value]) => (
             <div key={label}>
               <div className="text-sm text-slate-500">{label}</div>

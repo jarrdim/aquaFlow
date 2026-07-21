@@ -67,16 +67,59 @@ const readingInclude = {
   events: { include: { performer: true }, orderBy: { createdAt: "desc" as const } },
 };
 
-async function getEligibleAssignments(cycleId?: bigint, routeId?: bigint, zoneId?: bigint) {
-  return prisma.meterAssignment.findMany({
-    where: {
-      assignmentStatus: "ACTIVE",
-      removalDate: null,
-      accountId: { not: null },
-      meter: { status: "ACTIVE" },
-      ...(routeId ? { account: { OR: [{ routeId }, { property: { routeId } }] } } : {}),
-      ...(zoneId ? { account: { property: { zoneId } } } : {}),
+function worklistSearch(search: string, exact: boolean): Prisma.MeterAssignmentWhereInput {
+  const text = exact
+    ? { equals: search, mode: Prisma.QueryMode.insensitive }
+    : { contains: search, mode: Prisma.QueryMode.insensitive };
+  return {
+    OR: [
+      { meter: { meterNumber: text } },
+      { meter: { serialNumber: text } },
+      { account: { accountNumber: text } },
+      { account: { customer: { customerNumber: text } } },
+      { account: { customer: { firstName: text } } },
+      { account: { customer: { middleName: text } } },
+      { account: { customer: { lastName: text } } },
+      { account: { customer: { organizationName: text } } },
+      { account: { customer: { phoneNumber: text } } },
+    ],
+  };
+}
+
+async function getEligibleAssignments(
+  cycleId?: bigint,
+  routeId?: bigint,
+  zoneId?: bigint,
+  search = "",
+  meterId?: bigint,
+) {
+  const baseWhere: Prisma.MeterAssignmentWhereInput = {
+    ...(meterId ? { meterId } : {}),
+    assignmentStatus: "ACTIVE",
+    removalDate: null,
+    accountId: { not: null },
+    meter: { status: "ACTIVE" },
+    account: {
+      accountStatus: "ACTIVE",
+      ...(routeId ? { OR: [{ routeId }, { property: { routeId } }] } : {}),
+      ...(zoneId ? { property: { zoneId } } : {}),
     },
+  };
+  const terms = search.trim().split(/\s+/).filter(Boolean);
+  let searchWhere: Prisma.MeterAssignmentWhereInput | undefined;
+  if (terms.length) {
+    const exactWhere = worklistSearch(search.trim(), true);
+    const hasExactMatch = await prisma.meterAssignment.findFirst({
+      where: { AND: [baseWhere, exactWhere] },
+      select: { assignmentId: true },
+    });
+    searchWhere = hasExactMatch
+      ? exactWhere
+      : { AND: terms.map((term) => worklistSearch(term, false)) };
+  }
+
+  return prisma.meterAssignment.findMany({
+    where: searchWhere ? { AND: [baseWhere, searchWhere] } : baseWhere,
     include: {
       meter: { include: { readings: { orderBy: { readingDate: "desc" }, take: 1 } } },
       account: { include: { customer: true, route: true, property: { include: { route: true, zone: true } } } },
@@ -215,6 +258,91 @@ readingsRouter.get("/assignments", async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+readingsRouter.post("/assignments/bulk", async (req, res, next) => {
+  const data = parse(z.object({
+    readingCycleId: id,
+    assignedDate: dateText.optional(),
+    remarks: z.string().trim().max(1000).optional(),
+    assignments: z.array(z.object({
+      routeId: id,
+      fieldOfficerId: id,
+    })).min(1).max(500),
+  }), req.body, res);
+  if (!data) return;
+  try {
+    const uniqueRouteIds = [...new Set(data.assignments.map((assignment) => assignment.routeId.toString()))].map(BigInt);
+    if (uniqueRouteIds.length !== data.assignments.length) {
+      return res.status(400).json({ error: "Each selected route may only appear once in a bulk assignment" });
+    }
+    const officerIds = [...new Set(data.assignments.map((assignment) => assignment.fieldOfficerId.toString()))].map(BigInt);
+    const [cycle, routes, officers, existing] = await Promise.all([
+      prisma.readingCycle.findUnique({ where: { readingCycleId: data.readingCycleId } }),
+      prisma.route.findMany({ where: { routeId: { in: uniqueRouteIds }, status: "ACTIVE" }, select: { routeId: true, routeName: true } }),
+      prisma.fieldOfficer.findMany({
+        where: {
+          fieldOfficerId: { in: officerIds },
+          status: "ACTIVE",
+          officerType: { in: ["METER_READER", "SUPERVISOR"] },
+        },
+        select: { fieldOfficerId: true },
+      }),
+      prisma.routeAssignment.findMany({
+        where: {
+          readingCycleId: data.readingCycleId,
+          routeId: { in: uniqueRouteIds },
+          status: { in: ["ASSIGNED", "ACCEPTED"] },
+        },
+        include: { route: { select: { routeName: true } } },
+      }),
+    ]);
+    if (!cycle || !["PLANNED", "OPEN"].includes(cycle.status)) {
+      return res.status(409).json({ error: "Routes can only be assigned to planned or open cycles" });
+    }
+    if (routes.length !== uniqueRouteIds.length) {
+      return res.status(400).json({ error: "One or more selected routes are missing or inactive" });
+    }
+    if (officers.length !== officerIds.length) {
+      return res.status(400).json({ error: "One or more selected meter readers are missing or inactive" });
+    }
+    if (existing.length) {
+      const names = existing.slice(0, 5).map((assignment) => assignment.route.routeName).join(", ");
+      const suffix = existing.length > 5 ? ` and ${existing.length - 5} more` : "";
+      return res.status(409).json({
+        error: `${existing.length} selected route(s) already have an active assignment for this cycle: ${names}${suffix}`,
+      });
+    }
+
+    const assignedDate = data.assignedDate ? asDate(data.assignedDate) : undefined;
+    const assignedBy = userId(req);
+    const created = await prisma.$transaction(async (tx) => {
+      const records = [];
+      for (const assignment of data.assignments) {
+        records.push(await tx.routeAssignment.create({
+          data: {
+            readingCycleId: data.readingCycleId,
+            routeId: assignment.routeId,
+            fieldOfficerId: assignment.fieldOfficerId,
+            assignedDate,
+            assignedBy,
+            remarks: data.remarks,
+          },
+        }));
+      }
+      await tx.fieldOfficer.updateMany({
+        where: { fieldOfficerId: { in: officerIds } },
+        data: { availabilityStatus: "ASSIGNED", updatedAt: new Date() },
+      });
+      return records;
+    });
+    res.status(201).json({ created: created.length, assignments: created });
+  } catch (error: any) {
+    if (error.code === "P2002") {
+      return res.status(409).json({ error: "One or more route assignments already exist. Refresh the planner and try again." });
+    }
+    next(error);
+  }
+});
+
 readingsRouter.post("/assignments", async (req, res, next) => {
   const data = parse(z.object({ readingCycleId: id, routeId: id, fieldOfficerId: id, assignedDate: dateText.optional(), remarks: z.string().trim().max(1000).optional() }), req.body, res);
   if (!data) return;
@@ -248,12 +376,26 @@ readingsRouter.get("/worklist", async (req, res, next) => {
     if (!cycleId) return res.status(400).json({ error: "cycleId is required" });
     const routeId = req.query.routeId ? BigInt(String(req.query.routeId)) : undefined;
     const zoneId = req.query.zoneId ? BigInt(String(req.query.zoneId)) : undefined;
-    const search = String(req.query.search ?? "").toLowerCase();
-    let items = await getEligibleAssignments(cycleId, routeId, zoneId);
-    if (search) items = items.filter((a) => [a.meter.meterNumber, a.account?.accountNumber, a.account?.customer.firstName, a.account?.customer.lastName, a.account?.customer.organizationName].filter(Boolean).join(" ").toLowerCase().includes(search));
+    const meterId = req.query.meterId ? BigInt(String(req.query.meterId)) : undefined;
+    const search = String(req.query.search ?? "").trim();
+    const items = await getEligibleAssignments(cycleId, routeId, zoneId, search, meterId);
     const currentReadings = await prisma.meterReading.findMany({ where: { readingCycleId: cycleId, meterId: { in: items.map((a) => a.meterId) } } });
     const byMeter = new Map(currentReadings.map((reading) => [reading.meterId.toString(), reading]));
-    res.json(items.map((a) => ({ ...a, cycleReading: byMeter.get(a.meterId.toString()) ?? null, route: a.account?.route ?? a.account?.property.route, zone: a.account?.property.zone, customerName: a.account?.customer.organizationName || `${a.account?.customer.firstName ?? ""} ${a.account?.customer.lastName ?? ""}`.trim() })));
+    res.json(items.map((a) => ({
+      ...a,
+      cycleReading: byMeter.get(a.meterId.toString()) ?? null,
+      route: a.account?.route ?? a.account?.property.route,
+      zone: a.account?.property.zone,
+      customerName:
+        a.account?.customer.organizationName ||
+        [
+          a.account?.customer.firstName,
+          a.account?.customer.middleName,
+          a.account?.customer.lastName,
+        ]
+          .filter(Boolean)
+          .join(" "),
+    })));
   } catch (error) { next(error); }
 });
 
@@ -340,6 +482,9 @@ readingsRouter.get("/", async (req, res, next) => {
     const exceptionOnly = String(req.query.exceptionOnly ?? "") === "true";
     const readingType = String(req.query.readingType ?? "");
     const search = String(req.query.search ?? "");
+    const paginated = req.query.page !== undefined;
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const pageSize = Math.min(200, Math.max(10, Number(req.query.pageSize) || 50));
     const where: Prisma.MeterReadingWhereInput = {
       ...(cycleId ? { readingCycleId: cycleId } : {}),
       ...(approvalStatus ? { approvalStatus } : {}),
@@ -350,12 +495,101 @@ readingsRouter.get("/", async (req, res, next) => {
         { meter: { meterNumber: { contains: search, mode: "insensitive" } } },
         { account: { accountNumber: { contains: search, mode: "insensitive" } } },
         { account: { customer: { firstName: { contains: search, mode: "insensitive" } } } },
+        { account: { customer: { middleName: { contains: search, mode: "insensitive" } } } },
         { account: { customer: { lastName: { contains: search, mode: "insensitive" } } } },
         { account: { customer: { organizationName: { contains: search, mode: "insensitive" } } } },
       ] } : {}),
     };
+    if (paginated) {
+      const [items, total] = await Promise.all([
+        prisma.meterReading.findMany({
+          where,
+          include: readingInclude,
+          orderBy: [{ readingDate: "desc" }, { readingId: "desc" }],
+          skip: (page - 1) * pageSize,
+          take: pageSize,
+        }),
+        prisma.meterReading.count({ where }),
+      ]);
+      return res.json({
+        items,
+        total,
+        page,
+        pageSize,
+        pages: Math.max(1, Math.ceil(total / pageSize)),
+      });
+    }
     res.json(await prisma.meterReading.findMany({ where, include: readingInclude, orderBy: { readingDate: "desc" }, take: 2000 }));
   } catch (error) { next(error); }
+});
+
+readingsRouter.patch("/bulk-decision", requireRole("SYSTEM_ADMIN", "SUPERVISOR", "METER_SUPERVISOR", "BILLING_SUPERVISOR"), async (req, res, next) => {
+  const data = parse(z.object({
+    readingIds: z.array(id).min(1).max(500),
+    decision: z.enum(["APPROVED", "REJECTED"]),
+    comments: z.string().trim().min(3).max(2000),
+  }), req.body, res);
+  if (!data) return;
+  try {
+    const readingIds = [...new Set(data.readingIds.map((readingId) => readingId.toString()))].map(BigInt);
+    const readings = await prisma.meterReading.findMany({
+      where: { readingId: { in: readingIds } },
+      include: { fieldOfficer: { select: { userId: true } } },
+    });
+    if (readings.length !== readingIds.length) {
+      return res.status(404).json({ error: "One or more selected readings no longer exist. Refresh the approval list." });
+    }
+    const nonPending = readings.filter((reading) => reading.approvalStatus !== "PENDING");
+    if (nonPending.length) {
+      return res.status(409).json({ error: `${nonPending.length} selected reading(s) have already been decided. Refresh the approval list.` });
+    }
+    const approverId = userId(req);
+    const ownReadings = approverId
+      ? readings.filter((reading) => reading.fieldOfficer?.userId === approverId)
+      : [];
+    if (ownReadings.length) {
+      return res.status(409).json({
+        error: `Maker-checker control: you cannot decide ${ownReadings.length} reading(s) that you captured. No selected readings were changed.`,
+      });
+    }
+    await prisma.$transaction(async (tx) => {
+      const updated = await tx.meterReading.updateMany({
+        where: { readingId: { in: readingIds }, approvalStatus: "PENDING" },
+        data: {
+          approvalStatus: data.decision,
+          approvalComments: data.comments,
+          approvedBy: approverId,
+          approvedAt: new Date(),
+          updatedAt: new Date(),
+        },
+      });
+      if (updated.count !== readings.length) {
+        throw Object.assign(new Error("Some selected readings changed during approval. Refresh and try again."), { status: 409 });
+      }
+      await tx.meterReadingEvent.createMany({
+        data: readings.map((reading) => ({
+          readingId: reading.readingId,
+          eventType: data.decision,
+          remarks: data.comments,
+          performedBy: approverId,
+        })),
+      });
+      await tx.meterEvent.createMany({
+        data: readings.map((reading) => ({
+          meterId: reading.meterId,
+          eventType: `READING_${data.decision}`,
+          reading: reading.currentReading,
+          remarks: data.comments,
+          performedBy: approverId,
+          metadata: { readingId: reading.readingId.toString(), bulkDecision: true },
+        })),
+      });
+    });
+    res.json({ updated: readings.length, decision: data.decision });
+  } catch (error: any) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    next(error);
+  }
 });
 
 readingsRouter.patch("/:id/decision", requireRole("SYSTEM_ADMIN", "SUPERVISOR", "METER_SUPERVISOR", "BILLING_SUPERVISOR"), async (req, res, next) => {
@@ -363,9 +597,15 @@ readingsRouter.patch("/:id/decision", requireRole("SYSTEM_ADMIN", "SUPERVISOR", 
   const data = parse(z.object({ decision: z.enum(["APPROVED", "REJECTED"]), comments: z.string().trim().min(3).max(2000) }), req.body, res);
   if (!readingId || !data) return;
   try {
-    const existing = await prisma.meterReading.findUnique({ where: { readingId } });
+    const existing = await prisma.meterReading.findUnique({
+      where: { readingId },
+      include: { fieldOfficer: { select: { userId: true } } },
+    });
     if (!existing) return res.status(404).json({ error: "Reading not found" });
     if (existing.approvalStatus !== "PENDING") return res.status(409).json({ error: "This reading has already been decided" });
+    if (userId(req) && existing.fieldOfficer?.userId === userId(req)) {
+      return res.status(409).json({ error: "Maker-checker control: you cannot decide a reading that you captured." });
+    }
     const updated = await prisma.$transaction(async (tx) => {
       const reading = await tx.meterReading.update({ where: { readingId }, data: { approvalStatus: data.decision, approvalComments: data.comments, approvedBy: userId(req), approvedAt: new Date(), updatedAt: new Date() }, include: readingInclude });
       await tx.meterReadingEvent.create({ data: { readingId, eventType: data.decision, remarks: data.comments, performedBy: userId(req) } });

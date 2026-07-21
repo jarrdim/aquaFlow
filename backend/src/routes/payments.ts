@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
@@ -99,8 +100,13 @@ paymentsRouter.post("/mpesa/callback", async (req, res, next) => {
         });
         return;
       }
-      const channel = await tx.paymentChannel.findUnique({
-        where: { channelCode: "MPESA" },
+      const channel = await tx.paymentChannel.findFirst({
+        where: {
+          OR: [
+            { channelCode: "MPESA" },
+            { channelName: { equals: "MPESA", mode: "insensitive" } },
+          ],
+        },
       });
       if (!channel || channel.status !== "ACTIVE")
         throw Object.assign(
@@ -288,12 +294,12 @@ async function allocate(
       updatedAt: new Date(),
     },
   });
+  // Reaching this function means the payment has already been matched to a
+  // verified customer account. A payment can have no bill allocation when the
+  // account has no open bill; that remainder is valid account credit, not an
+  // unmatched payment.
   const matchingStatus =
-    allocated === 0
-      ? "UNMATCHED"
-      : remaining > 0
-        ? "PARTIALLY_MATCHED"
-        : "MATCHED";
+    allocated > 0 && remaining > 0 ? "PARTIALLY_MATCHED" : "MATCHED";
   await tx.payment.update({
     where: { paymentId: payment.paymentId },
     data: {
@@ -571,24 +577,59 @@ paymentsRouter.get("/", async (req, res, next) => {
         ? BigInt(String(req.query.accountId))
         : undefined,
       q = String(req.query.search ?? "");
+    const paginated = req.query.page !== undefined;
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const pageSize = Math.min(200, Math.max(10, Number(req.query.pageSize) || 50));
+    const where: Prisma.PaymentWhereInput = {
+      ...(status ? { paymentStatus: status } : {}),
+      ...(channelId ? { channelId } : {}),
+      ...(accountId ? { accountId } : {}),
+      ...(q
+        ? {
+            OR: [
+              { transactionReference: { contains: q, mode: "insensitive" } },
+              { payerName: { contains: q, mode: "insensitive" } },
+              { payerPhone: { contains: q } },
+              { customerReference: { contains: q, mode: "insensitive" } },
+              { account: { accountNumber: { contains: q, mode: "insensitive" } } },
+              { account: { customer: { firstName: { contains: q, mode: "insensitive" } } } },
+              { account: { customer: { middleName: { contains: q, mode: "insensitive" } } } },
+              { account: { customer: { lastName: { contains: q, mode: "insensitive" } } } },
+              { account: { customer: { organizationName: { contains: q, mode: "insensitive" } } } },
+            ],
+          }
+        : {}),
+    };
+    const orderBy: Prisma.PaymentOrderByWithRelationInput[] = [
+      { paymentDate: "desc" },
+      { paymentId: "desc" },
+    ];
+    if (paginated) {
+      const [rows, total] = await Promise.all([
+        prisma.payment.findMany({
+          where,
+          include: paymentInclude,
+          orderBy,
+          skip: (page - 1) * pageSize,
+          take: pageSize,
+        }),
+        prisma.payment.count({ where }),
+      ]);
+      return res.json({
+        items: rows.map((p: any) => ({
+          ...p,
+          customerName: name(p.account?.customer),
+        })),
+        total,
+        page,
+        pageSize,
+        pages: Math.max(1, Math.ceil(total / pageSize)),
+      });
+    }
     const rows = await prisma.payment.findMany({
-      where: {
-        ...(status ? { paymentStatus: status } : {}),
-        ...(channelId ? { channelId } : {}),
-        ...(accountId ? { accountId } : {}),
-        ...(q
-          ? {
-              OR: [
-                { transactionReference: { contains: q, mode: "insensitive" } },
-                { payerName: { contains: q, mode: "insensitive" } },
-                { payerPhone: { contains: q } },
-                { customerReference: { contains: q, mode: "insensitive" } },
-              ],
-            }
-          : {}),
-      },
+      where,
       include: paymentInclude,
-      orderBy: { paymentDate: "desc" },
+      orderBy,
       take: 3000,
     });
     res.json(
@@ -664,7 +705,11 @@ paymentsRouter.post("/record", staff, async (req, res, next) => {
         });
         await tx.payment.update({
           where: { paymentId: payment.paymentId },
-          data: { paymentStatus: "POSTED", postedAt: new Date() },
+          data: {
+            matchingStatus: "MATCHED",
+            paymentStatus: "POSTED",
+            postedAt: new Date(),
+          },
         });
       }
       const receipt = await tx.receipt.create({
@@ -721,8 +766,13 @@ paymentsRouter.post(
     );
     if (!data) return;
     try {
-      const channel = await prisma.paymentChannel.findUnique({
-        where: { channelCode: "MPESA" },
+      const channel = await prisma.paymentChannel.findFirst({
+        where: {
+          OR: [
+            { channelCode: "MPESA" },
+            { channelName: { equals: "MPESA", mode: "insensitive" } },
+          ],
+        },
       });
       if (!channel)
         return res

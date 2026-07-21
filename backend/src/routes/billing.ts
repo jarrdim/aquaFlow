@@ -340,11 +340,14 @@ billingRouter.post("/generate", requireRole("SYSTEM_ADMIN", "BILLING_OFFICER"), 
 billingRouter.get("/bills", async (req, res, next) => {
   try {
     const cycleId = req.query.billingCycleId ? BigInt(String(req.query.billingCycleId)) : undefined;
+    const accountId = req.query.accountId ? BigInt(String(req.query.accountId)) : undefined;
     const status = String(req.query.status ?? "");
     const search = String(req.query.search ?? "");
     const rows = await prisma.bill.findMany({
       where: {
-        ...(cycleId ? { billingCycleId: cycleId } : {}), ...(status ? { status } : {}),
+        ...(cycleId ? { billingCycleId: cycleId } : {}),
+        ...(accountId ? { accountId } : {}),
+        ...(status ? { status } : {}),
         ...(search ? { OR: [{ billNumber: { contains: search, mode: "insensitive" } }, { account: { accountNumber: { contains: search, mode: "insensitive" } } }, { account: { customer: { firstName: { contains: search, mode: "insensitive" } } } }, { account: { customer: { lastName: { contains: search, mode: "insensitive" } } } }] } : {}),
       },
       include: billInclude,

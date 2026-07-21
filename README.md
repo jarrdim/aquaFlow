@@ -106,6 +106,12 @@ npm run prisma:generate
 
 `npm run seed` creates these idempotent local accounts. Their default password is
 `ChangeMe123!`, or the value of `SEED_DEFAULT_PASSWORD` when the seed is run.
+It does not create zones, service areas or routes by default, so operational
+geography can be imported first without primary-key collisions. To assign the
+seeded meter reader and supervisor to an imported zone, set
+`SEED_FIELD_OFFICER_ZONE_CODE` to that zone's code before running the seed.
+For the original local demo geography (`ZONE-01`, `AREA-01`, `ROUTE-01`), set
+`SEED_DEMO_GEOGRAPHY=true`.
 
 | Username             | Role                 | Typical test action                      |
 | -------------------- | -------------------- | ---------------------------------------- |
