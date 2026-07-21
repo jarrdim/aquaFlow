@@ -154,6 +154,12 @@ async function cycleCandidates(cycleId: bigint, filters: any = {}) {
     const calculation = tariff ? calculateTariff(tariff, consumption) : null;
     const previousBalance = filters.includePreviousBalance === false ? 0 : Number(account.currentBalance);
     const penalties = 0;
+    // A negative account balance is customer credit. It can offset the new
+    // charges, but a bill itself must never carry a negative amount due; any
+    // unused credit remains on the customer account for future postings.
+    const totalAmountDue = calculation
+      ? round(Math.max(0, previousBalance + calculation.totalCurrentCharges + penalties))
+      : 0;
     return {
       account,
       assignment,
@@ -165,7 +171,7 @@ async function cycleCandidates(cycleId: bigint, filters: any = {}) {
       penalties,
       issue,
       eligible: !["DUPLICATE_BILL", "MISSING_TARIFF", "MISSING_READING"].includes(issue),
-      totalAmountDue: calculation ? round(previousBalance + calculation.totalCurrentCharges + penalties) : 0,
+      totalAmountDue,
     };
   });
   return { cycle, readingCycle, rows };
