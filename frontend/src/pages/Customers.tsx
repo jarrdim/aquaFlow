@@ -1,7 +1,8 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { encodeId } from "../lib/hashids";
+import { SearchableSelect } from "../components/SearchableSelect";
 
 interface Customer {
   customerId: string;
@@ -15,6 +16,8 @@ interface Customer {
   emailAddress?: string;
   status: string;
   registrationDate: string;
+  accountCount: number;
+  activeMeters: Array<{ meterId: string; meterNumber: string }>;
 }
 
 const PAGE_SIZE = 20;
@@ -63,7 +66,7 @@ function SummaryMetric({
 }: {
   label: string;
   value: string | number;
-  tone?: "slate" | "emerald" | "violet" | "sky";
+  tone?: "slate" | "emerald" | "violet" | "sky" | "amber";
   icon: React.ReactNode;
 }) {
   const tones = {
@@ -71,6 +74,7 @@ function SummaryMetric({
     emerald: "bg-emerald-50 text-emerald-700",
     violet: "bg-violet-50 text-violet-700",
     sky: "bg-sky-50 text-sky-700",
+    amber: "bg-amber-50 text-amber-700",
   };
   return (
     <div className="flex min-w-0 items-center gap-3 px-5 py-4">
@@ -111,11 +115,24 @@ const SelectionIcon = () => (
   </svg>
 );
 
+const MeterIcon = () => (
+  <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9">
+    <circle cx="12" cy="12" r="8" />
+    <path d="M12 12l3-3M8 16h8M9 7.5h6" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+);
+
 export default function Customers() {
+  const [urlParams, setUrlParams] = useSearchParams();
   const [customers, setCustomers] = useState<Customer[]>([]);
-  const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState("");
-  const [page, setPage] = useState(1);
+  const [search, setSearch] = useState(() => urlParams.get("search") ?? "");
+  const [statusFilter, setStatusFilter] = useState(() => urlParams.get("status") ?? "");
+  const [meterAssignmentFilter, setMeterAssignmentFilter] = useState(
+    () => urlParams.get("meterAssignment") ?? "",
+  );
+  const [page, setPage] = useState(() =>
+    Math.max(1, Number(urlParams.get("page")) || 1),
+  );
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -123,14 +140,21 @@ export default function Customers() {
   const [selected, setSelected] = useState<string[]>([]);
   const [bulkStatus, setBulkStatus] = useState("ACTIVE");
   const [updating, setUpdating] = useState(false);
+  const [withoutActiveMeter, setWithoutActiveMeter] = useState(0);
 
-  async function load(q = search, status = statusFilter, currentPage = page) {
+  async function load(
+    q = search,
+    status = statusFilter,
+    meterAssignment = meterAssignmentFilter,
+    currentPage = page,
+  ) {
     setLoading(true);
     setError("");
     try {
-      const data = await api.listCustomers(q, currentPage, status);
+      const data = await api.listCustomers(q, currentPage, status, meterAssignment);
       setCustomers(data.items ?? []);
       setTotal(Number(data.total ?? 0));
+      setWithoutActiveMeter(Number(data.summary?.withoutActiveMeter ?? 0));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Customers could not be loaded.");
     } finally {
@@ -139,8 +163,17 @@ export default function Customers() {
   }
 
   useEffect(() => {
-    void load(search, statusFilter, page);
+    void load(search, statusFilter, meterAssignmentFilter, page);
   }, [page]);
+
+  useEffect(() => {
+    const next = new URLSearchParams();
+    if (search) next.set("search", search);
+    if (statusFilter) next.set("status", statusFilter);
+    if (meterAssignmentFilter) next.set("meterAssignment", meterAssignmentFilter);
+    if (page > 1) next.set("page", String(page));
+    setUrlParams(next, { replace: true });
+  }, [search, statusFilter, meterAssignmentFilter, page, setUrlParams]);
 
   const pageIds = customers.map((customer) => String(customer.customerId));
   const allPageSelected =
@@ -163,14 +196,21 @@ export default function Customers() {
   function submitSearch(event?: FormEvent) {
     event?.preventDefault();
     setPage(1);
-    void load(search, statusFilter, 1);
+    void load(search, statusFilter, meterAssignmentFilter, 1);
   }
 
   function changeStatusFilter(status: string) {
     setStatusFilter(status);
     setPage(1);
     setSelected([]);
-    void load(search, status, 1);
+    void load(search, status, meterAssignmentFilter, 1);
+  }
+
+  function changeMeterAssignmentFilter(value: string) {
+    setMeterAssignmentFilter(value);
+    setPage(1);
+    setSelected([]);
+    void load(search, statusFilter, value, 1);
   }
 
   function togglePage(checked: boolean) {
@@ -192,7 +232,7 @@ export default function Customers() {
         `${result.updated} customer(s) updated to ${bulkStatus.toLowerCase()}.`,
       );
       setSelected([]);
-      await load(search, statusFilter, page);
+      await load(search, statusFilter, meterAssignmentFilter, page);
     } catch (err) {
       setError(
         err instanceof Error
@@ -239,8 +279,16 @@ export default function Customers() {
       </div>
 
       <section className="mb-5 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-        <div className="grid divide-y divide-slate-100 sm:grid-cols-2 sm:divide-x sm:divide-y-0 xl:grid-cols-4">
+        <div className="grid divide-y divide-slate-100 sm:grid-cols-2 sm:divide-x sm:divide-y-0 xl:grid-cols-5">
           <SummaryMetric label="Total customers" value={total} icon={<UsersIcon />} />
+          <button
+            type="button"
+            className="text-left transition hover:bg-amber-50/60"
+            onClick={() => changeMeterAssignmentFilter("UNASSIGNED")}
+            title="Show customers without an active meter assignment"
+          >
+            <SummaryMetric label="Without active meter" value={withoutActiveMeter} tone="amber" icon={<MeterIcon />} />
+          </button>
           <SummaryMetric label="Active on page" value={shownActive} tone="emerald" icon={<CheckIcon />} />
           <SummaryMetric label="Organizations on page" value={shownOrganizations} tone="violet" icon={<BuildingIcon />} />
           <SummaryMetric label="Selected records" value={selected.length} tone="sky" icon={<SelectionIcon />} />
@@ -261,7 +309,7 @@ export default function Customers() {
 
       <form
         onSubmit={submitSearch}
-        className="mb-4 grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:grid-cols-[minmax(260px,1fr)_220px_auto]"
+        className="mb-4 grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm lg:grid-cols-[minmax(260px,1fr)_210px_230px_auto]"
       >
         <label className="relative block">
           <span className="sr-only">Find a customer</span>
@@ -289,7 +337,7 @@ export default function Customers() {
         </label>
         <label>
           <span className="sr-only">Customer status</span>
-          <select
+          <SearchableSelect
             className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm outline-none focus:border-aqua-500 focus:ring-2 focus:ring-aqua-500/20"
             value={statusFilter}
             onChange={(event) => changeStatusFilter(event.target.value)}
@@ -299,7 +347,19 @@ export default function Customers() {
             <option value="INACTIVE">Inactive</option>
             <option value="SUSPENDED">Suspended</option>
             <option value="CLOSED">Closed</option>
-          </select>
+          </SearchableSelect>
+        </label>
+        <label>
+          <span className="sr-only">Meter assignment</span>
+          <SearchableSelect
+            className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm outline-none focus:border-aqua-500 focus:ring-2 focus:ring-aqua-500/20"
+            value={meterAssignmentFilter}
+            onChange={(event) => changeMeterAssignmentFilter(event.target.value)}
+          >
+            <option value="">All meter assignments</option>
+            <option value="ASSIGNED">Active meter assigned</option>
+            <option value="UNASSIGNED">Without active meter</option>
+          </SearchableSelect>
         </label>
         <button
           className="h-11 rounded-xl bg-navy-900 px-7 text-sm font-bold text-white transition hover:bg-aqua-700"
@@ -320,7 +380,7 @@ export default function Customers() {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <select
+            <SearchableSelect
               className="rounded-lg border border-sky-200 bg-white px-3 py-2 text-sm"
               value={bulkStatus}
               onChange={(event) => setBulkStatus(event.target.value)}
@@ -329,7 +389,7 @@ export default function Customers() {
               <option value="INACTIVE">Set Inactive</option>
               <option value="SUSPENDED">Set Suspended</option>
               <option value="CLOSED">Set Closed</option>
-            </select>
+            </SearchableSelect>
             <button
               type="button"
               disabled={updating}
@@ -406,15 +466,16 @@ export default function Customers() {
           <p className="text-xs font-medium text-slate-500">
             Showing {customers.length} customers on this page
           </p>
-          {(search || statusFilter) && (
+          {(search || statusFilter || meterAssignmentFilter) && (
             <button
               type="button"
               className="text-xs font-bold text-aqua-700 hover:text-aqua-600"
               onClick={() => {
                 setSearch("");
                 setStatusFilter("");
+                setMeterAssignmentFilter("");
                 setPage(1);
-                void load("", "", 1);
+                void load("", "", "", 1);
               }}
             >
               Clear filters
@@ -437,6 +498,7 @@ export default function Customers() {
                   "Customer",
                   "Contact",
                   "Type",
+                  "Meter assignment",
                   "Registered",
                   "Status",
                   "Actions",
@@ -453,7 +515,7 @@ export default function Customers() {
             <tbody className="divide-y divide-slate-100">
               {loading ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-16 text-center text-slate-500">
+                  <td colSpan={8} className="px-4 py-16 text-center text-slate-500">
                     <span className="inline-flex items-center gap-2">
                       <span className="h-4 w-4 animate-spin rounded-full border-2 border-sky-200 border-t-sky-600" />
                       Loading customers…
@@ -516,6 +578,24 @@ export default function Customers() {
                             : "Individual"}
                         </span>
                       </td>
+                      <td className="px-4 py-3.5">
+                        {customer.activeMeters?.length ? (
+                          <div>
+                            <span className="inline-flex items-center gap-1.5 rounded-full border border-sky-200 bg-sky-50 px-2.5 py-1 text-xs font-semibold text-sky-700">
+                              <span className="h-1.5 w-1.5 rounded-full bg-sky-500" />
+                              Assigned
+                            </span>
+                            <div className="mt-1 max-w-[190px] truncate text-xs text-slate-500" title={customer.activeMeters.map((meter) => meter.meterNumber).join(", ")}>
+                              {customer.activeMeters.map((meter) => meter.meterNumber).join(", ")}
+                            </div>
+                          </div>
+                        ) : (
+                          <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700">
+                            <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+                            No active meter
+                          </span>
+                        )}
+                      </td>
                       <td className="px-4 py-3.5 text-sm text-slate-600">
                         {customer.registrationDate
                           ? new Date(customer.registrationDate).toLocaleDateString(
@@ -542,7 +622,7 @@ export default function Customers() {
                 })
               ) : (
                 <tr>
-                  <td colSpan={7} className="px-4 py-16 text-center">
+                  <td colSpan={8} className="px-4 py-16 text-center">
                     <div className="font-semibold text-slate-700">
                       No customers matched
                     </div>

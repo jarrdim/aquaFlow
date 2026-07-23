@@ -40,6 +40,7 @@ async function nextCustomerNumber() {
 customersRouter.get("/", async (req, res) => {
   const search = (req.query.search as string) ?? "";
   const status = (req.query.status as string) ?? "";
+  const meterAssignment = (req.query.meterAssignment as string) ?? "";
   const page = Math.max(1, Number(req.query.page) || 1);
   const pageSize = Math.min(100, Number(req.query.pageSize) || 20);
 
@@ -60,17 +61,64 @@ customersRouter.get("/", async (req, res) => {
     where.status = status;
   }
 
-  const [items, total] = await Promise.all([
+  const activeMeterAssignment = {
+    meterAssignments: { some: { assignmentStatus: "ACTIVE" } },
+  };
+  if (meterAssignment === "ASSIGNED") {
+    where.accounts = { some: activeMeterAssignment };
+  } else if (meterAssignment === "UNASSIGNED") {
+    where.accounts = { none: activeMeterAssignment };
+  }
+
+  const [items, total, withoutActiveMeter] = await Promise.all([
     prisma.customer.findMany({
       where,
+      include: {
+        accounts: {
+          select: {
+            accountId: true,
+            meterAssignments: {
+              where: { assignmentStatus: "ACTIVE" },
+              select: {
+                meterId: true,
+                meter: { select: { meterNumber: true } },
+              },
+            },
+          },
+        },
+      },
       orderBy: { createdAt: "desc" },
       skip: (page - 1) * pageSize,
       take: pageSize,
     }),
     prisma.customer.count({ where }),
+    prisma.customer.count({
+      where: {
+        accounts: {
+          none: {
+            meterAssignments: { some: { assignmentStatus: "ACTIVE" } },
+          },
+        },
+      },
+    }),
   ]);
 
-  res.json({ items, total, page, pageSize });
+  res.json({
+    items: items.map(({ accounts, ...customer }) => ({
+      ...customer,
+      accountCount: accounts.length,
+      activeMeters: accounts.flatMap((account) =>
+        account.meterAssignments.map((assignment) => ({
+          meterId: assignment.meterId,
+          meterNumber: assignment.meter.meterNumber,
+        })),
+      ),
+    })),
+    total,
+    page,
+    pageSize,
+    summary: { withoutActiveMeter },
+  });
 });
 
 customersRouter.get("/:id", async (req, res) => {

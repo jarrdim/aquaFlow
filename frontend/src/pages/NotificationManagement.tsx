@@ -1,6 +1,8 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, getSessionUser } from "../lib/api";
+import { SearchableSelect } from "../components/SearchableSelect";
+import { CheckboxMultiSelect } from "../components/CheckboxMultiSelect";
 
 type Row = Record<string, any>;
 const INPUT =
@@ -40,7 +42,7 @@ function Page({
 }) {
   return (
     <div className="mx-auto max-w-[1600px] p-4 lg:px-6 lg:py-5">
-      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+      <div className="page-screen-header mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">{title}</h1>
           <p className="mt-1 text-[15px] text-slate-500">{subtitle}</p>
@@ -336,7 +338,7 @@ function NotificationTable({
 }
 
 export function NotificationSend() {
-  const [mode, setMode] = useState<"SINGLE" | "BULK">("SINGLE");
+  const [mode, setMode] = useState<"SINGLE" | "BULK">("BULK");
   const modeSwitch = (
     <div className="inline-flex rounded-xl border border-slate-200 bg-white p-1 shadow-sm">
       <button
@@ -363,12 +365,22 @@ export function NotificationSend() {
 }
 
 function BulkNotificationSend({ modeSwitch }: { modeSwitch: ReactNode }) {
-  const [filters, setFilters] = useState({
+  const [filters, setFilters] = useState<{
+    search: string;
+    minimumBalance: string;
+    accountStatuses: string[];
+    zoneIds: string[];
+    categoryIds: string[];
+  }>({
     search: "",
     minimumBalance: "0.01",
-    accountStatus: "ACTIVE",
+    accountStatuses: ["ACTIVE"],
+    zoneIds: [],
+    categoryIds: [],
   });
   const [applied, setApplied] = useState(filters);
+  const [zones, setZones] = useState<Row[]>([]);
+  const [categories, setCategories] = useState<Row[]>([]);
   const [audience, setAudience] = useState<Row>({
     items: [],
     total: 0,
@@ -390,10 +402,23 @@ function BulkNotificationSend({ modeSwitch }: { modeSwitch: ReactNode }) {
   const [success, setSuccess] = useState("");
 
   useEffect(() => {
+    Promise.all([api.listZones(), api.listCategories()])
+      .then(([zoneRows, categoryRows]) => {
+        setZones(zoneRows);
+        setCategories(categoryRows);
+      })
+      .catch((e) => setError(errorText(e)));
+  }, []);
+
+  useEffect(() => {
     setLoading(true);
     api
       .notificationAudience({
-        ...applied,
+        search: applied.search,
+        minimumBalance: applied.minimumBalance,
+        accountStatuses: applied.accountStatuses.join(","),
+        zoneIds: applied.zoneIds.join(","),
+        categoryIds: applied.categoryIds.join(","),
         page: String(page),
         pageSize: "25",
       })
@@ -486,7 +511,7 @@ function BulkNotificationSend({ modeSwitch }: { modeSwitch: ReactNode }) {
           className="2xl:col-start-1 2xl:row-start-1"
           title="Audience filters"
         >
-          <div className="grid gap-3 md:grid-cols-3">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
             <label className="text-sm font-medium">
               Minimum outstanding balance
               <input
@@ -501,19 +526,34 @@ function BulkNotificationSend({ modeSwitch }: { modeSwitch: ReactNode }) {
               />
             </label>
             <label className="text-sm font-medium">
-              Account status
-              <select
+              Account statuses
+              <CheckboxMultiSelect
                 className={`${INPUT} mt-1`}
-                value={filters.accountStatus}
-                onChange={(e) =>
-                  setFilters({ ...filters, accountStatus: e.target.value })
-                }
-              >
-                <option value="ACTIVE">Active</option>
-                <option value="">All statuses</option>
-                <option value="SUSPENDED">Suspended</option>
-                <option value="INACTIVE">Inactive</option>
-              </select>
+                value={filters.accountStatuses}
+                onChange={(accountStatuses) => setFilters({ ...filters, accountStatuses })}
+                placeholder="All statuses"
+                options={[{ value: "ACTIVE", label: "Active" }, { value: "SUSPENDED", label: "Suspended" }, { value: "INACTIVE", label: "Inactive" }, { value: "PENDING", label: "Pending" }, { value: "CLOSED", label: "Closed" }]}
+              />
+            </label>
+            <label className="text-sm font-medium">
+              Zones
+              <CheckboxMultiSelect
+                className={`${INPUT} mt-1`}
+                value={filters.zoneIds}
+                onChange={(zoneIds) => setFilters({ ...filters, zoneIds })}
+                placeholder="All zones"
+                options={zones.map((zone) => ({ value: String(zone.zoneId), label: zone.zoneName }))}
+              />
+            </label>
+            <label className="text-sm font-medium">
+              Customer categories
+              <CheckboxMultiSelect
+                className={`${INPUT} mt-1`}
+                value={filters.categoryIds}
+                onChange={(categoryIds) => setFilters({ ...filters, categoryIds })}
+                placeholder="All categories"
+                options={categories.map((category) => ({ value: String(category.categoryId), label: category.categoryName }))}
+              />
             </label>
             <label className="text-sm font-medium">
               Account or customer
@@ -621,6 +661,7 @@ function BulkNotificationSend({ modeSwitch }: { modeSwitch: ReactNode }) {
                   />
                 </th>
                 <th className={TH}>Account / customer</th>
+                <th className={TH}>Zone</th>
                 <th className={TH}>Category</th>
                 <th className={TH}>SMS contact</th>
                 <th className={TH}>Email contact</th>
@@ -631,7 +672,7 @@ function BulkNotificationSend({ modeSwitch }: { modeSwitch: ReactNode }) {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-12 text-center text-slate-500">
+                  <td colSpan={8} className="px-4 py-12 text-center text-slate-500">
                     Loading audience…
                   </td>
                 </tr>
@@ -669,6 +710,7 @@ function BulkNotificationSend({ modeSwitch }: { modeSwitch: ReactNode }) {
                         {row.customerName}
                       </span>
                     </td>
+                    <td className={TD}>{row.property?.zone?.zoneName ?? "—"}</td>
                     <td className={TD}>
                       {row.category?.categoryName ?? "—"}
                     </td>
@@ -700,7 +742,7 @@ function BulkNotificationSend({ modeSwitch }: { modeSwitch: ReactNode }) {
                 ))
               ) : (
                 <tr>
-                  <td colSpan={7} className="px-4 py-12 text-center text-slate-500">
+                  <td colSpan={8} className="px-4 py-12 text-center text-slate-500">
                     No accounts match these filters.
                   </td>
                 </tr>
@@ -757,14 +799,14 @@ function BulkNotificationSend({ modeSwitch }: { modeSwitch: ReactNode }) {
           <div className="space-y-4">
             <label className="block text-sm font-medium">
               Message type
-              <select
+              <SearchableSelect
                 className={`${INPUT} mt-1`}
                 value={notificationType}
                 onChange={(e) => setNotificationType(e.target.value)}
               >
                 <option value="BALANCE_REMINDER">Balance reminder</option>
                 <option value="GENERAL">General message</option>
-              </select>
+              </SearchableSelect>
             </label>
             <div>
               <div className="mb-2 text-sm font-medium">Delivery channels</div>
@@ -961,7 +1003,7 @@ function NotificationSendLegacy({ modeSwitch }: { modeSwitch: ReactNode }) {
             <div className="grid gap-4 md:grid-cols-2 lg:col-span-2">
               <label className="text-sm font-medium">
                 Target source
-                <select
+                <SearchableSelect
                   className={`${INPUT} mt-1`}
                   value={targetType}
                   onChange={(e) => {
@@ -972,11 +1014,11 @@ function NotificationSendLegacy({ modeSwitch }: { modeSwitch: ReactNode }) {
                   <option value="ACCOUNT">Customer account</option>
                   <option value="BILL">Posted bill</option>
                   <option value="PAYMENT">Payment / receipt</option>
-                </select>
+                </SearchableSelect>
               </label>
               <label className="text-sm font-medium">
                 Message type
-                <select
+                <SearchableSelect
                   className={`${INPUT} mt-1`}
                   value={notificationType}
                   onChange={(e) => {
@@ -1004,12 +1046,12 @@ function NotificationSendLegacy({ modeSwitch }: { modeSwitch: ReactNode }) {
                       <option value="PAYMENT_REVERSAL">Payment reversal</option>
                     </>
                   )}
-                </select>
+                </SearchableSelect>
               </label>
             </div>
             <label className="block text-sm font-medium lg:col-span-2">
               Customer record
-              <select
+              <SearchableSelect
                 required
                 className={`${INPUT} mt-1`}
                 value={targetId}
@@ -1024,7 +1066,7 @@ function NotificationSendLegacy({ modeSwitch }: { modeSwitch: ReactNode }) {
                     {optionText(row)}
                   </option>
                 ))}
-              </select>
+              </SearchableSelect>
             </label>
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
               <div className="mb-2 text-sm font-medium">Delivery channels</div>
@@ -1258,7 +1300,7 @@ function NotificationRegister({ queueOnly = false }: { queueOnly?: boolean }) {
       <Notice error={error} success={success} />
       <Card>
         <div className="mb-4 grid gap-3 md:grid-cols-3">
-          <select
+          <SearchableSelect
             className={INPUT}
             value={status}
             onChange={(e) => setStatus(e.target.value)}
@@ -1268,8 +1310,8 @@ function NotificationRegister({ queueOnly = false }: { queueOnly?: boolean }) {
             <option value="SENT">Sent</option>
             <option value="DELIVERED">Delivered</option>
             <option value="FAILED">Failed</option>
-          </select>
-          <select
+          </SearchableSelect>
+          <SearchableSelect
             className={INPUT}
             value={channel}
             onChange={(e) => setChannel(e.target.value)}
@@ -1278,7 +1320,7 @@ function NotificationRegister({ queueOnly = false }: { queueOnly?: boolean }) {
             <option>SMS</option>
             <option>EMAIL</option>
             <option>PUSH</option>
-          </select>
+          </SearchableSelect>
           <div className="flex gap-2">
             <input
               className={INPUT}
@@ -1393,7 +1435,7 @@ export function NotificationTemplates() {
                 }
               />
               <div className="grid grid-cols-2 gap-3">
-                <select
+                <SearchableSelect
                   className={INPUT}
                   value={form.notificationType}
                   onChange={(e) =>
@@ -1410,8 +1452,8 @@ export function NotificationTemplates() {
                   ].map((item) => (
                     <option key={item}>{item}</option>
                   ))}
-                </select>
-                <select
+                </SearchableSelect>
+                <SearchableSelect
                   className={INPUT}
                   value={form.channel}
                   onChange={(e) =>
@@ -1421,7 +1463,7 @@ export function NotificationTemplates() {
                   <option>SMS</option>
                   <option>EMAIL</option>
                   <option>PUSH</option>
-                </select>
+                </SearchableSelect>
               </div>
               <input
                 className={INPUT}
@@ -1687,7 +1729,7 @@ export function NotificationProviders() {
                 }
               />
               <div className="grid grid-cols-2 gap-3">
-                <select
+                <SearchableSelect
                   className={INPUT}
                   value={form.channel}
                   onChange={(e) =>
@@ -1697,8 +1739,8 @@ export function NotificationProviders() {
                   <option>SMS</option>
                   <option>EMAIL</option>
                   <option>PUSH</option>
-                </select>
-                <select
+                </SearchableSelect>
+                <SearchableSelect
                   className={INPUT}
                   value={form.providerType}
                   onChange={(e) =>
@@ -1714,7 +1756,7 @@ export function NotificationProviders() {
                   <option value="SIMULATED">Simulated</option>
                   <option value="SMTP">SMTP email</option>
                   <option value="HTTP_API">HTTP API</option>
-                </select>
+                </SearchableSelect>
               </div>
               {form.providerType === "HTTP_API" && (
                 <input

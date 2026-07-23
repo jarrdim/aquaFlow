@@ -13,6 +13,8 @@ import { billingRouter } from "./routes/billing";
 import { paymentsRouter } from "./routes/payments";
 import { notificationsRouter } from "./routes/notifications";
 import { arrearsRouter } from "./routes/arrears";
+import { adminRouter } from "./routes/admin";
+import { serviceRequestsRouter } from "./routes/serviceRequests";
 
 // BigInt IDs (from BIGSERIAL columns) don't serialize to JSON by default.
 (BigInt.prototype as any).toJSON = function () {
@@ -37,6 +39,8 @@ app.use("/api/billing", billingRouter);
 app.use("/api/payments", paymentsRouter);
 app.use("/api/notifications", notificationsRouter);
 app.use("/api/arrears", arrearsRouter);
+app.use("/api/admin", adminRouter);
+app.use("/api/service-requests", serviceRequestsRouter);
 
 app.use(
   (

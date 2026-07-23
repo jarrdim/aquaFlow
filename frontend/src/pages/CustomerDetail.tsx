@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { decodeId, encodeId } from "../lib/hashids";
+import { SearchableSelect } from "../components/SearchableSelect";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface Customer {
@@ -385,9 +386,9 @@ export default function CustomerDetail() {
               />
             </Field>
             <Field label="Status" error={fieldErrors.status?.[0]}>
-              <select className={FIELD_CLS} value={editForm.status} onChange={(e) => setEditForm((f) => ({ ...f, status: e.target.value }))}>
+              <SearchableSelect className={FIELD_CLS} value={editForm.status} onChange={(e) => setEditForm((f) => ({ ...f, status: e.target.value }))}>
                 {["ACTIVE", "INACTIVE", "SUSPENDED", "CLOSED"].map((s) => <option key={s}>{s}</option>)}
-              </select>
+              </SearchableSelect>
             </Field>
             <Field label="Phone" error={fieldErrors.phoneNumber?.[0]}>
               <input className={FIELD_CLS} value={editForm.phoneNumber} onChange={(e) => setEditForm((f) => ({ ...f, phoneNumber: e.target.value }))} />
@@ -399,10 +400,10 @@ export default function CustomerDetail() {
               <input type="email" className={FIELD_CLS} value={editForm.emailAddress} onChange={(e) => setEditForm((f) => ({ ...f, emailAddress: e.target.value }))} />
             </Field>
             <Field label="Preferred Language" error={fieldErrors.preferredLanguage?.[0]}>
-              <select className={FIELD_CLS} value={editForm.preferredLanguage} onChange={(e) => setEditForm((f) => ({ ...f, preferredLanguage: e.target.value }))}>
+              <SearchableSelect className={FIELD_CLS} value={editForm.preferredLanguage} onChange={(e) => setEditForm((f) => ({ ...f, preferredLanguage: e.target.value }))}>
                 <option value="EN">English</option>
                 <option value="SW">Swahili</option>
-              </select>
+              </SearchableSelect>
             </Field>
           </div>
           <div className="flex gap-2 pt-1">
@@ -645,24 +646,24 @@ export default function CustomerDetail() {
             {showPropertyForm && (
               <form onSubmit={submitProperty} className="bg-white border border-slate-200 rounded-xl shadow-sm p-4 mb-3 space-y-3 text-sm">
                 <Field label="Zone *">
-                  <select required className={FIELD_CLS} value={propertyForm.zoneId}
+                  <SearchableSelect required className={FIELD_CLS} value={propertyForm.zoneId}
                     onChange={(e) => setPropertyForm((f) => ({ ...f, zoneId: e.target.value, serviceAreaId: "", routeId: "" }))}>
                     <option value="">Select zone</option>
                     {zones.map((z) => <option key={z.zoneId} value={z.zoneId}>{z.zoneName}</option>)}
-                  </select>
+                  </SearchableSelect>
                 </Field>
                 <div className="grid grid-cols-2 gap-3">
                   <Field label="Service Area">
-                    <select className={FIELD_CLS} value={propertyForm.serviceAreaId} onChange={(e) => setPropertyForm((f) => ({ ...f, serviceAreaId: e.target.value }))}>
+                    <SearchableSelect className={FIELD_CLS} value={propertyForm.serviceAreaId} onChange={(e) => setPropertyForm((f) => ({ ...f, serviceAreaId: e.target.value }))}>
                       <option value="">None</option>
                       {serviceAreas.map((s) => <option key={s.serviceAreaId} value={s.serviceAreaId}>{s.areaName}</option>)}
-                    </select>
+                    </SearchableSelect>
                   </Field>
                   <Field label="Route">
-                    <select className={FIELD_CLS} value={propertyForm.routeId} onChange={(e) => setPropertyForm((f) => ({ ...f, routeId: e.target.value }))}>
+                    <SearchableSelect className={FIELD_CLS} value={propertyForm.routeId} onChange={(e) => setPropertyForm((f) => ({ ...f, routeId: e.target.value }))}>
                       <option value="">None</option>
                       {routes.map((r) => <option key={r.routeId} value={r.routeId}>{r.routeName}</option>)}
-                    </select>
+                    </SearchableSelect>
                   </Field>
                 </div>
                 <Field label="Physical Address *">
@@ -729,16 +730,16 @@ export default function CustomerDetail() {
               <form onSubmit={submitAccount} className="bg-white border border-slate-200 rounded-xl shadow-sm p-4 mb-3 space-y-3 text-sm">
                 <div className="grid grid-cols-2 gap-3">
                   <Field label="Property *">
-                    <select required className={FIELD_CLS} value={accountForm.propertyId} onChange={(e) => setAccountForm((f) => ({ ...f, propertyId: e.target.value }))}>
+                    <SearchableSelect required className={FIELD_CLS} value={accountForm.propertyId} onChange={(e) => setAccountForm((f) => ({ ...f, propertyId: e.target.value }))}>
                       <option value="">Select property</option>
                       {properties.map((p) => <option key={p.propertyId} value={p.propertyId}>{p.propertyCode} — {p.physicalAddress}</option>)}
-                    </select>
+                    </SearchableSelect>
                   </Field>
                   <Field label="Customer Category *">
-                    <select required className={FIELD_CLS} value={accountForm.categoryId} onChange={(e) => setAccountForm((f) => ({ ...f, categoryId: e.target.value }))}>
+                    <SearchableSelect required className={FIELD_CLS} value={accountForm.categoryId} onChange={(e) => setAccountForm((f) => ({ ...f, categoryId: e.target.value }))}>
                       <option value="">Select category</option>
                       {categories.map((c) => <option key={c.categoryId} value={c.categoryId}>{c.categoryName}</option>)}
-                    </select>
+                    </SearchableSelect>
                   </Field>
                 </div>
                 <button className="px-4 py-2 text-sm font-medium bg-aqua-700 hover:bg-aqua-600 text-white rounded-lg shadow-sm transition-colors">
@@ -789,9 +790,26 @@ export default function CustomerDetail() {
 
       {/* Tab: Service Requests */}
       {activeTab === "service_requests" && (
-        <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-8 text-center text-sm text-slate-400">
-          Service requests will be available in a future update.
-        </div>
+        <section className="rounded-xl border border-slate-200 bg-white p-8 text-center shadow-sm">
+          <h2 className="font-semibold text-slate-900">Customer service history</h2>
+          <p className="mx-auto mt-2 max-w-xl text-sm text-slate-500">
+            Review this customer&apos;s requests and complaints, or register a new issue against one of their accounts.
+          </p>
+          <div className="mt-5 flex flex-wrap justify-center gap-3">
+            <Link
+              to={`/service-requests?customerId=${customer?.customerId ?? rawId}`}
+              className="rounded-lg border border-aqua-600 px-4 py-2 text-sm font-semibold text-aqua-700 hover:bg-aqua-50"
+            >
+              View service history
+            </Link>
+            <Link
+              to="/service-requests/new"
+              className="rounded-lg bg-aqua-700 px-4 py-2 text-sm font-semibold text-white hover:bg-aqua-600"
+            >
+              Register request
+            </Link>
+          </div>
+        </section>
       )}
 
       {/* Tab: Notes */}

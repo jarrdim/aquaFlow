@@ -50,6 +50,19 @@ const roleDefinitions = [
   ],
 ] as const;
 
+const permissionDefinitions = [
+  ["ADMIN_USER_VIEW", "Administration", "View users", "View user accounts and role assignments"],
+  ["ADMIN_USER_MANAGE", "Administration", "Manage users", "Create, edit, activate and deactivate users"],
+  ["ADMIN_ROLE_VIEW", "Administration", "View roles", "View roles and their permissions"],
+  ["ADMIN_ROLE_MANAGE", "Administration", "Manage roles", "Create roles and manage permission grants"],
+  ["ADMIN_PERMISSION_VIEW", "Administration", "View permissions", "View the permission catalogue"],
+  ["ADMIN_PERMISSION_MANAGE", "Administration", "Manage permissions", "Create and edit permission definitions"],
+  ["SERVICE_REQUEST_VIEW", "Service Requests", "View service requests", "View service requests and complaints"],
+  ["SERVICE_REQUEST_CREATE", "Service Requests", "Create service requests", "Register service requests and complaints"],
+  ["SERVICE_REQUEST_ASSIGN", "Service Requests", "Assign service requests", "Assign requests to service officers"],
+  ["SERVICE_REQUEST_RESOLVE", "Service Requests", "Resolve service requests", "Progress, resolve and close requests"],
+] as const;
+
 const staffDefinitions = [
   {
     username: "admin",
@@ -201,6 +214,26 @@ async function ensureUserRole(userId: bigint, roleId: bigint) {
   return prisma.userRole.create({ data: { userId, roleId } });
 }
 
+async function ensurePermission(
+  permissionCode: string,
+  moduleName: string,
+  permissionName: string,
+  description: string,
+) {
+  return prisma.permission.upsert({
+    where: { permissionCode },
+    update: { moduleName, permissionName, description },
+    create: { permissionCode, moduleName, permissionName, description },
+  });
+}
+
+async function ensureRolePermission(roleId: bigint, permissionId: bigint) {
+  const existing = await prisma.rolePermission.findFirst({
+    where: { roleId, permissionId },
+  });
+  return existing ?? prisma.rolePermission.create({ data: { roleId, permissionId } });
+}
+
 async function ensureCategory(categoryCode: string, categoryName: string) {
   const existing = await prisma.customerCategory.findFirst({
     where: { OR: [{ categoryCode }, { categoryName }] },
@@ -279,6 +312,17 @@ async function main() {
   const roles = new Map<string, { roleId: bigint }>();
   for (const [code, name, description] of roleDefinitions) {
     roles.set(code, await ensureRole(code, name, description));
+  }
+
+  for (const [code, moduleName, name, description] of permissionDefinitions) {
+    const permission = await ensurePermission(code, moduleName, name, description);
+    await ensureRolePermission(roles.get("SYSTEM_ADMIN")!.roleId, permission.permissionId);
+    if (code.startsWith("SERVICE_REQUEST_")) {
+      await ensureRolePermission(
+        roles.get("CUSTOMER_CARE_OFFICER")!.roleId,
+        permission.permissionId,
+      );
+    }
   }
 
   const passwordHash = await bcrypt.hash(defaultPassword, 10);

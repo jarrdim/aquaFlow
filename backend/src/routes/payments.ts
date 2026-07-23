@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client";
 import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
-import { requireAuth, requireRole } from "../middleware/auth";
+import { isSystemAdmin, requireAuth, requireRole } from "../middleware/auth";
 import {
   getMpesaConfig,
   normalizeKenyanPhone,
@@ -1034,7 +1034,7 @@ paymentsRouter.patch(
         return res
           .status(409)
           .json({ error: "Only pending reversals can be decided" });
-      if (reversal.requestedBy === uid(req))
+      if (reversal.requestedBy === uid(req) && !isSystemAdmin(req))
         return res
           .status(403)
           .json({

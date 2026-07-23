@@ -18,6 +18,8 @@
     "db:notification-upgrade": "prisma db execute --file prisma/migrations/20260715150000_notification_management/migration.sql --schema prisma/schema.prisma",
     "db:arrears-upgrade": "prisma db execute --file prisma/migrations/20260717090000_arrears_debt_management/migration.sql --schema prisma/schema.prisma",
     "db:tariff-upgrade": "prisma db execute --file prisma/migrations/20260714170000_tariff_management/migration.sql --schema prisma/schema.prisma",
+    "db:admin-upgrade": "prisma db execute --file prisma/migrations/20260722230000_admin_permissions/migration.sql --schema prisma/schema.prisma",
+    "db:service-request-upgrade": "prisma db execute --file prisma/migrations/20260722231000_service_request_management/migration.sql --schema prisma/schema.prisma",
     "seed": "ts-node prisma/seed.ts"
   },
   "dependencies": {

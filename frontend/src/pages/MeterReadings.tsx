@@ -1,7 +1,8 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../lib/api";
-import { exportExcel, openEvidence } from "../lib/meterFiles";
+import { exportExcel, openEvidence, parseMeterWorkbook } from "../lib/meterFiles";
+import { SearchableSelect } from "../components/SearchableSelect";
 
 type Row = Record<string, any>;
 const INPUT =
@@ -23,7 +24,7 @@ function Page({
 }) {
   return (
     <div className="mx-auto max-w-[1600px] p-4 lg:px-6 lg:py-5">
-      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+      <div className="page-screen-header mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-slate-900 lg:text-[26px]">
             {title}
@@ -314,7 +315,7 @@ function CycleSelect({
       .catch(() => undefined);
   }, []);
   return (
-    <select
+    <SearchableSelect
       className={INPUT}
       value={value}
       onChange={(e) => onChange(e.target.value)}
@@ -327,7 +328,7 @@ function CycleSelect({
           {c.cycleName} · {pretty(c.status)}
         </option>
       ))}
-    </select>
+    </SearchableSelect>
   );
 }
 
@@ -482,7 +483,7 @@ export function ReadingDashboard() {
         </div>
         <div className="grid gap-3 p-4 md:grid-cols-2">
           <Field label="Reading cycle">
-            <select
+            <SearchableSelect
               className={INPUT}
               value={filters.cycleId}
               onChange={(e) => {
@@ -496,10 +497,10 @@ export function ReadingDashboard() {
                   {c.cycleName}
                 </option>
               ))}
-            </select>
+            </SearchableSelect>
           </Field>
           <Field label="Zone">
-            <select
+            <SearchableSelect
               className={INPUT}
               value={filters.zoneId}
               onChange={(e) => {
@@ -513,7 +514,7 @@ export function ReadingDashboard() {
                   {z.zoneName}
                 </option>
               ))}
-            </select>
+            </SearchableSelect>
           </Field>
         </div>
         <div className="flex flex-wrap gap-x-6 gap-y-2 border-t border-slate-100 bg-slate-50/70 px-4 py-2.5 text-xs text-slate-500">
@@ -968,7 +969,7 @@ export function ReadingCycles() {
               </Field>
             </div>
             <Field label="Initial status">
-              <select
+              <SearchableSelect
                 className={INPUT}
                 value={form.status}
                 disabled={Boolean(editingId)}
@@ -976,7 +977,7 @@ export function ReadingCycles() {
               >
                 <option value="PLANNED">Planned</option>
                 <option value="OPEN">Open immediately</option>
-              </select>
+              </SearchableSelect>
             </Field>
             <Field label="Remarks">
               <textarea
@@ -1013,7 +1014,7 @@ export function ReadingCycles() {
               />
             </Field>
             <Field label="Rows per page">
-              <select
+              <SearchableSelect
                 className={INPUT}
                 value={cyclePageSize}
                 onChange={(event) =>
@@ -1023,7 +1024,7 @@ export function ReadingCycles() {
                 <option value={10}>10 rows</option>
                 <option value={25}>25 rows</option>
                 <option value={50}>50 rows</option>
-              </select>
+              </SearchableSelect>
             </Field>
           </div>
           <CyclePagination position="top" />
@@ -1414,7 +1415,7 @@ function ReadingRouteAssignmentsPlanner() {
         <Card title="Create meter reader profile" className="mb-4">
           <form onSubmit={createOfficer} className="grid gap-3 md:grid-cols-4">
             <Field label="Staff user" required>
-              <select
+              <SearchableSelect
                 required
                 className={INPUT}
                 value={officerForm.userId}
@@ -1435,7 +1436,7 @@ function ReadingRouteAssignmentsPlanner() {
                     {user.firstName} {user.lastName} ({user.username})
                   </option>
                 ))}
-              </select>
+              </SearchableSelect>
             </Field>
             <Field label="Employee number" required>
               <input
@@ -1464,7 +1465,7 @@ function ReadingRouteAssignmentsPlanner() {
               />
             </Field>
             <Field label="Home zone">
-              <select
+              <SearchableSelect
                 className={INPUT}
                 value={officerForm.homeZoneId}
                 onChange={(e) =>
@@ -1477,7 +1478,7 @@ function ReadingRouteAssignmentsPlanner() {
                     {zone.zoneName}
                   </option>
                 ))}
-              </select>
+              </SearchableSelect>
             </Field>
             <div className="md:col-span-4 flex justify-end">
               <Button tone="green">Create reader profile</Button>
@@ -1522,7 +1523,7 @@ function ReadingRouteAssignmentsPlanner() {
           </div>
           <div className="grid gap-3 lg:grid-cols-4">
             <Field label="Reading cycle" required>
-              <select
+              <SearchableSelect
                 required
                 className={INPUT}
                 value={cycleId}
@@ -1546,7 +1547,7 @@ function ReadingRouteAssignmentsPlanner() {
                       {cycle.cycleCode} — {cycle.cycleName}
                     </option>
                   ))}
-              </select>
+              </SearchableSelect>
             </Field>
             <Field label="Assigned date">
               <input
@@ -1557,7 +1558,7 @@ function ReadingRouteAssignmentsPlanner() {
               />
             </Field>
             <Field label="Reader for selected routes">
-              <select
+              <SearchableSelect
                 className={INPUT}
                 value={bulkReader}
                 onChange={(e) => setBulkReader(e.target.value)}
@@ -1571,7 +1572,7 @@ function ReadingRouteAssignmentsPlanner() {
                     {reader.officerName} — {reader.employeeNumber}
                   </option>
                 ))}
-              </select>
+              </SearchableSelect>
             </Field>
             <div className="flex items-end">
               <CycleActionButton
@@ -1593,7 +1594,7 @@ function ReadingRouteAssignmentsPlanner() {
                 onChange={(e) => setRouteSearch(e.target.value)}
                 placeholder="Search route name, code or zone"
               />
-              <select
+              <SearchableSelect
                 className={INPUT}
                 value={zoneId}
                 onChange={(e) => setZoneId(e.target.value)}
@@ -1604,7 +1605,7 @@ function ReadingRouteAssignmentsPlanner() {
                     {zone.zoneName}
                   </option>
                 ))}
-              </select>
+              </SearchableSelect>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full">
@@ -1676,7 +1677,7 @@ function ReadingRouteAssignmentsPlanner() {
                           )}
                         </td>
                         <td className={TD}>
-                          <select
+                          <SearchableSelect
                             className={INPUT}
                             value={readerByRoute[id] ?? ""}
                             disabled={Boolean(existing)}
@@ -1699,7 +1700,7 @@ function ReadingRouteAssignmentsPlanner() {
                                 {reader.officerName} — {reader.employeeNumber}
                               </option>
                             ))}
-                          </select>
+                          </SearchableSelect>
                         </td>
                       </tr>
                     );
@@ -2003,7 +2004,7 @@ export function ReadingRouteAssignments() {
         <Card title="Create meter reader profile" className="mb-4">
           <form onSubmit={createOfficer} className="grid gap-3 md:grid-cols-4">
             <Field label="Staff user" required>
-              <select
+              <SearchableSelect
                 required
                 className={INPUT}
                 value={officer.userId}
@@ -2024,7 +2025,7 @@ export function ReadingRouteAssignments() {
                     {u.firstName} {u.lastName} ({u.username})
                   </option>
                 ))}
-              </select>
+              </SearchableSelect>
             </Field>
             <Field label="Employee number" required>
               <input
@@ -2047,7 +2048,7 @@ export function ReadingRouteAssignments() {
               />
             </Field>
             <Field label="Home zone">
-              <select
+              <SearchableSelect
                 className={INPUT}
                 value={officer.homeZoneId}
                 onChange={(e) =>
@@ -2060,7 +2061,7 @@ export function ReadingRouteAssignments() {
                     {z.zoneName}
                   </option>
                 ))}
-              </select>
+              </SearchableSelect>
             </Field>
             <div className="md:col-span-4 flex justify-end">
               <Button tone="green">Create reader profile</Button>
@@ -2074,7 +2075,7 @@ export function ReadingRouteAssignments() {
           className="grid gap-3 md:grid-cols-2 xl:grid-cols-5"
         >
           <Field label="Reading cycle" required>
-            <select
+            <SearchableSelect
               required
               className={INPUT}
               value={form.readingCycleId}
@@ -2092,7 +2093,7 @@ export function ReadingRouteAssignments() {
                     {c.cycleName}
                   </option>
                 ))}
-            </select>
+            </SearchableSelect>
           </Field>
           <Field label="Routes" required>
             <MultiCheckDropdown
@@ -2225,6 +2226,17 @@ export function ReadingWorklist() {
   const [items, setItems] = useState<Row[]>([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [showBulkUpload, setShowBulkUpload] = useState(false);
+  const [bulkFileName, setBulkFileName] = useState("");
+  const [bulkRows, setBulkRows] = useState<
+    { row: number; payload: Record<string, unknown> }[]
+  >([]);
+  const [bulkErrors, setBulkErrors] = useState<Record<string, unknown>[]>([]);
+  const [bulkTotal, setBulkTotal] = useState(0);
+  const [bulkSkipped, setBulkSkipped] = useState(0);
+  const [bulkMessage, setBulkMessage] = useState("");
+  const [operation, setOperation] = useState("");
+  const [operationProgress, setOperationProgress] = useState(0);
   const cycleId = params.get("cycleId") ?? "";
   const routeId = params.get("routeId") ?? "";
   const search = params.get("search") ?? "";
@@ -2284,6 +2296,249 @@ export function ReadingWorklist() {
       }),
     [items, readingStatus],
   );
+
+  async function exportWorklist() {
+    if (!filteredItems.length || operation) return;
+    setError("");
+    setOperation("Preparing Excel worklist");
+    setOperationProgress(10);
+    try {
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+      const rows = filteredItems.map((item) => ({
+        "Meter ID": String(item.meterId),
+        "Meter Number": item.meter?.meterNumber ?? "",
+        "Account Number": item.account?.accountNumber ?? "",
+        "Customer Number": item.account?.customer?.customerNumber ?? "",
+        "Customer Name": item.customerName ?? "",
+        Route: item.route?.routeName ?? "",
+        "Previous Reading": Number(
+          item.cycleReading?.previousReading ??
+            item.meter?.readings?.[0]?.currentReading ??
+            item.meter?.openingReading ??
+            0,
+        ),
+        "Current Reading": item.cycleReading
+          ? Number(item.cycleReading.currentReading)
+          : "",
+        "Reading Date": item.cycleReading?.readingDate
+          ? String(item.cycleReading.readingDate).slice(0, 10)
+          : new Date().toISOString().slice(0, 10),
+        "Reading Type": item.cycleReading?.readingType ?? "ACTUAL",
+        "Estimation Reason": item.cycleReading?.estimationReason ?? "",
+        Remarks: "",
+        Status: item.cycleReading?.approvalStatus ?? "UNREAD",
+      }));
+      setOperationProgress(55);
+      const cycleCode = selectedCycle?.cycleCode ?? `cycle-${cycleId}`;
+      await exportExcel(
+        `meter-reading-worklist-${cycleCode}.xlsx`,
+        "Reading Worklist",
+        rows,
+      );
+      setOperationProgress(100);
+    } catch (e: any) {
+      setError(`Could not export the worklist: ${e.message}`);
+    } finally {
+      setOperation("");
+      setOperationProgress(0);
+    }
+  }
+
+  async function chooseBulkFile(file?: File) {
+    if (!file || !cycleId) return;
+    setBulkFileName(file.name);
+    setBulkMessage("");
+    setBulkRows([]);
+    setBulkErrors([]);
+    setBulkTotal(0);
+    setBulkSkipped(0);
+    setError("");
+    setOperation("Reading and validating spreadsheet");
+    setOperationProgress(5);
+    try {
+      const [records, eligibleItems] = await Promise.all([
+        parseMeterWorkbook(file),
+        api.readingWorklist({ cycleId }),
+      ]);
+      setBulkTotal(records.length);
+      setOperationProgress(45);
+      const normalize = (value: string) =>
+        value.toLowerCase().replace(/[^a-z0-9]/g, "");
+      const cell = (record: Record<string, unknown>, ...names: string[]) => {
+        const wanted = new Set(names.map(normalize));
+        const entry = Object.entries(record).find(([key]) =>
+          wanted.has(normalize(key)),
+        );
+        return entry?.[1];
+      };
+      const eligibleRows = eligibleItems as Row[];
+      const byId = new Map<string, Row>(
+        eligibleRows.map((item: Row) => [String(item.meterId), item]),
+      );
+      const byNumber = new Map<string, Row>(
+        eligibleRows.map((item: Row) => [
+          String(item.meter?.meterNumber ?? "").trim().toLowerCase(),
+          item,
+        ]),
+      );
+      const seen = new Set<string>();
+      const valid: { row: number; payload: Record<string, unknown> }[] = [];
+      const invalid: Record<string, unknown>[] = [];
+      let skipped = 0;
+
+      records.forEach((record, index) => {
+        const row = index + 2;
+        const meterIdValue = String(cell(record, "Meter ID", "meterId") ?? "").trim();
+        const meterNumber = String(
+          cell(record, "Meter Number", "meterNumber") ?? "",
+        ).trim();
+        const item =
+          (meterIdValue ? byId.get(meterIdValue) : undefined) ??
+          (meterNumber ? byNumber.get(meterNumber.toLowerCase()) : undefined);
+        const currentValue = cell(record, "Current Reading", "currentReading");
+        const currentIsBlank =
+          currentValue === "" ||
+          currentValue === null ||
+          currentValue === undefined ||
+          (typeof currentValue === "string" && !currentValue.trim());
+        if (currentIsBlank) {
+          skipped++;
+          return;
+        }
+        const currentReading = Number(currentValue);
+        const previousValue = cell(record, "Previous Reading", "previousReading");
+        const expectedPrevious = item
+          ? Number(
+              item.meter?.readings?.[0]?.currentReading ??
+                item.meter?.openingReading ??
+                0,
+            )
+          : 0;
+        const readingType = String(
+          cell(record, "Reading Type", "readingType") ?? "ACTUAL",
+        )
+          .trim()
+          .toUpperCase();
+        const estimationReason = String(
+          cell(record, "Estimation Reason", "estimationReason") ?? "",
+        ).trim();
+        const readingDateValue = String(
+          cell(record, "Reading Date", "readingDate") ?? "",
+        ).trim();
+        const parsedDate = readingDateValue ? new Date(readingDateValue) : new Date();
+        const key = item ? String(item.meterId) : meterNumber.toLowerCase();
+        const errors: string[] = [];
+
+        if (!meterIdValue && !meterNumber)
+          errors.push("Meter ID or meter number is required");
+        else if (!item)
+          errors.push("Meter is not eligible for the selected reading cycle");
+        if (key && seen.has(key)) errors.push("Duplicate meter in spreadsheet");
+        if (key) seen.add(key);
+        if (item?.cycleReading)
+          errors.push("A reading already exists for this meter and cycle");
+        if (
+          !Number.isFinite(currentReading) ||
+          currentReading < 0
+        )
+          errors.push("Current Reading must be a number of zero or greater");
+        if (
+          previousValue !== "" &&
+          previousValue !== null &&
+          previousValue !== undefined &&
+          (!Number.isFinite(Number(previousValue)) ||
+            Math.abs(Number(previousValue) - expectedPrevious) > 0.001)
+        )
+          errors.push(`Previous Reading has changed to ${expectedPrevious}`);
+        if (!(["ACTUAL", "ESTIMATED", "SMART"] as string[]).includes(readingType))
+          errors.push("Reading Type must be ACTUAL, ESTIMATED or SMART");
+        if (readingType === "ESTIMATED" && estimationReason.length < 3)
+          errors.push("Estimation Reason is required for estimated readings");
+        if (Number.isNaN(parsedDate.getTime())) errors.push("Reading Date is invalid");
+
+        if (errors.length || !item) {
+          invalid.push({
+            Row: row,
+            "Meter Number": meterNumber || item?.meter?.meterNumber || "",
+            Errors: errors.join("; "),
+          });
+          return;
+        }
+        valid.push({
+          row,
+          payload: {
+            meterId: String(item.meterId),
+            readingCycleId: cycleId,
+            previousReading: expectedPrevious,
+            currentReading,
+            readingType,
+            ...(estimationReason ? { estimationReason } : {}),
+            readingDate: parsedDate.toISOString(),
+            remarks: String(cell(record, "Remarks", "remarks") ?? "").trim(),
+            exceptionType: "NONE",
+            syncId: `excel-${cycleId}-${String(item.meterId)}`,
+            evidence: [],
+          },
+        });
+      });
+      setBulkRows(valid);
+      setBulkErrors(invalid);
+      setBulkSkipped(skipped);
+      setOperationProgress(100);
+      if (!records.length) setError("The spreadsheet contains no reading records.");
+    } catch (e: any) {
+      setError(`Could not process the spreadsheet: ${e.message}`);
+    } finally {
+      setOperation("");
+      setOperationProgress(0);
+    }
+  }
+
+  async function importBulkReadings() {
+    if (!bulkRows.length || operation) return;
+    setError("");
+    setBulkMessage("");
+    setOperation("Importing meter readings");
+    setOperationProgress(0);
+    const runtimeErrors: Record<string, unknown>[] = [];
+    let succeeded = 0;
+    try {
+      for (let offset = 0; offset < bulkRows.length; offset += 100) {
+        const chunk = bulkRows.slice(offset, offset + 100);
+        const result = await api.syncReadings(chunk.map((item) => item.payload));
+        result.results.forEach((rowResult: Row) => {
+          if (rowResult.ok) succeeded++;
+          else {
+            const source = chunk[rowResult.index];
+            runtimeErrors.push({
+              Row: source?.row ?? "",
+              "Meter Number": source?.payload?.meterId ?? "",
+              Errors: rowResult.error ?? "Import failed",
+            });
+          }
+        });
+        setOperationProgress(
+          Math.round((Math.min(offset + chunk.length, bulkRows.length) / bulkRows.length) * 100),
+        );
+      }
+      setBulkErrors((current) => [...current, ...runtimeErrors]);
+      setBulkRows([]);
+      setBulkMessage(
+        `${succeeded.toLocaleString()} reading${succeeded === 1 ? "" : "s"} imported and sent for approval${runtimeErrors.length ? `; ${runtimeErrors.length.toLocaleString()} failed` : ""}.`,
+      );
+      const refreshed = await api.readingWorklist({
+        cycleId,
+        routeId,
+        search: search.trim(),
+      });
+      setItems(refreshed);
+    } catch (e: any) {
+      setError(`Bulk import stopped: ${e.message}. Completed chunks were retained.`);
+    } finally {
+      setOperation("");
+      setOperationProgress(0);
+    }
+  }
   const totalPages = Math.max(1, Math.ceil(filteredItems.length / pageSize));
   const pageItems = filteredItems.slice(
     (page - 1) * pageSize,
@@ -2370,14 +2625,145 @@ export function ReadingWorklist() {
       title="Meter reading worklist"
       subtitle="Review route workloads and capture customer meter readings"
       actions={
-        <LinkButton to="/readings/register">Reading register</LinkButton>
+        <>
+          <Button
+            tone="slate"
+            disabled={!cycleId || !filteredItems.length || Boolean(operation)}
+            onClick={exportWorklist}
+          >
+            Export Excel
+          </Button>
+          <Button
+            tone="green"
+            disabled={!cycleId || Boolean(operation)}
+            onClick={() => setShowBulkUpload((visible) => !visible)}
+          >
+            {showBulkUpload ? "Close bulk upload" : "Bulk upload readings"}
+          </Button>
+          <LinkButton to="/readings/register">Reading register</LinkButton>
+        </>
       }
     >
       {error && <Notice>{error}</Notice>}
+      {operation && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/35 px-4 backdrop-blur-[2px]">
+          <div
+            className="w-full max-w-md rounded-2xl border border-white/50 bg-white p-6 shadow-2xl"
+            role="status"
+            aria-live="polite"
+          >
+            <div className="flex items-center gap-4">
+              <span className="h-10 w-10 flex-none animate-spin rounded-full border-4 border-sky-100 border-t-aqua-700" />
+              <div className="min-w-0 flex-1">
+                <div className="font-bold text-slate-900">{operation}</div>
+                <div className="mt-1 text-sm text-slate-500">
+                  Please keep this page open while the operation completes.
+                </div>
+              </div>
+              <span className="text-sm font-extrabold tabular-nums text-aqua-700">
+                {operationProgress}%
+              </span>
+            </div>
+            <div className="mt-5 h-2.5 overflow-hidden rounded-full bg-slate-100">
+              <div
+                className="h-full rounded-full bg-gradient-to-r from-sky-500 to-emerald-500 transition-[width] duration-300"
+                style={{ width: `${Math.max(operationProgress, 4)}%` }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+      {showBulkUpload && (
+        <section className="mb-4 overflow-hidden rounded-2xl border border-sky-200 bg-white shadow-[0_16px_42px_-30px_rgba(15,32,56,0.45)]">
+          <div className="border-b border-slate-100 bg-sky-50/60 px-5 py-4">
+            <h2 className="font-bold text-slate-900">Bulk Excel reading upload</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Export the worklist, fill in Current Reading, then validate and import the completed file. Readings are uploaded in safe batches of 100.
+            </p>
+          </div>
+          <div className="grid gap-5 p-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+            <Field label="Completed Excel or CSV file" required>
+              <input
+                type="file"
+                accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
+                className={INPUT}
+                disabled={Boolean(operation)}
+                onChange={(e) => chooseBulkFile(e.target.files?.[0])}
+              />
+            </Field>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                tone="green"
+                disabled={!bulkRows.length || Boolean(operation)}
+                onClick={importBulkReadings}
+              >
+                Import {bulkRows.length.toLocaleString()} valid reading
+                {bulkRows.length === 1 ? "" : "s"}
+              </Button>
+              {bulkErrors.length > 0 && (
+                <Button
+                  tone="orange"
+                  disabled={Boolean(operation)}
+                  onClick={() =>
+                    exportExcel(
+                      "meter-reading-import-errors.xlsx",
+                      "Import Errors",
+                      bulkErrors,
+                    )
+                  }
+                >
+                  Export errors
+                </Button>
+              )}
+            </div>
+          </div>
+          {(bulkFileName || bulkMessage) && (
+            <div className="border-t border-slate-100 px-5 py-4">
+              {bulkFileName && (
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  <div className="rounded-xl bg-slate-50 px-4 py-3">
+                    <div className="text-xs font-semibold uppercase text-slate-400">File rows</div>
+                    <div className="mt-1 text-xl font-extrabold text-slate-900">{bulkTotal.toLocaleString()}</div>
+                  </div>
+                  <div className="rounded-xl bg-emerald-50 px-4 py-3">
+                    <div className="text-xs font-semibold uppercase text-emerald-600">Ready to import</div>
+                    <div className="mt-1 text-xl font-extrabold text-emerald-700">{bulkRows.length.toLocaleString()}</div>
+                  </div>
+                  <div className="rounded-xl bg-amber-50 px-4 py-3">
+                    <div className="text-xs font-semibold uppercase text-amber-600">Not completed</div>
+                    <div className="mt-1 text-xl font-extrabold text-amber-700">{bulkSkipped.toLocaleString()}</div>
+                  </div>
+                  <div className="rounded-xl bg-red-50 px-4 py-3">
+                    <div className="text-xs font-semibold uppercase text-red-500">Validation errors</div>
+                    <div className="mt-1 text-xl font-extrabold text-red-700">{bulkErrors.length.toLocaleString()}</div>
+                  </div>
+                </div>
+              )}
+              {bulkErrors.length > 0 && (
+                <div className="mt-3 max-h-28 overflow-y-auto rounded-xl border border-red-100 bg-red-50/60 px-4 py-3 text-sm text-red-700">
+                  {bulkErrors.slice(0, 20).map((row, index) => (
+                    <div key={`${String(row.Row)}-${index}`}>
+                      Row {String(row.Row)}: {String(row.Errors)}
+                    </div>
+                  ))}
+                  {bulkErrors.length > 20 && (
+                    <div className="mt-1 font-semibold">Download the error report to see all errors.</div>
+                  )}
+                </div>
+              )}
+              {bulkMessage && (
+                <div className="mt-3">
+                  <Notice tone="green">{bulkMessage}</Notice>
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+      )}
       <section className="mb-4 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_16px_42px_-30px_rgba(15,32,56,0.45)]">
         <div className="grid gap-3 p-4 md:grid-cols-2 lg:grid-cols-4">
           <Field label="Reading cycle">
-            <select
+            <SearchableSelect
               className={INPUT}
               value={cycleId}
               onChange={(e) => update("cycleId", e.target.value)}
@@ -2388,10 +2774,10 @@ export function ReadingWorklist() {
                   {c.cycleName}
                 </option>
               ))}
-            </select>
+            </SearchableSelect>
           </Field>
           <Field label="Route">
-            <select
+            <SearchableSelect
               className={INPUT}
               value={routeId}
               onChange={(e) => update("routeId", e.target.value)}
@@ -2402,7 +2788,7 @@ export function ReadingWorklist() {
                   {r.routeName}
                 </option>
               ))}
-            </select>
+            </SearchableSelect>
           </Field>
           <Field label="Search">
             <input
@@ -2413,7 +2799,7 @@ export function ReadingWorklist() {
             />
           </Field>
           <Field label="Status">
-            <select
+            <SearchableSelect
               className={INPUT}
               value={readingStatus}
               onChange={(e) => update("status", e.target.value)}
@@ -2421,7 +2807,7 @@ export function ReadingWorklist() {
               <option value="">All meters</option>
               <option value="UNREAD">Unread</option>
               <option value="CAPTURED">Captured</option>
-            </select>
+            </SearchableSelect>
           </Field>
         </div>
         <div className="grid border-t border-slate-100 bg-slate-50/70 sm:grid-cols-3 sm:divide-x sm:divide-slate-200">
@@ -2861,7 +3247,7 @@ export function CaptureReading() {
                 />
               </Field>
               <Field label="Reading type" required>
-                <select
+                <SearchableSelect
                   className={INPUT}
                   value={form.readingType}
                   onChange={(e) =>
@@ -2871,7 +3257,7 @@ export function CaptureReading() {
                   <option value="ACTUAL">Actual</option>
                   <option value="ESTIMATED">Estimated</option>
                   <option value="SMART">Smart meter</option>
-                </select>
+                </SearchableSelect>
               </Field>
               <Field label="Reading date and time" required>
                 <input
@@ -2897,7 +3283,7 @@ export function CaptureReading() {
                 </Field>
               )}
               <Field label="Field officer">
-                <select
+                <SearchableSelect
                   className={INPUT}
                   value={form.fieldOfficerId}
                   onChange={(e) =>
@@ -2910,10 +3296,10 @@ export function CaptureReading() {
                       {o.officerName}
                     </option>
                   ))}
-                </select>
+                </SearchableSelect>
               </Field>
               <Field label="Observed exception">
-                <select
+                <SearchableSelect
                   className={INPUT}
                   value={form.exceptionType}
                   onChange={(e) =>
@@ -2922,7 +3308,7 @@ export function CaptureReading() {
                 >
                   <option value="NONE">Automatic detection</option>
                   <option value="TAMPERED">Tampering suspected</option>
-                </select>
+                </SearchableSelect>
               </Field>
               <Field label="Meter photo">
                 <input
@@ -3324,7 +3710,7 @@ export function ReadingRegister({
       <section className="mb-4 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_16px_42px_-30px_rgba(15,32,56,0.45)]">
         <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-4">
           <Field label="Cycle">
-            <select
+            <SearchableSelect
               className={INPUT}
               value={filters.cycleId}
               onChange={(e) =>
@@ -3337,10 +3723,10 @@ export function ReadingRegister({
                   {c.cycleName}
                 </option>
               ))}
-            </select>
+            </SearchableSelect>
           </Field>
           <Field label="Approval">
-            <select
+            <SearchableSelect
               className={INPUT}
               value={filters.approvalStatus}
               onChange={(e) =>
@@ -3351,10 +3737,10 @@ export function ReadingRegister({
               <option>PENDING</option>
               <option>APPROVED</option>
               <option>REJECTED</option>
-            </select>
+            </SearchableSelect>
           </Field>
           <Field label="Reading type">
-            <select
+            <SearchableSelect
               className={INPUT}
               value={filters.readingType}
               onChange={(e) =>
@@ -3365,7 +3751,7 @@ export function ReadingRegister({
               <option>ACTUAL</option>
               <option>ESTIMATED</option>
               <option>SMART</option>
-            </select>
+            </SearchableSelect>
           </Field>
           <Field label="Search">
             <input
@@ -3506,8 +3892,11 @@ export function ReadingApprovals() {
     >
       {error && <Notice>{error}</Notice>}
       {message && <Notice tone="green">{message}</Notice>}
-      <div className="grid gap-4 xl:grid-cols-[1.4fr_1fr]">
-        <Card title={`${total.toLocaleString()} pending reading(s)`}>
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px] 2xl:grid-cols-[minmax(0,1fr)_460px]">
+        <Card
+          className="min-w-0"
+          title={`${total.toLocaleString()} pending reading(s)`}
+        >
           <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
             <div>
               <div className="text-sm font-bold text-slate-800">
@@ -3589,6 +3978,7 @@ export function ReadingApprovals() {
           />
         </Card>
         <Card
+          className="min-w-0"
           title={
             selectedIds.size
               ? `Bulk approval decision · ${selectedIds.size} selected`
@@ -3736,6 +4126,10 @@ export function ReadingProgress() {
   const [cycleId, setCycleId] = useState("");
   const [cycles, setCycles] = useState<Row[]>([]);
   const [rows, setRows] = useState<Row[]>([]);
+  const [routeSearch, setRouteSearch] = useState("");
+  const [zoneFilter, setZoneFilter] = useState("");
+  const [progressFilter, setProgressFilter] = useState("");
+  const [exceptionFilter, setExceptionFilter] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   useEffect(() => {
@@ -3780,9 +4174,59 @@ export function ReadingProgress() {
       cancelled = true;
     };
   }, [cycleId]);
+  const zones = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          rows
+            .map((row) => String(row.route?.zone?.zoneName ?? "").trim())
+            .filter(Boolean),
+        ),
+      ).sort((a, b) => a.localeCompare(b)),
+    [rows],
+  );
+  const filteredRows = useMemo(() => {
+    const query = routeSearch.trim().toLowerCase();
+
+    return rows.filter((row) => {
+      const zoneName = String(row.route?.zone?.zoneName ?? "");
+      const routeName = String(row.route?.routeName ?? "");
+      const assignedOfficer = String(row.assignedOfficer ?? "Unassigned");
+      const captured = Number(row.captured ?? 0);
+      const totalMeters = Number(row.totalMeters ?? 0);
+      const exceptions = Number(row.exceptions ?? 0);
+
+      const matchesSearch =
+        !query ||
+        [zoneName, routeName, assignedOfficer].some((value) =>
+          value.toLowerCase().includes(query),
+        );
+      const matchesZone = !zoneFilter || zoneName === zoneFilter;
+      const matchesProgress =
+        !progressFilter ||
+        (progressFilter === "NOT_STARTED" && captured === 0) ||
+        (progressFilter === "IN_PROGRESS" &&
+          captured > 0 &&
+          captured < totalMeters) ||
+        (progressFilter === "COMPLETE" &&
+          totalMeters > 0 &&
+          captured >= totalMeters);
+      const matchesExceptions =
+        !exceptionFilter ||
+        (exceptionFilter === "WITH_EXCEPTIONS" && exceptions > 0) ||
+        (exceptionFilter === "WITHOUT_EXCEPTIONS" && exceptions === 0);
+
+      return (
+        matchesSearch &&
+        matchesZone &&
+        matchesProgress &&
+        matchesExceptions
+      );
+    });
+  }, [exceptionFilter, progressFilter, routeSearch, rows, zoneFilter]);
   const totals = useMemo(
     () =>
-      rows.reduce(
+      filteredRows.reduce(
         (a, r) => ({
           total: a.total + r.totalMeters,
           captured: a.captured + r.captured,
@@ -3791,7 +4235,10 @@ export function ReadingProgress() {
         }),
         { total: 0, captured: 0, unread: 0, exceptions: 0 },
       ),
-    [rows],
+    [filteredRows],
+  );
+  const hasFilters = Boolean(
+    routeSearch || zoneFilter || progressFilter || exceptionFilter,
   );
   return (
     <Page
@@ -3800,12 +4247,12 @@ export function ReadingProgress() {
       actions={
         <Button
           tone="green"
-          disabled={loading || !rows.length}
+          disabled={loading || !filteredRows.length}
           onClick={() =>
             exportExcel(
               "reading-route-progress.xlsx",
               "Route Progress",
-              rows.map((r) => ({
+              filteredRows.map((r) => ({
                 Zone: r.route?.zone?.zoneName,
                 Route: r.route?.routeName,
                 Officer: r.assignedOfficer,
@@ -3832,7 +4279,7 @@ export function ReadingProgress() {
         )}
         <div className="grid items-end gap-3 md:grid-cols-[1fr_repeat(4,160px)]">
           <Field label="Reading cycle">
-            <select
+            <SearchableSelect
               className={INPUT}
               value={cycleId}
               disabled={loading && !cycleId}
@@ -3843,7 +4290,7 @@ export function ReadingProgress() {
                   {c.cycleName}
                 </option>
               ))}
-            </select>
+            </SearchableSelect>
           </Field>
           {[
             ["Meters", totals.total],
@@ -3864,8 +4311,70 @@ export function ReadingProgress() {
             </div>
           ))}
         </div>
+        <div className="mt-4 grid items-end gap-3 border-t border-slate-100 pt-4 md:grid-cols-2 xl:grid-cols-[minmax(260px,1fr)_repeat(3,minmax(190px,240px))_auto]">
+          <Field label="Search routes">
+            <input
+              className={INPUT}
+              value={routeSearch}
+              onChange={(event) => setRouteSearch(event.target.value)}
+              placeholder="Zone, route or assigned officer"
+              aria-label="Search route progress"
+            />
+          </Field>
+          <Field label="Zone">
+            <SearchableSelect
+              className={INPUT}
+              value={zoneFilter}
+              onChange={(event) => setZoneFilter(event.target.value)}
+            >
+              <option value="">All zones</option>
+              {zones.map((zone) => (
+                <option key={zone} value={zone}>
+                  {zone}
+                </option>
+              ))}
+            </SearchableSelect>
+          </Field>
+          <Field label="Progress status">
+            <SearchableSelect
+              className={INPUT}
+              value={progressFilter}
+              onChange={(event) => setProgressFilter(event.target.value)}
+            >
+              <option value="">All progress statuses</option>
+              <option value="NOT_STARTED">Not started</option>
+              <option value="IN_PROGRESS">In progress</option>
+              <option value="COMPLETE">Complete</option>
+            </SearchableSelect>
+          </Field>
+          <Field label="Exceptions">
+            <SearchableSelect
+              className={INPUT}
+              value={exceptionFilter}
+              onChange={(event) => setExceptionFilter(event.target.value)}
+            >
+              <option value="">All routes</option>
+              <option value="WITH_EXCEPTIONS">With exceptions</option>
+              <option value="WITHOUT_EXCEPTIONS">Without exceptions</option>
+            </SearchableSelect>
+          </Field>
+          <Button
+            disabled={!hasFilters}
+            onClick={() => {
+              setRouteSearch("");
+              setZoneFilter("");
+              setProgressFilter("");
+              setExceptionFilter("");
+            }}
+          >
+            Clear filters
+          </Button>
+        </div>
       </Card>
-      <Card title="Progress by route" className="relative">
+      <Card
+        title={`Progress by route · ${filteredRows.length} of ${rows.length} routes`}
+        className="relative"
+      >
         <div className="overflow-x-auto" aria-busy={loading}>
           <table className="w-full">
             <thead>
@@ -3891,7 +4400,7 @@ export function ReadingProgress() {
                   </td>
                 </tr>
               ) : (
-                rows.map((r) => (
+                filteredRows.map((r) => (
                   <tr key={r.route.routeId} className="border-t border-slate-100">
                     <td className={TD}>
                       {r.route.zone?.zoneName} /{" "}
@@ -3921,14 +4430,18 @@ export function ReadingProgress() {
                   </tr>
                 ))
               )}
-              {!loading && !rows.length && (
+              {!loading && !filteredRows.length && (
                 <tr>
                   <td colSpan={8} className="px-4 py-16 text-center">
                     <div className="font-semibold text-slate-700">
-                      No route progress found
+                      {rows.length
+                        ? "No routes match these filters"
+                        : "No route progress found"}
                     </div>
                     <p className="mt-1 text-sm text-slate-500">
-                      Select another reading cycle and try again.
+                      {rows.length
+                        ? "Clear or adjust the filters and try again."
+                        : "Select another reading cycle and try again."}
                     </p>
                   </td>
                 </tr>

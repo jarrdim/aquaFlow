@@ -16,6 +16,7 @@ import {
 } from "react-router-dom";
 import Login from "./pages/Login";
 import LandingPage from "./pages/LandingPage";
+import OperationalDashboard from "./pages/OperationalDashboard";
 import Customers from "./pages/Customers";
 import NewCustomer from "./pages/NewCustomer";
 import CustomerDetail from "./pages/CustomerDetail";
@@ -107,6 +108,16 @@ import {
   PaymentReminders,
   PromisesToPay,
 } from "./pages/ArrearsManagement";
+import {
+  AdminDashboard,
+  PermissionRegister,
+  RoleAdministration,
+  UserAdministration,
+} from "./pages/AdminManagement";
+import {
+  RegisterServiceRequest,
+  ServiceRequestDashboard,
+} from "./pages/ServiceRequestManagement";
 import { api, clearToken, getSessionUser, getToken } from "./lib/api";
 import { encodeId } from "./lib/hashids";
 
@@ -258,7 +269,7 @@ const IcoDroplet = () => (
 );
 
 const NAV_ITEMS = [
-  { label: "Dashboard", Icon: IcoDashboard, path: null, iconClass: "bg-sky-400/10 text-sky-300" },
+  { label: "Dashboard", Icon: IcoDashboard, path: "/dashboard", iconClass: "bg-sky-400/10 text-sky-300" },
   { label: "Customers", Icon: IcoCustomers, path: "/customers", iconClass: "bg-violet-400/10 text-violet-300" },
   { label: "Billing", Icon: IcoBilling, path: "/billing", iconClass: "bg-emerald-400/10 text-emerald-300" },
   { label: "Meter Management", Icon: IcoMeter, path: "/meters", iconClass: "bg-amber-400/10 text-amber-300" },
@@ -268,11 +279,11 @@ const NAV_ITEMS = [
   { label: "Arrears & Debt", Icon: IcoArrears, path: "/arrears", iconClass: "bg-orange-400/10 text-orange-300" },
   { label: "Notifications", Icon: IcoMail, path: "/notifications", iconClass: "bg-blue-400/10 text-blue-300" },
   { label: "Accounts", Icon: IcoAccounts, path: null, iconClass: "bg-indigo-400/10 text-indigo-300" },
-  { label: "Service Requests", Icon: IcoService, path: null, iconClass: "bg-rose-400/10 text-rose-300" },
+  { label: "Service Requests", Icon: IcoService, path: "/service-requests", iconClass: "bg-rose-400/10 text-rose-300" },
   { label: "Work Orders", Icon: IcoWorkOrders, path: null, iconClass: "bg-yellow-400/10 text-yellow-300" },
   { label: "Assets", Icon: IcoAssets, path: null, iconClass: "bg-teal-400/10 text-teal-300" },
   { label: "Reports", Icon: IcoReports, path: null, iconClass: "bg-purple-400/10 text-purple-300" },
-  { label: "Admin", Icon: IcoAdmin, path: null, iconClass: "bg-red-400/10 text-red-300" },
+  { label: "Admin", Icon: IcoAdmin, path: "/admin", iconClass: "bg-red-400/10 text-red-300" },
   { label: "Settings", Icon: IcoSettings, path: null, iconClass: "bg-slate-400/10 text-slate-300" },
 ];
 
@@ -369,6 +380,19 @@ const ARREARS_MENU = [
   ["Arrears Audit Trail", "/arrears/audit"],
 ] as const;
 
+const SERVICE_REQUEST_MENU = [
+  ["Service dashboard", "/service-requests"],
+  ["Register request", "/service-requests/new"],
+  ["Complaints", "/service-requests/complaints"],
+] as const;
+
+const ADMIN_MENU = [
+  ["Administration dashboard", "/admin"],
+  ["Users", "/admin/users"],
+  ["Roles", "/admin/roles"],
+  ["Permissions", "/admin/permissions"],
+] as const;
+
 const SIDEBAR_CHILD_MENUS: Record<
   string,
   readonly (readonly [string, string])[]
@@ -381,6 +405,8 @@ const SIDEBAR_CHILD_MENUS: Record<
   "Payments & Revenue": PAYMENT_MENU,
   "Arrears & Debt": ARREARS_MENU,
   Notifications: NOTIFICATION_MENU,
+  "Service Requests": SERVICE_REQUEST_MENU,
+  Admin: ADMIN_MENU,
 };
 
 const MODULE_LABELS: Record<string, string> = {
@@ -392,6 +418,8 @@ const MODULE_LABELS: Record<string, string> = {
   payments: "Payments & Revenue",
   arrears: "Arrears & Debt",
   notifications: "Notifications",
+  "service-requests": "Service Requests",
+  admin: "Administration",
 };
 
 const ROUTE_LABELS = new Map<string, string>([
@@ -402,8 +430,21 @@ const ROUTE_LABELS = new Map<string, string>([
   ...PAYMENT_MENU.map(([label, path]) => [path, label] as const),
   ...NOTIFICATION_MENU.map(([label, path]) => [path, label] as const),
   ...ARREARS_MENU.map(([label, path]) => [path, label] as const),
+  ...SERVICE_REQUEST_MENU.map(([label, path]) => [path, label] as const),
+  ...ADMIN_MENU.map(([label, path]) => [path, label] as const),
   ["/customers", "Customers"],
   ["/customers/new", "New Customer"],
+]);
+
+const PAGE_HEADING_LABELS = new Map<string, string>([
+  ["/readings/progress", "Route completion report"],
+  ["/service-requests", "Service requests and complaints"],
+  ["/service-requests/new", "Register service request"],
+  ["/service-requests/complaints", "Complaints"],
+  ["/admin", "Administration"],
+  ["/admin/users", "User administration"],
+  ["/admin/roles", "Role administration"],
+  ["/admin/permissions", "Permission register"],
 ]);
 
 function detailPageLabel(pathname: string) {
@@ -431,13 +472,19 @@ function detailPageLabel(pathname: string) {
 
 function AppBreadcrumbs() {
   const location = useLocation();
+  const navigate = useNavigate();
   const pathname = location.pathname.replace(/\/+$/, "") || "/";
   const segments = pathname.split("/").filter(Boolean);
   const moduleKey = segments[0];
   const moduleLabel = MODULE_LABELS[moduleKey];
   const modulePath = moduleKey ? `/${moduleKey}` : "/";
 
-  if (!moduleLabel || pathname === modulePath) return null;
+  if (
+    !moduleLabel ||
+    (pathname === modulePath && !["service-requests", "admin"].includes(moduleKey))
+  ) {
+    return null;
+  }
 
   const exactLabel = ROUTE_LABELS.get(pathname);
   const parentEntry = Array.from(ROUTE_LABELS.entries())
@@ -447,34 +494,70 @@ function AppBreadcrumbs() {
         pathname.startsWith(`${path}/`),
     )
     .sort(([left], [right]) => right.length - left.length)[0];
-  const currentLabel = exactLabel ?? detailPageLabel(pathname);
+  const currentLabel =
+    PAGE_HEADING_LABELS.get(pathname) ?? exactLabel ?? detailPageLabel(pathname);
+  const canGoBack = Number(window.history.state?.idx ?? 0) > 0;
+
+  function returnToPreviousPage() {
+    if (canGoBack) {
+      navigate(-1);
+      return;
+    }
+    navigate(modulePath);
+  }
 
   return (
     <nav
       aria-label="Breadcrumb"
-      className="mx-auto flex w-full max-w-[1600px] items-center gap-2 px-5 pt-3 text-xs font-medium text-slate-500 lg:px-8"
+      className="app-breadcrumbs mx-auto flex w-full max-w-[1600px] flex-wrap items-center gap-2 px-5 pt-3 text-xs font-medium text-slate-500 lg:px-8"
     >
-      <Link
-        to={modulePath}
-        className="transition-colors hover:text-aqua-700"
-      >
-        {moduleLabel}
-      </Link>
-      {parentEntry && (
+      {pathname === modulePath ? (
+        <h1
+          aria-current="page"
+          className="text-xl font-bold tracking-tight text-slate-900 lg:text-2xl"
+        >
+          {currentLabel}
+        </h1>
+      ) : (
         <>
+          <button
+            type="button"
+            onClick={returnToPreviousPage}
+            className="inline-flex items-center gap-1 font-semibold text-aqua-700 transition-colors hover:text-aqua-600"
+            title={canGoBack ? "Return to the previous page with its filters" : `Return to ${moduleLabel}`}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden="true">
+              <path d="m15 18-6-6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            Back
+          </button>
           <span aria-hidden="true" className="text-slate-300">/</span>
           <Link
-            to={parentEntry[0]}
+            to={modulePath}
             className="transition-colors hover:text-aqua-700"
           >
-            {parentEntry[1]}
+            {moduleLabel}
           </Link>
+          {parentEntry && (
+            <>
+              <span aria-hidden="true" className="text-slate-300">/</span>
+              <Link
+                to={parentEntry[0]}
+                className="transition-colors hover:text-aqua-700"
+              >
+                {parentEntry[1]}
+              </Link>
+            </>
+          )}
+          <span aria-hidden="true" className="text-slate-300">/</span>
+          <h1
+            aria-current="page"
+            className="ml-1 text-xl font-bold tracking-tight text-slate-900 lg:text-2xl"
+          >
+            {currentLabel}
+          </h1>
         </>
       )}
-      <span aria-hidden="true" className="text-slate-300">/</span>
-      <span aria-current="page" className="font-semibold text-slate-700">
-        {currentLabel}
-      </span>
     </nav>
   );
 }
@@ -921,6 +1004,52 @@ function Shell({ children }: { children: React.ReactNode }) {
                     })}
                   </div>
                 )}
+                {!sidebarCollapsed && label === "Service Requests" && active && (
+                  <div className="ml-7 mt-1 space-y-0.5 border-l border-white/10 pl-2">
+                    {SERVICE_REQUEST_MENU.map(([itemLabel, itemPath]) => {
+                      const itemActive =
+                        itemPath === "/service-requests"
+                          ? location.pathname === itemPath
+                          : location.pathname.startsWith(itemPath);
+                      return (
+                        <Link
+                          key={itemPath}
+                          to={itemPath}
+                          className={`block rounded px-2 py-1.5 text-xs font-medium transition-colors ${
+                            itemActive
+                              ? "bg-white/10 text-white"
+                              : "text-blue-100/50 hover:bg-white/5 hover:text-white"
+                          }`}
+                        >
+                          {itemLabel}
+                        </Link>
+                      );
+                    })}
+                  </div>
+                )}
+                {!sidebarCollapsed && label === "Admin" && active && (
+                  <div className="ml-7 mt-1 space-y-0.5 border-l border-white/10 pl-2">
+                    {ADMIN_MENU.map(([itemLabel, itemPath]) => {
+                      const itemActive =
+                        itemPath === "/admin"
+                          ? location.pathname === itemPath
+                          : location.pathname.startsWith(itemPath);
+                      return (
+                        <Link
+                          key={itemPath}
+                          to={itemPath}
+                          className={`block rounded px-2 py-1.5 text-xs font-medium transition-colors ${
+                            itemActive
+                              ? "bg-white/10 text-white"
+                              : "text-blue-100/50 hover:bg-white/5 hover:text-white"
+                          }`}
+                        >
+                          {itemLabel}
+                        </Link>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             ) : (
               <span
@@ -1264,6 +1393,16 @@ export default function App() {
     <Routes>
       <Route path="/" element={<LandingPage />} />
       <Route path="/login" element={<Login />} />
+      <Route
+        path="/dashboard"
+        element={
+          <Protected>
+            <Shell>
+              <OperationalDashboard />
+            </Shell>
+          </Protected>
+        }
+      />
       <Route
         path="/customers"
         element={
@@ -2094,6 +2233,76 @@ export default function App() {
           <Protected>
             <Shell>
               <MeterHistory />
+            </Shell>
+          </Protected>
+        }
+      />
+      <Route
+        path="/service-requests"
+        element={
+          <Protected>
+            <Shell>
+              <ServiceRequestDashboard />
+            </Shell>
+          </Protected>
+        }
+      />
+      <Route
+        path="/service-requests/new"
+        element={
+          <Protected>
+            <Shell>
+              <RegisterServiceRequest />
+            </Shell>
+          </Protected>
+        }
+      />
+      <Route
+        path="/service-requests/complaints"
+        element={
+          <Protected>
+            <Shell>
+              <ServiceRequestDashboard />
+            </Shell>
+          </Protected>
+        }
+      />
+      <Route
+        path="/admin"
+        element={
+          <Protected>
+            <Shell>
+              <AdminDashboard />
+            </Shell>
+          </Protected>
+        }
+      />
+      <Route
+        path="/admin/users"
+        element={
+          <Protected>
+            <Shell>
+              <UserAdministration />
+            </Shell>
+          </Protected>
+        }
+      />
+      <Route
+        path="/admin/roles"
+        element={
+          <Protected>
+            <Shell>
+              <RoleAdministration />
+            </Shell>
+          </Protected>
+        }
+      />
+      <Route
+        path="/admin/permissions"
+        element={
+          <Protected>
+            <Shell>
+              <PermissionRegister />
             </Shell>
           </Protected>
         }

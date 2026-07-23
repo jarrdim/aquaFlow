@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client";
 import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
-import { requireAuth, requireRole } from "../middleware/auth";
+import { isSystemAdmin, requireAuth, requireRole } from "../middleware/auth";
 
 export const tariffsRouter = Router();
 tariffsRouter.use(requireAuth);
@@ -901,7 +901,7 @@ tariffsRouter.patch(
         return res
           .status(409)
           .json({ error: "Tariff is not pending approval" });
-      if (tariff.createdBy && tariff.createdBy === uid(req))
+      if (tariff.createdBy && tariff.createdBy === uid(req) && !isSystemAdmin(req))
         return res
           .status(409)
           .json({

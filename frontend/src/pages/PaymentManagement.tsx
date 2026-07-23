@@ -2,6 +2,7 @@ import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { exportExcel } from "../lib/meterFiles";
+import { SearchableSelect } from "../components/SearchableSelect";
 
 type Row = Record<string, any>;
 const INPUT =
@@ -441,7 +442,7 @@ export function RecordPayment() {
       <Card className="mx-auto max-w-3xl">
         <form onSubmit={submit} className="grid gap-3 md:grid-cols-2">
           <Field label="Customer account">
-            <select
+            <SearchableSelect
               required
               className={INPUT}
               value={form.accountId}
@@ -453,10 +454,10 @@ export function RecordPayment() {
                   {a.accountNumber} · {a.customerName}
                 </option>
               ))}
-            </select>
+            </SearchableSelect>
           </Field>
           <Field label="Payment channel">
-            <select
+            <SearchableSelect
               required
               className={INPUT}
               value={form.channelId}
@@ -468,7 +469,7 @@ export function RecordPayment() {
                   {c.channelName}
                 </option>
               ))}
-            </select>
+            </SearchableSelect>
           </Field>
           {account && (
             <div className="md:col-span-2 rounded-lg bg-blue-50 p-3 text-blue-700">
@@ -508,7 +509,7 @@ export function RecordPayment() {
             />
           </Field>
           <Field label="Payment type">
-            <select
+            <SearchableSelect
               className={INPUT}
               value={form.paymentType}
               onChange={(e) =>
@@ -518,7 +519,7 @@ export function RecordPayment() {
               <option>BILL_PAYMENT</option>
               <option>ADVANCE_PAYMENT</option>
               <option>DEPOSIT</option>
-            </select>
+            </SearchableSelect>
           </Field>
           <Field label="Remarks">
             <textarea
@@ -649,7 +650,7 @@ export function MpesaStkPush() {
         <Card title="Send payment prompt">
           <form className="space-y-3" onSubmit={submit}>
             <Field label="Customer account">
-              <select
+              <SearchableSelect
                 required
                 className={INPUT}
                 value={form.accountId}
@@ -661,7 +662,7 @@ export function MpesaStkPush() {
                     {a.accountNumber} · {a.customerName}
                   </option>
                 ))}
-              </select>
+              </SearchableSelect>
             </Field>
             {selectedAccount && (
               <div className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm text-blue-800">
@@ -887,7 +888,7 @@ export function PaymentRegister() {
       <Card className="mb-4">
         <div className="grid gap-3 md:grid-cols-2">
           <Field label="Status">
-            <select
+            <SearchableSelect
               className={INPUT}
               value={status}
               onChange={(e) => {
@@ -899,7 +900,7 @@ export function PaymentRegister() {
               <option>RECEIVED</option>
               <option>POSTED</option>
               <option>REVERSED</option>
-            </select>
+            </SearchableSelect>
           </Field>
           <Field label="Search">
             <input
@@ -989,7 +990,7 @@ export function UnmatchedPayments() {
                 </div>
               </div>
               <Field label="Customer account">
-                <select
+                <SearchableSelect
                   className={INPUT}
                   value={accountId}
                   onChange={(e) => setAccountId(e.target.value)}
@@ -1000,7 +1001,7 @@ export function UnmatchedPayments() {
                       {a.accountNumber} · {a.customerName}
                     </option>
                   ))}
-                </select>
+                </SearchableSelect>
               </Field>
               <Field label="Allocation reason">
                 <textarea
@@ -1160,7 +1161,7 @@ export function PaymentReversals() {
         <Card title="New reversal request">
           <form className="space-y-3" onSubmit={submit}>
             <Field label="Posted payment">
-              <select
+              <SearchableSelect
                 required
                 className={INPUT}
                 value={form.paymentId}
@@ -1174,10 +1175,10 @@ export function PaymentReversals() {
                     {p.transactionReference} · {money(p.amount)}
                   </option>
                 ))}
-              </select>
+              </SearchableSelect>
             </Field>
             <Field label="Reason">
-              <select
+              <SearchableSelect
                 className={INPUT}
                 value={form.reversalReason}
                 onChange={(e) =>
@@ -1188,7 +1189,7 @@ export function PaymentReversals() {
                 <option>WRONG_ACCOUNT</option>
                 <option>CHARGEBACK</option>
                 <option>INPUT_ERROR</option>
-              </select>
+              </SearchableSelect>
             </Field>
             <Field label="Detailed explanation">
               <textarea
@@ -1360,7 +1361,7 @@ export function CollectionReport() {
     >
       <Card className="mb-4">
         <Field label="Channel">
-          <select
+          <SearchableSelect
             className={INPUT}
             value={channelId}
             onChange={(e) => setChannelId(e.target.value)}
@@ -1371,7 +1372,7 @@ export function CollectionReport() {
                 {c.channelName}
               </option>
             ))}
-          </select>
+          </SearchableSelect>
         </Field>
       </Card>
       <Kpi label="Total collected" value={money(totals)} />
@@ -1401,7 +1402,7 @@ export function PaymentHistory() {
     >
       <Card className="mb-4">
         <Field label="Customer account">
-          <select
+          <SearchableSelect
             className={INPUT}
             value={accountId}
             onChange={(e) => setAccountId(e.target.value)}
@@ -1411,7 +1412,7 @@ export function PaymentHistory() {
                 {a.accountNumber} · {a.customerName}
               </option>
             ))}
-          </select>
+          </SearchableSelect>
         </Field>
       </Card>
       <Card>
@@ -1522,7 +1523,7 @@ export function PaymentReconciliation() {
         <Card title="New reconciliation">
           <form onSubmit={submit} className="space-y-3">
             <Field label="Channel">
-              <select
+              <SearchableSelect
                 required
                 className={INPUT}
                 value={form.channelId}
@@ -1535,7 +1536,7 @@ export function PaymentReconciliation() {
                     {c.channelName}
                   </option>
                 ))}
-              </select>
+              </SearchableSelect>
             </Field>
             <div className="grid grid-cols-2 gap-3">
               <Field label="Period start">

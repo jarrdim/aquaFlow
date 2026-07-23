@@ -7,6 +7,7 @@ import {
 } from "react-router-dom";
 import { api } from "../lib/api";
 import { decodeId, encodeId } from "../lib/hashids";
+import { SearchableSelect } from "../components/SearchableSelect";
 import {
   exportExcel,
   fileToEvidence,
@@ -36,7 +37,7 @@ function Page({
 }) {
   return (
     <div className="mx-auto max-w-[1600px] p-4 lg:px-6 lg:py-5">
-      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+      <div className="page-screen-header mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-slate-900 lg:text-[26px]">
             {title}
@@ -336,7 +337,7 @@ export function MeterDashboard() {
             />
           </Field>
           <Field label="Zone">
-            <select
+            <SearchableSelect
               className={INPUT}
               value={filters.zoneId}
               onChange={(e) =>
@@ -349,7 +350,7 @@ export function MeterDashboard() {
                   {zone.zoneName}
                 </option>
               ))}
-            </select>
+            </SearchableSelect>
           </Field>
           <div className="flex items-end">
             <Button className="w-full" onClick={load}>
@@ -551,7 +552,7 @@ export function RegisterMeter() {
               />
             </Field>
             <Field label="Meter type" required>
-              <select
+              <SearchableSelect
                 className={INPUT}
                 value={form.meterType}
                 onChange={(e) => update("meterType", e.target.value)}
@@ -559,10 +560,10 @@ export function RegisterMeter() {
                 {["CUSTOMER", "BULK", "ZONE", "BOREHOLE"].map((x) => (
                   <option key={x}>{x}</option>
                 ))}
-              </select>
+              </SearchableSelect>
             </Field>
             <Field label="Technology" required>
-              <select
+              <SearchableSelect
                 className={INPUT}
                 value={form.technology}
                 onChange={(e) => update("technology", e.target.value)}
@@ -570,7 +571,7 @@ export function RegisterMeter() {
                 {["MANUAL", "PREPAID", "SMART"].map((x) => (
                   <option key={x}>{x}</option>
                 ))}
-              </select>
+              </SearchableSelect>
             </Field>
             <Field label="Brand">
               <input
@@ -643,7 +644,7 @@ export function RegisterMeter() {
               />
             </Field>
             <Field label="Installation status" required>
-              <select
+              <SearchableSelect
                 className={INPUT}
                 value={form.installationStatus}
                 onChange={(e) => update("installationStatus", e.target.value)}
@@ -651,10 +652,10 @@ export function RegisterMeter() {
                 {["IN_STORE", "INSTALLED", "REMOVED"].map((x) => (
                   <option key={x}>{x}</option>
                 ))}
-              </select>
+              </SearchableSelect>
             </Field>
             <Field label="Current status" required>
-              <select
+              <SearchableSelect
                 className={INPUT}
                 value={form.status}
                 onChange={(e) => update("status", e.target.value)}
@@ -671,7 +672,7 @@ export function RegisterMeter() {
                 ].map((x) => (
                   <option key={x}>{x}</option>
                 ))}
-              </select>
+              </SearchableSelect>
             </Field>
             <Field label="Seal number">
               <input
@@ -786,7 +787,7 @@ export function MeterList() {
             />
           </Field>
           <Field label="Type">
-            <select
+            <SearchableSelect
               className={INPUT}
               value={filters.type}
               onChange={(e) => setFilters({ ...filters, type: e.target.value })}
@@ -795,10 +796,10 @@ export function MeterList() {
               {["CUSTOMER", "BULK", "ZONE", "BOREHOLE"].map((x) => (
                 <option key={x}>{x}</option>
               ))}
-            </select>
+            </SearchableSelect>
           </Field>
           <Field label="Status">
-            <select
+            <SearchableSelect
               className={INPUT}
               value={filters.status}
               onChange={(e) =>
@@ -818,10 +819,10 @@ export function MeterList() {
               ].map((x) => (
                 <option key={x}>{x}</option>
               ))}
-            </select>
+            </SearchableSelect>
           </Field>
           <Field label="Zone">
-            <select
+            <SearchableSelect
               className={INPUT}
               value={filters.zoneId}
               onChange={(e) =>
@@ -834,7 +835,7 @@ export function MeterList() {
                   {z.zoneName}
                 </option>
               ))}
-            </select>
+            </SearchableSelect>
           </Field>
           <div className="flex items-end">
             <Button className="w-full" onClick={load}>
@@ -1063,7 +1064,7 @@ export function AssignMeter({
             )}
             {!nonCustomer && (
               <Field label="Customer account" required>
-                <select
+                <SearchableSelect
                   required
                   className={INPUT}
                   value={form.accountId}
@@ -1077,12 +1078,12 @@ export function AssignMeter({
                       {a.accountNumber} · {a.customerName}
                     </option>
                   ))}
-                </select>
+                </SearchableSelect>
               </Field>
             )}
             {nonCustomer && (
               <Field label="Assign to" required>
-                <select
+                <SearchableSelect
                   className={INPUT}
                   value={form.targetType}
                   onChange={(e) =>
@@ -1096,7 +1097,7 @@ export function AssignMeter({
                 >
                   <option value="zone">Zone</option>
                   <option value="borehole">Borehole</option>
-                </select>
+                </SearchableSelect>
               </Field>
             )}
             {!nonCustomer && (
@@ -1128,7 +1129,7 @@ export function AssignMeter({
             )}
             {nonCustomer && form.targetType === "zone" && (
               <Field label="Zone" required>
-                <select
+                <SearchableSelect
                   required
                   className={INPUT}
                   value={form.zoneId}
@@ -1140,12 +1141,12 @@ export function AssignMeter({
                       {z.zoneName}
                     </option>
                   ))}
-                </select>
+                </SearchableSelect>
               </Field>
             )}
             {nonCustomer && form.targetType === "borehole" && (
               <Field label="Borehole" required>
-                <select
+                <SearchableSelect
                   required
                   className={INPUT}
                   value={form.boreholeId}
@@ -1159,11 +1160,11 @@ export function AssignMeter({
                       {b.boreholeName}
                     </option>
                   ))}
-                </select>
+                </SearchableSelect>
               </Field>
             )}
             <Field label="Meter" required>
-              <select
+              <SearchableSelect
                 required
                 className={INPUT}
                 value={form.meterId}
@@ -1181,7 +1182,7 @@ export function AssignMeter({
                       {m.meterNumber} · {displaySize(m.meterSizeMm)}
                     </option>
                   ))}
-              </select>
+              </SearchableSelect>
             </Field>
             <Field label="Meter type">
               <input
@@ -1477,14 +1478,14 @@ export function MeterProfile() {
                   <input required className={INPUT} value={form.meterNumber} onChange={(e) => update("meterNumber", e.target.value)} />
                 </Field>
                 <Field label="Meter type" required>
-                  <select className={INPUT} value={form.meterType} onChange={(e) => update("meterType", e.target.value)}>
+                  <SearchableSelect className={INPUT} value={form.meterType} onChange={(e) => update("meterType", e.target.value)}>
                     {["CUSTOMER", "BULK", "ZONE", "BOREHOLE"].map((value) => <option key={value}>{value}</option>)}
-                  </select>
+                  </SearchableSelect>
                 </Field>
                 <Field label="Technology" required>
-                  <select className={INPUT} value={form.technology} onChange={(e) => update("technology", e.target.value)}>
+                  <SearchableSelect className={INPUT} value={form.technology} onChange={(e) => update("technology", e.target.value)}>
                     {["MANUAL", "PREPAID", "SMART"].map((value) => <option key={value}>{value}</option>)}
-                  </select>
+                  </SearchableSelect>
                 </Field>
                 <Field label="Brand">
                   <input className={INPUT} value={form.brand} onChange={(e) => update("brand", e.target.value)} />
@@ -2066,7 +2067,7 @@ export function UpdateMeterStatus() {
                 />
               </Field>
               <Field label="New status" required>
-                <select
+                <SearchableSelect
                   className={INPUT}
                   value={form.status}
                   onChange={(e) => setForm({ ...form, status: e.target.value })}
@@ -2082,7 +2083,7 @@ export function UpdateMeterStatus() {
                   ].map((x) => (
                     <option key={x}>{x}</option>
                   ))}
-                </select>
+                </SearchableSelect>
               </Field>
               <Field label="Status reason" required>
                 <input
@@ -2320,7 +2321,7 @@ export function MeterReplacement() {
                 />
               </Field>
               <Field label="New meter number" required>
-                <select
+                <SearchableSelect
                   required
                   className={INPUT}
                   value={form.newMeterId}
@@ -2334,7 +2335,7 @@ export function MeterReplacement() {
                       {m.meterNumber} · {displaySize(m.meterSizeMm)}
                     </option>
                   ))}
-                </select>
+                </SearchableSelect>
               </Field>
               <Field label="New opening reading" required>
                 <input
@@ -2902,7 +2903,7 @@ export function ExceptionReport({ alerts = false }: { alerts?: boolean }) {
             />
           </Field>
           <Field label="Zone">
-            <select
+            <SearchableSelect
               className={INPUT}
               value={filters.zoneId}
               onChange={(e) =>
@@ -2915,10 +2916,10 @@ export function ExceptionReport({ alerts = false }: { alerts?: boolean }) {
                   {z.zoneName}
                 </option>
               ))}
-            </select>
+            </SearchableSelect>
           </Field>
           <Field label="Alert type">
-            <select
+            <SearchableSelect
               className={INPUT}
               value={filters.alertType}
               onChange={(e) =>
@@ -2936,10 +2937,10 @@ export function ExceptionReport({ alerts = false }: { alerts?: boolean }) {
               ].map((x) => (
                 <option key={x}>{x}</option>
               ))}
-            </select>
+            </SearchableSelect>
           </Field>
           <Field label="Status">
-            <select
+            <SearchableSelect
               className={INPUT}
               value={filters.status}
               onChange={(e) =>
@@ -2951,7 +2952,7 @@ export function ExceptionReport({ alerts = false }: { alerts?: boolean }) {
               <option value="DISMISSED">Dismissed</option>
               <option value="RESOLVED">Resolved</option>
               <option value="">All</option>
-            </select>
+            </SearchableSelect>
           </Field>
           <div className="flex items-end">
             <Button className="w-full" onClick={load}>
@@ -3177,7 +3178,7 @@ export function BulkMeterImport() {
             <input disabled className={INPUT} value="Reject duplicates" />
           </Field>
           <Field label="Default meter type">
-            <select
+            <SearchableSelect
               className={INPUT}
               value={defaults.meterType}
               onChange={(e) =>
@@ -3187,10 +3188,10 @@ export function BulkMeterImport() {
               {["CUSTOMER", "BULK", "ZONE", "BOREHOLE"].map((item) => (
                 <option key={item}>{item}</option>
               ))}
-            </select>
+            </SearchableSelect>
           </Field>
           <Field label="Default status">
-            <select
+            <SearchableSelect
               className={INPUT}
               value={defaults.status}
               onChange={(e) =>
@@ -3199,7 +3200,7 @@ export function BulkMeterImport() {
             >
               <option value="IN_STOCK">In store</option>
               <option value="INACTIVE">Inactive</option>
-            </select>
+            </SearchableSelect>
           </Field>
           <Field label="Download template">
             <Button type="button" tone="teal" onClick={template}>

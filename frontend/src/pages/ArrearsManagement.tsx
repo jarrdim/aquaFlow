@@ -2,6 +2,8 @@ import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { exportExcel } from "../lib/meterFiles";
+import { SearchableSelect } from "../components/SearchableSelect";
+import { CheckboxMultiSelect } from "../components/CheckboxMultiSelect";
 
 type Row = Record<string, any>;
 const INPUT =
@@ -10,6 +12,8 @@ const TH =
   "px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500";
 const TD = "px-4 py-3 text-[15px] text-slate-600";
 const isoToday = () => new Date().toISOString().slice(0, 10);
+const NOTICE_MESSAGE_TEMPLATE =
+  "Dear {{customerName}}, your water account {{accountNumber}} has an outstanding balance of {{balance}}. Kindly pay by the stated deadline to avoid further recovery action.";
 const money = (value: any) =>
   `KSh ${Number(value ?? 0).toLocaleString("en-KE", {
     minimumFractionDigits: 2,
@@ -43,7 +47,7 @@ function Page({
 }) {
   return (
     <div className="mx-auto max-w-[1600px] p-4 lg:px-6 lg:py-5">
-      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+      <div className="page-screen-header mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">{title}</h1>
           <p className="mt-1 text-[15px] text-slate-500">{subtitle}</p>
@@ -210,14 +214,14 @@ function AccountSelect({
   onChange: (value: string) => void;
 }) {
   return (
-    <select className={INPUT} value={value} onChange={(event) => onChange(event.target.value)}>
+    <SearchableSelect className={INPUT} value={value} onChange={(event) => onChange(event.target.value)}>
       <option value="">Select customer account</option>
       {rows.map((row) => (
         <option key={row.accountId} value={row.accountId}>
           {row.accountNumber} · {row.customerName} · {money(row.currentBalance)}
         </option>
       ))}
-    </select>
+    </SearchableSelect>
   );
 }
 
@@ -276,7 +280,7 @@ export function ArrearsDashboard() {
             />
           </Field>
           <Field label="Zone">
-            <select
+            <SearchableSelect
               className={INPUT}
               value={filters.zoneId}
               onChange={(event) => setFilters({ ...filters, zoneId: event.target.value })}
@@ -287,10 +291,10 @@ export function ArrearsDashboard() {
                   {zone.zoneName}
                 </option>
               ))}
-            </select>
+            </SearchableSelect>
           </Field>
           <Field label="Customer category">
-            <select
+            <SearchableSelect
               className={INPUT}
               value={filters.categoryId}
               onChange={(event) =>
@@ -303,7 +307,7 @@ export function ArrearsDashboard() {
                   {category.categoryName}
                 </option>
               ))}
-            </select>
+            </SearchableSelect>
           </Field>
         </div>
       </Card>
@@ -447,26 +451,26 @@ export function ArrearsAgingReport() {
             />
           </Field>
           <Field label="Zone">
-            <select className={INPUT} value={filters.zoneId} onChange={(e) => setFilters({ ...filters, zoneId: e.target.value })}>
+            <SearchableSelect className={INPUT} value={filters.zoneId} onChange={(e) => setFilters({ ...filters, zoneId: e.target.value })}>
               <option value="">All zones</option>
               {zones.map((row) => <option key={row.zoneId} value={row.zoneId}>{row.zoneName}</option>)}
-            </select>
+            </SearchableSelect>
           </Field>
           <Field label="Category">
-            <select className={INPUT} value={filters.categoryId} onChange={(e) => setFilters({ ...filters, categoryId: e.target.value })}>
+            <SearchableSelect className={INPUT} value={filters.categoryId} onChange={(e) => setFilters({ ...filters, categoryId: e.target.value })}>
               <option value="">All categories</option>
               {categories.map((row) => <option key={row.categoryId} value={row.categoryId}>{row.categoryName}</option>)}
-            </select>
+            </SearchableSelect>
           </Field>
           <Field label="Arrears age">
-            <select className={INPUT} value={filters.ageBucket} onChange={(e) => setFilters({ ...filters, ageBucket: e.target.value })}>
+            <SearchableSelect className={INPUT} value={filters.ageBucket} onChange={(e) => setFilters({ ...filters, ageBucket: e.target.value })}>
               <option value="">All ages</option>
               <option value="0_30">0–30 days</option>
               <option value="31_60">31–60 days</option>
               <option value="61_90">61–90 days</option>
               <option value="91_120">91–120 days</option>
               <option value="120_PLUS">120+ days</option>
-            </select>
+            </SearchableSelect>
           </Field>
           <Field label="Minimum balance">
             <input type="number" min="0" className={INPUT} value={filters.minimumBalance} onChange={(e) => setFilters({ ...filters, minimumBalance: e.target.value })} />
@@ -729,57 +733,134 @@ export function DemandNotices() {
   const queryAccount = new URLSearchParams(window.location.search).get("accountId") ?? "";
   const [rows, setRows] = useState<Row[]>([]);
   const [accounts, setAccounts] = useState<Row[]>([]);
+  const [zones, setZones] = useState<Row[]>([]);
+  const [categories, setCategories] = useState<Row[]>([]);
+  const [zoneIds, setZoneIds] = useState<string[]>([]);
+  const [categoryIds, setCategoryIds] = useState<string[]>([]);
+  const [recipientIds, setRecipientIds] = useState<string[]>(queryAccount ? [queryAccount] : []);
   const [selected, setSelected] = useState<Row>();
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [comments, setComments] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [acting, setActing] = useState<"APPROVE" | "REJECT" | "RETURN" | "">("");
+  const [search, setSearch] = useState("");
+  const [status, setStatus] = useState("");
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
   const [form, setForm] = useState<Row>({
-    accountId: queryAccount,
     noticeType: "DEMAND",
     paymentDeadline: "",
     deliveryChannel: "SMS",
-    messageBody: "",
+    messageBody: NOTICE_MESSAGE_TEMPLATE,
   });
-  const load = () =>
-    Promise.all([api.listDebtNotices(), api.listArrearsAccounts()])
-      .then(([noticeRows, accountRows]) => {
-        setRows(noticeRows);
-        setAccounts(accountRows);
-        if (!selected && noticeRows.length) setSelected(noticeRows[0]);
+  const load = async (pageValue = page, includeAccounts = false) => {
+    setLoading(true);
+    setError("");
+    try {
+      const [noticeResult, accountRows] = await Promise.all([
+        api.listDebtNotices({ page: String(pageValue), pageSize: "25", search, status }),
+        includeAccounts ? api.listArrearsAccounts() : Promise.resolve(null),
+      ]);
+      const noticeRows = noticeResult.rows ?? [];
+      setRows(noticeRows);
+      setTotal(Number(noticeResult.total ?? 0));
+      setPage(Number(noticeResult.page ?? pageValue));
+      setTotalPages(Number(noticeResult.totalPages ?? 1));
+      if (accountRows) setAccounts(accountRows);
+      setSelected((current) =>
+        noticeRows.find((row: Row) => row.noticeId === current?.noticeId) ?? noticeRows[0],
+      );
+      setSelectedIds([]);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+  useEffect(() => {
+    void load(1, true);
+    Promise.all([api.listZones(), api.listCategories()])
+      .then(([zoneRows, categoryRows]) => {
+        setZones(zoneRows);
+        setCategories(categoryRows);
       })
-      .catch((e) => setError(e.message));
-  useEffect(() => {
-    load();
+      .catch((value) => setError(value.message));
   }, []);
-  const current = accounts.find((row) => String(row.accountId) === form.accountId);
-  useEffect(() => {
-    if (current && !form.messageBody)
-      setForm((value) => ({
-        ...value,
-        messageBody: `Dear ${current.customerName}, your water account ${current.accountNumber} has an outstanding balance of ${money(current.currentBalance)}. Kindly pay by the stated deadline to avoid further recovery action.`,
-      }));
-  }, [form.accountId]);
+  const filteredAccounts = useMemo(
+    () => accounts.filter((account) =>
+      (!zoneIds.length || zoneIds.includes(String(account.zone?.zoneId))) &&
+      (!categoryIds.length || categoryIds.includes(String(account.category?.categoryId)))),
+    [accounts, zoneIds, categoryIds],
+  );
+  const recipientAccounts = useMemo(
+    () => accounts.filter((account) => recipientIds.includes(String(account.accountId))),
+    [accounts, recipientIds],
+  );
+  const combinedBalance = recipientAccounts.reduce(
+    (sum, account) => sum + Number(account.currentBalance ?? 0),
+    0,
+  );
+  const previewAccount = recipientAccounts[0];
+  const previewMessage = previewAccount
+    ? String(form.messageBody)
+        .replace(/\{\{customerName\}\}/g, previewAccount.customerName)
+        .replace(/\{\{accountNumber\}\}/g, previewAccount.accountNumber)
+        .replace(/\{\{balance\}\}/g, money(previewAccount.currentBalance))
+    : "";
+  function updateAudienceFilters(nextZoneIds: string[], nextCategoryIds: string[]) {
+    setZoneIds(nextZoneIds);
+    setCategoryIds(nextCategoryIds);
+    setRecipientIds((current) => current.filter((accountId) => {
+      const account = accounts.find((row) => String(row.accountId) === accountId);
+      return !!account &&
+        (!nextZoneIds.length || nextZoneIds.includes(String(account.zone?.zoneId))) &&
+        (!nextCategoryIds.length || nextCategoryIds.includes(String(account.category?.categoryId)));
+    }));
+  }
   async function submit(event: FormEvent) {
     event.preventDefault();
     try {
-      await api.createDebtNotice(form);
-      setMessage("Demand notice submitted for independent approval.");
-      await load();
+      const result = await api.createDebtNotice({ ...form, accountIds: recipientIds });
+      setMessage(`${Number(result.created ?? recipientIds.length)} demand notice(s) submitted for independent approval.`);
+      setRecipientIds([]);
+      await load(1);
     } catch (e: any) {
       setError(e.message);
     }
   }
   async function decide(decision: "APPROVE" | "REJECT" | "RETURN") {
-    if (!selected) return;
+    const noticeIds = selectedIds.length
+      ? selectedIds
+      : selected
+        ? [String(selected.noticeId)]
+        : [];
+    if (!noticeIds.length) return;
     try {
-      await api.decideDebtNotice(selected.noticeId, decision, comments);
-      setMessage(`Notice ${decision.toLowerCase()}d.`);
+      setActing(decision);
+      setError("");
+      if (noticeIds.length === 1 && !selectedIds.length)
+        await api.decideDebtNotice(noticeIds[0], decision, comments);
+      else await api.decideDebtNotices(noticeIds, decision, comments);
+      setMessage(`${noticeIds.length} notice(s) ${decision.toLowerCase()}d.`);
       setComments("");
       await load();
     } catch (e: any) {
       setError(e.message);
+    } finally {
+      setActing("");
     }
   }
+  const pendingRows = rows.filter((row) => row.noticeStatus === "PENDING_APPROVAL");
+  const allPendingOnPageSelected = pendingRows.length > 0 && pendingRows.every((row) => selectedIds.includes(String(row.noticeId)));
+  const decisionRows = selectedIds.length
+    ? rows.filter((row) => selectedIds.includes(String(row.noticeId)))
+    : selected
+      ? [selected]
+      : [];
+  const decisionPending = decisionRows.length > 0 && decisionRows.every((row) => row.noticeStatus === "PENDING_APPROVAL");
   return (
     <Page title="Demand notices" subtitle="Generate, approve and track formal recovery notices">
       {error && <Alert>{error}</Alert>}
@@ -787,49 +868,114 @@ export function DemandNotices() {
       <div className="grid gap-4 xl:grid-cols-[.85fr_1.15fr]">
         <Card title="Generate demand notice">
           <form onSubmit={submit} className="space-y-3">
-            <Field label="Customer account *"><AccountSelect rows={accounts} value={form.accountId} onChange={(value) => setForm({ ...form, accountId: value, messageBody: "" })} /></Field>
-            {current && <div className="rounded-xl bg-blue-50 p-3 text-sm text-blue-700">Outstanding balance: <strong>{money(current.currentBalance)}</strong> · Arrears age: <strong>{current.ageDays} days</strong></div>}
             <div className="grid grid-cols-2 gap-3">
-              <Field label="Notice type *"><select className={INPUT} value={form.noticeType} onChange={(e) => setForm({ ...form, noticeType: e.target.value })}><option value="DEMAND">Demand</option><option value="FINAL_DEMAND">Final demand</option><option value="DISCONNECTION_NOTICE">Disconnection notice</option></select></Field>
+              <Field label="Zones">
+                <CheckboxMultiSelect
+                  className={INPUT}
+                  value={zoneIds}
+                  onChange={(values) => updateAudienceFilters(values, categoryIds)}
+                  placeholder="All zones"
+                  options={zones.map((zone) => ({ value: String(zone.zoneId), label: zone.zoneName }))}
+                />
+              </Field>
+              <Field label="Customer categories">
+                <CheckboxMultiSelect
+                  className={INPUT}
+                  value={categoryIds}
+                  onChange={(values) => updateAudienceFilters(zoneIds, values)}
+                  placeholder="All categories"
+                  options={categories.map((category) => ({ value: String(category.categoryId), label: category.categoryName }))}
+                />
+              </Field>
+            </div>
+            <Field label="Customer accounts *">
+              <CheckboxMultiSelect
+                className={INPUT}
+                maxSelected={500}
+                value={recipientIds}
+                onChange={(values) => setRecipientIds(values.slice(0, 500))}
+                placeholder="Select customer accounts"
+                options={filteredAccounts.map((account) => ({
+                  value: String(account.accountId),
+                  label: `${account.accountNumber} · ${account.customerName} · ${money(account.currentBalance)}`,
+                }))}
+              />
+            </Field>
+            <div className="rounded-xl bg-blue-50 p-3 text-sm text-blue-700">
+              <div className="flex items-center justify-between gap-3">
+                <span><strong>{recipientIds.length}</strong> account(s) selected</span>
+                <span>Combined balance: <strong>{money(combinedBalance)}</strong></span>
+              </div>
+              <div className="mt-1 text-xs text-blue-600">Maximum 500 notices per submission. Use the zone and category filters to narrow the customer list.</div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Notice type *"><SearchableSelect className={INPUT} value={form.noticeType} onChange={(e) => setForm({ ...form, noticeType: e.target.value })}><option value="DEMAND">Demand</option><option value="FINAL_DEMAND">Final demand</option><option value="DISCONNECTION_NOTICE">Disconnection notice</option></SearchableSelect></Field>
               <Field label="Payment deadline *"><input type="date" className={INPUT} value={form.paymentDeadline} onChange={(e) => setForm({ ...form, paymentDeadline: e.target.value })} /></Field>
             </div>
-            <Field label="Delivery channel"><select className={INPUT} value={form.deliveryChannel} onChange={(e) => setForm({ ...form, deliveryChannel: e.target.value })}><option value="SMS">SMS</option><option value="EMAIL">Email</option><option value="PUSH">App push</option><option value="PRINT">Print</option><option value="SMS_PDF">SMS + PDF</option></select></Field>
+            <Field label="Delivery channel"><SearchableSelect className={INPUT} value={form.deliveryChannel} onChange={(e) => setForm({ ...form, deliveryChannel: e.target.value })}><option value="SMS">SMS</option><option value="EMAIL">Email</option><option value="PUSH">App push</option><option value="PRINT">Print</option><option value="SMS_PDF">SMS + PDF</option></SearchableSelect></Field>
             <Field label="Notice message *"><textarea className={`${INPUT} min-h-36`} value={form.messageBody} onChange={(e) => setForm({ ...form, messageBody: e.target.value })} /></Field>
-            <Button type="submit" className="w-full" disabled={!form.accountId || !form.paymentDeadline}>Submit for approval</Button>
+            <div className="text-xs leading-5 text-slate-500">Personalization tokens: <code>{"{{customerName}}"}</code>, <code>{"{{accountNumber}}"}</code>, and <code>{"{{balance}}"}</code>.</div>
+            {previewMessage && <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600"><strong className="block text-slate-800">Preview for {previewAccount.customerName}</strong>{previewMessage}</div>}
+            <Button type="submit" className="w-full" disabled={!recipientIds.length || !form.paymentDeadline || String(form.messageBody).trim().length < 10}>Submit {recipientIds.length || ""} notice{recipientIds.length === 1 ? "" : "s"} for approval</Button>
           </form>
         </Card>
         <div className="space-y-4">
-          <Card title={`${rows.length} notice(s) in register`}>
+          <Card title={`${total} notice(s) in register`}>
+            <form className="mb-3 grid gap-2 md:grid-cols-[1fr_220px_auto]" onSubmit={(event) => { event.preventDefault(); void load(1); }}>
+              <input className={INPUT} value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search notice, account or customer" />
+              <SearchableSelect className={INPUT} value={status} onChange={(event) => setStatus(event.target.value)}>
+                <option value="">All statuses</option><option value="PENDING_APPROVAL">Pending approval</option><option value="APPROVED">Approved</option><option value="RETURNED">Returned</option><option value="REJECTED">Rejected</option>
+              </SearchableSelect>
+              <Button type="submit" disabled={loading}>{loading ? "Loading…" : "Search"}</Button>
+            </form>
+            {selectedIds.length > 0 && <div className="mb-3 flex items-center justify-between rounded-xl bg-blue-50 px-3 py-2 text-sm text-blue-800"><span><strong>{selectedIds.length}</strong> pending notice(s) selected on this page</span><button type="button" className="font-semibold" onClick={() => setSelectedIds([])}>Clear selection</button></div>}
             <div className="max-h-80 overflow-auto">
-              <table className="w-full min-w-[750px]">
-                <thead><tr><th className={TH}>Notice</th><th className={TH}>Account</th><th className={TH}>Amount</th><th className={TH}>Deadline</th><th className={TH}>Status</th><th className={TH}>Action</th></tr></thead>
+              <table className="w-full min-w-[800px]">
+                <thead><tr><th className={TH}><input type="checkbox" aria-label="Select all pending notices on this page" disabled={loading || !pendingRows.length} checked={allPendingOnPageSelected} onChange={(event) => setSelectedIds(event.target.checked ? pendingRows.map((row) => String(row.noticeId)) : [])} /></th><th className={TH}>Notice</th><th className={TH}>Account</th><th className={TH}>Amount</th><th className={TH}>Deadline</th><th className={TH}>Status</th><th className={TH}>Action</th></tr></thead>
                 <tbody>
-                  {rows.map((row) => (
-                    <tr key={row.noticeId} className="border-t">
-                      <td className={TD}><strong>{row.noticeNumber}</strong><div className="text-xs">{pretty(row.noticeType)}</div></td>
-                      <td className={TD}>{row.account?.accountNumber}<div className="text-xs">{customerName(row.account?.customer)}</div></td>
-                      <td className={TD}>{money(row.outstandingAmount)}</td>
-                      <td className={TD}>{date(row.paymentDeadline)}</td>
-                      <td className={TD}><Badge value={row.noticeStatus} /></td>
-                      <td className={TD}><button className="font-semibold text-aqua-700" onClick={() => setSelected(row)}>Review</button></td>
-                    </tr>
-                  ))}
-                  {!rows.length && <tr><td colSpan={6} className="p-8 text-center text-slate-400">No debt notices have been generated.</td></tr>}
+                  {loading ? <tr><td colSpan={7} className="p-10 text-center text-slate-500"><span className="inline-flex items-center"><span className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-aqua-200 border-t-aqua-700" />Loading notices…</span></td></tr> : <>
+                    {rows.map((row) => {
+                      const id = String(row.noticeId);
+                      const pending = row.noticeStatus === "PENDING_APPROVAL";
+                      return <tr key={row.noticeId} className={`border-t ${selectedIds.includes(id) ? "bg-blue-50" : ""}`}>
+                        <td className={TD}><input type="checkbox" aria-label={`Select ${row.noticeNumber}`} disabled={!pending} checked={selectedIds.includes(id)} onChange={() => { setSelected(row); setSelectedIds((values) => values.includes(id) ? values.filter((value) => value !== id) : [...values, id]); }} /></td>
+                        <td className={TD}><strong>{row.noticeNumber}</strong><div className="text-xs">{pretty(row.noticeType)}</div></td>
+                        <td className={TD}>{row.account?.accountNumber}<div className="text-xs">{customerName(row.account?.customer)}</div></td>
+                        <td className={TD}>{money(row.outstandingAmount)}</td><td className={TD}>{date(row.paymentDeadline)}</td><td className={TD}><Badge value={row.noticeStatus} /></td>
+                        <td className={TD}><button type="button" className="font-semibold text-aqua-700" onClick={() => { setSelectedIds([]); setSelected(row); }}>Review</button></td>
+                      </tr>;
+                    })}
+                    {!rows.length && <tr><td colSpan={7} className="p-8 text-center text-slate-400">No notices match the current filters.</td></tr>}
+                  </>}
                 </tbody>
               </table>
             </div>
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-sm text-slate-500">
+              <span>{total ? `Showing ${(page - 1) * 25 + 1}–${Math.min(page * 25, total)} of ${total}` : "No notices"} · Bulk selection is limited to the current page.</span>
+              <div className="flex items-center gap-2"><Button disabled={loading || page <= 1} onClick={() => void load(page - 1)}>Previous</Button><span>Page {page} of {totalPages}</span><Button disabled={loading || page >= totalPages} onClick={() => void load(page + 1)}>Next</Button></div>
+            </div>
           </Card>
-          {selected && (
-            <Card title={`Approval decision · ${selected.noticeNumber}`}>
-              <div className="mb-3 rounded-xl bg-slate-50 p-3">
-                <div className="font-semibold">{pretty(selected.noticeType)} · {money(selected.outstandingAmount)}</div>
-                <div className="mt-1 text-sm text-slate-600">{selected.messageBody}</div>
-              </div>
-              <Field label="Decision comments *"><textarea className={`${INPUT} min-h-20`} value={comments} onChange={(e) => setComments(e.target.value)} /></Field>
-              <div className="mt-3 flex justify-end gap-2">
-                <Button tone="red" disabled={comments.length < 3 || selected.noticeStatus !== "PENDING_APPROVAL"} onClick={() => decide("REJECT")}>Reject</Button>
-                <Button tone="orange" disabled={comments.length < 3 || selected.noticeStatus !== "PENDING_APPROVAL"} onClick={() => decide("RETURN")}>Return</Button>
-                <Button tone="green" disabled={comments.length < 3 || selected.noticeStatus !== "PENDING_APPROVAL"} onClick={() => decide("APPROVE")}>Approve notice</Button>
+          {decisionRows.length > 0 && (
+            <Card title={decisionRows.length > 1 ? `Approval decision · ${decisionRows.length} notices selected` : `Approval decision · ${decisionRows[0].noticeNumber}`}>
+              {decisionRows.length > 1 ? (
+                <div className="mb-3 rounded-xl bg-blue-50 p-3">
+                  <div className="font-semibold">Reviewing {decisionRows.length} pending notices</div>
+                  <div className="mt-1 text-sm text-slate-600">Combined amount: <strong>{money(decisionRows.reduce((sum, row) => sum + Number(row.outstandingAmount ?? 0), 0))}</strong>. The same decision and comment will be recorded against each notice.</div>
+                  <div className="mt-2 max-h-28 overflow-y-auto rounded-lg bg-white px-3">
+                    {decisionRows.map((row) => <div key={row.noticeId} className="flex justify-between gap-3 border-b py-2 text-sm last:border-0"><span>{row.noticeNumber} · {row.account?.accountNumber}</span><strong>{money(row.outstandingAmount)}</strong></div>)}
+                  </div>
+                </div>
+              ) : (
+                <div className="mb-3 rounded-xl bg-slate-50 p-3">
+                  <div className="font-semibold">{pretty(decisionRows[0].noticeType)} · {money(decisionRows[0].outstandingAmount)}</div>
+                  <div className="mt-1 text-sm text-slate-600">{decisionRows[0].messageBody}</div>
+                </div>
+              )}
+              <Field label={decisionRows.length > 1 ? `Shared decision comment for ${decisionRows.length} notices *` : "Decision comments *"}><textarea className={`${INPUT} min-h-20`} value={comments} onChange={(e) => setComments(e.target.value)} /></Field>
+              <div className="mt-3 flex flex-wrap justify-end gap-2">
+                <Button tone="red" disabled={!!acting || comments.length < 3 || !decisionPending} onClick={() => decide("REJECT")}>{acting === "REJECT" ? "Rejecting…" : `Reject${decisionRows.length > 1 ? ` (${decisionRows.length})` : ""}`}</Button>
+                <Button tone="orange" disabled={!!acting || comments.length < 3 || !decisionPending} onClick={() => decide("RETURN")}>{acting === "RETURN" ? "Returning…" : `Return${decisionRows.length > 1 ? ` (${decisionRows.length})` : ""}`}</Button>
+                <Button tone="green" disabled={!!acting || comments.length < 3 || !decisionPending} onClick={() => decide("APPROVE")}>{acting === "APPROVE" ? "Approving…" : `Approve${decisionRows.length > 1 ? ` selected (${decisionRows.length})` : " notice"}`}</Button>
               </div>
             </Card>
           )}
@@ -892,7 +1038,7 @@ export function PaymentPlans() {
             <div className="rounded-xl bg-emerald-50 p-3 text-emerald-800">Estimated instalment: <strong>{money(installment)}</strong></div>
             <div className="grid grid-cols-2 gap-3">
               <Field label="Start date"><input type="date" className={INPUT} value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} /></Field>
-              <Field label="Frequency"><select className={INPUT} value={form.frequency} onChange={(e) => setForm({ ...form, frequency: e.target.value })}><option value="WEEKLY">Weekly</option><option value="MONTHLY">Monthly</option><option value="QUARTERLY">Quarterly</option></select></Field>
+              <Field label="Frequency"><SearchableSelect className={INPUT} value={form.frequency} onChange={(e) => setForm({ ...form, frequency: e.target.value })}><option value="WEEKLY">Weekly</option><option value="MONTHLY">Monthly</option><option value="QUARTERLY">Quarterly</option></SearchableSelect></Field>
             </div>
             <Field label="Remarks"><textarea className={`${INPUT} min-h-20`} value={form.remarks} onChange={(e) => setForm({ ...form, remarks: e.target.value })} /></Field>
             <Button type="submit" className="w-full" disabled={!form.accountId}>Generate and submit plan</Button>
@@ -942,12 +1088,12 @@ export function PromisesToPay() {
           <Field label="Customer account *"><AccountSelect rows={accounts} value={form.accountId} onChange={(value) => setForm({ ...form, accountId: value })} /></Field>
           <Field label="Promise amount *"><input type="number" min="1" className={INPUT} value={form.promisedAmount} onChange={(e) => setForm({ ...form, promisedAmount: e.target.value })} /></Field>
           <div className="grid grid-cols-2 gap-3"><Field label="Promised payment date *"><input type="date" className={INPUT} value={form.expectedPaymentDate} onChange={(e) => setForm({ ...form, expectedPaymentDate: e.target.value })} /></Field><Field label="Follow-up date"><input type="date" className={INPUT} value={form.followUpDate} onChange={(e) => setForm({ ...form, followUpDate: e.target.value })} /></Field></div>
-          <Field label="Contact method"><select className={INPUT} value={form.contactMethod} onChange={(e) => setForm({ ...form, contactMethod: e.target.value })}><option value="PHONE">Phone call</option><option value="WALK_IN">Walk-in</option><option value="EMAIL">Email</option><option value="SMS">SMS</option></select></Field>
+          <Field label="Contact method"><SearchableSelect className={INPUT} value={form.contactMethod} onChange={(e) => setForm({ ...form, contactMethod: e.target.value })}><option value="PHONE">Phone call</option><option value="WALK_IN">Walk-in</option><option value="EMAIL">Email</option><option value="SMS">SMS</option></SearchableSelect></Field>
           <Field label="Customer remarks *"><textarea className={`${INPUT} min-h-24`} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></Field>
           <Button type="submit" tone="green" className="w-full">Save promise</Button>
         </form></Card>
         <Card title="Promise tracking">
-          <div className="mb-3 max-w-xs"><select className={INPUT} value={status} onChange={(e) => setStatus(e.target.value)}><option value="">All statuses</option><option value="OPEN">Open</option><option value="KEPT">Kept</option><option value="BROKEN">Broken</option><option value="CANCELLED">Cancelled</option></select></div>
+          <div className="mb-3 max-w-xs"><SearchableSelect className={INPUT} value={status} onChange={(e) => setStatus(e.target.value)}><option value="">All statuses</option><option value="OPEN">Open</option><option value="KEPT">Kept</option><option value="BROKEN">Broken</option><option value="CANCELLED">Cancelled</option></SearchableSelect></div>
           <div className="overflow-x-auto"><table className="w-full min-w-[850px]"><thead><tr><th className={TH}>Reference / Customer</th><th className={TH}>Amount</th><th className={TH}>Due date</th><th className={TH}>Contact</th><th className={TH}>Status</th><th className={TH}>Actions</th></tr></thead><tbody>
             {rows.map((row) => <tr className="border-t" key={row.promiseId}><td className={TD}><strong>{row.promiseReference}</strong><div className="text-xs">{row.account?.accountNumber} · {customerName(row.account?.customer)}</div></td><td className={TD}>{money(row.promisedAmount)}</td><td className={TD}>{date(row.expectedPaymentDate)}</td><td className={TD}>{pretty(row.contactMethod)}</td><td className={TD}><Badge value={row.status} /></td><td className={TD}>{row.status === "OPEN" ? <div className="flex gap-2"><button className="font-semibold text-emerald-700" onClick={() => update(row.promiseId, "KEPT")}>Kept</button><button className="font-semibold text-red-700" onClick={() => update(row.promiseId, "BROKEN")}>Broken</button><button className="font-semibold text-slate-500" onClick={() => update(row.promiseId, "CANCELLED")}>Cancel</button></div> : "—"}</td></tr>)}
             {!rows.length && <tr><td colSpan={6} className="p-8 text-center text-slate-400">No promises match this status.</td></tr>}
@@ -966,24 +1112,45 @@ export function DisconnectionLists() {
   const [comments, setComments] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [action, setAction] = useState<"CREATE" | "APPROVE" | "REJECT" | "RETURN" | "">("");
   const [filters, setFilters] = useState<Row>({ minimumAgeDays: "90", minimumBalance: "2000" });
-  const load = () => Promise.all([api.disconnectionEligible(filters), api.listDisconnectionLists()]).then(([a, b]) => { setEligible(a); setLists(b); if (!review && b.length) setReview(b[0]); }).catch((e) => setError(e.message));
+  const load = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const [eligibleRows, listRows] = await Promise.all([
+        api.disconnectionEligible(filters),
+        api.listDisconnectionLists(),
+      ]);
+      setEligible(eligibleRows);
+      setLists(listRows);
+      setReview((current) =>
+        listRows.find((row: Row) => row.disconnectionListId === current?.disconnectionListId) ?? listRows[0],
+      );
+      setSelected((values) => values.filter((value) => eligibleRows.some((row: Row) => String(row.accountId) === value)));
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
   useEffect(() => {
-    load();
+    void load();
   }, [filters.minimumAgeDays, filters.minimumBalance]);
-  async function create() { try { await api.createDisconnectionList({ accountIds: selected, minimumAgeDays: filters.minimumAgeDays, minimumBalance: filters.minimumBalance, remarks: "Generated from approved final demand notices" }); setMessage("Disconnection list submitted for Finance Manager approval."); setSelected([]); await load(); } catch (e: any) { setError(e.message); } }
-  async function decide(decision: "APPROVE" | "REJECT" | "RETURN") { if (!review) return; try { await api.decideDisconnectionList(review.disconnectionListId, decision, comments); setMessage(`Disconnection list ${decision.toLowerCase()}d.`); setComments(""); await load(); } catch (e: any) { setError(e.message); } }
+  async function create() { try { setAction("CREATE"); setError(""); await api.createDisconnectionList({ accountIds: selected, minimumAgeDays: filters.minimumAgeDays, minimumBalance: filters.minimumBalance, remarks: "Generated from approved final demand notices" }); setMessage("Disconnection list submitted for Finance Manager approval."); setSelected([]); await load(); } catch (e: any) { setError(e.message); } finally { setAction(""); } }
+  async function decide(decision: "APPROVE" | "REJECT" | "RETURN") { if (!review) return; try { setAction(decision); setError(""); await api.decideDisconnectionList(review.disconnectionListId, decision, comments); setMessage(`Disconnection list ${decision.toLowerCase()}d.`); setComments(""); await load(); } catch (e: any) { setError(e.message); } finally { setAction(""); } }
   return (
     <Page title="Disconnection lists" subtitle="Escalate eligible accounts only after formal recovery notices" actions={<LinkButton to="/arrears/notices">Demand notices</LinkButton>}>
       {error && <Alert>{error}</Alert>}{message && <Alert success>{message}</Alert>}
       <Card title="Create disconnection list">
-        <div className="mb-3 grid gap-3 md:grid-cols-3"><Field label="Minimum arrears age (days)"><input type="number" min="1" className={INPUT} value={filters.minimumAgeDays} onChange={(e) => setFilters({ ...filters, minimumAgeDays: e.target.value })} /></Field><Field label="Minimum balance"><input type="number" min="0" className={INPUT} value={filters.minimumBalance} onChange={(e) => setFilters({ ...filters, minimumBalance: e.target.value })} /></Field><div className="flex items-end"><Button className="w-full" tone="orange" disabled={!selected.length} onClick={create}>Submit {selected.length} selected account(s)</Button></div></div>
-        <div className="overflow-x-auto"><table className="w-full min-w-[850px]"><thead><tr><th className={TH}><input type="checkbox" checked={eligible.length > 0 && selected.length === eligible.length} onChange={(e) => setSelected(e.target.checked ? eligible.map((row) => String(row.accountId)) : [])} /></th><th className={TH}>Account / Customer</th><th className={TH}>Zone</th><th className={TH}>Balance</th><th className={TH}>Age</th><th className={TH}>Last notice</th></tr></thead><tbody>{eligible.map((row) => <tr className="border-t" key={row.accountId}><td className={TD}><input type="checkbox" checked={selected.includes(String(row.accountId))} onChange={() => setSelected((values) => values.includes(String(row.accountId)) ? values.filter((value) => value !== String(row.accountId)) : [...values, String(row.accountId)])} /></td><td className={TD}><strong>{row.accountNumber}</strong><div className="text-xs">{row.customerName}</div></td><td className={TD}>{row.zone?.zoneName ?? "—"}</td><td className={`${TD} font-semibold text-red-700`}>{money(row.arrearsBalance)}</td><td className={TD}>{row.ageDays} days</td><td className={TD}>{row.lastNotice?.noticeNumber}<div className="text-xs">{date(row.lastNotice?.paymentDeadline)}</div></td></tr>)}{!eligible.length && <tr><td colSpan={6} className="p-8 text-center text-slate-400">No account meets the rule with an approved final demand or disconnection notice.</td></tr>}</tbody></table></div>
+        <div className="mb-3 grid gap-3 md:grid-cols-3"><Field label="Minimum arrears age (days)"><input type="number" min="1" className={INPUT} value={filters.minimumAgeDays} onChange={(e) => setFilters({ ...filters, minimumAgeDays: e.target.value })} /></Field><Field label="Minimum balance"><input type="number" min="0" className={INPUT} value={filters.minimumBalance} onChange={(e) => setFilters({ ...filters, minimumBalance: e.target.value })} /></Field><div className="flex items-end"><Button className="w-full" tone="orange" disabled={loading || !!action || !selected.length} onClick={create}>{action === "CREATE" ? <span className="inline-flex items-center"><span className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white/50 border-t-white" />Submitting…</span> : `Submit ${selected.length} selected account(s)`}</Button></div></div>
+        <div className="overflow-x-auto"><table className="w-full min-w-[850px]"><thead><tr><th className={TH}><input type="checkbox" disabled={loading} checked={eligible.length > 0 && selected.length === eligible.length} onChange={(e) => setSelected(e.target.checked ? eligible.map((row) => String(row.accountId)) : [])} /></th><th className={TH}>Account / Customer</th><th className={TH}>Zone</th><th className={TH}>Balance</th><th className={TH}>Age</th><th className={TH}>Last notice</th></tr></thead><tbody>{loading ? <tr><td colSpan={6} className="p-10 text-center text-slate-500"><span className="inline-flex items-center"><span className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-aqua-200 border-t-aqua-700" />Loading eligible accounts…</span></td></tr> : <>{eligible.map((row) => <tr className="border-t" key={row.accountId}><td className={TD}><input type="checkbox" checked={selected.includes(String(row.accountId))} onChange={() => setSelected((values) => values.includes(String(row.accountId)) ? values.filter((value) => value !== String(row.accountId)) : [...values, String(row.accountId)])} /></td><td className={TD}><strong>{row.accountNumber}</strong><div className="text-xs">{row.customerName}</div></td><td className={TD}>{row.zone?.zoneName ?? "—"}</td><td className={`${TD} font-semibold text-red-700`}>{money(row.arrearsBalance)}</td><td className={TD}>{row.ageDays} days</td><td className={TD}>{row.lastNotice?.noticeNumber}<div className="text-xs">{date(row.lastNotice?.paymentDeadline)}</div></td></tr>)}{!eligible.length && <tr><td colSpan={6} className="p-8 text-center text-slate-400">No account meets the rule with an approved final demand or disconnection notice.</td></tr>}</>}</tbody></table></div>
       </Card>
       <div className="mt-4 grid gap-4 xl:grid-cols-[1.1fr_.9fr]">
-        <Card title={`${lists.length} disconnection list(s)`}><div className="space-y-2">{lists.map((row) => <button key={row.disconnectionListId} className={`flex w-full items-center justify-between rounded-xl border p-3 text-left ${review?.disconnectionListId === row.disconnectionListId ? "border-aqua-500 bg-blue-50" : ""}`} onClick={() => setReview(row)}><div><strong>{row.listReference}</strong><div className="text-xs text-slate-500">{row.items?.length ?? 0} account(s) · {date(row.createdAt)}</div></div><Badge value={row.status} /></button>)}{!lists.length && <div className="p-8 text-center text-slate-400">No lists created.</div>}</div></Card>
+        <Card title={`${lists.length} disconnection list(s)`}><div className="space-y-2">{loading ? <div className="p-10 text-center text-slate-500"><span className="inline-flex items-center"><span className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-aqua-200 border-t-aqua-700" />Loading disconnection lists…</span></div> : <>{lists.map((row) => <button key={row.disconnectionListId} className={`flex w-full items-center justify-between rounded-xl border p-3 text-left ${review?.disconnectionListId === row.disconnectionListId ? "border-aqua-500 bg-blue-50" : ""}`} onClick={() => setReview(row)}><div><strong>{row.listReference}</strong><div className="text-xs text-slate-500">{row.items?.length ?? 0} account(s) · {date(row.createdAt)}</div></div><Badge value={row.status} /></button>)}{!lists.length && <div className="p-8 text-center text-slate-400">No lists created.</div>}</>}</div></Card>
         <Card title="Approval decision">
-          {!review ? <div className="p-8 text-center text-slate-400">Select a list to review.</div> : <><div className="rounded-xl bg-slate-50 p-3"><div className="text-lg font-bold">{review.listReference}</div><div className="mt-1 text-sm">{review.items?.length} account(s) · Minimum {review.minimumAgeDays} days · {money(review.minimumBalance)}</div></div><div className="my-3 max-h-44 overflow-y-auto">{(review.items ?? []).map((item: Row) => <div key={item.disconnectionItemId} className="flex justify-between border-b py-2 text-sm"><span>{item.account?.accountNumber} · {customerName(item.account?.customer)}</span><strong>{money(item.outstandingAmount)}</strong></div>)}</div><Field label="Decision comments *"><textarea className={`${INPUT} min-h-20`} value={comments} onChange={(e) => setComments(e.target.value)} /></Field><div className="mt-3 flex justify-end gap-2"><Button tone="red" disabled={comments.length < 3 || review.status !== "PENDING_APPROVAL"} onClick={() => decide("REJECT")}>Reject</Button><Button tone="orange" disabled={comments.length < 3 || review.status !== "PENDING_APPROVAL"} onClick={() => decide("RETURN")}>Return</Button><Button tone="green" disabled={comments.length < 3 || review.status !== "PENDING_APPROVAL"} onClick={() => decide("APPROVE")}>Approve list</Button></div></>}
+          {loading ? <div className="p-10 text-center text-slate-500"><span className="inline-flex items-center"><span className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-aqua-200 border-t-aqua-700" />Loading approval details…</span></div> : !review ? <div className="p-8 text-center text-slate-400">Select a list to review.</div> : <><div className="rounded-xl bg-slate-50 p-3"><div className="text-lg font-bold">{review.listReference}</div><div className="mt-1 text-sm">{review.items?.length} account(s) · Minimum {review.minimumAgeDays} days · {money(review.minimumBalance)}</div></div><div className="my-3 max-h-44 overflow-y-auto">{(review.items ?? []).map((item: Row) => <div key={item.disconnectionItemId} className="flex justify-between border-b py-2 text-sm"><span>{item.account?.accountNumber} · {customerName(item.account?.customer)}</span><strong>{money(item.outstandingAmount)}</strong></div>)}</div><Field label="Decision comments *"><textarea className={`${INPUT} min-h-20`} value={comments} onChange={(e) => setComments(e.target.value)} /></Field><div className="mt-3 flex justify-end gap-2"><Button tone="red" disabled={!!action || comments.length < 3 || review.status !== "PENDING_APPROVAL"} onClick={() => decide("REJECT")}>{action === "REJECT" ? "Rejecting…" : "Reject"}</Button><Button tone="orange" disabled={!!action || comments.length < 3 || review.status !== "PENDING_APPROVAL"} onClick={() => decide("RETURN")}>{action === "RETURN" ? "Returning…" : "Return"}</Button><Button tone="green" disabled={!!action || comments.length < 3 || review.status !== "PENDING_APPROVAL"} onClick={() => decide("APPROVE")}>{action === "APPROVE" ? "Approving…" : "Approve list"}</Button></div></>}
         </Card>
       </div>
     </Page>

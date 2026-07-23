@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client";
 import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
-import { requireAuth, requireRole } from "../middleware/auth";
+import { isSystemAdmin, requireAuth, requireRole } from "../middleware/auth";
 
 export const billingRouter = Router();
 billingRouter.use(requireAuth);
@@ -373,22 +373,21 @@ billingRouter.get("/bills/:id", async (req, res, next) => {
 });
 
 billingRouter.patch("/bills/decision", requireRole("BILLING_SUPERVISOR", "FINANCE_MANAGER", "SYSTEM_ADMIN"), async (req, res, next) => {
-  const data = parse(z.object({ billIds: z.array(id).min(1).max(500), decision: z.enum(["APPROVE", "REJECT", "RETURN"]), comments: z.string().trim().min(3).max(2000) }), req.body, res);
+  const data = parse(z.object({ billIds: z.array(id).min(1).max(10_000), decision: z.enum(["APPROVE", "REJECT", "RETURN"]), comments: z.string().trim().min(3).max(2000) }), req.body, res);
   if (!data) return;
   try {
     const bills = await prisma.bill.findMany({ where: { billId: { in: data.billIds } } });
     if (bills.length !== data.billIds.length) return res.status(404).json({ error: "One or more bills were not found" });
     if (bills.some((bill: any) => bill.status !== "PENDING_APPROVAL")) return res.status(409).json({ error: "Only pending bills can be decided" });
-    if (bills.some((bill: any) => bill.generatedBy === uid(req))) {
-      for (const bill of bills.filter((value: any) => value.generatedBy === uid(req))) await prisma.billingSecurityAlert.create({ data: { billId: bill.billId, alertType: "SELF_APPROVAL", attemptedAction: data.decision, details: "Bill generator attempted to approve their own bill", attemptedBy: uid(req) } });
+    if (!isSystemAdmin(req) && bills.some((bill: any) => bill.generatedBy === uid(req))) {
+      await prisma.billingSecurityAlert.createMany({ data: bills.filter((value: any) => value.generatedBy === uid(req)).map((bill: any) => ({ billId: bill.billId, alertType: "SELF_APPROVAL", attemptedAction: data.decision, details: "Bill generator attempted to approve their own bill", attemptedBy: uid(req) })) });
       return res.status(403).json({ error: "Maker-checker control: a bill generator cannot approve their own bills" });
     }
     const status = data.decision === "APPROVE" ? "APPROVED" : data.decision === "RETURN" ? "RETURNED" : "REJECTED";
+    const decidedAt = new Date();
     await prisma.$transaction(async (tx) => {
-      for (const bill of bills) {
-        await tx.bill.update({ where: { billId: bill.billId }, data: { status, approvedBy: uid(req), approvedAt: new Date(), approvalComments: data.comments, updatedAt: new Date() } });
-        await tx.billingEvent.create({ data: { billingCycleId: bill.billingCycleId, billId: bill.billId, eventType: `BILL_${status}`, previousStatus: bill.status, newStatus: status, details: data.comments, performedBy: uid(req) } });
-      }
+      await tx.bill.updateMany({ where: { billId: { in: data.billIds }, status: "PENDING_APPROVAL" }, data: { status, approvedBy: uid(req), approvedAt: decidedAt, approvalComments: data.comments, updatedAt: decidedAt } });
+      await tx.billingEvent.createMany({ data: bills.map((bill: any) => ({ billingCycleId: bill.billingCycleId, billId: bill.billId, eventType: `BILL_${status}`, previousStatus: bill.status, newStatus: status, details: data.comments, performedBy: uid(req), createdAt: decidedAt })) });
     });
     res.json({ updated: bills.length, status });
   } catch (error) { next(error); }
@@ -404,13 +403,23 @@ billingRouter.post("/cycles/:id/post", requireRole("FINANCE_MANAGER", "SYSTEM_AD
     const approved = cycle.bills.filter((bill: any) => bill.status === "APPROVED");
     if (!approved.length) return res.status(409).json({ error: "No approved bills are ready for posting" });
     if (cycle.bills.some((bill: any) => ["DRAFT", "PENDING_APPROVAL", "RETURNED"].includes(bill.status))) return res.status(409).json({ error: "Resolve all draft, pending or returned bills before posting the period" });
+    const postedAt = new Date();
     await prisma.$transaction(async (tx) => {
-      for (const bill of approved) {
-        await tx.bill.update({ where: { billId: bill.billId }, data: { status: "POSTED", postedBy: uid(req), postedAt: new Date(), updatedAt: new Date() } });
-        await tx.customerAccount.update({ where: { accountId: bill.accountId }, data: { currentBalance: { increment: bill.totalCurrentCharges }, updatedAt: new Date() } });
-        await tx.billingEvent.create({ data: { billingCycleId: cycleId, billId: bill.billId, eventType: "BILL_POSTED", previousStatus: "APPROVED", newStatus: "POSTED", details: data.reason, performedBy: uid(req) } });
-      }
-      await tx.billingCycle.update({ where: { billingCycleId: cycleId }, data: { status: "POSTED", postedBy: uid(req), postedAt: new Date(), updatedAt: new Date() } });
+      await tx.$executeRaw`
+        UPDATE aquaflow.customer_accounts AS account
+        SET current_balance = account.current_balance + charges.total,
+            updated_at = ${postedAt}
+        FROM (
+          SELECT account_id, SUM(total_current_charges) AS total
+          FROM aquaflow.bills
+          WHERE billing_cycle_id = ${cycleId} AND status = 'APPROVED'
+          GROUP BY account_id
+        ) AS charges
+        WHERE account.account_id = charges.account_id
+      `;
+      await tx.bill.updateMany({ where: { billingCycleId: cycleId, status: "APPROVED" }, data: { status: "POSTED", postedBy: uid(req), postedAt, updatedAt: postedAt } });
+      await tx.billingEvent.createMany({ data: approved.map((bill: any) => ({ billingCycleId: cycleId, billId: bill.billId, eventType: "BILL_POSTED", previousStatus: "APPROVED", newStatus: "POSTED", details: data.reason, performedBy: uid(req), createdAt: postedAt })) });
+      await tx.billingCycle.update({ where: { billingCycleId: cycleId }, data: { status: "POSTED", postedBy: uid(req), postedAt, updatedAt: postedAt } });
       await tx.billingEvent.create({ data: { billingCycleId: cycleId, eventType: "PERIOD_POSTED", previousStatus: cycle.status, newStatus: "POSTED", details: `${approved.length} bill(s) posted. ${data.reason}`, performedBy: uid(req) } });
     });
     res.json({ posted: approved.length });
@@ -496,7 +505,7 @@ billingRouter.patch("/adjustments/decision", requireRole("BILLING_SUPERVISOR", "
     if (adjustments.length !== data.adjustmentIds.length) return res.status(404).json({ error: "One or more adjustment requests were not found" });
     if (adjustments.some((adjustment: any) => adjustment.status !== "PENDING")) return res.status(409).json({ error: "Only pending adjustment requests can be decided" });
     const selfApprovals = adjustments.filter((adjustment: any) => adjustment.requestedBy === uid(req));
-    if (selfApprovals.length) {
+    if (selfApprovals.length && !isSystemAdmin(req)) {
       await prisma.billingSecurityAlert.createMany({ data: selfApprovals.map((adjustment: any) => ({ billId: adjustment.billId, alertType: "SELF_APPROVAL", attemptedAction: data.decision, details: "Adjustment requester attempted batch self-approval", attemptedBy: uid(req) })) });
       return res.status(403).json({ error: "Maker-checker control: a requester cannot decide their own adjustment. No selected requests were changed." });
     }
@@ -524,7 +533,7 @@ billingRouter.patch("/adjustments/:id/decision", requireRole("BILLING_SUPERVISOR
     const adjustment = await prisma.billingAdjustment.findUnique({ where: { adjustmentId }, include: { bill: true } });
     if (!adjustment) return res.status(404).json({ error: "Adjustment not found" });
     if (adjustment.status !== "PENDING") return res.status(409).json({ error: "This adjustment has already been decided" });
-    if (adjustment.requestedBy === uid(req)) {
+    if (adjustment.requestedBy === uid(req) && !isSystemAdmin(req)) {
       await prisma.billingSecurityAlert.create({ data: { billId: adjustment.billId, alertType: "SELF_APPROVAL", attemptedAction: data.decision, details: "Adjustment requester attempted self-approval", attemptedBy: uid(req) } });
       return res.status(403).json({ error: "Maker-checker control: the requester cannot approve their own adjustment" });
     }
@@ -574,6 +583,7 @@ billingRouter.get("/dashboard", async (req, res, next) => {
       prisma.billingEvent.findMany({ where: cycle ? { billingCycleId: cycle.billingCycleId } : undefined, include: { bill: { include: { account: { include: { customer: true } } } }, performer: true }, orderBy: { createdAt: "desc" }, take: 8 }),
     ]);
     const approved = bills.filter((bill) => ["APPROVED", "POSTED", "PARTIALLY_PAID", "PAID"].includes(bill.status)).length;
-    res.json({ cycle, customersToBill: bills.length, billsGenerated: bills.length, pending: bills.filter((bill) => bill.status === "PENDING_APPROVAL").length, approved, totalBilling: round(bills.reduce((sum, bill) => sum + Number(bill.totalCurrentCharges), 0)), notified: bills.filter((bill) => bill.notificationStatus === "SENT").length, cancelled: bills.filter((bill) => bill.status === "CANCELLED").length, alerts, adjustments, recent: recent.map((row: any) => ({ ...row, customerName: customerName(row.bill?.account?.customer) })) });
+    const readyToPost = bills.filter((bill) => bill.status === "APPROVED").length;
+    res.json({ cycle, customersToBill: bills.length, billsGenerated: bills.length, pending: bills.filter((bill) => bill.status === "PENDING_APPROVAL").length, approved, readyToPost, totalBilling: round(bills.reduce((sum, bill) => sum + Number(bill.totalCurrentCharges), 0)), notified: bills.filter((bill) => bill.notificationStatus === "SENT").length, cancelled: bills.filter((bill) => bill.status === "CANCELLED").length, alerts, adjustments, recent: recent.map((row: any) => ({ ...row, customerName: customerName(row.bill?.account?.customer) })) });
   } catch (error) { next(error); }
 });

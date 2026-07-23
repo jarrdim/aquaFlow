@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client";
 import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
-import { requireAuth, requireRole } from "../middleware/auth";
+import { isSystemAdmin, requireAuth, requireRole } from "../middleware/auth";
 
 export const arrearsRouter = Router();
 arrearsRouter.use(requireAuth);
@@ -36,6 +36,11 @@ const today = () => {
 };
 const round = (value: number) =>
   Math.round((value + Number.EPSILON) * 100) / 100;
+const moneyForMessage = (value: unknown) =>
+  `KSh ${Number(value ?? 0).toLocaleString("en-KE", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
 const customerName = (customer: any) =>
   customer?.organizationName ||
   [customer?.firstName, customer?.middleName, customer?.lastName]
@@ -381,17 +386,39 @@ arrearsRouter.post("/reminders", officer, async (req, res, next) => {
 arrearsRouter.get("/notices", async (req, res, next) => {
   try {
     const status = String(req.query.status ?? "");
-    res.json(
-      await prisma.debtNotice.findMany({
-        where: status ? { noticeStatus: status } : undefined,
+    const search = String(req.query.search ?? "").trim();
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const pageSize = Math.min(50, Math.max(10, Number(req.query.pageSize) || 25));
+    const where: Prisma.DebtNoticeWhereInput = {
+      ...(status ? { noticeStatus: status } : {}),
+      ...(search
+        ? {
+            OR: [
+              { noticeNumber: { contains: search, mode: "insensitive" } },
+              { account: { accountNumber: { contains: search, mode: "insensitive" } } },
+              { account: { customer: { customerNumber: { contains: search, mode: "insensitive" } } } },
+              { account: { customer: { firstName: { contains: search, mode: "insensitive" } } } },
+              { account: { customer: { lastName: { contains: search, mode: "insensitive" } } } },
+              { account: { customer: { organizationName: { contains: search, mode: "insensitive" } } } },
+            ],
+          }
+        : {}),
+    };
+    const [rows, total] = await Promise.all([
+      prisma.debtNotice.findMany({
+        where,
         include: {
           account: { include: { customer: true, property: { include: { zone: true } } } },
           creator: true,
           approver: true,
         },
         orderBy: { createdAt: "desc" },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
       }),
-    );
+      prisma.debtNotice.count({ where }),
+    ]);
+    res.json({ rows, total, page, pageSize, totalPages: Math.max(1, Math.ceil(total / pageSize)) });
   } catch (error) {
     next(error);
   }
@@ -400,46 +427,136 @@ arrearsRouter.get("/notices", async (req, res, next) => {
 arrearsRouter.post("/notices", officer, async (req, res, next) => {
   const data = parse(
     z.object({
-      accountId: id,
+      accountId: id.optional(),
+      accountIds: z.array(id).max(500).optional(),
       noticeType: z.enum(["DEMAND", "FINAL_DEMAND", "DISCONNECTION_NOTICE"]),
       paymentDeadline: z.string().min(1),
       deliveryChannel: z.enum(["SMS", "EMAIL", "PUSH", "PRINT", "SMS_PDF"]),
       messageBody: z.string().trim().min(10).max(5000),
+    }).refine((value) => value.accountId || value.accountIds?.length, {
+      message: "Select at least one customer account",
+      path: ["accountIds"],
     }),
     req.body,
     res,
   );
   if (!data) return;
   try {
-    const account = await prisma.customerAccount.findUnique({
-      where: { accountId: data.accountId },
+    const accountIds = [...new Set([
+      ...(data.accountIds ?? []).map(String),
+      ...(data.accountId ? [String(data.accountId)] : []),
+    ])].map(BigInt);
+    if (accountIds.length > 500)
+      return res.status(400).json({ error: "A notice batch can contain at most 500 accounts" });
+    const accounts = await prisma.customerAccount.findMany({
+      where: { accountId: { in: accountIds } },
+      include: { customer: true },
     });
-    if (!account) return res.status(404).json({ error: "Account not found" });
-    if (Number(account.currentBalance) <= 0)
-      return res.status(409).json({ error: "This account has no outstanding balance" });
-    const notice = await prisma.debtNotice.create({
-      data: {
-        noticeNumber: `DN-${Date.now()}-${String(data.accountId)}`,
-        accountId: data.accountId,
-        noticeType: data.noticeType,
-        paymentDeadline: day(data.paymentDeadline),
-        outstandingAmount: account.currentBalance,
-        deliveryChannel: data.deliveryChannel,
-        deliveryStatus: "PENDING",
-        noticeStatus: "PENDING_APPROVAL",
-        messageBody: data.messageBody,
-        createdBy: uid(req),
-      },
+    if (accounts.length !== accountIds.length)
+      return res.status(404).json({ error: "One or more customer accounts were not found" });
+    const withoutBalance = accounts.filter((account) => Number(account.currentBalance) <= 0);
+    if (withoutBalance.length)
+      return res.status(409).json({
+        error: `${withoutBalance.length} selected account(s) have no outstanding balance`,
+      });
+
+    const timestamp = Date.now();
+    const notices = await prisma.$transaction(async (tx) => {
+      const created = [];
+      for (const account of accounts) {
+        const personalizedMessage = data.messageBody
+          .replace(/\{\{customerName\}\}/g, customerName(account.customer))
+          .replace(/\{\{accountNumber\}\}/g, account.accountNumber)
+          .replace(/\{\{balance\}\}/g, moneyForMessage(account.currentBalance));
+        const notice = await tx.debtNotice.create({
+          data: {
+            noticeNumber: `DN-${timestamp}-${String(account.accountId)}`,
+            accountId: account.accountId,
+            noticeType: data.noticeType,
+            paymentDeadline: day(data.paymentDeadline),
+            outstandingAmount: account.currentBalance,
+            deliveryChannel: data.deliveryChannel,
+            deliveryStatus: "PENDING",
+            noticeStatus: "PENDING_APPROVAL",
+            messageBody: personalizedMessage,
+            createdBy: uid(req),
+          },
+        });
+        await tx.arrearsAction.create({
+          data: {
+            accountId: account.accountId,
+            actionType: "DEBT_NOTICE_SUBMITTED",
+            details: `${data.noticeType} submitted for approval`,
+            performedBy: uid(req),
+            referenceType: "DEBT_NOTICE",
+            referenceId: notice.noticeId,
+          },
+        });
+        created.push(notice);
+      }
+      return created;
+    }, { maxWait: 10_000, timeout: 120_000 });
+    res.status(201).json({ created: notices.length, notices });
+  } catch (error) {
+    next(error);
+  }
+});
+
+arrearsRouter.patch("/notices/decision", supervisor, async (req, res, next) => {
+  const data = parse(
+    z.object({
+      noticeIds: z.array(id).min(1).max(500),
+      decision: z.enum(["APPROVE", "REJECT", "RETURN"]),
+      comments: z.string().trim().min(3).max(2000),
+    }),
+    req.body,
+    res,
+  );
+  if (!data) return;
+  try {
+    const noticeIds = [...new Set(data.noticeIds.map(String))].map(BigInt);
+    const notices = await prisma.debtNotice.findMany({
+      where: { noticeId: { in: noticeIds } },
     });
-    await action(
-      data.accountId,
-      "DEBT_NOTICE_SUBMITTED",
-      `${data.noticeType} submitted for approval`,
-      uid(req),
-      "DEBT_NOTICE",
-      notice.noticeId,
-    );
-    res.status(201).json(notice);
+    if (notices.length !== noticeIds.length)
+      return res.status(404).json({ error: "One or more notices were not found" });
+    if (notices.some((notice) => notice.noticeStatus !== "PENDING_APPROVAL"))
+      return res.status(409).json({ error: "Only pending notices can be decided" });
+    if (!isSystemAdmin(req) && notices.some((notice) => notice.createdBy === uid(req)))
+      return res.status(403).json({
+        error: "Maker-checker control: remove notices you created from this approval batch",
+      });
+
+    const status =
+      data.decision === "APPROVE"
+        ? "APPROVED"
+        : data.decision === "RETURN"
+          ? "RETURNED"
+          : "REJECTED";
+    const now = new Date();
+    await prisma.$transaction(async (tx) => {
+      await tx.debtNotice.updateMany({
+        where: { noticeId: { in: noticeIds }, noticeStatus: "PENDING_APPROVAL" },
+        data: {
+          noticeStatus: status,
+          approvedBy: uid(req),
+          approvedAt: now,
+          decisionComments: data.comments,
+          updatedAt: now,
+        },
+      });
+      await tx.arrearsAction.createMany({
+        data: notices.map((notice) => ({
+          accountId: notice.accountId,
+          actionType: `DEBT_NOTICE_${status}`,
+          details: data.comments,
+          performedBy: uid(req),
+          referenceType: "DEBT_NOTICE",
+          referenceId: notice.noticeId,
+        })),
+      });
+    });
+    res.json({ updated: notices.length, status });
   } catch (error) {
     next(error);
   }
@@ -461,7 +578,7 @@ arrearsRouter.patch("/notices/:id/decision", supervisor, async (req, res, next) 
     if (!notice) return res.status(404).json({ error: "Notice not found" });
     if (notice.noticeStatus !== "PENDING_APPROVAL")
       return res.status(409).json({ error: "Only pending notices can be decided" });
-    if (notice.createdBy === uid(req))
+    if (notice.createdBy === uid(req) && !isSystemAdmin(req))
       return res.status(403).json({
         error: "Maker-checker control: the notice creator cannot approve their own notice",
       });
@@ -625,7 +742,7 @@ arrearsRouter.patch("/plans/:id/decision", supervisor, async (req, res, next) =>
     if (!plan) return res.status(404).json({ error: "Payment plan not found" });
     if (plan.status !== "PROPOSED")
       return res.status(409).json({ error: "Only proposed plans can be decided" });
-    if (plan.createdBy === uid(req))
+    if (plan.createdBy === uid(req) && !isSystemAdmin(req))
       return res.status(403).json({
         error: "Maker-checker control: the plan creator cannot approve their own plan",
       });
@@ -921,7 +1038,7 @@ arrearsRouter.patch("/disconnections/:id/decision", manager, async (req, res, ne
     if (!list) return res.status(404).json({ error: "Disconnection list not found" });
     if (list.status !== "PENDING_APPROVAL")
       return res.status(409).json({ error: "Only pending lists can be decided" });
-    if (list.createdBy === uid(req))
+    if (list.createdBy === uid(req) && !isSystemAdmin(req))
       return res.status(403).json({
         error: "Maker-checker control: the list creator cannot approve their own list",
       });
@@ -1041,7 +1158,7 @@ arrearsRouter.patch("/write-offs/:id/decision", manager, async (req, res, next) 
     if (!request) return res.status(404).json({ error: "Write-off request not found" });
     if (request.status !== "PENDING")
       return res.status(409).json({ error: "Only pending requests can be decided" });
-    if (request.requestedBy === uid(req))
+    if (request.requestedBy === uid(req) && !isSystemAdmin(req))
       return res.status(403).json({
         error: "Maker-checker control: the requester cannot decide their own write-off",
       });

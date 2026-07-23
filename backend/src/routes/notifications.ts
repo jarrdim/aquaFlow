@@ -755,7 +755,17 @@ notificationsRouter.get("/audience", managers, async (req, res, next) => {
     .object({
       search: z.string().trim().max(100).default(""),
       minimumBalance: z.coerce.number().min(0).default(0.01),
-      accountStatus: z.string().trim().default("ACTIVE"),
+      accountStatuses: z.string().trim().default("").transform((value) => value ? value.split(",").filter(Boolean) : []),
+      zoneIds: z.string().trim().default("").transform((value, context) => {
+        const values = value ? value.split(",").filter(Boolean) : [];
+        if (values.some((item) => !/^\d+$/.test(item))) context.addIssue({ code: z.ZodIssueCode.custom, message: "Zone IDs must be numeric" });
+        return values;
+      }),
+      categoryIds: z.string().trim().default("").transform((value, context) => {
+        const values = value ? value.split(",").filter(Boolean) : [];
+        if (values.some((item) => !/^\d+$/.test(item))) context.addIssue({ code: z.ZodIssueCode.custom, message: "Category IDs must be numeric" });
+        return values;
+      }),
       page: z.coerce.number().int().min(1).default(1),
       pageSize: z.coerce.number().int().min(10).max(100).default(25),
     })
@@ -763,11 +773,13 @@ notificationsRouter.get("/audience", managers, async (req, res, next) => {
   if (!parsed.success)
     return res.status(400).json({ error: parsed.error.flatten() });
   try {
-    const { search, minimumBalance, accountStatus, page, pageSize } =
+    const { search, minimumBalance, accountStatuses, zoneIds, categoryIds, page, pageSize } =
       parsed.data;
     const where: any = {
       currentBalance: { gte: minimumBalance },
-      ...(accountStatus ? { accountStatus } : {}),
+      ...(accountStatuses.length ? { accountStatus: { in: accountStatuses } } : {}),
+      ...(zoneIds.length ? { property: { zoneId: { in: zoneIds.map(BigInt) } } } : {}),
+      ...(categoryIds.length ? { categoryId: { in: categoryIds.map(BigInt) } } : {}),
       ...(search
         ? {
             OR: [
@@ -813,7 +825,7 @@ notificationsRouter.get("/audience", managers, async (req, res, next) => {
     const [items, total, balance] = await Promise.all([
       prisma.customerAccount.findMany({
         where,
-        include: { customer: true, category: true },
+        include: { customer: true, category: true, property: { include: { zone: true } } },
         orderBy: [{ currentBalance: "desc" }, { accountNumber: "asc" }],
         skip: (page - 1) * pageSize,
         take: pageSize,
@@ -845,7 +857,9 @@ notificationsRouter.post("/send-bulk", managers, async (req, res, next) => {
   const audienceFilters = z.object({
     search: z.string().trim().max(100).default(""),
     minimumBalance: z.coerce.number().min(0).default(0.01),
-    accountStatus: z.string().trim().default("ACTIVE"),
+    accountStatuses: z.array(z.string().trim().min(1).max(50)).max(20).default([]),
+    zoneIds: z.array(id).max(100).default([]),
+    categoryIds: z.array(id).max(100).default([]),
   });
   const parsed = z
     .object({
@@ -877,9 +891,9 @@ notificationsRouter.post("/send-bulk", managers, async (req, res, next) => {
     const { filters } = parsed.data;
     const filteredWhere: any = {
       currentBalance: { gte: filters.minimumBalance },
-      ...(filters.accountStatus
-        ? { accountStatus: filters.accountStatus }
-        : {}),
+      ...(filters.accountStatuses.length ? { accountStatus: { in: filters.accountStatuses } } : {}),
+      ...(filters.zoneIds.length ? { property: { zoneId: { in: filters.zoneIds } } } : {}),
+      ...(filters.categoryIds.length ? { categoryId: { in: filters.categoryIds } } : {}),
       ...(filters.search
         ? {
             OR: [
@@ -919,6 +933,12 @@ notificationsRouter.post("/send-bulk", managers, async (req, res, next) => {
                     contains: filters.search,
                     mode: "insensitive",
                   },
+                },
+              },
+              { customer: { phoneNumber: { contains: filters.search } } },
+              {
+                customer: {
+                  emailAddress: { contains: filters.search, mode: "insensitive" },
                 },
               },
             ],

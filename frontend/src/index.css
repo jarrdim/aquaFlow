@@ -156,6 +156,21 @@ strong,
   scrollbar-width: thin;
 }
 
+/* On nested screens the final breadcrumb is the page heading. This removes
+   the duplicated title row and returns more vertical space to data tables. */
+.app-content:has(.app-breadcrumbs) .page-screen-header h1 {
+  display: none;
+}
+
+.app-content:has(.app-breadcrumbs) .page-screen-header {
+  margin-top: -0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.app-content:has(.app-breadcrumbs) .page-screen-header p {
+  margin-top: 0;
+}
+
 .app-content::-webkit-scrollbar {
   width: 8px;
   height: 8px;

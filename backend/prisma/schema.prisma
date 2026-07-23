@@ -117,6 +117,7 @@ model Customer {
   accounts      CustomerAccount[]
   users         User[]
   notifications Notification[]
+  serviceRequests ServiceRequest[]
 
   @@map("customers")
   @@schema("aquaflow")
@@ -183,6 +184,7 @@ model CustomerAccount {
   disconnectionItems   DisconnectionListItem[]
   debtWriteOffs        DebtWriteOff[]
   arrearsActions       ArrearsAction[]
+  serviceRequests      ServiceRequest[]
 
   @@map("customer_accounts")
   @@schema("aquaflow")
@@ -251,6 +253,9 @@ model User {
   requestedDebtWriteOffs         DebtWriteOff[]               @relation("DebtWriteOffRequester")
   decidedDebtWriteOffs           DebtWriteOff[]               @relation("DebtWriteOffApprover")
   arrearsActions                 ArrearsAction[]              @relation("ArrearsActionUser")
+  createdServiceRequests         ServiceRequest[]             @relation("ServiceRequestCreator")
+  assignedServiceRequests        ServiceRequest[]             @relation("ServiceRequestAssignee")
+  serviceRequestEvents           ServiceRequestEvent[]        @relation("ServiceRequestEventUser")
 
   @@map("users")
   @@schema("aquaflow")
@@ -315,6 +320,58 @@ model RolePermission {
 
   @@unique([roleId, permissionId])
   @@map("role_permissions")
+  @@schema("aquaflow")
+}
+
+model ServiceRequest {
+  serviceRequestId BigInt    @id @default(autoincrement()) @map("service_request_id")
+  requestNumber    String    @unique @map("request_number")
+  requestType      String    @map("request_type")
+  customerId       BigInt?   @map("customer_id")
+  accountId        BigInt?   @map("account_id")
+  category         String
+  subject          String
+  description      String
+  contactChannel   String    @default("PHONE") @map("contact_channel")
+  priority         String    @default("MEDIUM")
+  status           String    @default("OPEN")
+  assignedTo       BigInt?   @map("assigned_to")
+  dueAt            DateTime? @map("due_at")
+  resolution       String?
+  resolvedAt       DateTime? @map("resolved_at")
+  closedAt         DateTime? @map("closed_at")
+  createdBy        BigInt    @map("created_by")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  customer Customer? @relation(fields: [customerId], references: [customerId])
+  account  CustomerAccount? @relation(fields: [accountId], references: [accountId])
+  creator  User @relation("ServiceRequestCreator", fields: [createdBy], references: [userId])
+  assignee User? @relation("ServiceRequestAssignee", fields: [assignedTo], references: [userId])
+  events   ServiceRequestEvent[]
+
+  @@index([status, priority])
+  @@index([customerId])
+  @@index([accountId])
+  @@map("service_requests")
+  @@schema("aquaflow")
+}
+
+model ServiceRequestEvent {
+  serviceRequestEventId BigInt   @id @default(autoincrement()) @map("service_request_event_id")
+  serviceRequestId      BigInt   @map("service_request_id")
+  eventType             String   @map("event_type")
+  oldStatus             String?  @map("old_status")
+  newStatus             String?  @map("new_status")
+  comments              String?
+  performedBy           BigInt   @map("performed_by")
+  createdAt             DateTime @default(now()) @map("created_at")
+
+  serviceRequest ServiceRequest @relation(fields: [serviceRequestId], references: [serviceRequestId], onDelete: Cascade)
+  performer      User @relation("ServiceRequestEventUser", fields: [performedBy], references: [userId])
+
+  @@index([serviceRequestId, createdAt])
+  @@map("service_request_events")
   @@schema("aquaflow")
 }
 

@@ -148,9 +148,9 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ username, password }),
     }),
-  listCustomers: (search = "", page = 1, status = "") =>
+  listCustomers: (search = "", page = 1, status = "", meterAssignment = "") =>
     request(
-      `/customers?search=${encodeURIComponent(search)}&page=${page}${status ? `&status=${encodeURIComponent(status)}` : ""}`,
+      `/customers?search=${encodeURIComponent(search)}&page=${page}${status ? `&status=${encodeURIComponent(status)}` : ""}${meterAssignment ? `&meterAssignment=${encodeURIComponent(meterAssignment)}` : ""}`,
     ),
   getCustomer: (id: string) => request(`/customers/${id}`),
   createCustomer: (data: Record<string, unknown>) =>
@@ -650,8 +650,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify(data),
     }),
-  listDebtNotices: (status = "") =>
-    request(`/arrears/notices${status ? `?status=${encodeURIComponent(status)}` : ""}`),
+  listDebtNotices: (filters: Record<string, string> = {}) => {
+    const query = new URLSearchParams(
+      Object.entries(filters).filter(([, value]) => value),
+    ).toString();
+    return request(`/arrears/notices${query ? `?${query}` : ""}`);
+  },
   createDebtNotice: (data: Record<string, unknown>) =>
     request("/arrears/notices", {
       method: "POST",
@@ -665,6 +669,15 @@ export const api = {
     request(`/arrears/notices/${id}/decision`, {
       method: "PATCH",
       body: JSON.stringify({ decision, comments }),
+    }),
+  decideDebtNotices: (
+    noticeIds: string[],
+    decision: "APPROVE" | "REJECT" | "RETURN",
+    comments: string,
+  ) =>
+    request("/arrears/notices/decision", {
+      method: "PATCH",
+      body: JSON.stringify({ noticeIds, decision, comments }),
     }),
   listPaymentPlans: (status = "") =>
     request(`/arrears/plans${status ? `?status=${encodeURIComponent(status)}` : ""}`),
@@ -744,4 +757,31 @@ export const api = {
   },
   arrearsAudit: (accountId = "") =>
     request(`/arrears/audit${accountId ? `?accountId=${encodeURIComponent(accountId)}` : ""}`),
+  adminDashboard: () => request("/admin/dashboard"),
+  listAdminUsers: (filters: Record<string, string> = {}) => {
+    const query = new URLSearchParams(Object.entries(filters).filter(([, value]) => value)).toString();
+    return request(`/admin/users${query ? `?${query}` : ""}`);
+  },
+  createAdminUser: (data: Record<string, unknown>) => request("/admin/users", { method: "POST", body: JSON.stringify(data) }),
+  updateAdminUser: (id: string, data: Record<string, unknown>) => request(`/admin/users/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+  updateAdminUserRoles: (id: string, roleIds: string[]) => request(`/admin/users/${id}/roles`, { method: "PUT", body: JSON.stringify({ roleIds }) }),
+  listAdminRoles: () => request("/admin/roles"),
+  createAdminRole: (data: Record<string, unknown>) => request("/admin/roles", { method: "POST", body: JSON.stringify(data) }),
+  updateAdminRole: (id: string, data: Record<string, unknown>) => request(`/admin/roles/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+  updateRolePermissions: (id: string, permissionIds: string[]) => request(`/admin/roles/${id}/permissions`, { method: "PUT", body: JSON.stringify({ permissionIds }) }),
+  listAdminPermissions: () => request("/admin/permissions"),
+  createAdminPermission: (data: Record<string, unknown>) => request("/admin/permissions", { method: "POST", body: JSON.stringify(data) }),
+  updateAdminPermission: (id: string, data: Record<string, unknown>) => request(`/admin/permissions/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+  serviceRequestDashboard: () => request("/service-requests/dashboard"),
+  listServiceRequestTargets: (q = "") => request(`/service-requests/targets${q ? `?q=${encodeURIComponent(q)}` : ""}`),
+  listServiceOfficers: () => request("/service-requests/officers"),
+  listServiceRequests: (filters: Record<string, string> = {}) => {
+    const query = new URLSearchParams(Object.entries(filters).filter(([, value]) => value)).toString();
+    return request(`/service-requests${query ? `?${query}` : ""}`);
+  },
+  getServiceRequest: (id: string) => request(`/service-requests/${id}`),
+  createServiceRequest: (data: Record<string, unknown>) => request("/service-requests", { method: "POST", body: JSON.stringify(data) }),
+  assignServiceRequest: (id: string, data: Record<string, unknown>) => request(`/service-requests/${id}/assign`, { method: "PATCH", body: JSON.stringify(data) }),
+  updateServiceRequestStatus: (id: string, data: Record<string, unknown>) => request(`/service-requests/${id}/status`, { method: "PATCH", body: JSON.stringify(data) }),
+  addServiceRequestComment: (id: string, comments: string) => request(`/service-requests/${id}/comments`, { method: "POST", body: JSON.stringify({ comments }) }),
 };

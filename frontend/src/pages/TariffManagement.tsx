@@ -2,6 +2,7 @@ import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { exportExcel } from "../lib/meterFiles";
+import { SearchableSelect } from "../components/SearchableSelect";
 
 type Row = Record<string, any>;
 const INPUT =
@@ -24,7 +25,7 @@ function Page({
 }) {
   return (
     <div className="mx-auto max-w-[1600px] p-4 lg:px-6 lg:py-5">
-      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+      <div className="page-screen-header mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-slate-900 lg:text-[26px]">
             {title}
@@ -299,7 +300,7 @@ export function TariffDashboard() {
       <Card className="mb-4">
         <div className="grid gap-3 md:grid-cols-2">
           <Field label="Effective year">
-            <select
+            <SearchableSelect
               className={INPUT}
               value={filters.year}
               onChange={(e) => setFilters({ ...filters, year: e.target.value })}
@@ -308,10 +309,10 @@ export function TariffDashboard() {
                 const year = new Date().getFullYear() + offset;
                 return <option key={year}>{year}</option>;
               })}
-            </select>
+            </SearchableSelect>
           </Field>
           <Field label="Customer category">
-            <select
+            <SearchableSelect
               className={INPUT}
               value={filters.categoryId}
               onChange={(e) =>
@@ -324,7 +325,7 @@ export function TariffDashboard() {
                   {c.categoryName}
                 </option>
               ))}
-            </select>
+            </SearchableSelect>
           </Field>
         </div>
       </Card>
@@ -458,7 +459,7 @@ export function TariffRegister() {
             />
           </Field>
           <Field label="Status">
-            <select
+            <SearchableSelect
               className={INPUT}
               value={filters.status}
               onChange={(e) =>
@@ -477,10 +478,10 @@ export function TariffRegister() {
               ].map((x) => (
                 <option key={x}>{x}</option>
               ))}
-            </select>
+            </SearchableSelect>
           </Field>
           <Field label="Method">
-            <select
+            <SearchableSelect
               className={INPUT}
               value={filters.method}
               onChange={(e) =>
@@ -491,10 +492,10 @@ export function TariffRegister() {
               {METHODS.map((x) => (
                 <option key={x}>{x}</option>
               ))}
-            </select>
+            </SearchableSelect>
           </Field>
           <Field label="Category">
-            <select
+            <SearchableSelect
               className={INPUT}
               value={filters.categoryId}
               onChange={(e) =>
@@ -507,7 +508,7 @@ export function TariffRegister() {
                   {c.categoryName}
                 </option>
               ))}
-            </select>
+            </SearchableSelect>
           </Field>
         </div>
       </Card>
@@ -680,7 +681,7 @@ export function TariffEditor() {
               />
             </Field>
             <Field label="Customer category" required>
-              <select
+              <SearchableSelect
                 required
                 className={INPUT}
                 value={form.categoryId}
@@ -692,10 +693,10 @@ export function TariffEditor() {
                     {c.categoryName}
                   </option>
                 ))}
-              </select>
+              </SearchableSelect>
             </Field>
             <Field label="Billing method" required>
-              <select
+              <SearchableSelect
                 className={INPUT}
                 value={form.billingMethod}
                 onChange={(e) => set("billingMethod", e.target.value)}
@@ -703,7 +704,7 @@ export function TariffEditor() {
                 {METHODS.map((x) => (
                   <option key={x}>{x}</option>
                 ))}
-              </select>
+              </SearchableSelect>
             </Field>
             {form.billingMethod === "FLAT" && (
               <Field label="Flat amount" required>
@@ -1054,7 +1055,7 @@ export function TariffSimulation() {
         <Card title="Simulation inputs">
           <form onSubmit={run} className="space-y-3">
             <Field label="Proposed tariff" required>
-              <select
+              <SearchableSelect
                 required
                 className={INPUT}
                 value={tariffId}
@@ -1069,7 +1070,7 @@ export function TariffSimulation() {
                     {t.tariffName} · {t.category?.categoryName}
                   </option>
                 ))}
-              </select>
+              </SearchableSelect>
             </Field>
             <Field
               label={
@@ -1555,14 +1556,14 @@ export function TariffActivation() {
                 </dl>
               </div>
               <Field label="Activation mode">
-                <select
+                <SearchableSelect
                   className={INPUT}
                   value={mode}
                   onChange={(e) => setMode(e.target.value as any)}
                 >
                   <option value="AUTO_ON_DATE">Auto on effective date</option>
                   <option value="NOW">Activate now</option>
-                </select>
+                </SearchableSelect>
               </Field>
               <Field label="Activation reason" required>
                 <textarea
@@ -1635,7 +1636,7 @@ export function TariffAssignments() {
       <Card title="Category assignment workspace" className="mb-4">
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <Field label="Customer category">
-            <select
+            <SearchableSelect
               className={INPUT}
               value={categoryId}
               onChange={(e) => {
@@ -1649,7 +1650,7 @@ export function TariffAssignments() {
                   {c.categoryName}
                 </option>
               ))}
-            </select>
+            </SearchableSelect>
           </Field>
           <Field label="Current active tariff">
             <input
@@ -1659,7 +1660,7 @@ export function TariffAssignments() {
             />
           </Field>
           <Field label="New tariff">
-            <select
+            <SearchableSelect
               className={INPUT}
               value={newTariffId}
               onChange={(e) => setNewTariffId(e.target.value)}
@@ -1670,7 +1671,7 @@ export function TariffAssignments() {
                   {t.tariffName} · {pretty(t.status)}
                 </option>
               ))}
-            </select>
+            </SearchableSelect>
           </Field>
           <Field label="Effective from">
             <input
@@ -1800,7 +1801,7 @@ export function TariffHistory() {
       {error && <Notice>{error}</Notice>}
       <Card className="mb-4">
         <Field label="Customer category">
-          <select
+          <SearchableSelect
             className={INPUT}
             value={categoryId}
             onChange={(e) => setCategoryId(e.target.value)}
@@ -1811,7 +1812,7 @@ export function TariffHistory() {
                 {c.categoryName}
               </option>
             ))}
-          </select>
+          </SearchableSelect>
         </Field>
       </Card>
       <Card title={`${rows.length} historical version(s)`}>
@@ -1910,7 +1911,7 @@ export function TariffComparison() {
       <Card className="mb-4">
         <div className="grid gap-3 md:grid-cols-2">
           <Field label="Old tariff">
-            <select
+            <SearchableSelect
               className={INPUT}
               value={leftId}
               onChange={(e) => setLeftId(e.target.value)}
@@ -1921,10 +1922,10 @@ export function TariffComparison() {
                   {t.tariffName} · {t.category?.categoryName}
                 </option>
               ))}
-            </select>
+            </SearchableSelect>
           </Field>
           <Field label="New tariff">
-            <select
+            <SearchableSelect
               className={INPUT}
               value={rightId}
               onChange={(e) => setRightId(e.target.value)}
@@ -1935,7 +1936,7 @@ export function TariffComparison() {
                   {t.tariffName} · {t.category?.categoryName}
                 </option>
               ))}
-            </select>
+            </SearchableSelect>
           </Field>
         </div>
       </Card>
@@ -2041,7 +2042,7 @@ export function TariffAudit() {
       {error && <Notice>{error}</Notice>}
       <Card className="mb-4">
         <Field label="Tariff">
-          <select
+          <SearchableSelect
             className={INPUT}
             value={tariffId}
             onChange={(e) => setTariffId(e.target.value)}
@@ -2052,7 +2053,7 @@ export function TariffAudit() {
                 {t.tariffName} · {t.category?.categoryName}
               </option>
             ))}
-          </select>
+          </SearchableSelect>
         </Field>
       </Card>
       <Card title={tariff?.tariffName ?? "Audit events"}>

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import { encodeId } from "../lib/hashids";
+import { SearchableSelect } from "../components/SearchableSelect";
 
 type CustomerType = "INDIVIDUAL" | "ORGANIZATION";
 type IdType = "NATIONAL_ID" | "PASSPORT" | "OTHER";
@@ -248,14 +249,14 @@ export default function NewCustomer() {
             {/* Customer Type */}
             <div className="mb-4">
               <Field label="Customer Type" required>
-                <select
+                <SearchableSelect
                   className={FIELD_CLS}
                   value={customerType}
                   onChange={(e) => setCustomerType(e.target.value as CustomerType)}
                 >
                   <option value="INDIVIDUAL">Individual</option>
                   <option value="ORGANIZATION">Organization</option>
-                </select>
+                </SearchableSelect>
               </Field>
             </div>
 
@@ -277,11 +278,11 @@ export default function NewCustomer() {
                 {/* ID + Phone row */}
                 <div className="mb-4 grid gap-3 md:grid-cols-3">
                   <Field label="ID Type" required>
-                    <select className={FIELD_CLS} value={idType} onChange={(e) => setIdType(e.target.value as IdType)}>
+                    <SearchableSelect className={FIELD_CLS} value={idType} onChange={(e) => setIdType(e.target.value as IdType)}>
                       <option value="NATIONAL_ID">National ID</option>
                       <option value="PASSPORT">Passport</option>
                       <option value="OTHER">Other</option>
-                    </select>
+                    </SearchableSelect>
                   </Field>
                   <Field label="ID Number">
                     <input className={FIELD_CLS} value={form.nationalId} onChange={(e) => upd("nationalId", e.target.value)} placeholder="0712 345 678" />
@@ -303,10 +304,10 @@ export default function NewCustomer() {
 
                 <div className="grid gap-3 md:grid-cols-2">
                   <Field label="Preferred Language">
-                    <select className={FIELD_CLS} value={form.preferredLanguage} onChange={(e) => upd("preferredLanguage", e.target.value)}>
+                    <SearchableSelect className={FIELD_CLS} value={form.preferredLanguage} onChange={(e) => upd("preferredLanguage", e.target.value)}>
                       <option value="EN">English</option>
                       <option value="SW">Swahili</option>
-                    </select>
+                    </SearchableSelect>
                   </Field>
                   <Field label="Registration Date" required>
                     <input type="date" className={FIELD_CLS} value={form.registrationDate} onChange={(e) => upd("registrationDate", e.target.value)} />
@@ -338,10 +339,10 @@ export default function NewCustomer() {
                 </div>
                 <div className="grid gap-3 md:grid-cols-2">
                   <Field label="Preferred Language">
-                    <select className={FIELD_CLS} value={form.preferredLanguage} onChange={(e) => upd("preferredLanguage", e.target.value)}>
+                    <SearchableSelect className={FIELD_CLS} value={form.preferredLanguage} onChange={(e) => upd("preferredLanguage", e.target.value)}>
                       <option value="EN">English</option>
                       <option value="SW">Swahili</option>
-                    </select>
+                    </SearchableSelect>
                   </Field>
                   <Field label="Registration Date" required>
                     <input type="date" className={FIELD_CLS} value={form.registrationDate} onChange={(e) => upd("registrationDate", e.target.value)} />
@@ -360,29 +361,29 @@ export default function NewCustomer() {
 
             <div className="mb-3">
               <Field label="Zone">
-                <select
+                <SearchableSelect
                   className={FIELD_CLS}
                   value={form.zoneId}
                   onChange={(e) => { upd("zoneId", e.target.value); upd("serviceAreaId", ""); upd("routeId", ""); }}
                 >
                   <option value="">Select zone (optional)</option>
                   {zones.map((z) => <option key={z.zoneId} value={z.zoneId}>{z.zoneName}</option>)}
-                </select>
+                </SearchableSelect>
               </Field>
             </div>
 
             <div className="mb-3 grid gap-3 md:grid-cols-2">
               <Field label="Service Area">
-                <select className={FIELD_CLS} value={form.serviceAreaId} onChange={(e) => upd("serviceAreaId", e.target.value)} disabled={!form.zoneId}>
+                <SearchableSelect className={FIELD_CLS} value={form.serviceAreaId} onChange={(e) => upd("serviceAreaId", e.target.value)} disabled={!form.zoneId}>
                   <option value="">None</option>
                   {serviceAreas.map((s) => <option key={s.serviceAreaId} value={s.serviceAreaId}>{s.areaName}</option>)}
-                </select>
+                </SearchableSelect>
               </Field>
               <Field label="Route">
-                <select className={FIELD_CLS} value={form.routeId} onChange={(e) => upd("routeId", e.target.value)} disabled={!form.zoneId}>
+                <SearchableSelect className={FIELD_CLS} value={form.routeId} onChange={(e) => upd("routeId", e.target.value)} disabled={!form.zoneId}>
                   <option value="">None</option>
                   {routes.map((r) => <option key={r.routeId} value={r.routeId}>{r.routeName}</option>)}
-                </select>
+                </SearchableSelect>
               </Field>
             </div>
 
