@@ -787,12 +787,14 @@ function Shell({ children }: { children: React.ReactNode }) {
       >
         {/* Utility logo */}
         <div className={`flex items-center border-b border-white/10 px-3 py-3 ${sidebarCollapsed ? "justify-center" : ""}`}>
-          <div
+          <Link
+            to="/"
+            aria-label="Go to home page"
+            title="Home"
             className={`overflow-hidden rounded-xl shadow-sm ${
               sidebarCollapsed ? "h-11 w-11" : "h-16 w-full"
             }`}
           >
-            
             <img
               src="/samdamte-navbar-logo-transparent.png"
               alt="Samdamte Water Utility Management"
@@ -800,7 +802,7 @@ function Shell({ children }: { children: React.ReactNode }) {
                 sidebarCollapsed ? "h-11 w-auto object-left" : "h-full w-full"
               }`}
             />
-          </div>
+          </Link>
         </div>
 
         {/* Nav */}
