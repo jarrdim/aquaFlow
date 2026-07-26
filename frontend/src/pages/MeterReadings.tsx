@@ -2,6 +2,7 @@ import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { exportExcel, openEvidence, parseMeterWorkbook } from "../lib/meterFiles";
+import { CheckboxMultiSelect } from "../components/CheckboxMultiSelect";
 import { SearchableSelect } from "../components/SearchableSelect";
 import { SweetAlertToast } from "../components/SweetAlertToast";
 
@@ -2242,7 +2243,19 @@ export function ReadingWorklist() {
   const [operation, setOperation] = useState("");
   const [operationProgress, setOperationProgress] = useState(0);
   const cycleId = params.get("cycleId") ?? "";
-  const routeId = params.get("routeId") ?? "";
+  const routeIdsParam = params.get("routeIds") ?? params.get("routeId") ?? "";
+  const routeIds = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          routeIdsParam
+            .split(",")
+            .map((value) => value.trim())
+            .filter(Boolean),
+        ),
+      ),
+    [routeIdsParam],
+  );
   const search = params.get("search") ?? "";
   const readingStatus = params.get("status") ?? "";
   const page = Math.max(1, Number(params.get("page") ?? "1") || 1);
@@ -2266,7 +2279,11 @@ export function ReadingWorklist() {
     setLoading(true);
     const timer = window.setTimeout(() => {
       api
-        .readingWorklist({ cycleId, routeId, search: search.trim() })
+        .readingWorklist({
+          cycleId,
+          routeIds: routeIds.join(","),
+          search: search.trim(),
+        })
         .then((nextItems) => {
           if (cancelled) return;
           setError("");
@@ -2283,12 +2300,20 @@ export function ReadingWorklist() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [cycleId, routeId, search]);
+  }, [cycleId, routeIdsParam, search]);
 
   const selectedCycle = cycles.find(
     (cycle) => String(cycle.readingCycleId) === cycleId,
   );
-  const selectedRoute = routes.find((route) => String(route.routeId) === routeId);
+  const selectedRoutes = routes.filter((route) =>
+    routeIds.includes(String(route.routeId)),
+  );
+  const selectedRouteSummary =
+    selectedRoutes.length === 0
+      ? "All routes"
+      : selectedRoutes.length <= 2
+        ? selectedRoutes.map((route) => route.routeName).join(", ")
+        : `${selectedRoutes.length.toLocaleString()} routes`;
   const captured = items.filter((item) => item.cycleReading).length;
   const unread = items.length - captured;
   const filteredItems = useMemo(
@@ -2532,7 +2557,7 @@ export function ReadingWorklist() {
       );
       const refreshed = await api.readingWorklist({
         cycleId,
-        routeId,
+        routeIds: routeIds.join(","),
         search: search.trim(),
       });
       setItems(refreshed);
@@ -2564,6 +2589,16 @@ export function ReadingWorklist() {
   const update = (key: string, value: string) => {
     const next = new URLSearchParams(params);
     value ? next.set(key, value) : next.delete(key);
+    next.delete("page");
+    setParams(next);
+  };
+
+  const updateRoutes = (values: string[]) => {
+    const next = new URLSearchParams(params);
+    next.delete("routeId");
+    values.length
+      ? next.set("routeIds", values.join(","))
+      : next.delete("routeIds");
     next.delete("page");
     setParams(next);
   };
@@ -2781,18 +2816,16 @@ export function ReadingWorklist() {
             </SearchableSelect>
           </Field>
           <Field label="Route">
-            <SearchableSelect
+            <CheckboxMultiSelect
               className={INPUT}
-              value={routeId}
-              onChange={(e) => update("routeId", e.target.value)}
-            >
-              <option value="">All routes</option>
-              {routes.map((r) => (
-                <option key={r.routeId} value={r.routeId}>
-                  {r.routeName}
-                </option>
-              ))}
-            </SearchableSelect>
+              value={routeIds}
+              onChange={updateRoutes}
+              placeholder="All routes"
+              options={routes.map((route) => ({
+                value: String(route.routeId),
+                label: route.routeName,
+              }))}
+            />
           </Field>
           <Field label="Search">
             <input
@@ -2821,7 +2854,7 @@ export function ReadingWorklist() {
             </div>
             <div className="mt-1 truncate text-sm font-bold text-slate-800">
               {selectedCycle?.cycleName ?? "Select a reading cycle"}
-              {selectedRoute ? ` · ${selectedRoute.routeName}` : " · All routes"}
+              {` · ${selectedRouteSummary}`}
             </div>
           </div>
           <div className="px-4 py-3">

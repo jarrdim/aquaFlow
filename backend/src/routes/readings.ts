@@ -91,7 +91,7 @@ function worklistSearch(search: string, exact: boolean): Prisma.MeterAssignmentW
 
 async function getEligibleAssignments(
   cycleId?: bigint,
-  routeId?: bigint,
+  routeIds?: bigint[],
   zoneId?: bigint,
   search = "",
   meterId?: bigint,
@@ -99,8 +99,13 @@ async function getEligibleAssignments(
 ) {
   const accountFilters: Prisma.CustomerAccountWhereInput[] = [
     { accountStatus: "ACTIVE" },
-    ...(routeId
-      ? [{ OR: [{ routeId }, { property: { routeId } }] } as Prisma.CustomerAccountWhereInput]
+    ...(routeIds?.length
+      ? [{
+          OR: [
+            { routeId: { in: routeIds } },
+            { property: { routeId: { in: routeIds } } },
+          ],
+        } as Prisma.CustomerAccountWhereInput]
       : []),
     ...(allowedRouteIds
       ? [{
@@ -389,7 +394,14 @@ readingsRouter.get("/worklist", async (req, res, next) => {
   try {
     const cycleId = req.query.cycleId ? BigInt(String(req.query.cycleId)) : undefined;
     if (!cycleId) return res.status(400).json({ error: "cycleId is required" });
-    const routeId = req.query.routeId ? BigInt(String(req.query.routeId)) : undefined;
+    const rawRouteIds = String(req.query.routeIds ?? req.query.routeId ?? "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
+    if (rawRouteIds.some((value) => !/^\d+$/.test(value))) {
+      return res.status(400).json({ error: "routeIds must contain valid route IDs" });
+    }
+    const routeIds = Array.from(new Set(rawRouteIds)).map((value) => BigInt(value));
     const zoneId = req.query.zoneId ? BigInt(String(req.query.zoneId)) : undefined;
     const meterId = req.query.meterId ? BigInt(String(req.query.meterId)) : undefined;
     const search = String(req.query.search ?? "").trim();
@@ -412,13 +424,17 @@ readingsRouter.get("/worklist", async (req, res, next) => {
         return res.status(403).json({ error: "No active field officer profile is linked to this user" });
       }
       allowedRouteIds = officer.routeAssignments.map((assignment) => assignment.routeId);
-      if (routeId && !allowedRouteIds.some((allowed) => allowed === routeId)) {
+      if (
+        routeIds.some(
+          (routeId) => !allowedRouteIds?.some((allowed) => allowed === routeId),
+        )
+      ) {
         return res.status(403).json({ error: "This route is not assigned to you for the selected cycle" });
       }
     }
     const items = await getEligibleAssignments(
       cycleId,
-      routeId,
+      routeIds,
       zoneId,
       search,
       meterId,
@@ -740,7 +756,7 @@ readingsRouter.get("/reports/progress", async (req, res, next) => {
     const routes = await prisma.route.findMany({ where: { status: "ACTIVE" }, include: { zone: true }, orderBy: { routeName: "asc" } });
     const rows = [];
     for (const route of routes) {
-      const eligible = await getEligibleAssignments(cycleId, route.routeId);
+      const eligible = await getEligibleAssignments(cycleId, [route.routeId]);
       const meterIds = eligible.map((a) => a.meterId);
       const readings = meterIds.length ? await prisma.meterReading.findMany({ where: { readingCycleId: cycleId, meterId: { in: meterIds } } }) : [];
       const routeAssignment = await prisma.routeAssignment.findFirst({ where: { readingCycleId: cycleId, routeId: route.routeId, status: { not: "REASSIGNED" } }, include: { fieldOfficer: { include: { user: true } } }, orderBy: { createdAt: "desc" } });
