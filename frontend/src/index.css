@@ -295,6 +295,70 @@ input[type="radio"] {
   background-clip: padding-box;
 }
 
+@keyframes landing-live-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.45);
+    opacity: 1;
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(52, 211, 153, 0);
+    opacity: 0.75;
+  }
+}
+
+@keyframes landing-chart-breathe {
+  0%, 100% {
+    transform: scaleY(0.88);
+    filter: saturate(0.9);
+  }
+  50% {
+    transform: scaleY(1);
+    filter: saturate(1.15);
+  }
+}
+
+@keyframes landing-toast-float {
+  0%, 100% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(0, -7px, 0);
+  }
+}
+
+.landing-live-dot,
+.landing-workflow-dot {
+  animation: landing-live-pulse 2s ease-in-out infinite;
+}
+
+.landing-chart-bar {
+  transform-origin: bottom;
+  animation: landing-chart-breathe 3.2s ease-in-out infinite;
+  transition: height 500ms ease;
+}
+
+.landing-payment-toast {
+  animation: landing-toast-float 3.6s ease-in-out infinite;
+}
+
+.landing-metric-card {
+  transition: transform 250ms ease, box-shadow 250ms ease;
+}
+
+.landing-metric-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 12px 24px -18px rgba(15, 32, 56, 0.55);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .landing-live-dot,
+  .landing-workflow-dot,
+  .landing-chart-bar,
+  .landing-payment-toast {
+    animation: none;
+  }
+}
+
 @media print {
   @page {
     size: A4 portrait;

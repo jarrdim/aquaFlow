@@ -71,14 +71,12 @@ export default function LandingPage() {
     <div className="landing-page h-screen overflow-y-auto bg-white text-slate-900">
       <header className="sticky top-0 z-40 border-b border-slate-200/80 bg-white/90 backdrop-blur-xl">
         <div className="mx-auto flex h-20 max-w-7xl items-center justify-between px-6 lg:px-8">
-          <Link to="/" className="flex items-center gap-3" aria-label="AquaFlow home">
-            <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-sky-400 to-aqua-700 text-white shadow-lg shadow-sky-200/70">
-              <Droplet className="h-6 w-6" />
-            </span>
-            <span>
-              <span className="block text-lg font-extrabold tracking-tight text-navy-900">AquaFlow</span>
-              <span className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">Water utility management</span>
-            </span>
+          <Link to="/" className="flex items-center" aria-label="Samdamte home">
+            <img
+              src="/samdamte-water-logo-print.png"
+              alt="Samdamte Water Utility Management"
+              className="h-16 w-auto max-w-[270px] object-contain"
+            />
           </Link>
 
           <nav className="hidden items-center gap-8 text-sm font-semibold text-slate-600 md:flex" aria-label="Landing page">
@@ -157,7 +155,7 @@ export default function LandingPage() {
                         <p className="text-[11px] text-slate-500">Live utility performance</p>
                       </div>
                     </div>
-                    <div className="flex gap-1.5"><span className="h-2 w-2 rounded-full bg-slate-200" /><span className="h-2 w-2 rounded-full bg-slate-200" /><span className="h-2 w-2 rounded-full bg-emerald-400" /></div>
+                    <div className="flex gap-1.5"><span className="h-2 w-2 rounded-full bg-slate-200" /><span className="h-2 w-2 rounded-full bg-slate-200" /><span className="landing-live-dot h-2 w-2 rounded-full bg-emerald-400" /></div>
                   </div>
 
                   <div className="grid gap-3 p-5 sm:grid-cols-3">
@@ -166,7 +164,7 @@ export default function LandingPage() {
                       ["Collection rate", "94.2%", "+2.1%", "text-emerald-600"],
                       ["Open exceptions", "18", "Review", "text-amber-600"],
                     ].map(([label, value, change, color]) => (
-                      <div key={label} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                      <div key={label} className="landing-metric-card rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
                         <p className="text-[11px] font-semibold text-slate-500">{label}</p>
                         <div className="mt-2 flex items-end justify-between">
                           <p className={`text-2xl font-black ${color}`}>{value}</p>
@@ -186,8 +184,11 @@ export default function LandingPage() {
                         {[43, 58, 52, 72, 67, 88, 76, 94, 83, 100, 89, 106].map((height, index) => (
                           <span
                             key={index}
-                            className={`flex-1 rounded-t ${index > 8 ? "bg-aqua-600" : "bg-sky-100"}`}
-                            style={{ height: `${height}px` }}
+                            className={`landing-chart-bar flex-1 rounded-t ${index > 8 ? "bg-aqua-600" : "bg-sky-100"}`}
+                            style={{
+                              height: `${height}px`,
+                              animationDelay: `${index * 110}ms`,
+                            }}
                           />
                         ))}
                       </div>
@@ -205,7 +206,7 @@ export default function LandingPage() {
                         ].map(([label, value], index) => (
                           <div key={label} className="flex items-center justify-between border-b border-white/10 pb-3 last:border-0 last:pb-0">
                             <div className="flex items-center gap-2">
-                              <span className={`h-2 w-2 rounded-full ${index === 2 ? "bg-emerald-400" : "bg-sky-400"}`} />
+                              <span className={`landing-workflow-dot h-2 w-2 rounded-full ${index === 2 ? "bg-emerald-400" : "bg-sky-400"}`} style={{ animationDelay: `${index * 400}ms` }} />
                               <span className="text-[11px] text-slate-300">{label}</span>
                             </div>
                             <span className="text-xs font-extrabold">{value}</span>
@@ -216,7 +217,7 @@ export default function LandingPage() {
                   </div>
                 </div>
               </div>
-              <div className="absolute -bottom-5 -left-5 hidden rounded-2xl border border-emerald-100 bg-white px-4 py-3 shadow-xl sm:flex sm:items-center sm:gap-3">
+              <div className="landing-payment-toast absolute -bottom-5 -left-5 hidden rounded-2xl border border-emerald-100 bg-white px-4 py-3 shadow-xl sm:flex sm:items-center sm:gap-3">
                 <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700"><Check /></span>
                 <div><p className="text-xs font-extrabold text-slate-800">Payment reconciled</p><p className="text-[10px] text-slate-500">M-Pesa confirmation received</p></div>
               </div>
@@ -288,9 +289,13 @@ export default function LandingPage() {
 
       <footer className="border-t border-slate-200 bg-white">
         <div className="mx-auto flex max-w-7xl flex-col gap-4 px-6 py-8 text-sm text-slate-500 sm:flex-row sm:items-center sm:justify-between lg:px-8">
-          <div className="flex items-center gap-2 font-extrabold text-navy-900"><Droplet className="h-5 w-5 text-aqua-600" /> AquaFlow</div>
+          <img
+            src="/samdamte-water-logo-print.png"
+            alt="Samdamte Water Utility Management"
+            className="h-12 w-auto max-w-[220px] object-contain"
+          />
           <p>Professional water utility operations, connected end to end.</p>
-          <p>© {new Date().getFullYear()} AquaFlow</p>
+          <p>© {new Date().getFullYear()} Samdamte Water</p>
         </div>
       </footer>
     </div>
