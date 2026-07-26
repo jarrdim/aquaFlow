@@ -36,8 +36,15 @@ export default function Login() {
   return (
     <div className="min-h-screen flex items-center justify-center">
       <form onSubmit={handleSubmit} className="bg-white shadow-sm rounded-xl p-8 w-full max-w-sm border border-slate-200">
-        <h1 className="text-xl font-semibold text-aqua-700 mb-1">Samdamte</h1>
-        <p className="text-sm text-slate-500 mb-6">Water Utility Management System</p>
+        <div className="mb-6 border-b border-slate-100 pb-5 text-center">
+          <img
+            src="/samdamte-water-logo-print.png"
+            
+            alt="Samdamte Water Utility Management"
+            className="mx-auto h-auto w-full max-w-[250px] object-contain"
+          />
+          <p className="mt-3 text-sm text-slate-500">Sign in to the utility management system</p>
+        </div>
 
         <SweetAlertToast
           message={sessionExpired && !error ? "Your session expired. Sign in again to continue." : ""}
