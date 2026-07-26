@@ -788,9 +788,9 @@ function Shell({ children }: { children: React.ReactNode }) {
         {/* Utility logo */}
         <div className={`flex items-center border-b border-white/10 px-3 py-3 ${sidebarCollapsed ? "justify-center" : ""}`}>
           <Link
-            to="/"
-            aria-label="Go to home page"
-            title="Home"
+            to="/dashboard"
+            aria-label="Go to dashboard"
+            title="Dashboard"
             className={`overflow-hidden rounded-xl shadow-sm ${
               sidebarCollapsed ? "h-11 w-11" : "h-16 w-full"
             }`}
