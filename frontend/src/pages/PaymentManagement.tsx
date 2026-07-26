@@ -1062,10 +1062,11 @@ export function PaymentReceipt() {
     >
       <Card className="invoice-print-document mx-auto max-w-3xl">
         <div className="flex justify-between border-b pb-4">
-          <div>
-            <h2 className="text-2xl font-bold text-aqua-700">AquaFlow</h2>
-            <div>Water Utility Management</div>
-          </div>
+          <img
+            src="/samdamte-water-logo-print.png"
+            alt="Samdamte Water Utility Management"
+            className="invoice-brand-logo h-auto w-[260px] max-w-[55%] object-contain"
+          />
           <div className="text-right">
             <h2 className="text-xl font-bold">PAYMENT RECEIPT</h2>
             <div>{r.receiptNumber}</div>

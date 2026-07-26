@@ -90,32 +90,32 @@ strong,
     color 160ms ease;
 }
 
-.app-sidebar nav > div > a,
-.app-sidebar nav > span {
+.app-sidebar nav>div>a,
+.app-sidebar nav>span {
   font-size: 0.94rem;
   line-height: 1.35rem;
   font-weight: 500;
 }
 
-.app-sidebar nav > div > div a {
+.app-sidebar nav>div>div a {
   font-size: 0.82rem;
   line-height: 1.15rem;
   letter-spacing: 0.005em;
 }
 
-.app-sidebar nav > div > a[class*="bg-navy"] {
+.app-sidebar nav>div>a[class*="bg-navy"] {
   font-weight: 650;
 }
 
-.app-sidebar > div:last-child .text-xs {
+.app-sidebar>div:last-child .text-xs {
   font-size: 0.82rem;
 }
 
-.app-sidebar > div:last-child .text-\[10px\] {
+.app-sidebar>div:last-child .text-\[10px\] {
   font-size: 0.72rem;
 }
 
-.app-sidebar > div:last-child .text-\[11px\] {
+.app-sidebar>div:last-child .text-\[11px\] {
   font-size: 0.76rem;
 }
 
@@ -309,7 +309,7 @@ input[type="radio"] {
   body.printing-invoice .app-sidebar,
   body.printing-invoice .app-topbar,
   body.printing-invoice .page-screen-header,
-  body.printing-invoice .invoice-print-page > [role="alert"] {
+  body.printing-invoice .invoice-print-page>[role="alert"] {
     display: none !important;
   }
 
@@ -341,7 +341,17 @@ input[type="radio"] {
     break-inside: avoid;
   }
 
-  body.printing-invoice .invoice-print-document > div {
+  body.printing-invoice .invoice-brand-logo {
+    display: block !important;
+    width: 280px !important;
+    max-width: 48% !important;
+
+    height: auto !important;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  body.printing-invoice .invoice-print-document>div {
     padding: 0 !important;
   }
 

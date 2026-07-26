@@ -381,6 +381,43 @@ export function MeterDashboard() {
               </div>
             ))}
           </div>
+
+
+  <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-6 mb-6">
+            <LinkButton to="/meters/list">Meter register</LinkButton>
+            <LinkButton to="/meters/replacements" tone="orange">
+              Replacement approvals
+            </LinkButton>
+            <LinkButton to="/meters/reports/exceptions" tone="teal">
+              Exception report
+            </LinkButton>
+            <LinkButton to="/meters/import" tone="green">
+              Bulk import
+            </LinkButton>
+            <LinkButton to="/meters/alerts" tone="red">
+              Exception alerts
+            </LinkButton>
+            <Button
+              tone="slate"
+              onClick={async () => {
+                const meters = await api.listMeters();
+                await exportExcel(
+                  "meter-register.xlsx",
+                  "Meters",
+                  meters.map((m: AnyRecord) => ({
+                    Meter: m.meterNumber,
+                    Type: m.meterType,
+                    SizeMM: m.meterSizeMm,
+                    AssignedTo: m.assignedTo ?? "",
+                    Status: m.status,
+                  })),
+                );
+              }}
+            >
+              Export register
+            </Button>
+          </div>
+
           <div className="grid gap-6 xl:grid-cols-[0.8fr_1.2fr]">
             <Card title="Meter distribution by type">
               <div className="space-y-5 py-2">
@@ -445,7 +482,7 @@ export function MeterDashboard() {
               )}
             </Card>
           </div>
-          <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
+          {/* <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
             <LinkButton to="/meters/list">Meter register</LinkButton>
             <LinkButton to="/meters/replacements" tone="orange">
               Replacement approvals
@@ -478,7 +515,7 @@ export function MeterDashboard() {
             >
               Export register
             </Button>
-          </div>
+          </div> */}
         </>
       )}
     </Page>

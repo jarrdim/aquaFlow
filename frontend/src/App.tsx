@@ -785,16 +785,21 @@ function Shell({ children }: { children: React.ReactNode }) {
           sidebarCollapsed ? "app-sidebar-collapsed w-20" : "w-60"
         }`}
       >
-        {/* Logo */}
-        <div className={`flex items-center border-b border-white/10 px-4 py-4 ${sidebarCollapsed ? "justify-center" : "gap-3"}`}>
-          <div className="w-9 h-9 rounded-xl bg-sky-500 flex items-center justify-center flex-shrink-0">
-            <IcoDroplet />
-          </div>
-          <div className={`min-w-0 ${sidebarCollapsed ? "hidden" : ""}`}>
-            <div className="text-sm font-bold leading-tight">AquaFlow</div>
-            <div className="text-[10px] text-blue-200/60 leading-tight truncate">
-              Water Utility Management
-            </div>
+        {/* Utility logo */}
+        <div className={`flex items-center border-b border-white/10 px-3 py-3 ${sidebarCollapsed ? "justify-center" : ""}`}>
+          <div
+            className={`overflow-hidden rounded-xl shadow-sm ${
+              sidebarCollapsed ? "h-11 w-11" : "h-16 w-full"
+            }`}
+          >
+            
+            <img
+              src="/samdamte-navbar-logo-transparent.png"
+              alt="Samdamte Water Utility Management"
+              className={`max-w-none object-contain ${
+                sidebarCollapsed ? "h-11 w-auto object-left" : "h-full w-full"
+              }`}
+            />
           </div>
         </div>
 
