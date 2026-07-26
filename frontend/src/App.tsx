@@ -178,6 +178,11 @@ function Protected({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+function GuestOnly({ children }: { children: React.ReactNode }) {
+  if (getToken()) return <Navigate to="/dashboard" replace />;
+  return <>{children}</>;
+}
+
 // ── Inline SVG icons ──────────────────────────────────────────────────────────
 const Icon = ({ d, size = 16 }: { d: string; size?: number }) => (
   <svg
@@ -1402,7 +1407,14 @@ export default function App() {
   return (
     <Routes>
       <Route path="/" element={<LandingPage />} />
-      <Route path="/login" element={<Login />} />
+      <Route
+        path="/login"
+        element={
+          <GuestOnly>
+            <Login />
+          </GuestOnly>
+        }
+      />
       <Route
         path="/dashboard"
         element={
