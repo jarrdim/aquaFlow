@@ -1,6 +1,7 @@
 import { ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../lib/api";
+import { SweetAlertToast } from "../components/SweetAlertToast";
 
 type Row = Record<string, any>;
 
@@ -271,7 +272,7 @@ export default function OperationalDashboard() {
         </button>
       </div>
 
-      {error && <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">{error}</div>}
+      <SweetAlertToast message={error} type="warning" />
 
       {loading ? (
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{Array.from({ length: 6 }, (_, index) => <Skeleton key={index} />)}</div>

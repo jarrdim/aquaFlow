@@ -113,10 +113,10 @@ model Customer {
   createdAt          DateTime @default(now()) @map("created_at")
   updatedAt          DateTime @default(now()) @map("updated_at")
 
-  properties    Property[]
-  accounts      CustomerAccount[]
-  users         User[]
-  notifications Notification[]
+  properties      Property[]
+  accounts        CustomerAccount[]
+  users           User[]
+  notifications   Notification[]
   serviceRequests ServiceRequest[]
 
   @@map("customers")
@@ -323,6 +323,47 @@ model RolePermission {
   @@schema("aquaflow")
 }
 
+model SystemSetting {
+  settingId              BigInt   @id @default(autoincrement()) @map("setting_id")
+  utilityName            String   @default("AquaFlow") @map("utility_name")
+  utilityCode            String   @default("AQUAFLOW") @map("utility_code")
+  emailAddress           String?  @map("email_address")
+  phoneNumber            String?  @map("phone_number")
+  secondaryPhoneNumber   String?  @map("secondary_phone_number")
+  postalAddress          String?  @map("postal_address")
+  postalCode             String?  @map("postal_code")
+  physicalAddress        String?  @map("physical_address")
+  currencyCode           String   @default("KES") @map("currency_code")
+  timezone               String   @default("Africa/Nairobi")
+  locale                 String   @default("en-KE")
+  dateFormat             String   @default("DD/MM/YYYY") @map("date_format")
+  billingDueDays         Int      @default(14) @map("billing_due_days")
+  defaultBillingRate     Decimal? @map("default_billing_rate") @db.Decimal(18, 2)
+  subprojectDiscountRate Decimal? @map("subproject_discount_rate") @db.Decimal(5, 2)
+  reconnectionFee        Decimal? @map("reconnection_fee") @db.Decimal(18, 2)
+  readingVariancePercent Decimal  @default(30) @map("reading_variance_percent") @db.Decimal(5, 2)
+  minimumReadingValue    Decimal  @default(0) @map("minimum_reading_value") @db.Decimal(18, 3)
+  billingMessageLine1    String?  @map("billing_message_line_1")
+  billingMessageLine2    String?  @map("billing_message_line_2")
+  billingMessageLine3    String?  @map("billing_message_line_3")
+  demandMessageLine1     String?  @map("demand_message_line_1")
+  demandMessageLine2     String?  @map("demand_message_line_2")
+  demandMessageLine3     String?  @map("demand_message_line_3")
+  demandMessageLine4     String?  @map("demand_message_line_4")
+  demandMessageLine5     String?  @map("demand_message_line_5")
+  receiptMessage         String?  @map("receipt_message")
+  sessionTimeoutMinutes  Int      @default(30) @map("session_timeout_minutes")
+  passwordMinimumLength  Int      @default(8) @map("password_minimum_length")
+  requireTwoFactor       Boolean  @default(false) @map("require_two_factor")
+  maintenanceMode        Boolean  @default(false) @map("maintenance_mode")
+  updatedBy              BigInt?  @map("updated_by")
+  createdAt              DateTime @default(now()) @map("created_at")
+  updatedAt              DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@map("system_settings")
+  @@schema("aquaflow")
+}
+
 model ServiceRequest {
   serviceRequestId BigInt    @id @default(autoincrement()) @map("service_request_id")
   requestNumber    String    @unique @map("request_number")
@@ -344,10 +385,10 @@ model ServiceRequest {
   createdAt        DateTime  @default(now()) @map("created_at")
   updatedAt        DateTime  @default(now()) @updatedAt @map("updated_at")
 
-  customer Customer? @relation(fields: [customerId], references: [customerId])
-  account  CustomerAccount? @relation(fields: [accountId], references: [accountId])
-  creator  User @relation("ServiceRequestCreator", fields: [createdBy], references: [userId])
-  assignee User? @relation("ServiceRequestAssignee", fields: [assignedTo], references: [userId])
+  customer Customer?             @relation(fields: [customerId], references: [customerId])
+  account  CustomerAccount?      @relation(fields: [accountId], references: [accountId])
+  creator  User                  @relation("ServiceRequestCreator", fields: [createdBy], references: [userId])
+  assignee User?                 @relation("ServiceRequestAssignee", fields: [assignedTo], references: [userId])
   events   ServiceRequestEvent[]
 
   @@index([status, priority])
@@ -368,7 +409,7 @@ model ServiceRequestEvent {
   createdAt             DateTime @default(now()) @map("created_at")
 
   serviceRequest ServiceRequest @relation(fields: [serviceRequestId], references: [serviceRequestId], onDelete: Cascade)
-  performer      User @relation("ServiceRequestEventUser", fields: [performedBy], references: [userId])
+  performer      User           @relation("ServiceRequestEventUser", fields: [performedBy], references: [userId])
 
   @@index([serviceRequestId, createdAt])
   @@map("service_request_events")

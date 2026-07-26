@@ -67,6 +67,13 @@ function ageBucket(days: number) {
   if (days <= 120) return "91_120";
   return "120_PLUS";
 }
+function selectedIds(value: unknown) {
+  const values = Array.isArray(value) ? value : String(value ?? "").split(",");
+  return values
+    .map((entry) => String(entry).trim())
+    .filter((entry) => /^\d+$/.test(entry))
+    .map((entry) => BigInt(entry));
+}
 const accountInclude = {
   customer: true,
   category: true,
@@ -85,13 +92,21 @@ const accountInclude = {
 } satisfies Prisma.CustomerAccountInclude;
 
 async function arrearsRows(asOf: Date, filters: any = {}) {
+  const zoneIds = selectedIds(filters.zoneIds);
+  const categoryIds = selectedIds(filters.categoryIds);
   const accounts = await prisma.customerAccount.findMany({
     where: {
       currentBalance: { gt: 0 },
-      ...(filters.zoneId
+      ...(zoneIds.length
+        ? { property: { zoneId: { in: zoneIds } } }
+        : filters.zoneId
         ? { property: { zoneId: BigInt(filters.zoneId) } }
         : {}),
-      ...(filters.categoryId ? { categoryId: BigInt(filters.categoryId) } : {}),
+      ...(categoryIds.length
+        ? { categoryId: { in: categoryIds } }
+        : filters.categoryId
+          ? { categoryId: BigInt(filters.categoryId) }
+          : {}),
     },
     include: accountInclude,
     orderBy: { accountNumber: "asc" },

@@ -4,6 +4,7 @@ import { api } from "../lib/api";
 import { exportExcel } from "../lib/meterFiles";
 import { SearchableSelect } from "../components/SearchableSelect";
 import { CheckboxMultiSelect } from "../components/CheckboxMultiSelect";
+import { SweetAlertToast } from "../components/SweetAlertToast";
 
 type Row = Record<string, any>;
 const INPUT =
@@ -139,17 +140,7 @@ function Alert({
   children: ReactNode;
   success?: boolean;
 }) {
-  return (
-    <div
-      className={`mb-4 whitespace-pre-line rounded-xl border p-3 text-sm ${
-        success
-          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-          : "border-red-200 bg-red-50 text-red-700"
-      }`}
-    >
-      {children}
-    </div>
-  );
+  return <SweetAlertToast message={children} type={success ? "success" : "error"} />;
 }
 function Badge({ value }: { value: any }) {
   const normalized = String(value ?? "");
@@ -228,25 +219,46 @@ function AccountSelect({
 export function ArrearsDashboard() {
   const [data, setData] = useState<Row>();
   const [error, setError] = useState("");
-  const [filters, setFilters] = useState<Row>({ asOf: isoToday(), zoneId: "", categoryId: "" });
+  const [filters, setFilters] = useState({
+    asOf: isoToday(),
+    zoneIds: [] as string[],
+    categoryIds: [] as string[],
+  });
   const [zones, setZones] = useState<Row[]>([]);
   const [categories, setCategories] = useState<Row[]>([]);
-  const load = () =>
-    api
-      .arrearsDashboard(filters)
-      .then(setData)
-      .catch((value) => setError(value.message));
+  const [loadingLookups, setLoadingLookups] = useState(true);
+  const [loadingDashboard, setLoadingDashboard] = useState(true);
+  const zoneIds = filters.zoneIds.join(",");
+  const categoryIds = filters.categoryIds.join(",");
   useEffect(() => {
+    setLoadingLookups(true);
     Promise.all([api.listZones(), api.listCategories()])
       .then(([zoneRows, categoryRows]) => {
         setZones(zoneRows);
         setCategories(categoryRows);
       })
-      .catch((value) => setError(value.message));
+      .catch((value) => setError(value.message))
+      .finally(() => setLoadingLookups(false));
   }, []);
   useEffect(() => {
-    load();
-  }, [filters.asOf, filters.zoneId, filters.categoryId]);
+    let cancelled = false;
+    setLoadingDashboard(true);
+    setError("");
+    api
+      .arrearsDashboard({ asOf: filters.asOf, zoneIds, categoryIds })
+      .then((value) => {
+        if (!cancelled) setData(value);
+      })
+      .catch((value) => {
+        if (!cancelled) setError(value.message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingDashboard(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [filters.asOf, zoneIds, categoryIds]);
   const buckets = [
     ["0–30 days", data?.buckets?.["0_30"] ?? 0, "bg-sky-500"],
     ["31–60 days", data?.buckets?.["31_60"] ?? 0, "bg-amber-400"],
@@ -280,50 +292,56 @@ export function ArrearsDashboard() {
             />
           </Field>
           <Field label="Zone">
-            <SearchableSelect
+            <CheckboxMultiSelect
               className={INPUT}
-              value={filters.zoneId}
-              onChange={(event) => setFilters({ ...filters, zoneId: event.target.value })}
-            >
-              <option value="">All zones</option>
-              {zones.map((zone) => (
-                <option key={zone.zoneId} value={zone.zoneId}>
-                  {zone.zoneName}
-                </option>
-              ))}
-            </SearchableSelect>
+              disabled={loadingLookups}
+              placeholder={loadingLookups ? "Loading zones…" : "All zones"}
+              value={filters.zoneIds}
+              onChange={(values) => setFilters({ ...filters, zoneIds: values })}
+              options={zones.map((zone) => ({
+                value: String(zone.zoneId),
+                label: zone.zoneName,
+              }))}
+            />
           </Field>
           <Field label="Customer category">
-            <SearchableSelect
+            <CheckboxMultiSelect
               className={INPUT}
-              value={filters.categoryId}
-              onChange={(event) =>
-                setFilters({ ...filters, categoryId: event.target.value })
-              }
-            >
-              <option value="">All categories</option>
-              {categories.map((category) => (
-                <option key={category.categoryId} value={category.categoryId}>
-                  {category.categoryName}
-                </option>
-              ))}
-            </SearchableSelect>
+              disabled={loadingLookups}
+              placeholder={loadingLookups ? "Loading categories…" : "All categories"}
+              value={filters.categoryIds}
+              onChange={(values) => setFilters({ ...filters, categoryIds: values })}
+              options={categories.map((category) => ({
+                value: String(category.categoryId),
+                label: category.categoryName,
+              }))}
+            />
           </Field>
         </div>
       </Card>
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Kpi label="Total arrears" value={money(data?.totalArrears)} color="text-red-700" />
-        <Kpi label="Customers in arrears" value={data?.customersInArrears ?? 0} />
-        <Kpi label="Demand notices" value={data?.demandNotices ?? 0} color="text-orange-600" />
-        <Kpi
-          label="Disconnection eligible"
-          value={data?.disconnectionEligible ?? 0}
-          color="text-red-600"
-        />
-        <Kpi label="Active payment plans" value={data?.activePlans ?? 0} color="text-emerald-700" />
-        <Kpi label="Open promises" value={data?.openPromises ?? 0} color="text-aqua-700" />
-      </div>
-      <div className="mt-4 grid gap-4 xl:grid-cols-[1.1fr_.9fr]">
+      <div className="relative min-h-[360px]" aria-busy={loadingDashboard}>
+        {loadingDashboard && (
+          <div className="absolute inset-0 z-20 flex items-start justify-center rounded-2xl bg-slate-50/80 pt-16 backdrop-blur-[1px]">
+            <div className="flex items-center rounded-xl border border-slate-200 bg-white px-5 py-3 font-medium text-slate-600 shadow-sm">
+              <span className="mr-3 h-5 w-5 animate-spin rounded-full border-2 border-aqua-200 border-t-aqua-700" />
+              Loading arrears dashboard…
+            </div>
+          </div>
+        )}
+        <div className={loadingDashboard ? "pointer-events-none opacity-50" : ""}>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <Kpi label="Total arrears" value={money(data?.totalArrears)} color="text-red-700" />
+            <Kpi label="Customers in arrears" value={data?.customersInArrears ?? 0} />
+            <Kpi label="Demand notices" value={data?.demandNotices ?? 0} color="text-orange-600" />
+            <Kpi
+              label="Disconnection eligible"
+              value={data?.disconnectionEligible ?? 0}
+              color="text-red-600"
+            />
+            <Kpi label="Active payment plans" value={data?.activePlans ?? 0} color="text-emerald-700" />
+            <Kpi label="Open promises" value={data?.openPromises ?? 0} color="text-aqua-700" />
+          </div>
+          <div className="mt-4 grid gap-4 xl:grid-cols-[1.1fr_.9fr]">
         <Card title="Arrears ageing summary">
           <div className="space-y-4">
             {buckets.map(([label, value, color]) => (
@@ -374,6 +392,8 @@ export function ArrearsDashboard() {
             )}
           </div>
         </Card>
+          </div>
+        </div>
       </div>
     </Page>
   );

@@ -1,5 +1,8 @@
 # AquaFlow — Water Utility Management
 
+Android field-app integration and offline synchronization are documented in
+[`docs/ANDROID_FIELD_APP_HANDOFF.md`](docs/ANDROID_FIELD_APP_HANDOFF.md).
+
 This is a working first slice of the AquaFlow Water Distribution, Billing and Field
 Management System, built from your Functional Requirements Specification and
 `aquaflow_postgresql_ddl.sql`. It covers FRS sections **3.1 (Authentication)** and

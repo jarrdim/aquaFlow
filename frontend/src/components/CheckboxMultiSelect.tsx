@@ -12,6 +12,7 @@ type Props = {
   disabled?: boolean;
   maxSelected?: number;
   options: CheckboxMultiSelectOption[];
+  placement?: "auto" | "top" | "bottom";
   placeholder: string;
   value: string[];
   onChange: (value: string[]) => void;
@@ -19,7 +20,16 @@ type Props = {
 
 type Position = { bottom?: number; left: number; top?: number; width: number };
 
-export function CheckboxMultiSelect({ className = "", disabled, maxSelected, options, placeholder, value, onChange }: Props) {
+export function CheckboxMultiSelect({
+  className = "",
+  disabled,
+  maxSelected,
+  options,
+  placement = "auto",
+  placeholder,
+  value,
+  onChange,
+}: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -59,9 +69,10 @@ export function CheckboxMultiSelect({ className = "", disabled, maxSelected, opt
       const left = Math.min(Math.max(rect.left, margin), window.innerWidth - width - margin);
       const below = window.innerHeight - rect.bottom - margin - gap;
       const above = rect.top - margin - gap;
-      setPosition(below >= 260 || below >= above
-        ? { left, top: rect.bottom + gap, width }
-        : { bottom: window.innerHeight - rect.top + gap, left, width });
+      const openAbove = placement === "top" || (placement === "auto" && below < 260 && below < above);
+      setPosition(openAbove
+        ? { bottom: window.innerHeight - rect.top + gap, left, width }
+        : { left, top: rect.bottom + gap, width });
     };
     update();
     window.addEventListener("resize", update);
@@ -70,7 +81,7 @@ export function CheckboxMultiSelect({ className = "", disabled, maxSelected, opt
       window.removeEventListener("resize", update);
       window.removeEventListener("scroll", update, true);
     };
-  }, [open]);
+  }, [open, placement]);
 
   useEffect(() => {
     if (open) requestAnimationFrame(() => searchRef.current?.focus());

@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, getSessionUser } from "../lib/api";
 import { exportExcel } from "../lib/meterFiles";
 import { SearchableSelect } from "../components/SearchableSelect";
+import { SweetAlertToast } from "../components/SweetAlertToast";
 
 type Row = Record<string, any>;
 const INPUT = "w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-[15px] leading-5 text-slate-700 outline-none transition focus:border-aqua-500 focus:ring-2 focus:ring-aqua-500/20 disabled:bg-slate-50 disabled:text-slate-400";
@@ -27,6 +28,7 @@ function LinkButton({ to, children, tone = "blue" }: { to: string; children: Rea
   return <Link to={to} className={`inline-flex items-center justify-center rounded-lg px-4 py-2 text-[15px] font-semibold text-white shadow-sm ${colors[tone]}`}>{children}</Link>;
 }
 function Notice({ children, tone = "red" }: { children: ReactNode; tone?: "red" | "blue" | "green" }) {
+  if (tone !== "blue") return <SweetAlertToast message={children} type={tone === "green" ? "success" : "error"} />;
   const colors = { red: "border-red-200 bg-red-50 text-red-700", blue: "border-blue-200 bg-blue-50 text-blue-700", green: "border-emerald-200 bg-emerald-50 text-emerald-700" };
   return <div className={`mb-3 whitespace-pre-line rounded-lg border px-3 py-2 text-sm ${colors[tone]}`}>{children}</div>;
 }

@@ -8,6 +8,7 @@ import {
 import { api } from "../lib/api";
 import { decodeId, encodeId } from "../lib/hashids";
 import { SearchableSelect } from "../components/SearchableSelect";
+import { SweetAlertToast } from "../components/SweetAlertToast";
 import {
   exportExcel,
   fileToEvidence,
@@ -192,14 +193,11 @@ function Notice({
   kind?: "error" | "success" | "info";
   children: ReactNode;
 }) {
-  const cls =
-    kind === "error"
-      ? "border-red-200 bg-red-50 text-red-700"
-      : kind === "success"
-        ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-        : "border-blue-200 bg-blue-50 text-blue-700";
+  if (kind !== "info") {
+    return <SweetAlertToast message={children} type={kind === "success" ? "success" : "error"} />;
+  }
   return (
-    <div className={`mb-4 rounded-xl border px-4 py-3 text-sm ${cls}`}>
+    <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700">
       {children}
     </div>
   );

@@ -7,6 +7,7 @@ import {
 } from "react-router-dom";
 import { api } from "../lib/api";
 import { SearchableSelect } from "../components/SearchableSelect";
+import { SweetAlertToast } from "../components/SweetAlertToast";
 
 type Target = {
   accountId: string;
@@ -235,16 +236,8 @@ export function ServiceRequestDashboard() {
           + Register request
         </Link>
       </div>
-      {error && (
-        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {error}
-        </div>
-      )}
-      {success && (
-        <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
-          {success}
-        </div>
-      )}
+      <SweetAlertToast message={error} type="error" />
+      <SweetAlertToast message={success} type="success" />
       {summary && (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
           {[
@@ -591,11 +584,7 @@ export function RegisterServiceRequest() {
           priority
         </p>
       </div>
-      {error && (
-        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {error}
-        </div>
-      )}
+      <SweetAlertToast message={error} type="error" />
       {loading ? (
         <Loader label="Loading customer accounts…" />
       ) : (

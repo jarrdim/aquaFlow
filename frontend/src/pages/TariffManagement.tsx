@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { exportExcel } from "../lib/meterFiles";
 import { SearchableSelect } from "../components/SearchableSelect";
+import { SweetAlertToast } from "../components/SweetAlertToast";
 
 type Row = Record<string, any>;
 const INPUT =
@@ -133,6 +134,9 @@ function Notice({
   children: ReactNode;
   tone?: "red" | "blue" | "green";
 }) {
+  if (tone !== "blue") {
+    return <SweetAlertToast message={children} type={tone === "green" ? "success" : "error"} />;
+  }
   const cls = {
     red: "border-red-200 bg-red-50 text-red-700",
     blue: "border-blue-200 bg-blue-50 text-blue-700",

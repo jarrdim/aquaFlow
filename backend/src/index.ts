@@ -15,6 +15,9 @@ import { notificationsRouter } from "./routes/notifications";
 import { arrearsRouter } from "./routes/arrears";
 import { adminRouter } from "./routes/admin";
 import { serviceRequestsRouter } from "./routes/serviceRequests";
+import { settingsRouter } from "./routes/settings";
+import { mobileRouter } from "./routes/mobile";
+import { prisma } from "./lib/prisma";
 
 // BigInt IDs (from BIGSERIAL columns) don't serialize to JSON by default.
 (BigInt.prototype as any).toJSON = function () {
@@ -25,7 +28,29 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "15mb" }));
 
-app.get("/health", (_req, res) => res.json({ status: "ok" }));
+app.get("/health", (_req, res) =>
+  res.json({
+    status: "ok",
+    service: "aquaflow-api",
+    timestamp: new Date().toISOString(),
+  }),
+);
+app.get("/ready", async (_req, res) => {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    res.json({
+      status: "ready",
+      database: "connected",
+      timestamp: new Date().toISOString(),
+    });
+  } catch {
+    res.status(503).json({
+      status: "not_ready",
+      database: "unavailable",
+      timestamp: new Date().toISOString(),
+    });
+  }
+});
 
 app.use("/api/auth", authRouter);
 app.use("/api/customers", customersRouter);
@@ -41,6 +66,8 @@ app.use("/api/notifications", notificationsRouter);
 app.use("/api/arrears", arrearsRouter);
 app.use("/api/admin", adminRouter);
 app.use("/api/service-requests", serviceRequestsRouter);
+app.use("/api/settings", settingsRouter);
+app.use("/api/mobile", mobileRouter);
 
 app.use(
   (

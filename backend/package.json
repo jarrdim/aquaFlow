@@ -20,6 +20,8 @@
     "db:tariff-upgrade": "prisma db execute --file prisma/migrations/20260714170000_tariff_management/migration.sql --schema prisma/schema.prisma",
     "db:admin-upgrade": "prisma db execute --file prisma/migrations/20260722230000_admin_permissions/migration.sql --schema prisma/schema.prisma",
     "db:service-request-upgrade": "prisma db execute --file prisma/migrations/20260722231000_service_request_management/migration.sql --schema prisma/schema.prisma",
+    "db:settings-upgrade": "prisma db execute --file prisma/migrations/20260723130000_system_settings/migration.sql --schema prisma/schema.prisma",
+    "db:legacy-settings-upgrade": "prisma db execute --file prisma/migrations/20260723143000_legacy_majiware_settings/migration.sql --schema prisma/schema.prisma",
     "seed": "ts-node prisma/seed.ts"
   },
   "dependencies": {

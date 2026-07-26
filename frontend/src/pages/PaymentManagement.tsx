@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { exportExcel } from "../lib/meterFiles";
 import { SearchableSelect } from "../components/SearchableSelect";
+import { SweetAlertToast } from "../components/SweetAlertToast";
 
 type Row = Record<string, any>;
 const INPUT =
@@ -123,13 +124,7 @@ function Notice({
   children: ReactNode;
   green?: boolean;
 }) {
-  return (
-    <div
-      className={`mb-4 rounded-xl border p-3 text-sm ${green ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-red-200 bg-red-50 text-red-700"}`}
-    >
-      {children}
-    </div>
-  );
+  return <SweetAlertToast message={children} type={green ? "success" : "error"} />;
 }
 function Badge({ value }: { value: any }) {
   const v = String(value ?? "");

@@ -3,6 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { encodeId } from "../lib/hashids";
 import { SearchableSelect } from "../components/SearchableSelect";
+import { SweetAlertToast } from "../components/SweetAlertToast";
 
 interface Customer {
   customerId: string;
@@ -295,17 +296,8 @@ export default function Customers() {
         </div>
       </section>
 
-      {(error || success) && (
-        <div
-          className={`mb-4 rounded-xl border px-4 py-3 text-sm ${
-            error
-              ? "border-red-200 bg-red-50 text-red-700"
-              : "border-emerald-200 bg-emerald-50 text-emerald-700"
-          }`}
-        >
-          {error || success}
-        </div>
-      )}
+      <SweetAlertToast message={error} type="error" />
+      <SweetAlertToast message={success} type="success" />
 
       <form
         onSubmit={submitSearch}

@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { api, getSessionUser } from "../lib/api";
 import { CheckboxMultiSelect } from "../components/CheckboxMultiSelect";
 import { SearchableSelect } from "../components/SearchableSelect";
+import { SweetAlertToast } from "../components/SweetAlertToast";
 
 type Role = {
   roleId: string;
@@ -89,16 +90,8 @@ function Loader() {
 function Notice({ error, success }: { error: string; success: string }) {
   return (
     <>
-      {error && (
-        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {error}
-        </div>
-      )}
-      {success && (
-        <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
-          {success}
-        </div>
-      )}
+      <SweetAlertToast message={error} type="error" />
+      <SweetAlertToast message={success} type="success" />
     </>
   );
 }
@@ -574,6 +567,7 @@ export function UserAdministration() {
                 <span className="mb-1 block text-sm font-medium">Roles *</span>
                 <CheckboxMultiSelect
                   className={input}
+                  placement="top"
                   placeholder="Select roles"
                   options={roles
                     .filter((r) => r.status === "ACTIVE")

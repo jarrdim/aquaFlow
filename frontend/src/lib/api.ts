@@ -784,4 +784,7 @@ export const api = {
   assignServiceRequest: (id: string, data: Record<string, unknown>) => request(`/service-requests/${id}/assign`, { method: "PATCH", body: JSON.stringify(data) }),
   updateServiceRequestStatus: (id: string, data: Record<string, unknown>) => request(`/service-requests/${id}/status`, { method: "PATCH", body: JSON.stringify(data) }),
   addServiceRequestComment: (id: string, comments: string) => request(`/service-requests/${id}/comments`, { method: "POST", body: JSON.stringify({ comments }) }),
+  getSystemSettings: () => request("/settings"),
+  updateSystemSettings: (data: Record<string, unknown>) =>
+    request("/settings", { method: "PUT", body: JSON.stringify(data) }),
 };

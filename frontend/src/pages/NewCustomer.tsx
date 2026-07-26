@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import { encodeId } from "../lib/hashids";
 import { SearchableSelect } from "../components/SearchableSelect";
+import { SweetAlertToast } from "../components/SweetAlertToast";
 
 type CustomerType = "INDIVIDUAL" | "ORGANIZATION";
 type IdType = "NATIONAL_ID" | "PASSPORT" | "OTHER";
@@ -466,12 +467,7 @@ export default function NewCustomer() {
           </>
         )}
 
-        {/* ── Error ── */}
-        {stepError && (
-          <div className="mt-4 px-4 py-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-600">
-            {stepError}
-          </div>
-        )}
+        <SweetAlertToast message={stepError} type="error" />
       </div>
 
       {/* ── Navigation buttons ── */}

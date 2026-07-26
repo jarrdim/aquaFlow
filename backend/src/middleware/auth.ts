@@ -7,6 +7,7 @@ export interface AuthPayload {
   username: string;
   userType: string;
   roles: string[];
+  tokenType?: "access" | "refresh";
 }
 
 declare global {
@@ -26,6 +27,9 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
   const token = header.slice("Bearer ".length);
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET as string) as AuthPayload;
+    if (payload.tokenType === "refresh") {
+      return res.status(401).json({ error: "A refresh token cannot access this resource" });
+    }
     req.user = payload;
     next();
   } catch {

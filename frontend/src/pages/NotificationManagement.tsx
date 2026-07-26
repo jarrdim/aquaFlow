@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { api, getSessionUser } from "../lib/api";
 import { SearchableSelect } from "../components/SearchableSelect";
 import { CheckboxMultiSelect } from "../components/CheckboxMultiSelect";
+import { SweetAlertToast } from "../components/SweetAlertToast";
 
 type Row = Record<string, any>;
 const INPUT =
@@ -97,13 +98,7 @@ function Button({
 }
 function Notice({ error, success }: { error?: string; success?: string }) {
   if (!error && !success) return null;
-  return (
-    <div
-      className={`mb-4 rounded-xl border px-4 py-3 text-sm ${error ? "border-red-200 bg-red-50 text-red-700" : "border-emerald-200 bg-emerald-50 text-emerald-700"}`}
-    >
-      {error || success}
-    </div>
-  );
+  return <SweetAlertToast message={error || success} type={error ? "error" : "success"} />;
 }
 function Badge({ value }: { value: string }) {
   const colors: Row = {

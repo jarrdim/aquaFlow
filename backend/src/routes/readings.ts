@@ -26,6 +26,9 @@ const captureSchema = z.object({
   readingDate: z.string().datetime().optional(),
   gpsLatitude: z.coerce.number().min(-90).max(90).optional(),
   gpsLongitude: z.coerce.number().min(-180).max(180).optional(),
+  gpsAccuracy: z.coerce.number().min(0).max(10_000).optional(),
+  meterCondition: z.enum(["GOOD", "DAMAGED", "LEAKING", "TAMPERED", "INACCESSIBLE"]).default("GOOD"),
+  anomalyReason: z.string().trim().min(3).max(1000).optional(),
   exceptionType: z.enum(["NONE", "TAMPERED"]).optional(),
   syncId: z.string().trim().min(6).max(100).optional(),
   remarks: z.string().trim().max(2000).optional(),
@@ -92,18 +95,30 @@ async function getEligibleAssignments(
   zoneId?: bigint,
   search = "",
   meterId?: bigint,
+  allowedRouteIds?: bigint[],
 ) {
+  const accountFilters: Prisma.CustomerAccountWhereInput[] = [
+    { accountStatus: "ACTIVE" },
+    ...(routeId
+      ? [{ OR: [{ routeId }, { property: { routeId } }] } as Prisma.CustomerAccountWhereInput]
+      : []),
+    ...(allowedRouteIds
+      ? [{
+          OR: [
+            { routeId: { in: allowedRouteIds } },
+            { property: { routeId: { in: allowedRouteIds } } },
+          ],
+        } as Prisma.CustomerAccountWhereInput]
+      : []),
+    ...(zoneId ? [{ property: { zoneId } } as Prisma.CustomerAccountWhereInput] : []),
+  ];
   const baseWhere: Prisma.MeterAssignmentWhereInput = {
     ...(meterId ? { meterId } : {}),
     assignmentStatus: "ACTIVE",
     removalDate: null,
     accountId: { not: null },
     meter: { status: "ACTIVE" },
-    account: {
-      accountStatus: "ACTIVE",
-      ...(routeId ? { OR: [{ routeId }, { property: { routeId } }] } : {}),
-      ...(zoneId ? { property: { zoneId } } : {}),
-    },
+    account: { AND: accountFilters },
   };
   const terms = search.trim().split(/\s+/).filter(Boolean);
   let searchWhere: Prisma.MeterAssignmentWhereInput | undefined;
@@ -378,7 +393,37 @@ readingsRouter.get("/worklist", async (req, res, next) => {
     const zoneId = req.query.zoneId ? BigInt(String(req.query.zoneId)) : undefined;
     const meterId = req.query.meterId ? BigInt(String(req.query.meterId)) : undefined;
     const search = String(req.query.search ?? "").trim();
-    const items = await getEligibleAssignments(cycleId, routeId, zoneId, search, meterId);
+    let allowedRouteIds: bigint[] | undefined;
+    if (req.user?.roles.includes("METER_READER")) {
+      const officer = await prisma.fieldOfficer.findUnique({
+        where: { userId: BigInt(req.user.userId) },
+        select: {
+          status: true,
+          routeAssignments: {
+            where: {
+              readingCycleId: cycleId,
+              status: { in: ["ASSIGNED", "ACCEPTED"] },
+            },
+            select: { routeId: true },
+          },
+        },
+      });
+      if (!officer || officer.status !== "ACTIVE") {
+        return res.status(403).json({ error: "No active field officer profile is linked to this user" });
+      }
+      allowedRouteIds = officer.routeAssignments.map((assignment) => assignment.routeId);
+      if (routeId && !allowedRouteIds.some((allowed) => allowed === routeId)) {
+        return res.status(403).json({ error: "This route is not assigned to you for the selected cycle" });
+      }
+    }
+    const items = await getEligibleAssignments(
+      cycleId,
+      routeId,
+      zoneId,
+      search,
+      meterId,
+      allowedRouteIds,
+    );
     const currentReadings = await prisma.meterReading.findMany({ where: { readingCycleId: cycleId, meterId: { in: items.map((a) => a.meterId) } } });
     const byMeter = new Map(currentReadings.map((reading) => [reading.meterId.toString(), reading]));
     res.json(items.map((a) => ({
@@ -405,7 +450,15 @@ async function capture(input: any, req: any) {
     if (existing) return { reading: existing, duplicateSync: true };
   }
   const [meter, cycle] = await Promise.all([
-    prisma.meter.findUnique({ where: { meterId: input.meterId }, include: { assignments: { where: { assignmentStatus: "ACTIVE", removalDate: null }, orderBy: { assignmentDate: "desc" }, take: 1 }, readings: { orderBy: { readingDate: "desc" }, take: 1 } } }),
+    prisma.meter.findUnique({ where: { meterId: input.meterId }, include: {
+      assignments: {
+        where: { assignmentStatus: "ACTIVE", removalDate: null },
+        include: { account: { include: { property: true } } },
+        orderBy: { assignmentDate: "desc" },
+        take: 1,
+      },
+      readings: { orderBy: { readingDate: "desc" }, take: 1 },
+    } }),
     prisma.readingCycle.findUnique({ where: { readingCycleId: input.readingCycleId } }),
   ]);
   if (!meter) throw Object.assign(new Error("Meter not found"), { status: 404 });
@@ -416,6 +469,33 @@ async function capture(input: any, req: any) {
   if (!fieldOfficerId && req.user?.userId) {
     const officer = await prisma.fieldOfficer.findUnique({ where: { userId: BigInt(req.user.userId) }, select: { fieldOfficerId: true } });
     fieldOfficerId = officer?.fieldOfficerId;
+  }
+  if (req.user?.roles.includes("METER_READER")) {
+    const officer = await prisma.fieldOfficer.findUnique({
+      where: { userId: BigInt(req.user.userId) },
+      select: {
+        fieldOfficerId: true,
+        status: true,
+        routeAssignments: {
+          where: {
+            readingCycleId: input.readingCycleId,
+            status: { in: ["ASSIGNED", "ACCEPTED"] },
+          },
+          select: { routeId: true },
+        },
+      },
+    });
+    if (!officer || officer.status !== "ACTIVE") {
+      throw Object.assign(new Error("No active field officer profile is linked to this user"), { status: 403 });
+    }
+    const accountRouteId = assignment.account?.routeId ?? assignment.account?.property.routeId;
+    if (
+      !accountRouteId ||
+      !officer.routeAssignments.some((routeAssignment) => routeAssignment.routeId === accountRouteId)
+    ) {
+      throw Object.assign(new Error("This meter is not on a route assigned to you for this cycle"), { status: 403 });
+    }
+    fieldOfficerId = officer.fieldOfficerId;
   }
   const previous = Number(meter.readings[0]?.currentReading ?? meter.openingReading);
   if (input.previousReading != null && Math.abs(input.previousReading - previous) > 0.001) throw Object.assign(new Error(`Previous reading changed to ${previous}. Refresh before submitting.`), { status: 409 });
@@ -440,7 +520,12 @@ async function capture(input: any, req: any) {
       gpsLatitude: input.gpsLatitude, gpsLongitude: input.gpsLongitude,
       abnormalFlag: exceptionType !== "NONE", exceptionType, syncId: input.syncId,
       evidence: { create: input.evidence },
-      events: { create: { eventType: "CAPTURED", remarks: input.remarks, performedBy: userId(req), metadata: { source: input.syncId ? "SYNC" : "WEB" } } },
+      events: { create: { eventType: "CAPTURED", remarks: input.remarks, performedBy: userId(req), metadata: {
+        source: input.syncId ? "SYNC" : "WEB",
+        meterCondition: input.meterCondition,
+        gpsAccuracy: input.gpsAccuracy,
+        anomalyReason: input.anomalyReason,
+      } } },
     }, include: readingInclude });
     await tx.meterEvent.create({ data: { meterId: input.meterId, assignmentId: assignment.assignmentId, eventType: "READING_CAPTURED", reading: input.currentReading, remarks: input.remarks, gpsLatitude: input.gpsLatitude, gpsLongitude: input.gpsLongitude, performedBy: userId(req), metadata: { readingId: reading.readingId.toString(), cycleId: input.readingCycleId.toString(), exceptionType } } });
     return reading;
@@ -448,7 +533,10 @@ async function capture(input: any, req: any) {
   return { reading: result, duplicateSync: false };
 }
 
-readingsRouter.post("/", async (req, res, next) => {
+readingsRouter.post(
+  "/",
+  requireRole("METER_READER", "METER_SUPERVISOR", "SUPERVISOR"),
+  async (req, res, next) => {
   const data = parse(captureSchema, req.body, res);
   if (!data) return;
   try {
@@ -459,9 +547,13 @@ readingsRouter.post("/", async (req, res, next) => {
     if (error.status) return res.status(error.status).json({ error: error.message });
     next(error);
   }
-});
+  },
+);
 
-readingsRouter.post("/sync", async (req, res, next) => {
+readingsRouter.post(
+  "/sync",
+  requireRole("METER_READER", "METER_SUPERVISOR", "SUPERVISOR"),
+  async (req, res, next) => {
   const body = parse(z.object({ readings: z.array(captureSchema).min(1).max(100) }), req.body, res);
   if (!body) return;
   const results: any[] = [];
@@ -472,7 +564,8 @@ readingsRouter.post("/sync", async (req, res, next) => {
     }
     res.json({ total: results.length, succeeded: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok).length, results });
   } catch (error) { next(error); }
-});
+  },
+);
 
 readingsRouter.get("/", async (req, res, next) => {
   try {

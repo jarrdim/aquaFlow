@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { decodeId, encodeId } from "../lib/hashids";
 import { SearchableSelect } from "../components/SearchableSelect";
+import { SweetAlertToast } from "../components/SweetAlertToast";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface Customer {
@@ -414,9 +415,7 @@ export default function CustomerDetail() {
               Cancel
             </button>
           </div>
-          {error && (
-            <p className="text-sm text-red-600 mt-1">{error}</p>
-          )}
+          <SweetAlertToast message={error} type="error" />
         </form>
       )}
 

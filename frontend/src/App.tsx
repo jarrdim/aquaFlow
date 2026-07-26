@@ -118,6 +118,7 @@ import {
   RegisterServiceRequest,
   ServiceRequestDashboard,
 } from "./pages/ServiceRequestManagement";
+import SettingsManagement from "./pages/SettingsManagement";
 import { api, clearToken, getSessionUser, getToken } from "./lib/api";
 import { encodeId } from "./lib/hashids";
 
@@ -284,7 +285,7 @@ const NAV_ITEMS = [
   { label: "Assets", Icon: IcoAssets, path: null, iconClass: "bg-teal-400/10 text-teal-300" },
   { label: "Reports", Icon: IcoReports, path: null, iconClass: "bg-purple-400/10 text-purple-300" },
   { label: "Admin", Icon: IcoAdmin, path: "/admin", iconClass: "bg-red-400/10 text-red-300" },
-  { label: "Settings", Icon: IcoSettings, path: null, iconClass: "bg-slate-400/10 text-slate-300" },
+  { label: "Settings", Icon: IcoSettings, path: "/settings", iconClass: "bg-slate-400/10 text-slate-300" },
 ];
 
 const CUSTOMER_MENU = [
@@ -420,6 +421,7 @@ const MODULE_LABELS: Record<string, string> = {
   notifications: "Notifications",
   "service-requests": "Service Requests",
   admin: "Administration",
+  settings: "Settings",
 };
 
 const ROUTE_LABELS = new Map<string, string>([
@@ -445,6 +447,7 @@ const PAGE_HEADING_LABELS = new Map<string, string>([
   ["/admin/users", "User administration"],
   ["/admin/roles", "Role administration"],
   ["/admin/permissions", "Permission register"],
+  ["/settings", "System settings"],
 ]);
 
 function detailPageLabel(pathname: string) {
@@ -481,7 +484,7 @@ function AppBreadcrumbs() {
 
   if (
     !moduleLabel ||
-    (pathname === modulePath && !["service-requests", "admin"].includes(moduleKey))
+    (pathname === modulePath && !["service-requests", "admin", "settings"].includes(moduleKey))
   ) {
     return null;
   }
@@ -2303,6 +2306,16 @@ export default function App() {
           <Protected>
             <Shell>
               <PermissionRegister />
+            </Shell>
+          </Protected>
+        }
+      />
+      <Route
+        path="/settings"
+        element={
+          <Protected>
+            <Shell>
+              <SettingsManagement />
             </Shell>
           </Protected>
         }
