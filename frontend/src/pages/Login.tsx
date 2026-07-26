@@ -36,7 +36,7 @@ export default function Login() {
   return (
     <div className="min-h-screen flex items-center justify-center">
       <form onSubmit={handleSubmit} className="bg-white shadow-sm rounded-xl p-8 w-full max-w-sm border border-slate-200">
-        <h1 className="text-xl font-semibold text-aqua-700 mb-1">AquaFlow</h1>
+        <h1 className="text-xl font-semibold text-aqua-700 mb-1">Samdamte</h1>
         <p className="text-sm text-slate-500 mb-6">Water Utility Management System</p>
 
         <SweetAlertToast

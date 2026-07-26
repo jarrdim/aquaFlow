@@ -452,12 +452,27 @@ billingRouter.post("/notifications", requireRole("SYSTEM_ADMIN", "BILLING_OFFICE
 billingRouter.get("/statements/:accountId", async (req, res, next) => {
   const accountId = parse(id, req.params.accountId, res); if (!accountId) return;
   try {
-    const account = await prisma.customerAccount.findUnique({ where: { accountId }, include: { customer: true } });
+    const account = await prisma.customerAccount.findUnique({
+      where: { accountId },
+      include: {
+        customer: true,
+        category: true,
+        property: { include: { zone: true } },
+      },
+    });
     if (!account) return res.status(404).json({ error: "Account not found" });
-    const from = req.query.from ? day(String(req.query.from)) : new Date("2000-01-01T00:00:00.000Z");
+    const fromText = String(req.query.from ?? "");
+    const toText = String(req.query.to ?? "");
+    const from = fromText ? day(fromText) : new Date("2000-01-01T00:00:00.000Z");
     // Blank date filters mean the complete account history. This also keeps a
     // newly posted, future-dated period visible immediately after posting.
-    const to = req.query.to ? new Date(`${String(req.query.to)}T23:59:59.999Z`) : new Date("9999-12-31T23:59:59.999Z");
+    const to = toText ? new Date(`${toText}T23:59:59.999Z`) : new Date("9999-12-31T23:59:59.999Z");
+    if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
+      return res.status(400).json({ error: "Statement dates must be valid dates." });
+    }
+    if (from > to) {
+      return res.status(400).json({ error: "Statement start date cannot be after the end date." });
+    }
     const [bills, payments, priorBills, priorPayments] = await Promise.all([
       prisma.bill.findMany({ where: { accountId, status: { in: ["POSTED", "PARTIALLY_PAID", "PAID"] }, issueDate: { gte: from, lte: to } }, include: { billingCycle: true }, orderBy: { issueDate: "asc" } }),
       prisma.$queryRaw<any[]>`SELECT payment_id, transaction_reference, amount, payment_date FROM aquaflow.payments WHERE account_id = ${accountId} AND payment_status = 'POSTED' AND payment_date BETWEEN ${from} AND ${to} ORDER BY payment_date`,
@@ -471,7 +486,19 @@ billingRouter.get("/statements/:accountId", async (req, res, next) => {
     const openingBalance = round(Number(account.openingBalance) + Number(priorBills._sum.totalCurrentCharges ?? 0) - Number(priorPayments[0]?.total ?? 0));
     let balance = openingBalance;
     const statement = entries.map((entry) => { balance = round(balance + entry.debit - entry.credit); return { ...entry, balance }; });
-    res.json({ account: { ...account, customerName: customerName(account.customer) }, openingBalance, closingBalance: balance, entries: statement });
+    const totalDebits = round(entries.reduce((sum, entry) => sum + entry.debit, 0));
+    const totalCredits = round(entries.reduce((sum, entry) => sum + entry.credit, 0));
+    res.json({
+      account: { ...account, customerName: customerName(account.customer) },
+      period: { from: fromText || null, to: toText || null },
+      openingBalance,
+      totalDebits,
+      totalCredits,
+      netMovement: round(totalDebits - totalCredits),
+      closingBalance: balance,
+      currentBalance: Number(account.currentBalance),
+      entries: statement,
+    });
   } catch (error) { next(error); }
 });
 

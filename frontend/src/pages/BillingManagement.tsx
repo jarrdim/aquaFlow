@@ -134,12 +134,148 @@ export function BillInvoice() {
   </Page>;
 }
 
-export function CustomerStatements() {
+function LegacyCustomerStatements() {
   const [bills, setBills] = useState<Row[]>([]); const [accountId, setAccountId] = useState(""); const [from, setFrom] = useState(""); const [to, setTo] = useState(""); const [statement, setStatement] = useState<Row | null>(null); const [error, setError] = useState("");
   useEffect(() => { api.listBills().then((rows) => { setBills(rows); if (rows[0]) setAccountId(String(rows[0].accountId)); }); }, []); const accounts = useMemo(() => Array.from(new Map(bills.map((b) => [String(b.accountId), b])).values()), [bills]);
   async function load() { try { setStatement(await api.getCustomerStatement(accountId, from, to)); setError(""); } catch (e: any) { setError(e.message); } } useEffect(() => { if (accountId) load(); }, [accountId]);
   return <Page title="Customer statements" subtitle="Debits, payments and running account balances" actions={<>{statement && <Button tone="slate" onClick={() => window.print()}>Print / Save PDF</Button>}<Button tone="green" disabled={!statement} onClick={() => statement && exportExcel("customer-statement.xlsx", "Statement", statement.entries)}>Export Excel</Button></>}>
     {error && <Notice>{error}</Notice>}<Card className="mb-4"><div className="grid gap-3 md:grid-cols-4"><Field label="Customer account"><SearchableSelect className={INPUT} value={accountId} onChange={(e) => setAccountId(e.target.value)}><option value="">Select account</option>{accounts.map((b: Row) => <option key={b.accountId} value={b.accountId}>{b.account.accountNumber} · {b.customerName}</option>)}</SearchableSelect></Field><Field label="From"><input type="date" className={INPUT} value={from} onChange={(e) => setFrom(e.target.value)} /></Field><Field label="To"><input type="date" className={INPUT} value={to} onChange={(e) => setTo(e.target.value)} /></Field><div className="flex items-end"><Button className="w-full" onClick={load} disabled={!accountId}>Load statement</Button></div></div></Card>{statement && <Card title={`${statement.account.customerName} · ${statement.account.accountNumber}`}><div className="overflow-x-auto"><table className="w-full"><thead><tr><th className={TH}>Date</th><th className={TH}>Description</th><th className={TH}>Debit</th><th className={TH}>Credit</th><th className={TH}>Balance</th></tr></thead><tbody>{statement.entries.map((entry: Row) => <tr key={entry.id} className="border-t"><td className={TD}>{date(entry.date)}</td><td className={TD}>{entry.description}</td><td className={TD}>{entry.debit ? money(entry.debit) : "—"}</td><td className={TD}>{entry.credit ? money(entry.credit) : "—"}</td><td className={`${TD} font-semibold`}>{money(entry.balance)}</td></tr>)}{!statement.entries.length && <tr><td colSpan={5} className="p-8 text-center text-slate-400">No posted transactions in this date range.</td></tr>}</tbody></table></div><div className="mt-4 flex justify-end text-lg"><span className="mr-5">Closing balance</span><strong>{money(statement.closingBalance)}</strong></div></Card>}
+  </Page>;
+}
+
+export function CustomerStatements() {
+  const now = new Date();
+  const localDate = (value: Date) => `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
+  const [bills, setBills] = useState<Row[]>([]);
+  const [accountId, setAccountId] = useState("");
+  const [from, setFrom] = useState(localDate(new Date(now.getFullYear(), now.getMonth(), 1)));
+  const [to, setTo] = useState(localDate(now));
+  const [statement, setStatement] = useState<Row | null>(null);
+  const [loadingAccounts, setLoadingAccounts] = useState(true);
+  const [loadingStatement, setLoadingStatement] = useState(false);
+  const [error, setError] = useState("");
+  const accounts = useMemo(
+    () => Array.from(new Map(bills.map((bill) => [String(bill.accountId), bill])).values()),
+    [bills],
+  );
+
+  useEffect(() => {
+    api.listBills()
+      .then((rows) => {
+        setBills(rows);
+        if (rows[0]) setAccountId(String(rows[0].accountId));
+      })
+      .catch((e) => setError(e.message))
+      .finally(() => setLoadingAccounts(false));
+  }, []);
+
+  async function load(selectedAccountId = accountId) {
+    if (!selectedAccountId) return;
+    setLoadingStatement(true);
+    setError("");
+    try {
+      setStatement(await api.getCustomerStatement(selectedAccountId, from, to));
+    } catch (e: any) {
+      setError(e.message);
+      setStatement(null);
+    } finally {
+      setLoadingStatement(false);
+    }
+  }
+
+  useEffect(() => {
+    if (accountId) load(accountId);
+  }, [accountId]);
+
+  function printStatement() {
+    const cleanup = () => document.body.classList.remove("printing-statement");
+    document.body.classList.add("printing-statement");
+    window.addEventListener("afterprint", cleanup, { once: true });
+    window.print();
+  }
+
+  function exportStatement() {
+    if (!statement) return;
+    const rows = [
+      { Date: from, Description: "Opening balance", Debit: 0, Credit: 0, Balance: statement.openingBalance },
+      ...statement.entries.map((entry: Row) => ({
+        Date: entry.date,
+        Description: entry.description,
+        Debit: entry.debit,
+        Credit: entry.credit,
+        Balance: entry.balance,
+      })),
+      { Date: to, Description: "Period totals", Debit: statement.totalDebits, Credit: statement.totalCredits, Balance: "" },
+      { Date: to, Description: "Closing balance", Debit: 0, Credit: 0, Balance: statement.closingBalance },
+    ];
+    exportExcel(`statement-${statement.account.accountNumber}-${from}-to-${to}.xlsx`, "Statement", rows);
+  }
+
+  return <Page className="statement-print-page" title="Customer statements" subtitle="A reconciled record of opening balance, charges, payments and closing balance" actions={<>
+    <Button tone="slate" disabled={!statement || loadingStatement} onClick={printStatement}>Print / Save PDF</Button>
+    <Button tone="green" disabled={!statement || loadingStatement} onClick={exportStatement}>Export Excel</Button>
+  </>}>
+    {error && <Notice>{error}</Notice>}
+    <Card className="statement-screen-filters mb-4">
+      <div className="grid gap-3 md:grid-cols-4">
+        <Field label="Customer account">
+          <SearchableSelect className={INPUT} disabled={loadingAccounts} value={accountId} onChange={(e) => setAccountId(e.target.value)}>
+            <option value="">{loadingAccounts ? "Loading accounts..." : "Select account"}</option>
+            {accounts.map((bill: Row) => <option key={bill.accountId} value={bill.accountId}>{bill.account.accountNumber} · {bill.customerName}</option>)}
+          </SearchableSelect>
+        </Field>
+        <Field label="From"><input type="date" className={INPUT} value={from} onChange={(e) => setFrom(e.target.value)} /></Field>
+        <Field label="To"><input type="date" className={INPUT} value={to} onChange={(e) => setTo(e.target.value)} /></Field>
+        <div className="flex items-end"><Button className="w-full" onClick={() => load()} disabled={!accountId || loadingStatement}>{loadingStatement ? "Loading statement..." : "Load statement"}</Button></div>
+      </div>
+    </Card>
+    {loadingStatement && !statement ? <Card><Spinner /></Card> : statement && <Card className="statement-print-document">
+      <div className="border-b border-slate-200 pb-4">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <img src="/samdamte-water-logo-print.png" alt="Samdamte Water Utility Management" className="statement-brand-logo h-auto w-[260px] max-w-[55%] object-contain" />
+          <div className="text-right">
+            <div className="text-xl font-bold text-slate-900">CUSTOMER STATEMENT</div>
+            <div className="mt-1 text-sm text-slate-500">{date(`${from}T00:00:00.000Z`)} – {date(`${to}T00:00:00.000Z`)}</div>
+          </div>
+        </div>
+        <div className="mt-5 grid gap-4 text-sm md:grid-cols-2">
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">Customer</div>
+            <div className="mt-1 text-lg font-bold text-slate-900">{statement.account.customerName}</div>
+            <div>Account {statement.account.accountNumber}</div>
+            <div>{statement.account.property?.physicalAddress}</div>
+          </div>
+          <div className="md:text-right">
+            <div><span className="text-slate-500">Category:</span> {statement.account.category?.categoryName ?? "—"}</div>
+            <div><span className="text-slate-500">Zone:</span> {statement.account.property?.zone?.zoneName ?? "—"}</div>
+            <div><span className="text-slate-500">Account status:</span> {pretty(statement.account.accountStatus)}</div>
+          </div>
+        </div>
+      </div>
+      <div className="my-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <Kpi label="Opening balance" value={money(statement.openingBalance)} />
+        <Kpi label="Period debits" value={money(statement.totalDebits)} tone="text-red-700" />
+        <Kpi label="Period credits" value={money(statement.totalCredits)} tone="text-emerald-700" />
+        <Kpi label="Closing balance" value={money(statement.closingBalance)} tone="text-aqua-700" />
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[720px]">
+          <thead><tr><th className={TH}>Date</th><th className={TH}>Description / reference</th><th className={`${TH} text-right`}>Debit</th><th className={`${TH} text-right`}>Credit</th><th className={`${TH} text-right`}>Balance</th></tr></thead>
+          <tbody>
+            <tr className="border-t bg-slate-50"><td className={TD}>{date(`${from}T00:00:00.000Z`)}</td><td className={`${TD} font-semibold text-slate-800`}>Balance brought forward</td><td className={`${TD} text-right`}>—</td><td className={`${TD} text-right`}>—</td><td className={`${TD} text-right font-bold`}>{money(statement.openingBalance)}</td></tr>
+            {statement.entries.map((entry: Row) => <tr key={entry.id} className="border-t"><td className={TD}>{date(entry.date)}</td><td className={TD}>{entry.description}</td><td className={`${TD} text-right`}>{entry.debit ? money(entry.debit) : "—"}</td><td className={`${TD} text-right`}>{entry.credit ? money(entry.credit) : "—"}</td><td className={`${TD} text-right font-semibold`}>{money(entry.balance)}</td></tr>)}
+            {!statement.entries.length && <tr><td colSpan={5} className="p-8 text-center text-slate-500">No transactions occurred during this period. The closing balance is the balance brought forward.</td></tr>}
+          </tbody>
+          <tfoot>
+            <tr className="border-t-2 border-slate-300 bg-slate-50"><td colSpan={2} className={`${TD} font-bold text-slate-800`}>Period totals</td><td className={`${TD} text-right font-bold`}>{money(statement.totalDebits)}</td><td className={`${TD} text-right font-bold`}>{money(statement.totalCredits)}</td><td className={`${TD} text-right font-bold text-aqua-700`}>{money(statement.closingBalance)}</td></tr>
+          </tfoot>
+        </table>
+      </div>
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t pt-4 text-sm">
+        <span className="text-slate-500">Opening balance + debits − credits = closing balance</span>
+        <div className="text-lg"><span className="mr-4">Amount due / (credit)</span><strong className={Number(statement.closingBalance) > 0 ? "text-red-700" : "text-emerald-700"}>{money(statement.closingBalance)}</strong></div>
+      </div>
+    </Card>}
   </Page>;
 }
 

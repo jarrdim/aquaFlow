@@ -423,4 +423,61 @@ input[type="radio"] {
   body.printing-invoice .invoice-print-document td {
     padding: 6px 8px !important;
   }
+
+  body.printing-statement {
+    overflow: visible !important;
+    background: white !important;
+  }
+
+  body.printing-statement .app-sidebar,
+  body.printing-statement .app-topbar,
+  body.printing-statement .page-screen-header,
+  body.printing-statement .statement-screen-filters,
+  body.printing-statement .statement-print-page>[role="alert"] {
+    display: none !important;
+  }
+
+  body.printing-statement .app-shell,
+  body.printing-statement .app-main-column,
+  body.printing-statement .app-content {
+    display: block !important;
+    width: 100% !important;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    background: white !important;
+  }
+
+  body.printing-statement .statement-print-page {
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  body.printing-statement .statement-print-document {
+    width: 100% !important;
+    max-width: none !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    font-size: 11pt;
+  }
+
+  body.printing-statement .statement-print-document>div {
+    padding: 0 !important;
+  }
+
+  body.printing-statement .statement-brand-logo {
+    display: block !important;
+    width: 210px !important;
+    height: auto !important;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  body.printing-statement .statement-print-document th,
+  body.printing-statement .statement-print-document td {
+    padding: 6px 8px !important;
+  }
 }
