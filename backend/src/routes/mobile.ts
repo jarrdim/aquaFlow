@@ -1,4 +1,6 @@
 import { Router } from "express";
+import jwt from "jsonwebtoken";
+import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { requireAuth, requireRole } from "../middleware/auth";
 
@@ -51,7 +53,142 @@ mobileRouter.get("/bootstrap", async (_req, res, next) => {
   }
 });
 
+function normalizedPhone(value: string) {
+  const digits = value.replace(/\D/g, "");
+  return digits.length >= 9 ? digits.slice(-9) : digits;
+}
+
+mobileRouter.post("/customer/login", async (req, res, next) => {
+  try {
+    const parsed = z.object({ phoneNumber: z.string().trim().min(7).max(30) }).safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Enter your registered phone number" });
+    const requested = normalizedPhone(parsed.data.phoneNumber);
+    const candidates = await prisma.customer.findMany({
+      where: { status: "ACTIVE", phoneNumber: { not: "" } },
+    });
+    const matches = candidates.filter((customer) => normalizedPhone(customer.phoneNumber) === requested);
+    if (matches.length !== 1) {
+      return res.status(401).json({
+        error: matches.length ? "This phone number belongs to more than one customer record" : "No active customer was found with this phone number",
+      });
+    }
+    const customer = matches[0];
+    const customerName = customer.organizationName ||
+      [customer.firstName, customer.middleName, customer.lastName].filter(Boolean).join(" ");
+    const identity = {
+      userId: customer.customerId.toString(),
+      username: customer.phoneNumber,
+      userType: "CUSTOMER",
+      roles: ["CUSTOMER"],
+    };
+    const secret = process.env.JWT_SECRET as string;
+    res.json({
+      token: jwt.sign({ ...identity, tokenType: "access" }, secret, { expiresIn: "8h" }),
+      refreshToken: jwt.sign({ ...identity, tokenType: "refresh" }, secret, { expiresIn: "30d" }),
+      expiresIn: 8 * 60 * 60,
+      user: {
+        userId: customer.customerId,
+        username: customer.phoneNumber,
+        firstName: customerName,
+        lastName: "",
+        userType: "CUSTOMER",
+        roles: ["CUSTOMER"],
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 mobileRouter.use(requireAuth);
+
+mobileRouter.get("/customer/overview", requireRole("CUSTOMER"), async (req, res, next) => {
+  try {
+    const customerId = BigInt(req.user!.userId);
+    const customer = await prisma.customer.findUnique({
+      where: { customerId },
+      include: {
+        accounts: {
+          include: {
+            property: { include: { zone: true } },
+            bills: { orderBy: { issueDate: "desc" }, take: 24 },
+            payments: {
+              include: { channel: true, receipt: true },
+              orderBy: { paymentDate: "desc" },
+              take: 24,
+            },
+          },
+          orderBy: { accountNumber: "asc" },
+        },
+        serviceRequests: { orderBy: { createdAt: "desc" }, take: 20 },
+        notifications: { orderBy: { createdAt: "desc" }, take: 30 },
+      },
+    });
+    if (!customer || customer.status !== "ACTIVE") {
+      return res.status(404).json({ error: "Active customer profile not found" });
+    }
+    const name = customer.organizationName ||
+      [customer.firstName, customer.middleName, customer.lastName].filter(Boolean).join(" ");
+    const connections = await prisma.newConnectionApplication.findMany({
+      where: { customerId },
+      orderBy: { createdAt: "desc" },
+      take: 20,
+    });
+    const accounts = customer.accounts.map((account) => ({
+      accountId: account.accountId,
+      accountNumber: account.accountNumber,
+      status: account.accountStatus,
+      currentBalance: account.currentBalance,
+      connectionDate: account.connectionDate,
+      property: {
+        propertyNumber: account.property.propertyCode,
+        address: account.property.physicalAddress,
+        zoneName: account.property.zone?.zoneName,
+      },
+      bills: account.bills.map((bill) => ({
+        billId: bill.billId,
+        billNumber: bill.billNumber,
+        issueDate: bill.issueDate,
+        dueDate: bill.dueDate,
+        consumptionUnits: bill.consumptionUnits,
+        totalCurrentCharges: bill.totalCurrentCharges,
+        totalAmountDue: bill.totalAmountDue,
+        paidAmount: bill.paidAmount,
+        status: bill.status,
+      })),
+      payments: account.payments.map((payment) => ({
+        paymentId: payment.paymentId,
+        transactionReference: payment.transactionReference,
+        amount: payment.amount,
+        paymentDate: payment.paymentDate,
+        status: payment.paymentStatus,
+        channelName: payment.channel.channelName,
+        receiptNumber: payment.receipt?.receiptNumber,
+      })),
+    }));
+    res.json({
+      customer: {
+        customerId: customer.customerId,
+        customerNumber: customer.customerNumber,
+        name,
+        phoneNumber: customer.phoneNumber,
+        emailAddress: customer.emailAddress,
+      },
+      summary: {
+        accounts: accounts.length,
+        balance: accounts.reduce((sum, account) => sum + Number(account.currentBalance), 0),
+        openRequests: customer.serviceRequests.filter((item) => !["RESOLVED", "CLOSED", "CANCELLED"].includes(item.status)).length,
+        unreadNotifications: customer.notifications.filter((item) => item.deliveryStatus !== "DELIVERED").length,
+      },
+      accounts,
+      serviceRequests: customer.serviceRequests,
+      connections,
+      notifications: customer.notifications,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
 
 mobileRouter.get("/me", async (req, res, next) => {
   try {

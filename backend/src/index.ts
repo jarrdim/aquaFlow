@@ -17,6 +17,8 @@ import { adminRouter } from "./routes/admin";
 import { serviceRequestsRouter } from "./routes/serviceRequests";
 import { settingsRouter } from "./routes/settings";
 import { mobileRouter } from "./routes/mobile";
+import { workOrdersRouter } from "./routes/workOrders";
+import { connectionsRouter } from "./routes/connections";
 import { prisma } from "./lib/prisma";
 
 // BigInt IDs (from BIGSERIAL columns) don't serialize to JSON by default.
@@ -68,6 +70,8 @@ app.use("/api/admin", adminRouter);
 app.use("/api/service-requests", serviceRequestsRouter);
 app.use("/api/settings", settingsRouter);
 app.use("/api/mobile", mobileRouter);
+app.use("/api/work-orders", workOrdersRouter);
+app.use("/api/connections", connectionsRouter);
 
 app.use(
   (

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { encodeId } from "../lib/hashids";
 import { SearchableSelect } from "../components/SearchableSelect";
@@ -110,6 +110,9 @@ export default function NewCustomer() {
   const [routes, setRoutes]           = useState<Lookup[]>([]);
 
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const connectionId = searchParams.get("connectionId");
+  const returnTo = searchParams.get("returnTo");
 
   const upd = (field: string, value: string) => setForm((f) => ({ ...f, [field]: value }));
 
@@ -193,7 +196,12 @@ export default function NewCustomer() {
         });
       }
 
-      navigate(`/customers/${encodeId(customer.customerId)}`);
+      if (connectionId) {
+        await api.linkConnectionCustomer(connectionId, String(customer.customerId));
+        navigate(returnTo || `/connections/${connectionId}`);
+      } else {
+        navigate(`/customers/${encodeId(customer.customerId)}`);
+      }
     } catch (err: any) {
       setStepError(err.message ?? "Failed to save customer");
     } finally {
@@ -217,10 +225,12 @@ export default function NewCustomer() {
             Customer operations
           </p>
           <h1 className="text-2xl font-bold text-slate-900">
-            Register New Customer
+            {connectionId ? "Create customer for connection" : "Register New Customer"}
           </h1>
           <p className="mt-1 text-[15px] text-slate-500">
-            Create the customer identity, property and account-ready record.
+            {connectionId
+              ? "This is the existing customer wizard. Saving links the new customer to the approved connection."
+              : "Create the customer identity, property and account-ready record."}
           </p>
         </div>
         <Link

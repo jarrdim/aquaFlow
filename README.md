@@ -3,6 +3,10 @@
 Android field-app integration and offline synchronization are documented in
 [`docs/ANDROID_FIELD_APP_HANDOFF.md`](docs/ANDROID_FIELD_APP_HANDOFF.md).
 
+Live server installation and database upgrade commands are preserved in
+[`LIVE_DEPLOYMENT.md`](LIVE_DEPLOYMENT.md). Follow that checklist in order when
+transferring a new release to production.
+
 This is a working first slice of the AquaFlow Water Distribution, Billing and Field
 Management System, built from your Functional Requirements Specification and
 `aquaflow_postgresql_ddl.sql`. It covers FRS sections **3.1 (Authentication)** and
@@ -56,12 +60,18 @@ regenerating Prisma. It preserves existing records and may be safely re-run:
 cd backend
 npm run db:meter-upgrade
 npm run db:reading-upgrade
+npm run db:meter-event-upgrade
 npm run db:tariff-upgrade
 npm run db:billing-upgrade
 npm run db:payment-upgrade
 npm run db:mpesa-upgrade
 npm run db:notification-upgrade
 npm run db:arrears-upgrade
+npm run db:admin-upgrade
+npm run db:service-request-upgrade
+npm run db:settings-upgrade
+npm run db:legacy-settings-upgrade
+npm run db:work-order-upgrade
 npm run prisma:generate
 ```
 

@@ -20,6 +20,7 @@ type Settings = {
   defaultBillingRate: number | null;
   subprojectDiscountRate: number | null;
   reconnectionFee: number | null;
+  defaultConnectionFee: number | null;
   readingVariancePercent: number;
   minimumReadingValue: number;
   billingMessageLine1: string;
@@ -55,6 +56,7 @@ const initialSettings: Settings = {
   defaultBillingRate: null,
   subprojectDiscountRate: null,
   reconnectionFee: null,
+  defaultConnectionFee: null,
   readingVariancePercent: 30,
   minimumReadingValue: 0,
   billingMessageLine1: "",
@@ -151,6 +153,7 @@ export default function SettingsManagement() {
           defaultBillingRate: data.defaultBillingRate == null ? null : Number(data.defaultBillingRate),
           subprojectDiscountRate: data.subprojectDiscountRate == null ? null : Number(data.subprojectDiscountRate),
           reconnectionFee: data.reconnectionFee == null ? null : Number(data.reconnectionFee),
+          defaultConnectionFee: data.defaultConnectionFee == null ? null : Number(data.defaultConnectionFee),
         }),
       )
       .catch((requestError: unknown) => setError(errorMessage(requestError)))
@@ -281,6 +284,9 @@ export default function SettingsManagement() {
                 </Field>
                 <Field label="Reconnection fee (KSh)" hint="Default fee recorded in the legacy setup.">
                   <input type="number" min={0} step="0.01" className={input} value={settings.reconnectionFee ?? ""} onChange={(event) => set("reconnectionFee", event.target.value === "" ? null : Number(event.target.value))} />
+                </Field>
+                <Field label="New connection fee (KSh)" hint="Auto-applied to new applications; authorized staff can override it with a reason.">
+                  <input type="number" min={0} step="0.01" className={input} value={settings.defaultConnectionFee ?? ""} onChange={(event) => set("defaultConnectionFee", event.target.value === "" ? null : Number(event.target.value))} />
                 </Field>
                 <Field label="Variance alert (%)" hint="Flag an unusual change for review.">
                   <input type="number" min={0} max={999.99} step="0.01" className={input} value={settings.readingVariancePercent} onChange={(event) => set("readingVariancePercent", Number(event.target.value))} required />

@@ -784,6 +784,37 @@ export const api = {
   assignServiceRequest: (id: string, data: Record<string, unknown>) => request(`/service-requests/${id}/assign`, { method: "PATCH", body: JSON.stringify(data) }),
   updateServiceRequestStatus: (id: string, data: Record<string, unknown>) => request(`/service-requests/${id}/status`, { method: "PATCH", body: JSON.stringify(data) }),
   addServiceRequestComment: (id: string, comments: string) => request(`/service-requests/${id}/comments`, { method: "POST", body: JSON.stringify({ comments }) }),
+  workOrderDashboard: () => request("/work-orders/dashboard"),
+  workOrderLookups: () => request("/work-orders/lookups"),
+  listWorkOrderTargets: (q = "") => request(`/work-orders/targets${q ? `?q=${encodeURIComponent(q)}` : ""}`),
+  listWorkOrders: (filters: Record<string, string> = {}) => {
+    const query = new URLSearchParams(Object.entries(filters).filter(([, value]) => value)).toString();
+    return request(`/work-orders${query ? `?${query}` : ""}`);
+  },
+  getWorkOrder: (id: string) => request(`/work-orders/${id}`),
+  createWorkOrder: (data: Record<string, unknown>) => request("/work-orders", { method: "POST", body: JSON.stringify(data) }),
+  assignWorkOrder: (id: string, data: Record<string, unknown>) => request(`/work-orders/${id}/assign`, { method: "PATCH", body: JSON.stringify(data) }),
+  updateWorkOrderStatus: (id: string, data: Record<string, unknown>) => request(`/work-orders/${id}/status`, { method: "PATCH", body: JSON.stringify(data) }),
+  addWorkOrderEvidence: (id: string, data: Record<string, unknown>) => request(`/work-orders/${id}/evidence`, { method: "POST", body: JSON.stringify(data) }),
+  addWorkOrderConsumable: (id: string, data: Record<string, unknown>) => request(`/work-orders/${id}/consumables`, { method: "POST", body: JSON.stringify(data) }),
+  verifyWorkOrder: (id: string, data: Record<string, unknown>) => request(`/work-orders/${id}/verify`, { method: "PATCH", body: JSON.stringify(data) }),
+  closeWorkOrder: (id: string, notes: string) => request(`/work-orders/${id}/close`, { method: "PATCH", body: JSON.stringify({ notes }) }),
+  connectionDashboard: () => request("/connections/dashboard"),
+  connectionLookups: () => request("/connections/lookups"),
+  listConnections: (filters: Record<string, string> = {}) => {
+    const query = new URLSearchParams(Object.entries(filters).filter(([, value]) => value)).toString();
+    return request(`/connections${query ? `?${query}` : ""}`);
+  },
+  getConnection: (id: string) => request(`/connections/${id}`),
+  createConnection: (data: Record<string, unknown>) =>
+    request("/connections", { method: "POST", body: JSON.stringify(data) }),
+  updateConnection: (id: string, data: Record<string, unknown>) =>
+    request(`/connections/${id}/action`, { method: "PATCH", body: JSON.stringify(data) }),
+  linkConnectionCustomer: (id: string, customerId: string) =>
+    request(`/connections/${id}/link-customer`, {
+      method: "POST",
+      body: JSON.stringify({ customerId }),
+    }),
   getSystemSettings: () => request("/settings"),
   updateSystemSettings: (data: Record<string, unknown>) =>
     request("/settings", { method: "PUT", body: JSON.stringify(data) }),

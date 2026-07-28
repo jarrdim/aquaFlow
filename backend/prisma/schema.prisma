@@ -341,6 +341,7 @@ model SystemSetting {
   defaultBillingRate     Decimal? @map("default_billing_rate") @db.Decimal(18, 2)
   subprojectDiscountRate Decimal? @map("subproject_discount_rate") @db.Decimal(5, 2)
   reconnectionFee        Decimal? @map("reconnection_fee") @db.Decimal(18, 2)
+  defaultConnectionFee   Decimal? @map("default_connection_fee") @db.Decimal(18, 2)
   readingVariancePercent Decimal  @default(30) @map("reading_variance_percent") @db.Decimal(5, 2)
   minimumReadingValue    Decimal  @default(0) @map("minimum_reading_value") @db.Decimal(18, 3)
   billingMessageLine1    String?  @map("billing_message_line_1")
@@ -361,6 +362,60 @@ model SystemSetting {
   updatedAt              DateTime @default(now()) @updatedAt @map("updated_at")
 
   @@map("system_settings")
+  @@schema("aquaflow")
+}
+
+model NewConnectionApplication {
+  connectionApplicationId BigInt    @id @default(autoincrement()) @map("connection_application_id")
+  applicationNumber       String    @unique @map("application_number")
+  customerId              BigInt?   @map("customer_id")
+  applicantType           String    @default("INDIVIDUAL") @map("applicant_type")
+  applicantName           String    @map("applicant_name")
+  identificationNumber    String?   @map("identification_number")
+  phoneNumber             String    @map("phone_number")
+  emailAddress            String?   @map("email_address")
+  physicalAddress         String    @map("physical_address")
+  plotNumber              String?   @map("plot_number")
+  zoneId                  BigInt?   @map("zone_id")
+  connectionType          String    @default("DOMESTIC") @map("connection_type")
+  status                  String    @default("SUBMITTED")
+  connectionFee           Decimal   @default(0) @map("connection_fee") @db.Decimal(18, 2)
+  connectionFeeOverridden Boolean   @default(false) @map("connection_fee_overridden")
+  feeOverrideReason       String?   @map("fee_override_reason")
+  inspectionScheduledAt   DateTime? @map("inspection_scheduled_at")
+  inspectionOfficerId     BigInt?   @map("inspection_officer_id")
+  inspectionOutcome       String?   @map("inspection_outcome")
+  inspectionNotes         String?   @map("inspection_notes")
+  materialsCost           Decimal   @default(0) @map("materials_cost") @db.Decimal(18, 2)
+  labourCost              Decimal   @default(0) @map("labour_cost") @db.Decimal(18, 2)
+  quotationTotal          Decimal   @default(0) @map("quotation_total") @db.Decimal(18, 2)
+  amountPaid              Decimal   @default(0) @map("amount_paid") @db.Decimal(18, 2)
+  paymentReference        String?   @map("payment_reference")
+  decisionNotes           String?   @map("decision_notes")
+  accountId               BigInt?   @map("account_id")
+  workOrderId             BigInt?   @map("work_order_id")
+  remarks                 String?
+  createdBy               BigInt    @map("created_by")
+  createdAt               DateTime  @default(now()) @map("created_at")
+  updatedAt               DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  activities NewConnectionActivity[]
+
+  @@map("new_connection_applications")
+  @@schema("aquaflow")
+}
+
+model NewConnectionActivity {
+  connectionActivityId    BigInt   @id @default(autoincrement()) @map("connection_activity_id")
+  connectionApplicationId BigInt   @map("connection_application_id")
+  activityType            String   @map("activity_type")
+  notes                   String?
+  performedBy             BigInt   @map("performed_by")
+  performedAt             DateTime @default(now()) @map("performed_at")
+
+  application NewConnectionApplication @relation(fields: [connectionApplicationId], references: [connectionApplicationId])
+
+  @@map("new_connection_activities")
   @@schema("aquaflow")
 }
 

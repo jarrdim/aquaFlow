@@ -26,6 +26,7 @@ const settingsInput = z.object({
   defaultBillingRate: z.coerce.number().min(0).optional().nullable(),
   subprojectDiscountRate: z.coerce.number().min(0).max(100).optional().nullable(),
   reconnectionFee: z.coerce.number().min(0).optional().nullable(),
+  defaultConnectionFee: z.coerce.number().min(0).optional().nullable(),
   readingVariancePercent: z.coerce.number().min(0).max(999.99),
   minimumReadingValue: z.coerce.number().min(0),
   billingMessageLine1: nullableText(500),

@@ -61,6 +61,11 @@ const permissionDefinitions = [
   ["SERVICE_REQUEST_CREATE", "Service Requests", "Create service requests", "Register service requests and complaints"],
   ["SERVICE_REQUEST_ASSIGN", "Service Requests", "Assign service requests", "Assign requests to service officers"],
   ["SERVICE_REQUEST_RESOLVE", "Service Requests", "Resolve service requests", "Progress, resolve and close requests"],
+  ["WORK_ORDER_VIEW", "Work Orders", "View work orders", "View work-order registers, details and history"],
+  ["WORK_ORDER_CREATE", "Work Orders", "Create work orders", "Create work orders from requests, alerts or manual field needs"],
+  ["WORK_ORDER_ASSIGN", "Work Orders", "Assign work orders", "Schedule and assign field officers"],
+  ["WORK_ORDER_EXECUTE", "Work Orders", "Execute work orders", "Accept, start, update and complete assigned work"],
+  ["WORK_ORDER_VERIFY", "Work Orders", "Verify work orders", "Verify, return and close completed field work"],
 ] as const;
 
 const staffDefinitions = [
@@ -322,6 +327,17 @@ async function main() {
         roles.get("CUSTOMER_CARE_OFFICER")!.roleId,
         permission.permissionId,
       );
+    }
+    if (code.startsWith("WORK_ORDER_")) {
+      if (["WORK_ORDER_VIEW", "WORK_ORDER_CREATE", "WORK_ORDER_ASSIGN", "WORK_ORDER_VERIFY"].includes(code)) {
+        await ensureRolePermission(roles.get("METER_SUPERVISOR")!.roleId, permission.permissionId);
+      }
+      if (["WORK_ORDER_VIEW", "WORK_ORDER_EXECUTE"].includes(code)) {
+        await ensureRolePermission(roles.get("METER_READER")!.roleId, permission.permissionId);
+      }
+      if (["WORK_ORDER_VIEW", "WORK_ORDER_CREATE"].includes(code)) {
+        await ensureRolePermission(roles.get("CUSTOMER_CARE_OFFICER")!.roleId, permission.permissionId);
+      }
     }
   }
 

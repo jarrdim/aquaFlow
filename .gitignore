@@ -7,6 +7,12 @@
 !**/.env.example
 *.log
 docs/
-documets-and-flow/
-android-work/
-
+!docs/
+docs/*
+!docs/New_Connection_UI_Flow.html
+!docs/New_Connection_UI_Flow.doc
+!docs/New_Connection_UI_Flow.pdf
+documets-and-flow/*
+android-work/*
+LIVE_DEPLOYMENT.md
+documets-and-flow/*

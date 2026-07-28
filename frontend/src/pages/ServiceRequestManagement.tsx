@@ -428,6 +428,14 @@ export function ServiceRequestDashboard() {
                   {selected.description}
                 </p>
               </div>
+              {!["RESOLVED", "CLOSED", "CANCELLED"].includes(selected.status) && (
+                <Link
+                  to={`/work-orders/new?serviceRequestId=${selected.serviceRequestId}`}
+                  className="block w-full rounded-lg bg-aqua-700 px-4 py-2.5 text-center text-sm font-bold text-white"
+                >
+                  Create linked work order
+                </Link>
+              )}
               <label className="block">
                 <span className="mb-1 block text-sm font-medium">
                   Assigned officer

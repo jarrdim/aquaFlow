@@ -457,7 +457,14 @@ billingRouter.get("/statements/:accountId", async (req, res, next) => {
       include: {
         customer: true,
         category: true,
-        property: { include: { zone: true } },
+        route: { include: { zone: true } },
+        property: { include: { zone: true, route: true, serviceArea: true } },
+        meterAssignments: {
+          where: { assignmentStatus: "ACTIVE" },
+          include: { meter: true },
+          orderBy: { assignmentDate: "desc" },
+          take: 1,
+        },
       },
     });
     if (!account) return res.status(404).json({ error: "Account not found" });
@@ -473,23 +480,87 @@ billingRouter.get("/statements/:accountId", async (req, res, next) => {
     if (from > to) {
       return res.status(400).json({ error: "Statement start date cannot be after the end date." });
     }
-    const [bills, payments, priorBills, priorPayments] = await Promise.all([
-      prisma.bill.findMany({ where: { accountId, status: { in: ["POSTED", "PARTIALLY_PAID", "PAID"] }, issueDate: { gte: from, lte: to } }, include: { billingCycle: true }, orderBy: { issueDate: "asc" } }),
-      prisma.$queryRaw<any[]>`SELECT payment_id, transaction_reference, amount, payment_date FROM aquaflow.payments WHERE account_id = ${accountId} AND payment_status = 'POSTED' AND payment_date BETWEEN ${from} AND ${to} ORDER BY payment_date`,
+    const [bills, payments, priorBills, priorPayments, latestBill, settings] = await Promise.all([
+      prisma.bill.findMany({
+        where: { accountId, status: { in: ["POSTED", "PARTIALLY_PAID", "PAID"] }, issueDate: { gte: from, lte: to } },
+        include: { billingCycle: true, tariff: true, reading: true },
+        orderBy: { issueDate: "asc" },
+      }),
+      prisma.payment.findMany({
+        where: { accountId, paymentStatus: "POSTED", paymentDate: { gte: from, lte: to } },
+        include: { channel: true },
+        orderBy: { paymentDate: "asc" },
+      }),
       prisma.bill.aggregate({ where: { accountId, status: { in: ["POSTED", "PARTIALLY_PAID", "PAID"] }, issueDate: { lt: from } }, _sum: { totalCurrentCharges: true } }),
-      prisma.$queryRaw<any[]>`SELECT COALESCE(SUM(amount), 0) AS total FROM aquaflow.payments WHERE account_id = ${accountId} AND payment_status = 'POSTED' AND payment_date < ${from}`,
+      prisma.payment.aggregate({
+        where: { accountId, paymentStatus: "POSTED", paymentDate: { lt: from } },
+        _sum: { amount: true },
+      }),
+      prisma.bill.findFirst({
+        where: { accountId, status: { in: ["POSTED", "PARTIALLY_PAID", "PAID"] } },
+        include: { tariff: true },
+        orderBy: { issueDate: "desc" },
+      }),
+      prisma.systemSetting.findFirst(),
     ]);
     const entries = [
-      ...bills.map((bill: any) => ({ id: `B${bill.billId}`, date: bill.issueDate, description: `Bill ${bill.billingCycle.cycleName} (${bill.billNumber})`, debit: Number(bill.totalCurrentCharges), credit: 0 })),
-      ...payments.map((payment: any) => ({ id: `P${payment.payment_id}`, date: payment.payment_date, description: `Payment ${payment.transaction_reference}`, debit: 0, credit: Number(payment.amount) })),
+      ...bills.map((bill: any) => ({
+        id: `B${bill.billId}`,
+        date: bill.issueDate,
+        particulars: "Water bill",
+        reference: bill.billNumber,
+        period: bill.billingCycle.cycleCode || bill.billingCycle.cycleName,
+        details: bill.reading
+          ? `Prev: ${Number(bill.reading.previousReading)} - Curr: ${Number(bill.reading.currentReading)} - Units: ${Number(bill.reading.consumption)} (${String(bill.reading.readingType).replace(/_/g, " ")}) - Due: ${bill.dueDate.toISOString().slice(0, 10)}`
+          : `Units: ${Number(bill.consumptionUnits)} - Due: ${bill.dueDate.toISOString().slice(0, 10)}`,
+        description: `Water bill ${bill.billNumber}`,
+        debit: Number(bill.totalCurrentCharges),
+        credit: 0,
+      })),
+      ...payments.map((payment: any) => ({
+        id: `P${payment.paymentId}`,
+        date: payment.paymentDate,
+        particulars: "Payment",
+        reference: payment.transactionReference,
+        period: payment.paymentDate.toISOString().slice(0, 7),
+        details: [payment.channel.channelName, payment.remarks].filter(Boolean).join(" - "),
+        description: `Payment ${payment.transactionReference}`,
+        debit: 0,
+        credit: Number(payment.amount),
+      })),
     ].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-    const openingBalance = round(Number(account.openingBalance) + Number(priorBills._sum.totalCurrentCharges ?? 0) - Number(priorPayments[0]?.total ?? 0));
+    const openingBalance = round(Number(account.openingBalance) + Number(priorBills._sum.totalCurrentCharges ?? 0) - Number(priorPayments._sum.amount ?? 0));
     let balance = openingBalance;
     const statement = entries.map((entry) => { balance = round(balance + entry.debit - entry.credit); return { ...entry, balance }; });
     const totalDebits = round(entries.reduce((sum, entry) => sum + entry.debit, 0));
     const totalCredits = round(entries.reduce((sum, entry) => sum + entry.credit, 0));
     res.json({
-      account: { ...account, customerName: customerName(account.customer) },
+      utility: {
+        name: settings?.utilityName ?? "Samdamte Water Utility Management",
+        code: settings?.utilityCode ?? "SAMDAMTE",
+        email: settings?.emailAddress ?? null,
+        phone: settings?.phoneNumber ?? null,
+        secondaryPhone: settings?.secondaryPhoneNumber ?? null,
+        postalAddress: settings?.postalAddress ?? null,
+        postalCode: settings?.postalCode ?? null,
+        physicalAddress: settings?.physicalAddress ?? null,
+        currencyCode: settings?.currencyCode ?? "KES",
+      },
+      account: {
+        accountId: account.accountId,
+        accountNumber: account.accountNumber,
+        customerName: customerName(account.customer),
+        phone: account.customer.phoneNumber,
+        email: account.customer.emailAddress,
+        status: account.accountStatus,
+        category: account.category.categoryName,
+        region: account.property?.serviceArea?.areaName ?? account.property?.zone?.zoneName ?? account.route?.zone.zoneName ?? null,
+        zone: account.property?.zone?.zoneName ?? account.route?.zone.zoneName ?? null,
+        route: account.route?.routeName ?? account.property?.route?.routeName ?? null,
+        meterNumber: account.meterAssignments[0]?.meter.meterNumber ?? null,
+        tariff: latestBill?.tariff.tariffName ?? account.category.categoryName,
+        address: account.property?.physicalAddress ?? null,
+      },
       period: { from: fromText || null, to: toText || null },
       openingBalance,
       totalDebits,

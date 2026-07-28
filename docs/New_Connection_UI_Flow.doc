@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Samdamte Water — New Connection UI Flow</title>
+<style>
+  @page { size: A4 landscape; margin: 13mm; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: Arial, Helvetica, sans-serif; color: #122033; background: #fff; font-size: 11px; }
+  .page { min-height: 180mm; page-break-after: always; padding: 7mm; position: relative; }
+  .page:last-child { page-break-after: auto; }
+  .cover { background: linear-gradient(135deg,#071d3b,#076795); color:#fff; display:flex; align-items:center; padding:22mm; }
+  .cover h1 { font-size: 35px; margin: 0 0 8px; }
+  .cover p { font-size: 17px; max-width: 780px; line-height: 1.55; color:#d8efff; }
+  .eyebrow { text-transform: uppercase; letter-spacing: 1.7px; font-weight: 700; color:#0a87bd; }
+  .cover .eyebrow { color:#7edcff; }
+  h1 { font-size: 24px; margin: 3px 0 4px; }
+  h2 { font-size: 18px; margin: 0; }
+  h3 { font-size: 12px; margin: 0 0 8px; }
+  p { line-height: 1.45; }
+  .muted { color:#63748d; }
+  .header { display:flex; justify-content:space-between; align-items:flex-end; border-bottom:2px solid #e3edf5; padding-bottom:8px; margin-bottom:12px; }
+  .screen { border:1px solid #cfdeea; border-radius:12px; overflow:hidden; box-shadow:0 8px 26px rgba(11,45,78,.08); background:#f6f9fc; }
+  .topbar { height:38px; background:#fff; border-bottom:1px solid #dce7f0; display:flex; align-items:center; gap:12px; padding:0 14px; }
+  .brand { font-weight:800; color:#075f8c; }
+  .search { background:#edf3f8; border-radius:15px; width:260px; padding:6px 12px; color:#8392a6; }
+  .body { padding:14px; }
+  .title-row, .actions { display:flex; justify-content:space-between; align-items:center; gap:8px; }
+  .btn { display:inline-block; padding:8px 13px; border-radius:7px; background:#09658f; color:#fff; font-weight:700; }
+  .btn.green { background:#009b6c; } .btn.light { background:#e9f1f6; color:#23415b; }
+  .grid { display:grid; grid-template-columns:repeat(12,1fr); gap:10px; margin-top:10px; }
+  .card { background:#fff; border:1px solid #d9e4ed; border-radius:9px; padding:12px; }
+  .metric { grid-column:span 3; } .metric b { display:block; font-size:22px; margin-top:5px; }
+  .main { grid-column:span 8; } .side { grid-column:span 4; }
+  .field { margin-bottom:9px; } .field label { display:block; color:#40536d; margin-bottom:4px; font-weight:600; }
+  .control { min-height:32px; padding:8px 10px; border:1px solid #cbdbe8; background:#fff; border-radius:6px; color:#52657c; }
+  .steps { display:flex; gap:4px; margin:10px 0; }
+  .step { flex:1; border-top:4px solid #dbe6ef; padding-top:6px; color:#718198; }
+  .step.active,.step.done { border-color:#009b6c; color:#05664c; font-weight:700; }
+  table { width:100%; border-collapse:collapse; background:#fff; }
+  th { text-align:left; background:#f0f5f9; color:#536881; padding:8px; font-size:10px; }
+  td { padding:9px 8px; border-bottom:1px solid #e5edf3; }
+  .badge { padding:4px 8px; border-radius:12px; background:#e8f7f1; color:#087957; font-weight:700; font-size:9px; }
+  .note { border-left:4px solid #0a87bd; background:#eaf6fc; padding:9px 11px; border-radius:5px; margin-top:10px; }
+  .flow { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+  .flow span { padding:8px 10px; border-radius:7px; background:#eaf6fc; font-weight:700; }
+  .flow i { color:#0a87bd; font-style:normal; font-size:16px; }
+  .footer { position:absolute; left:7mm; right:7mm; bottom:4mm; display:flex; justify-content:space-between; color:#8190a2; font-size:9px; }
+  .danger { color:#c73c3c; } .money { color:#047d5b; font-weight:800; }
+</style>
+</head>
+<body>
+<section class="page cover">
+  <div>
+    <div class="eyebrow">Product design & operating specification</div>
+    <h1>New Connection Management</h1>
+    <p>A page-based, auditable workflow for application intake, inspection, quotation, payment, approval, customer conversion, installation and service activation.</p>
+    <p><b>Samdamte Water Utility Management</b><br>Version 1.0 · 27 July 2026</p>
+  </div>
+</section>
+
+<section class="page">
+  <div class="header"><div><div class="eyebrow">Design principles</div><h1>One application, one visible lifecycle</h1></div><div class="muted">Existing design system · responsive · server-paginated</div></div>
+  <div class="grid">
+    <div class="card main">
+      <h2>Operating flow</h2><p class="muted">Each status unlocks only the next valid action. All decisions and changes create an activity record.</p>
+      <div class="flow"><span>Submitted</span><i>→</i><span>Inspection</span><i>→</i><span>Quotation</span><i>→</i><span>Payment</span><i>→</i><span>Approval</span><i>→</i><span>Create/link customer</span><i>→</i><span>Installation</span><i>→</i><span>Active</span></div>
+      <div class="note"><b>Customer integration:</b> the existing Create Customer wizard is opened with the connection application context and returns to the application after linking the new customer. It is reused, not duplicated.</div>
+    </div>
+    <div class="card side"><h2>Interaction rules</h2><p>Use full pages for the multi-step intake and application profile. Use right drawers or confirmation dialogs for short actions, fee override, destructive decisions and error detail.</p><p>Lists load 25 records by default and filter on the server.</p></div>
+  </div>
+  <div class="footer"><span>New Connection UI Flow</span><span>Architecture</span></div>
+</section>
+
+<section class="page">
+  <div class="header"><div><div class="eyebrow">Screen 1</div><h1>Connection dashboard</h1><p class="muted">Workload, conversion and ageing at a glance.</p></div><span class="btn green">+ New application</span></div>
+  <div class="screen"><div class="topbar"><span class="brand">Samdamte</span><span class="search">Search customers, accounts, meters…</span></div><div class="body">
+    <div class="grid"><div class="card metric">Applications<b>1,248</b></div><div class="card metric">Pending inspection<b>83</b></div><div class="card metric">Awaiting payment<b>41</b></div><div class="card metric">Ready to install<b>18</b></div>
+    <div class="card main"><h3>Application pipeline</h3><div class="flow"><span>Submitted 83</span><span>Inspected 56</span><span>Quoted 41</span><span>Paid 26</span><span>Approved 18</span></div></div>
+    <div class="card side"><h3>Attention required</h3><p><b class="danger">12</b> overdue inspections</p><p><b class="danger">4</b> payment variances</p></div></div>
+  </div></div><div class="footer"><span>New Connection UI Flow</span><span>1 / 14</span></div>
+</section>
+
+<section class="page">
+  <div class="header"><div><div class="eyebrow">Screen 2</div><h1>New connection application</h1><p class="muted">A focused four-step page wizard.</p></div><span class="btn light">Save draft</span></div>
+  <div class="screen"><div class="topbar"><span class="brand">New Connections</span><span>New application</span></div><div class="body">
+    <div class="steps"><div class="step active">1 Applicant</div><div class="step">2 Property</div><div class="step">3 Service & fee</div><div class="step">4 Review</div></div>
+    <div class="grid"><div class="card main"><div class="field"><label>Applicant type</label><div class="control">New applicant</div></div><div class="field"><label>Applicant name *</label><div class="control">Enter full legal name</div></div><div class="field"><label>Phone *</label><div class="control">+254…</div></div><div class="field"><label>Email</label><div class="control">name@example.com</div></div></div>
+    <div class="card side"><h3>Application guidance</h3><p>Capture the applicant first. A customer account is created only after approval to prevent incomplete records entering the customer register.</p><span class="btn">Continue</span></div></div>
+  </div></div><div class="footer"><span>New Connection UI Flow</span><span>2 / 14</span></div>
+</section>
+
+<section class="page">
+  <div class="header"><div><div class="eyebrow">Screen 3</div><h1>Application register</h1><p class="muted">Searchable, server-paginated operational register.</p></div><span class="btn green">+ New application</span></div>
+  <div class="screen"><div class="body"><div class="card"><div class="actions"><div class="control" style="width:45%">Application no., applicant or phone</div><div class="control">All statuses</div><div class="control">All zones</div></div></div><div class="card" style="margin-top:10px"><table><tr><th>APPLICATION</th><th>APPLICANT</th><th>LOCATION</th><th>FEE</th><th>STATUS</th><th>ACTION</th></tr><tr><td><b>NC-2026-000124</b></td><td>Grace Njeri<br><span class="muted">+254 712 000 000</span></td><td>Joska 3 · Route 01</td><td>KSh 2,000.00</td><td><span class="badge">Submitted</span></td><td>Review →</td></tr><tr><td><b>NC-2026-000123</b></td><td>Peter Maina</td><td>Baraka · Route 02</td><td>KSh 2,000.00</td><td><span class="badge">Inspection scheduled</span></td><td>Review →</td></tr></table><p class="muted">Showing 1–25 of 1,248 · Page 1 of 50</p></div></div></div>
+  <div class="footer"><span>New Connection UI Flow</span><span>3 / 14</span></div>
+</section>
+
+<section class="page">
+  <div class="header"><div><div class="eyebrow">Screen 4</div><h1>Application profile</h1><p class="muted">Single source of truth for the connection journey.</p></div><span class="badge">Inspection scheduled</span></div>
+  <div class="screen"><div class="body"><div class="steps"><div class="step done">Application</div><div class="step active">Inspection</div><div class="step">Quotation</div><div class="step">Payment</div><div class="step">Approval</div><div class="step">Installation</div><div class="step">Activation</div></div><div class="grid"><div class="card main"><h2>NC-2026-000124 · Grace Njeri</h2><p>Plot 18, Joska 3 · Domestic connection · +254 712 000 000</p><h3>Activity</h3><table><tr><td>Application submitted</td><td>27 Jul 2026 09:41</td><td>Customer Care</td></tr><tr><td>Inspection scheduled</td><td>28 Jul 2026 10:00</td><td>Mary Supervisor</td></tr></table></div><div class="card side"><h3>Next action</h3><p>Record the field inspection outcome and technical notes.</p><span class="btn">Record inspection</span></div></div></div></div>
+  <div class="footer"><span>New Connection UI Flow</span><span>4 / 14</span></div>
+</section>
+
+<section class="page">
+  <div class="header"><div><div class="eyebrow">Screen 5</div><h1>Inspection scheduling</h1><p class="muted">Short contextual action on the application profile.</p></div></div>
+  <div class="grid"><div class="card main"><h2>Schedule field inspection</h2><div class="field"><label>Date and time *</label><div class="control">28/07/2026 · 10:00 AM</div></div><div class="field"><label>Inspection officer</label><div class="control">Search field officers…</div></div><div class="field"><label>Instructions</label><div class="control">Verify service line, access and required materials</div></div><span class="btn">Schedule inspection</span></div><div class="card side"><h2>Confirmation drawer</h2><p>Use a right drawer only to confirm the officer, date and applicant notification before committing.</p></div></div>
+  <div class="footer"><span>New Connection UI Flow</span><span>5 / 14</span></div>
+</section>
+
+<section class="page">
+  <div class="header"><div><div class="eyebrow">Screen 6</div><h1>Inspection report</h1><p class="muted">Technical assessment with a clear outcome.</p></div></div>
+  <div class="screen"><div class="body"><div class="grid"><div class="card main"><div class="field"><label>Outcome *</label><div class="control">Feasible</div></div><div class="field"><label>Technical findings *</label><div class="control" style="height:70px">Existing main is accessible. 12 metres of 20 mm pipe required.</div></div><div class="field"><label>Evidence</label><div class="control">Upload photos or documents</div></div></div><div class="card side"><h3>Outcome rules</h3><p><b>Feasible</b> unlocks quotation.</p><p><b>Revisit</b> returns to scheduling.</p><p><b>Not feasible</b> requires a reason and closes the application.</p><span class="btn">Save report</span></div></div></div></div>
+  <div class="footer"><span>New Connection UI Flow</span><span>6 / 14</span></div>
+</section>
+
+<section class="page">
+  <div class="header"><div><div class="eyebrow">Screen 7</div><h1>Quotation</h1><p class="muted">Transparent calculation and controlled fee override.</p></div></div>
+  <div class="grid"><div class="card main"><table><tr><th>ITEM</th><th>BASIS</th><th>AMOUNT</th></tr><tr><td>Connection fee</td><td>System default</td><td>KSh 2,000.00</td></tr><tr><td>Materials</td><td>Inspection estimate</td><td>KSh 4,850.00</td></tr><tr><td>Labour</td><td>Standard job rate</td><td>KSh 1,500.00</td></tr><tr><td><b>Total</b></td><td></td><td class="money">KSh 8,350.00</td></tr></table></div><div class="card side"><h2>Fee policy</h2><p>The default connection fee is configured once in Settings and copied to the application at submission.</p><p><b>Override</b> is available to authorized users and requires a reason. The original and overridden amounts remain auditable.</p><span class="btn light">Override fee</span> <span class="btn">Issue quotation</span></div></div>
+  <div class="footer"><span>New Connection UI Flow</span><span>7 / 14</span></div>
+</section>
+
+<section class="page">
+  <div class="header"><div><div class="eyebrow">Screen 8</div><h1>Fee and payment tracking</h1><p class="muted">Receipts, partial payments and outstanding balance.</p></div></div>
+  <div class="screen"><div class="body"><div class="grid"><div class="card metric">Quotation<b>KSh 8,350</b></div><div class="card metric">Paid<b class="money">KSh 5,000</b></div><div class="card metric">Balance<b class="danger">KSh 3,350</b></div><div class="card metric">Status<b style="font-size:15px">Partially paid</b></div><div class="card main"><h3>Payment history</h3><table><tr><th>DATE</th><th>REFERENCE</th><th>CHANNEL</th><th>AMOUNT</th></tr><tr><td>29 Jul 2026</td><td>QHL8D2K3</td><td>M-Pesa</td><td>KSh 5,000.00</td></tr></table></div><div class="card side"><h3>Record payment</h3><div class="control">Reference</div><br><div class="control">Amount</div><br><span class="btn">Record payment</span></div></div></div></div>
+  <div class="footer"><span>New Connection UI Flow</span><span>8 / 14</span></div>
+</section>
+
+<section class="page">
+  <div class="header"><div><div class="eyebrow">Screen 9</div><h1>Approval or rejection</h1><p class="muted">Independent decision after full payment.</p></div></div>
+  <div class="grid"><div class="card main"><h2>Approval pack</h2><table><tr><td>Applicant details</td><td>Complete</td></tr><tr><td>Inspection</td><td>Feasible</td></tr><tr><td>Quotation</td><td>KSh 8,350.00</td></tr><tr><td>Payment</td><td class="money">Paid in full</td></tr></table></div><div class="card side"><div class="field"><label>Decision comments *</label><div class="control" style="height:65px">Record the reason for this decision</div></div><span class="btn light">Reject</span> <span class="btn green">Approve application</span></div></div>
+  <div class="footer"><span>New Connection UI Flow</span><span>9 / 14</span></div>
+</section>
+
+<section class="page">
+  <div class="header"><div><div class="eyebrow">Screen 10</div><h1>Create or link customer account</h1><p class="muted">Reuse the existing Create Customer workflow.</p></div></div>
+  <div class="grid"><div class="card main"><h2>Approved applicant is ready for conversion</h2><p>Choose an existing customer if this applicant already has a profile, or launch the current Create Customer wizard with application data prefilled.</p><div class="actions"><span class="btn light">Link existing customer</span><span class="btn">Open Create Customer</span></div><div class="note">The existing wizard receives <b>connectionId</b> and <b>returnTo</b>. After its normal create operation, it links the resulting customer and returns to this profile.</div></div><div class="card side"><h3>Do not duplicate</h3><p>Name, contact, identity and customer validation remain owned by the established customer module.</p></div></div>
+  <div class="footer"><span>New Connection UI Flow</span><span>10 / 14</span></div>
+</section>
+
+<section class="page">
+  <div class="header"><div><div class="eyebrow">Screen 11</div><h1>Installation work order</h1><p class="muted">Handoff to the existing Work Orders module.</p></div></div>
+  <div class="screen"><div class="body"><div class="grid"><div class="card main"><h2>Connection installation</h2><div class="field"><label>Customer account</label><div class="control">10017 · Grace Njeri</div></div><div class="field"><label>Zone / route</label><div class="control">Joska 3 · Route 01</div></div><div class="field"><label>Assign field officer</label><div class="control">Search officers…</div></div></div><div class="card side"><h3>Dispatch summary</h3><p>New connection · High priority</p><p>Due 02 Aug 2026</p><span class="btn">Create work order</span></div></div></div></div>
+  <div class="footer"><span>New Connection UI Flow</span><span>11 / 14</span></div>
+</section>
+
+<section class="page">
+  <div class="header"><div><div class="eyebrow">Screen 12</div><h1>Installation completion</h1><p class="muted">Confirm physical work before activation.</p></div></div>
+  <div class="grid"><div class="card main"><h2>Completion evidence</h2><div class="field"><label>Meter serial *</label><div class="control">SDM-0001842</div></div><div class="field"><label>Initial reading *</label><div class="control">0</div></div><div class="field"><label>Completion notes *</label><div class="control">Connection tested; no leaks observed.</div></div></div><div class="card side"><h3>Verification</h3><p>Installation is marked complete first. Activation remains a separate controlled action.</p><span class="btn green">Complete installation</span></div></div>
+  <div class="footer"><span>New Connection UI Flow</span><span>12 / 14</span></div>
+</section>
+
+<section class="page">
+  <div class="header"><div><div class="eyebrow">Screen 13</div><h1>Customer notifications</h1><p class="muted">Event-driven updates across the journey.</p></div></div>
+  <div class="screen"><div class="body"><table><tr><th>EVENT</th><th>RECIPIENT</th><th>CHANNEL</th><th>DELIVERY</th></tr><tr><td>Application received</td><td>Grace Njeri</td><td>SMS</td><td><span class="badge">Delivered</span></td></tr><tr><td>Quotation issued</td><td>Grace Njeri</td><td>Email + SMS</td><td><span class="badge">Delivered</span></td></tr><tr><td>Connection activated</td><td>Grace Njeri</td><td>SMS</td><td><span class="badge">Queued</span></td></tr></table><div class="note">Notification failures do not roll back operational work; they enter the existing delivery queue for retry and audit.</div></div></div>
+  <div class="footer"><span>New Connection UI Flow</span><span>13 / 14</span></div>
+</section>
+
+<section class="page">
+  <div class="header"><div><div class="eyebrow">Screen 14</div><h1>Status tracking and activation</h1><p class="muted">A final, readable view for staff and customer follow-up.</p></div><span class="badge">Active</span></div>
+  <div class="screen"><div class="body"><div class="steps"><div class="step done">Application</div><div class="step done">Inspection</div><div class="step done">Quotation</div><div class="step done">Payment</div><div class="step done">Approval</div><div class="step done">Installation</div><div class="step done">Activation</div></div><div class="grid"><div class="card main"><h2>Connection successfully activated</h2><p><b>Customer:</b> Grace Njeri · 10017</p><p><b>Meter:</b> SDM-0001842 · <b>Activated:</b> 03 Aug 2026 14:32</p><p><b>Application:</b> NC-2026-000124</p></div><div class="card side"><h3>Available actions</h3><p>Open customer profile</p><p>Open meter profile</p><p>View work order</p><p>Print application record</p></div></div></div></div>
+  <div class="footer"><span>New Connection UI Flow</span><span>14 / 14</span></div>
+</section>
+
+<section class="page">
+  <div class="header"><div><div class="eyebrow">Implementation note</div><h1>Fee ownership and deployment</h1></div></div>
+  <div class="grid"><div class="card main"><h2>Connection fee decision</h2><p><b>Implemented assumption:</b> the fee is configured once under Settings → Billing & connections, then copied into each application at submission. A per-application override is supported and requires a reason.</p><p>If no default has been configured, the interface displays <b>Not configured</b> and prevents an accidental zero-fee application. An authorized user may still enter an explicit override and reason.</p><p>This does not conflict with an existing connection implementation because the repository did not previously contain a complete new-connection fee workflow. It does coexist with tariff and billing charges: the connection fee is an application/installation charge, not a consumption tariff.</p></div><div class="card side"><h2>Live deployment</h2><p>Deploy code, then run the committed database upgrade and regenerate the client. Do not manually recreate the tables.</p><p><code>npm run db:connection-upgrade</code><br><code>npm run prisma:generate</code><br><code>npm run build</code></p></div></div>
+  <div class="footer"><span>New Connection UI Flow</span><span>Implementation</span></div>
+</section>
+</body>
+</html>

@@ -91,9 +91,40 @@ authRouter.post("/refresh", async (req, res) => {
     const payload = jwt.verify(
       parsed.data.refreshToken,
       process.env.JWT_SECRET as string,
-    ) as { userId?: string; tokenType?: string };
+    ) as { userId?: string; tokenType?: string; userType?: string; roles?: string[] };
     if (payload.tokenType !== "refresh" || !payload.userId) {
       return res.status(401).json({ error: "Invalid refresh token" });
+    }
+
+    if (payload.userType === "CUSTOMER" && payload.roles?.includes("CUSTOMER")) {
+      const customer = await prisma.customer.findUnique({
+        where: { customerId: BigInt(payload.userId) },
+      });
+      if (!customer || customer.status !== "ACTIVE") {
+        return res.status(401).json({ error: "Customer account is not active" });
+      }
+      const identity = {
+        userId: customer.customerId.toString(),
+        username: customer.phoneNumber,
+        userType: "CUSTOMER",
+        roles: ["CUSTOMER"],
+      };
+      const secret = process.env.JWT_SECRET as string;
+      const customerName = customer.organizationName ||
+        [customer.firstName, customer.middleName, customer.lastName].filter(Boolean).join(" ");
+      return res.json({
+        token: jwt.sign({ ...identity, tokenType: "access" }, secret, { expiresIn: "8h" }),
+        refreshToken: jwt.sign({ ...identity, tokenType: "refresh" }, secret, { expiresIn: "30d" }),
+        expiresIn: 8 * 60 * 60,
+        user: {
+          userId: customer.customerId,
+          username: customer.phoneNumber,
+          firstName: customerName,
+          lastName: "",
+          userType: "CUSTOMER",
+          roles: ["CUSTOMER"],
+        },
+      });
     }
 
     const user = await prisma.user.findUnique({

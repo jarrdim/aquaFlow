@@ -17,9 +17,14 @@ import {
 import Login from "./pages/Login";
 import LandingPage from "./pages/LandingPage";
 import OperationalDashboard from "./pages/OperationalDashboard";
+import WorkOrderManagement from "./pages/WorkOrderManagement";
 import Customers from "./pages/Customers";
 import NewCustomer from "./pages/NewCustomer";
 import CustomerDetail from "./pages/CustomerDetail";
+import ConnectionDashboard, {
+  ConnectionProfile,
+  NewConnectionApplication,
+} from "./pages/ConnectionManagement";
 import {
   AssignMeter,
   BulkMeterImport,
@@ -277,6 +282,7 @@ const IcoDroplet = () => (
 const NAV_ITEMS = [
   { label: "Dashboard", Icon: IcoDashboard, path: "/dashboard", iconClass: "bg-sky-400/10 text-sky-300" },
   { label: "Customers", Icon: IcoCustomers, path: "/customers", iconClass: "bg-violet-400/10 text-violet-300" },
+  { label: "New Connections", Icon: IcoDroplet, path: "/connections", iconClass: "bg-cyan-400/10 text-cyan-300" },
   { label: "Billing", Icon: IcoBilling, path: "/billing", iconClass: "bg-emerald-400/10 text-emerald-300" },
   { label: "Meter Management", Icon: IcoMeter, path: "/meters", iconClass: "bg-amber-400/10 text-amber-300" },
   { label: "Meter Readings", Icon: IcoReadings, path: "/readings", iconClass: "bg-cyan-400/10 text-cyan-300" },
@@ -286,7 +292,7 @@ const NAV_ITEMS = [
   { label: "Notifications", Icon: IcoMail, path: "/notifications", iconClass: "bg-blue-400/10 text-blue-300" },
   { label: "Accounts", Icon: IcoAccounts, path: null, iconClass: "bg-indigo-400/10 text-indigo-300" },
   { label: "Service Requests", Icon: IcoService, path: "/service-requests", iconClass: "bg-rose-400/10 text-rose-300" },
-  { label: "Work Orders", Icon: IcoWorkOrders, path: null, iconClass: "bg-yellow-400/10 text-yellow-300" },
+  { label: "Work Orders", Icon: IcoWorkOrders, path: "/work-orders", iconClass: "bg-yellow-400/10 text-yellow-300" },
   { label: "Assets", Icon: IcoAssets, path: null, iconClass: "bg-teal-400/10 text-teal-300" },
   { label: "Reports", Icon: IcoReports, path: null, iconClass: "bg-purple-400/10 text-purple-300" },
   { label: "Admin", Icon: IcoAdmin, path: "/admin", iconClass: "bg-red-400/10 text-red-300" },
@@ -296,6 +302,11 @@ const NAV_ITEMS = [
 const CUSTOMER_MENU = [
   ["Manage Customers", "/customers"],
   ["Register Customer", "/customers/new"],
+] as const;
+
+const CONNECTION_MENU = [
+  ["Connection dashboard", "/connections"],
+  ["New application", "/connections/new"],
 ] as const;
 
 const METER_MENU = [
@@ -392,6 +403,11 @@ const SERVICE_REQUEST_MENU = [
   ["Complaints", "/service-requests/complaints"],
 ] as const;
 
+const WORK_ORDER_MENU = [
+  ["Work order register", "/work-orders"],
+  ["Create work order", "/work-orders/new"],
+] as const;
+
 const ADMIN_MENU = [
   ["Administration dashboard", "/admin"],
   ["Users", "/admin/users"],
@@ -404,6 +420,7 @@ const SIDEBAR_CHILD_MENUS: Record<
   readonly (readonly [string, string])[]
 > = {
   Customers: CUSTOMER_MENU,
+  "New Connections": CONNECTION_MENU,
   Billing: BILLING_MENU,
   "Meter Management": METER_MENU,
   "Meter Readings": READING_MENU,
@@ -412,11 +429,13 @@ const SIDEBAR_CHILD_MENUS: Record<
   "Arrears & Debt": ARREARS_MENU,
   Notifications: NOTIFICATION_MENU,
   "Service Requests": SERVICE_REQUEST_MENU,
+  "Work Orders": WORK_ORDER_MENU,
   Admin: ADMIN_MENU,
 };
 
 const MODULE_LABELS: Record<string, string> = {
   customers: "Customers",
+  connections: "New Connections",
   billing: "Billing",
   meters: "Meter Management",
   readings: "Meter Readings",
@@ -425,12 +444,14 @@ const MODULE_LABELS: Record<string, string> = {
   arrears: "Arrears & Debt",
   notifications: "Notifications",
   "service-requests": "Service Requests",
+  "work-orders": "Work Orders",
   admin: "Administration",
   settings: "Settings",
 };
 
 const ROUTE_LABELS = new Map<string, string>([
   ...METER_MENU.map(([label, path]) => [path, label] as const),
+  ...CONNECTION_MENU.map(([label, path]) => [path, label] as const),
   ...READING_MENU.map(([label, path]) => [path, label] as const),
   ...TARIFF_MENU.map(([label, path]) => [path, label] as const),
   ...BILLING_MENU.map(([label, path]) => [path, label] as const),
@@ -438,6 +459,7 @@ const ROUTE_LABELS = new Map<string, string>([
   ...NOTIFICATION_MENU.map(([label, path]) => [path, label] as const),
   ...ARREARS_MENU.map(([label, path]) => [path, label] as const),
   ...SERVICE_REQUEST_MENU.map(([label, path]) => [path, label] as const),
+  ...WORK_ORDER_MENU.map(([label, path]) => [path, label] as const),
   ...ADMIN_MENU.map(([label, path]) => [path, label] as const),
   ["/customers", "Customers"],
   ["/customers/new", "New Customer"],
@@ -448,15 +470,20 @@ const PAGE_HEADING_LABELS = new Map<string, string>([
   ["/service-requests", "Service requests and complaints"],
   ["/service-requests/new", "Register service request"],
   ["/service-requests/complaints", "Complaints"],
+  ["/work-orders", "Work order management"],
+  ["/work-orders/new", "Create work order"],
   ["/admin", "Administration"],
   ["/admin/users", "User administration"],
   ["/admin/roles", "Role administration"],
   ["/admin/permissions", "Permission register"],
   ["/settings", "System settings"],
+  ["/connections", "New connection management"],
+  ["/connections/new", "New connection application"],
 ]);
 
 function detailPageLabel(pathname: string) {
   if (/^\/customers\/[^/]+$/.test(pathname)) return "Customer Profile";
+  if (/^\/connections\/[^/]+$/.test(pathname)) return "Connection application";
   if (/^\/billing\/invoices\/[^/]+$/.test(pathname)) return "Invoice Details";
   if (/^\/payments\/receipts\/[^/]+$/.test(pathname)) return "Payment Receipt";
   if (/^\/meters\/[^/]+\/history$/.test(pathname)) return "Meter History";
@@ -489,7 +516,7 @@ function AppBreadcrumbs() {
 
   if (
     !moduleLabel ||
-    (pathname === modulePath && !["service-requests", "admin", "settings"].includes(moduleKey))
+    (pathname === modulePath && !["service-requests", "work-orders", "admin", "settings"].includes(moduleKey))
   ) {
     return null;
   }
@@ -1456,6 +1483,36 @@ export default function App() {
         }
       />
       <Route
+        path="/connections"
+        element={
+          <Protected>
+            <Shell>
+              <ConnectionDashboard />
+            </Shell>
+          </Protected>
+        }
+      />
+      <Route
+        path="/connections/new"
+        element={
+          <Protected>
+            <Shell>
+              <NewConnectionApplication />
+            </Shell>
+          </Protected>
+        }
+      />
+      <Route
+        path="/connections/:id"
+        element={
+          <Protected>
+            <Shell>
+              <ConnectionProfile />
+            </Shell>
+          </Protected>
+        }
+      />
+      <Route
         path="/billing"
         element={
           <Protected>
@@ -2285,6 +2342,26 @@ export default function App() {
           <Protected>
             <Shell>
               <ServiceRequestDashboard />
+            </Shell>
+          </Protected>
+        }
+      />
+      <Route
+        path="/work-orders"
+        element={
+          <Protected>
+            <Shell>
+              <WorkOrderManagement />
+            </Shell>
+          </Protected>
+        }
+      />
+      <Route
+        path="/work-orders/new"
+        element={
+          <Protected>
+            <Shell>
+              <WorkOrderManagement />
             </Shell>
           </Protected>
         }

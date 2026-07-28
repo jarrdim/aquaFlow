@@ -143,7 +143,7 @@ function LegacyCustomerStatements() {
   </Page>;
 }
 
-export function CustomerStatements() {
+function CustomerStatementsOld() {
   const now = new Date();
   const localDate = (value: Date) => `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
   const [bills, setBills] = useState<Row[]>([]);
@@ -274,6 +274,203 @@ export function CustomerStatements() {
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t pt-4 text-sm">
         <span className="text-slate-500">Opening balance + debits − credits = closing balance</span>
         <div className="text-lg"><span className="mr-4">Amount due / (credit)</span><strong className={Number(statement.closingBalance) > 0 ? "text-red-700" : "text-emerald-700"}>{money(statement.closingBalance)}</strong></div>
+      </div>
+    </Card>}
+  </Page>;
+}
+
+export function CustomerStatements() {
+  const now = new Date();
+  const localDate = (value: Date) => `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
+  const [bills, setBills] = useState<Row[]>([]);
+  const [accountId, setAccountId] = useState("");
+  const [from, setFrom] = useState(localDate(new Date(now.getFullYear(), now.getMonth(), 1)));
+  const [to, setTo] = useState(localDate(now));
+  const [statement, setStatement] = useState<Row | null>(null);
+  const [loadingAccounts, setLoadingAccounts] = useState(true);
+  const [loadingStatement, setLoadingStatement] = useState(false);
+  const [error, setError] = useState("");
+  const accounts = useMemo(
+    () => Array.from(new Map(bills.map((bill) => [String(bill.accountId), bill])).values()),
+    [bills],
+  );
+
+  useEffect(() => {
+    api.listBills()
+      .then((rows) => {
+        setBills(rows);
+        if (rows[0]) setAccountId(String(rows[0].accountId));
+      })
+      .catch((e) => setError(e.message))
+      .finally(() => setLoadingAccounts(false));
+  }, []);
+
+  async function load(selectedAccountId = accountId) {
+    if (!selectedAccountId) return;
+    setLoadingStatement(true);
+    setError("");
+    try {
+      setStatement(await api.getCustomerStatement(selectedAccountId, from, to));
+    } catch (e: any) {
+      setError(e.message);
+      setStatement(null);
+    } finally {
+      setLoadingStatement(false);
+    }
+  }
+
+  useEffect(() => {
+    if (accountId) load(accountId);
+  }, [accountId]);
+
+  function printStatement() {
+    const cleanup = () => document.body.classList.remove("printing-statement");
+    document.body.classList.add("printing-statement");
+    window.addEventListener("afterprint", cleanup, { once: true });
+    window.print();
+  }
+
+  function exportStatement() {
+    if (!statement) return;
+    const rows = [
+      { "#": "", Date: from, Particulars: "Opening balance", Reference: "", Period: "", Details: "", Credits: 0, Debits: 0, Balance: statement.openingBalance },
+      ...statement.entries.map((entry: Row, index: number) => ({
+        "#": index + 1,
+        Date: entry.date,
+        Particulars: entry.particulars,
+        Reference: entry.reference,
+        Period: entry.period,
+        Details: entry.details,
+        Credits: entry.credit,
+        Debits: entry.debit,
+        Balance: entry.balance,
+      })),
+      { "#": "", Date: to, Particulars: "Total", Reference: "", Period: "", Details: "", Credits: statement.totalCredits, Debits: statement.totalDebits, Balance: statement.closingBalance },
+    ];
+    exportExcel(`statement-${statement.account.accountNumber}-${from}-to-${to}.xlsx`, "Statement", rows);
+  }
+
+  const printedAt = new Date();
+  const utilityAddress = statement
+    ? [statement.utility.physicalAddress, statement.utility.postalAddress, statement.utility.postalCode].filter(Boolean).join(", ")
+    : "";
+
+  return <Page className="statement-print-page" title="Customer statements" subtitle="A reconciled record of opening balance, charges, payments and closing balance" actions={<>
+    <Button tone="slate" disabled={!statement || loadingStatement} onClick={printStatement}>Print / Save PDF</Button>
+    <Button tone="green" disabled={!statement || loadingStatement} onClick={exportStatement}>Export Excel</Button>
+  </>}>
+    {error && <Notice>{error}</Notice>}
+    <Card className="statement-screen-filters mb-4">
+      <div className="grid gap-3 md:grid-cols-4">
+        <Field label="Customer account">
+          <SearchableSelect className={INPUT} disabled={loadingAccounts || loadingStatement} value={accountId} onChange={(e) => setAccountId(e.target.value)}>
+            <option value="">{loadingAccounts ? "Loading accounts..." : "Select account"}</option>
+            {accounts.map((bill: Row) => <option key={bill.accountId} value={bill.accountId}>{bill.account.accountNumber} - {bill.customerName}</option>)}
+          </SearchableSelect>
+        </Field>
+        <Field label="From"><input type="date" className={INPUT} disabled={loadingStatement} value={from} onChange={(e) => setFrom(e.target.value)} /></Field>
+        <Field label="To"><input type="date" className={INPUT} disabled={loadingStatement} value={to} onChange={(e) => setTo(e.target.value)} /></Field>
+        <div className="flex items-end">
+          <Button className="flex w-full items-center justify-center gap-2" onClick={() => load()} disabled={!accountId || loadingStatement}>
+            {loadingStatement && <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden />}
+            {loadingStatement ? "Loading statement..." : "Load statement"}
+          </Button>
+        </div>
+      </div>
+    </Card>
+
+    {loadingStatement && !statement ? <Card><Spinner /></Card> : statement && <Card className="statement-print-document relative">
+      {loadingStatement && <div className="statement-loading-overlay absolute inset-0 z-20 flex items-start justify-center rounded-2xl bg-white/75 pt-24 backdrop-blur-[1px]">
+        <div className="flex items-center gap-3 rounded-xl border bg-white px-5 py-3 font-semibold text-slate-700 shadow-lg">
+          <span className="h-5 w-5 animate-spin rounded-full border-2 border-aqua-200 border-t-aqua-700" aria-hidden />
+          Refreshing statement...
+        </div>
+      </div>}
+
+      <div className="statement-letterhead grid items-center gap-5 border-b-[3px] border-aqua-800 pb-4 md:grid-cols-[1fr_300px]">
+        <img src="/samdamte-water-logo-print.png" alt={statement.utility.name} className="statement-brand-logo h-auto max-h-32 w-full max-w-[300px] object-contain object-left" />
+        <div className="statement-utility-contact border-l border-slate-300 pl-5 text-sm leading-6">
+          {statement.utility.phone && <div><strong>Tel:</strong> {statement.utility.phone}{statement.utility.secondaryPhone ? ` / ${statement.utility.secondaryPhone}` : ""}</div>}
+          {statement.utility.email && <div><strong>Email:</strong> {statement.utility.email}</div>}
+          {utilityAddress && <div><strong>Address:</strong> {utilityAddress}</div>}
+          <div className="mt-1 text-xs text-slate-500"><strong>Printed:</strong> {printedAt.toLocaleString()}</div>
+        </div>
+      </div>
+
+      <h2 className="statement-title my-5 text-center text-2xl font-black uppercase tracking-wide text-slate-950">Account Statement</h2>
+
+      <div className="statement-account-grid mb-5 grid gap-x-12 gap-y-2 text-sm md:grid-cols-2">
+        <div className="grid grid-cols-[130px_1fr] gap-y-2">
+          <strong>To:</strong><span>{statement.account.customerName}</span>
+          <strong>Mobile:</strong><span>{statement.account.phone || "-"}</span>
+          <strong>Email:</strong><span>{statement.account.email || "-"}</span>
+          <strong>Account status:</strong><span>{pretty(statement.account.status)}</span>
+          <strong>Meter number:</strong><span>{statement.account.meterNumber || "-"}</span>
+        </div>
+        <div className="grid grid-cols-[130px_1fr] gap-y-2">
+          <strong>Account:</strong><span>{statement.account.accountNumber}</span>
+          <strong>Zone:</strong><span>{statement.account.zone || "-"}</span>
+          <strong>Route:</strong><span>{statement.account.route || "-"}</span>
+          <strong>Tariff:</strong><span>{statement.account.tariff || statement.account.category || "-"}</span>
+        </div>
+      </div>
+
+      <div className="statement-period mb-3 flex flex-wrap justify-between gap-2 border-y border-slate-200 py-2 text-xs">
+        <span><strong>Statement period:</strong> {date(`${from}T00:00:00.000Z`)} - {date(`${to}T00:00:00.000Z`)}</span>
+        {statement.account.address && <span><strong>Service address:</strong> {statement.account.address}</span>}
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="statement-ledger w-full min-w-[980px]">
+          <thead><tr>
+            <th className={TH}>#</th>
+            <th className={TH}>Date</th>
+            <th className={TH}>Particulars</th>
+            <th className={TH}>Period</th>
+            <th className={TH}>Details</th>
+            <th className={`${TH} text-right`}>Credits</th>
+            <th className={`${TH} text-right`}>Debits</th>
+            <th className={`${TH} text-right`}>Balance</th>
+          </tr></thead>
+          <tbody>
+            <tr className="border-b border-slate-300">
+              <td className={TD} />
+              <td className={TD} />
+              <td className={`${TD} font-bold`} colSpan={3}>Opening balance</td>
+              <td className={`${TD} text-right`}>-</td>
+              <td className={`${TD} text-right`}>-</td>
+              <td className={`${TD} text-right font-bold`}>{money(statement.openingBalance)}</td>
+            </tr>
+            {statement.entries.map((entry: Row, index: number) => <tr key={entry.id} className="border-b border-slate-200 align-top">
+              <td className={TD}>{index + 1}</td>
+              <td className={`${TD} whitespace-nowrap`}>{date(entry.date)}</td>
+              <td className={TD}><div className="font-semibold">{entry.particulars}</div><div className="text-xs text-slate-500">{entry.reference}</div></td>
+              <td className={`${TD} whitespace-nowrap`}>{entry.period || "-"}</td>
+              <td className={`${TD} max-w-[360px]`}>{entry.details || "-"}</td>
+              <td className={`${TD} whitespace-nowrap text-right`}>{entry.credit ? money(entry.credit) : "-"}</td>
+              <td className={`${TD} whitespace-nowrap text-right`}>{entry.debit ? money(entry.debit) : "-"}</td>
+              <td className={`${TD} whitespace-nowrap text-right font-semibold`}>{money(entry.balance)}</td>
+            </tr>)}
+            {!statement.entries.length && <tr><td colSpan={8} className="p-8 text-center text-slate-500">No posted transactions in this date range. The closing balance equals the opening balance.</td></tr>}
+          </tbody>
+          <tfoot>
+            <tr className="border-t-2 border-slate-900">
+              <td colSpan={5} className={`${TD} text-right text-base font-black`}>Total</td>
+              <td className={`${TD} whitespace-nowrap text-right font-black`}>{money(statement.totalCredits)}</td>
+              <td className={`${TD} whitespace-nowrap text-right font-black`}>{money(statement.totalDebits)}</td>
+              <td className={`${TD} whitespace-nowrap text-right font-black`}>{money(statement.closingBalance)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+      <div className="statement-balance-forward mt-5 flex justify-end">
+        <div className="min-w-[310px] border-t-2 border-slate-900 pt-2 text-right text-lg">
+          <strong className="mr-10">Balance B/F</strong>
+          <strong>{money(statement.closingBalance)}</strong>
+        </div>
+      </div>
+      <div className="statement-footer mt-10 border-t border-slate-300 pt-3 text-center text-xs text-slate-500">
+        This statement is generated from posted bills and payments in the utility ledger.
       </div>
     </Card>}
   </Page>;
