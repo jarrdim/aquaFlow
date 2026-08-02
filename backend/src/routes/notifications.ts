@@ -38,6 +38,26 @@ function onfonSettings(provider: any) {
   return { configuration, secrets };
 }
 
+function findOnfonMessageId(value: unknown): string | null {
+  if (!value || typeof value !== "object") return null;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findOnfonMessageId(item);
+      if (found) return found;
+    }
+    return null;
+  }
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    if (key.replace(/[^a-z]/gi, "").toLowerCase() === "messageid" && item != null && String(item).trim())
+      return String(item).trim();
+  }
+  for (const item of Object.values(value as Record<string, unknown>)) {
+    const found = findOnfonMessageId(item);
+    if (found) return found;
+  }
+  return null;
+}
+
 async function onfonRequest(provider: any, recipient: string, message: string) {
   const { configuration, secrets } = onfonSettings(provider);
   const number = normalizeSmsPhone(recipient);
@@ -59,9 +79,12 @@ async function onfonRequest(provider: any, recipient: string, message: string) {
   if (!response.ok || Number(result.ErrorCode) !== 0) {
     throw new Error(result.ErrorDescription || `Onfon returned HTTP ${response.status}.`);
   }
-  const accepted = Array.isArray(result.Data) ? result.Data[0] : null;
-  if (!accepted?.MessageId) throw new Error("Onfon accepted the request without returning a MessageId.");
-  return { number, messageId: String(accepted.MessageId), result };
+  // Onfon installations return MessageId with different casing and sometimes
+  // nest it below another Data/Messages object. A successful response without
+  // an ID is still accepted; the synthetic reference keeps the audit record.
+  const returnedMessageId = findOnfonMessageId(result);
+  const messageId = returnedMessageId || `ONFON-ACCEPTED-${crypto.randomUUID()}`;
+  return { number, messageId, returnedMessageId, result };
 }
 
 // Onfon calls this route without an AquaFlow login. The per-provider token is
@@ -71,10 +94,27 @@ notificationsRouter.get("/onfon/dlr", async (req, res, next) => {
     const messageId = String(req.query.messageId ?? "").trim();
     const token = String(req.query.token ?? "").trim();
     if (!messageId || !token) return res.status(400).json({ error: "Missing delivery report parameters." });
-    const notification = await prisma.notification.findFirst({
+    let notification = await prisma.notification.findFirst({
       where: { externalReference: messageId },
       include: { provider: true },
     });
+    if (!notification && req.query.mobile) {
+      try {
+        const normalized = normalizeSmsPhone(String(req.query.mobile));
+        const local = `0${normalized.slice(3)}`;
+        notification = await prisma.notification.findFirst({
+          where: {
+            channel: "SMS",
+            deliveryStatus: "SENT",
+            externalReference: { startsWith: "ONFON-ACCEPTED-" },
+            recipient: { in: [normalized, `+${normalized}`, local] },
+            sentAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+          },
+          include: { provider: true },
+          orderBy: { sentAt: "desc" },
+        });
+      } catch { /* Ignore an invalid mobile value in the provider callback. */ }
+    }
     if (!notification?.provider) return res.status(200).json({ received: true });
     let configuredToken = "";
     try { configuredToken = onfonSettings(notification.provider).secrets.callbackToken; } catch { return res.status(403).json({ error: "Invalid callback configuration." }); }
@@ -91,6 +131,7 @@ notificationsRouter.get("/onfon/dlr", async (req, res, next) => {
         where: { notificationId: notification.notificationId },
         data: {
           deliveryStatus: delivered ? "DELIVERED" : failed ? "FAILED" : "SENT",
+          externalReference: messageId,
           deliveredAt: delivered ? now : notification.deliveredAt,
           failureReason: failed ? String(req.query.shortMessage || `Onfon status: ${providerStatus}`).slice(0, 2000) : null,
           updatedAt: now,
@@ -894,7 +935,12 @@ notificationsRouter.post(
     try {
       const provider = await prisma.notificationProvider.findUniqueOrThrow({ where: { providerId: providerId.data } });
       const accepted = await onfonRequest(provider, parsed.data.recipient, parsed.data.message);
-      res.json({ message: "Test SMS accepted by Onfon.", reference: accepted.messageId });
+      res.json({
+        message: accepted.returnedMessageId
+          ? "Test SMS accepted by Onfon."
+          : "Test SMS accepted by Onfon (the gateway did not return a provider message ID).",
+        reference: accepted.messageId,
+      });
     } catch (error) {
       res.status(502).json({ error: error instanceof Error ? error.message : "Onfon test failed." });
     }

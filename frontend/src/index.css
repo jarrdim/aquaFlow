@@ -370,6 +370,11 @@ input[type="radio"] {
     margin: 0;
   }
 
+  @page invoice {
+    size: A4 portrait;
+    margin: 0;
+  }
+
   body.printing-invoice {
     overflow: visible !important;
     background: white !important;
@@ -377,6 +382,7 @@ input[type="radio"] {
 
   body.printing-invoice .app-sidebar,
   body.printing-invoice .app-topbar,
+  body.printing-invoice .app-breadcrumbs,
   body.printing-invoice .page-screen-header,
   body.printing-invoice .invoice-print-page>[role="alert"] {
     display: none !important;
@@ -401,8 +407,12 @@ input[type="radio"] {
   }
 
   body.printing-invoice .invoice-print-document {
+    page: invoice;
+    box-sizing: border-box !important;
     width: 100% !important;
     max-width: none !important;
+    margin: 0 auto !important;
+    padding: 12mm !important;
     border: 0 !important;
     border-radius: 0 !important;
     box-shadow: none !important;
