@@ -395,7 +395,7 @@ model NewConnectionApplication {
   accountId               BigInt?   @map("account_id")
   workOrderId             BigInt?   @map("work_order_id")
   remarks                 String?
-  createdBy               BigInt    @map("created_by")
+  createdBy               BigInt?   @map("created_by")
   createdAt               DateTime  @default(now()) @map("created_at")
   updatedAt               DateTime  @default(now()) @updatedAt @map("updated_at")
 
@@ -410,7 +410,7 @@ model NewConnectionActivity {
   connectionApplicationId BigInt   @map("connection_application_id")
   activityType            String   @map("activity_type")
   notes                   String?
-  performedBy             BigInt   @map("performed_by")
+  performedBy             BigInt?  @map("performed_by")
   performedAt             DateTime @default(now()) @map("performed_at")
 
   application NewConnectionApplication @relation(fields: [connectionApplicationId], references: [connectionApplicationId])
@@ -436,13 +436,15 @@ model ServiceRequest {
   resolution       String?
   resolvedAt       DateTime? @map("resolved_at")
   closedAt         DateTime? @map("closed_at")
-  createdBy        BigInt    @map("created_by")
+  locationDetails  String?   @map("location_details")
+  photoEvidence    String?   @map("photo_evidence")
+  createdBy        BigInt?   @map("created_by")
   createdAt        DateTime  @default(now()) @map("created_at")
   updatedAt        DateTime  @default(now()) @updatedAt @map("updated_at")
 
   customer Customer?             @relation(fields: [customerId], references: [customerId])
   account  CustomerAccount?      @relation(fields: [accountId], references: [accountId])
-  creator  User                  @relation("ServiceRequestCreator", fields: [createdBy], references: [userId])
+  creator  User?                 @relation("ServiceRequestCreator", fields: [createdBy], references: [userId])
   assignee User?                 @relation("ServiceRequestAssignee", fields: [assignedTo], references: [userId])
   events   ServiceRequestEvent[]
 
@@ -460,11 +462,11 @@ model ServiceRequestEvent {
   oldStatus             String?  @map("old_status")
   newStatus             String?  @map("new_status")
   comments              String?
-  performedBy           BigInt   @map("performed_by")
+  performedBy           BigInt?  @map("performed_by")
   createdAt             DateTime @default(now()) @map("created_at")
 
   serviceRequest ServiceRequest @relation(fields: [serviceRequestId], references: [serviceRequestId], onDelete: Cascade)
-  performer      User           @relation("ServiceRequestEventUser", fields: [performedBy], references: [userId])
+  performer      User?          @relation("ServiceRequestEventUser", fields: [performedBy], references: [userId])
 
   @@index([serviceRequestId, createdAt])
   @@map("service_request_events")
@@ -1358,6 +1360,8 @@ model MpesaStkRequest {
   mpesaReceiptNumber  String?   @unique @map("mpesa_receipt_number")
   transactionDate     DateTime? @map("transaction_date")
   status              String    @default("PENDING")
+  purposeType         String    @default("BILL_PAYMENT") @map("purpose_type")
+  purposeReference    String?   @map("purpose_reference")
   callbackPayload     Json?     @map("callback_payload")
   createdAt           DateTime  @default(now()) @map("created_at")
   completedAt         DateTime? @map("completed_at")

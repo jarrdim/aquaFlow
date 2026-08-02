@@ -124,6 +124,7 @@ import {
   ServiceRequestDashboard,
 } from "./pages/ServiceRequestManagement";
 import SettingsManagement from "./pages/SettingsManagement";
+import ReconnectionManagement from "./pages/ReconnectionManagement";
 import { api, clearToken, getSessionUser, getToken } from "./lib/api";
 import { encodeId } from "./lib/hashids";
 
@@ -401,6 +402,8 @@ const SERVICE_REQUEST_MENU = [
   ["Service dashboard", "/service-requests"],
   ["Register request", "/service-requests/new"],
   ["Complaints", "/service-requests/complaints"],
+  ["Leak reports", "/service-requests/leaks"],
+  ["Reconnection requests", "/reconnections"],
 ] as const;
 
 const WORK_ORDER_MENU = [
@@ -2327,6 +2330,16 @@ export default function App() {
         }
       />
       <Route
+        path="/reconnections"
+        element={
+          <Protected>
+            <Shell>
+              <ReconnectionManagement />
+            </Shell>
+          </Protected>
+        }
+      />
+      <Route
         path="/service-requests/new"
         element={
           <Protected>
@@ -2338,6 +2351,16 @@ export default function App() {
       />
       <Route
         path="/service-requests/complaints"
+        element={
+          <Protected>
+            <Shell>
+              <ServiceRequestDashboard />
+            </Shell>
+          </Protected>
+        }
+      />
+      <Route
+        path="/service-requests/leaks"
         element={
           <Protected>
             <Shell>

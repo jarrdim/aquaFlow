@@ -5,10 +5,9 @@ import { prisma } from "../lib/prisma";
 import { isSystemAdmin, requireAuth, requireRole } from "../middleware/auth";
 import {
   getMpesaConfig,
-  normalizeKenyanPhone,
   parseMpesaDate,
-  requestStkPush,
 } from "../lib/mpesa";
+import { initiateMpesaStk } from "../lib/mpesaStk";
 
 export const paymentsRouter = Router();
 
@@ -51,6 +50,18 @@ paymentsRouter.post("/mpesa/callback", async (req, res, next) => {
           updatedAt: new Date(),
         },
       });
+      if (request.purposeType === "RECONNECTION_FEE" && request.purposeReference) {
+        await prisma.$executeRaw`
+          UPDATE aquaflow.reconnection_requests
+          SET fee_payment_status='UNPAID', updated_at=NOW()
+          WHERE request_number=${request.purposeReference} AND fee_payment_status='PENDING'`;
+      }
+      if (request.purposeType === "NEW_CONNECTION_FEE" && request.purposeReference) {
+        await prisma.$executeRaw`
+          UPDATE aquaflow.new_connection_applications
+          SET updated_at=NOW()
+          WHERE application_number=${request.purposeReference}`;
+      }
       return res.json({ ResultCode: 0, ResultDesc: "Accepted" });
     }
     const items = Array.isArray(callback.CallbackMetadata?.Item)
@@ -98,6 +109,22 @@ paymentsRouter.post("/mpesa/callback", async (req, res, next) => {
             updatedAt: new Date(),
           },
         });
+        if (locked.purposeType === "RECONNECTION_FEE" && locked.purposeReference) {
+          await tx.$executeRaw`
+            UPDATE aquaflow.reconnection_requests
+            SET fee_payment_status='PAID', fee_payment_id=${existing.paymentId},
+              fee_paid_at=COALESCE(fee_paid_at, NOW()), updated_at=NOW()
+            WHERE request_number=${locked.purposeReference}`;
+        }
+        if (locked.purposeType === "NEW_CONNECTION_FEE" && locked.purposeReference) {
+          await tx.$executeRaw`
+            UPDATE aquaflow.new_connection_applications
+            SET amount_paid=GREATEST(amount_paid, ${Number(locked.amount)}),
+              payment_reference=${receiptNumber},
+              status=CASE WHEN ${Number(locked.amount)} >= quotation_total THEN 'PAID' ELSE 'PARTIALLY_PAID' END,
+              updated_at=NOW()
+            WHERE application_number=${locked.purposeReference}`;
+        }
         return;
       }
       const channel = await tx.paymentChannel.findFirst({
@@ -131,9 +158,13 @@ paymentsRouter.post("/mpesa/callback", async (req, res, next) => {
             ),
           ),
           payerPhone: phoneNumber,
-          customerReference: account.accountNumber,
-          paymentType: "BILL_PAYMENT",
-          remarks: "M-Pesa Express STK Push",
+          customerReference: request.purposeReference ?? account.accountNumber,
+          paymentType: request.purposeType,
+          remarks: request.purposeType === "RECONNECTION_FEE"
+            ? `M-Pesa reconnection fee for ${request.purposeReference}`
+            : request.purposeType === "NEW_CONNECTION_FEE"
+              ? `M-Pesa new connection payment for ${request.purposeReference}`
+              : "M-Pesa Express STK Push",
           matchingStatus: "UNMATCHED",
           paymentStatus: "RECEIVED",
           unallocatedAmount: paidAmount,
@@ -141,12 +172,43 @@ paymentsRouter.post("/mpesa/callback", async (req, res, next) => {
           receivedBy: request.initiatedBy,
         },
       });
-      const allocation = await allocate(
-        tx,
-        payment,
-        account.accountId,
-        request.initiatedBy,
-      );
+      const isPurposePayment = ["RECONNECTION_FEE", "NEW_CONNECTION_FEE"].includes(request.purposeType);
+      const allocation = isPurposePayment
+        ? { allocated: 0, remaining: 0, matchingStatus: "MATCHED" }
+        : await allocate(tx, payment, account.accountId, request.initiatedBy);
+      if (isPurposePayment) {
+        await tx.payment.update({
+          where: { paymentId: payment.paymentId },
+          data: {
+            matchingStatus: "MATCHED",
+            paymentStatus: "POSTED",
+            unallocatedAmount: 0,
+            postedAt: new Date(),
+            updatedAt: new Date(),
+          },
+        });
+        if (request.purposeType === "RECONNECTION_FEE") {
+          await tx.$executeRaw`
+            UPDATE aquaflow.reconnection_requests
+            SET fee_payment_status='PAID', fee_payment_id=${payment.paymentId},
+              fee_paid_at=NOW(), updated_at=NOW()
+            WHERE request_number=${request.purposeReference}`;
+        } else {
+          await tx.$executeRaw`
+            UPDATE aquaflow.new_connection_applications
+            SET amount_paid=amount_paid + ${paidAmount}, payment_reference=${receiptNumber},
+              status=CASE WHEN amount_paid + ${paidAmount} >= quotation_total THEN 'PAID' ELSE 'PARTIALLY_PAID' END,
+              updated_at=NOW()
+            WHERE application_number=${request.purposeReference}`;
+          await tx.$executeRaw`
+            INSERT INTO aquaflow.new_connection_activities
+              (connection_application_id, activity_type, notes, performed_by)
+            SELECT connection_application_id, 'MPESA_PAYMENT',
+              ${`M-Pesa payment ${receiptNumber}: KSh ${paidAmount.toFixed(2)}`}, NULL
+            FROM aquaflow.new_connection_applications
+            WHERE application_number=${request.purposeReference}`;
+        }
+      }
       const receipt = await tx.receipt.create({
         data: {
           receiptNumber: `RCT-${new Date().getFullYear()}-${String(payment.paymentId).padStart(6, "0")}`,
@@ -162,7 +224,11 @@ paymentsRouter.post("/mpesa/callback", async (req, res, next) => {
           eventType: "MPESA_STK_PAYMENT_POSTED",
           previousStatus: "RECEIVED",
           newStatus: "POSTED",
-          details: `M-Pesa Express ${receiptNumber}; KSh ${allocation.allocated.toFixed(2)} allocated`,
+          details: request.purposeType === "RECONNECTION_FEE"
+            ? `M-Pesa Express ${receiptNumber}; reconnection fee ${request.purposeReference}`
+            : request.purposeType === "NEW_CONNECTION_FEE"
+              ? `M-Pesa Express ${receiptNumber}; new connection ${request.purposeReference}`
+              : `M-Pesa Express ${receiptNumber}; KSh ${allocation.allocated.toFixed(2)} allocated`,
           performedBy: request.initiatedBy,
           metadata: {
             stkRequestId: String(request.stkRequestId),
@@ -498,14 +564,6 @@ paymentsRouter.post("/mpesa/stk", staff, async (req, res, next) => {
   );
   if (!data) return;
   try {
-    const phoneNumber = normalizeKenyanPhone(data.phoneNumber);
-    if (!Number.isInteger(data.amount))
-      return res
-        .status(400)
-        .json({
-          error:
-            "M-Pesa Express amount must be a whole number of Kenya shillings",
-        });
     const account = await prisma.customerAccount.findUnique({
       where: { accountId: data.accountId },
       include: { customer: true },
@@ -514,55 +572,20 @@ paymentsRouter.post("/mpesa/stk", staff, async (req, res, next) => {
       return res
         .status(404)
         .json({ error: "Active customer account not found" });
-    const recent = await prisma.mpesaStkRequest.findFirst({
-      where: {
-        accountId: data.accountId,
-        phoneNumber,
-        amount: data.amount,
-        status: "PENDING",
-        createdAt: { gte: new Date(Date.now() - 2 * 60_000) },
-      },
-      orderBy: { createdAt: "desc" },
-    });
-    if (recent)
-      return res
-        .status(409)
-        .json({
-          error: "A matching M-Pesa prompt is already pending for this account",
-          stkRequestId: String(recent.stkRequestId),
-        });
-    const response = await requestStkPush({
-      phoneNumber,
+    const row = await initiateMpesaStk({
+      account,
+      phoneNumber: data.phoneNumber,
       amount: data.amount,
-      accountReference: account.accountNumber,
-      description: "AquaFlow water bill",
-    });
-    if (String(response.ResponseCode) !== "0" || !response.CheckoutRequestID)
-      return res
-        .status(400)
-        .json({
-          error:
-            response.ResponseDescription ||
-            "M-Pesa did not accept the STK request",
-        });
-    const row = await prisma.mpesaStkRequest.create({
-      data: {
-        accountId: data.accountId,
-        initiatedBy: uid(req),
-        phoneNumber,
-        amount: data.amount,
-        merchantRequestId: String(response.MerchantRequestID),
-        checkoutRequestId: String(response.CheckoutRequestID),
-        customerMessage: String(response.CustomerMessage ?? ""),
-        responseCode: String(response.ResponseCode),
-        responseDescription: String(response.ResponseDescription ?? ""),
-        status: "PENDING",
-      },
+      initiatedBy: uid(req),
     });
     res.status(201).json(row);
   } catch (e: any) {
     if (e.status)
-      return res.status(e.status).json({ error: e.message, details: e.daraja });
+      return res.status(e.status).json({
+        error: e.message,
+        ...(e.stkRequestId ? { stkRequestId: e.stkRequestId } : {}),
+        ...(e.daraja ? { details: e.daraja } : {}),
+      });
     next(e);
   }
 });

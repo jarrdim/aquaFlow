@@ -128,7 +128,7 @@ connectionsRouter.get("/:id", canView, async (req, res) => {
         ac.activity_type AS "activityType", ac.notes, ac.performed_at AS "performedAt",
         CONCAT_WS(' ', u.first_name, u.last_name) AS "performedByName"
       FROM aquaflow.new_connection_activities ac
-      JOIN aquaflow.users u ON u.user_id = ac.performed_by
+      LEFT JOIN aquaflow.users u ON u.user_id = ac.performed_by
       WHERE ac.connection_application_id = ${parsed.data}
       ORDER BY ac.performed_at DESC`,
   ]);

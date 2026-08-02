@@ -41,6 +41,8 @@ type Item = {
   dueAt?: string;
   createdAt: string;
   resolution?: string;
+  locationDetails?: string;
+  photoEvidence?: string;
   customer?: Target["customer"];
   account?: {
     accountId: string;
@@ -56,7 +58,7 @@ type Item = {
     newStatus?: string;
     comments?: string;
     createdAt: string;
-    performer: Officer;
+    performer?: Officer;
   }[];
 };
 const input =
@@ -119,9 +121,13 @@ export function ServiceRequestDashboard() {
   const defaultType = location.pathname.endsWith("/complaints")
     ? "COMPLAINT"
     : "";
+  const defaultCategory = location.pathname.endsWith("/leaks")
+    ? "LEAKAGE"
+    : "";
   const [summary, setSummary] = useState<any>();
   const [result, setResult] = useState<any>();
   const [selected, setSelected] = useState<Item | null>(null);
+  const [photoOpen, setPhotoOpen] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [officers, setOfficers] = useState<Officer[]>([]);
   const [loading, setLoading] = useState(true);
@@ -136,7 +142,7 @@ export function ServiceRequestDashboard() {
     requestType: searchParams.get("requestType") || defaultType,
     status: searchParams.get("status") || "",
     priority: searchParams.get("priority") || "",
-    category: searchParams.get("category") || "",
+    category: searchParams.get("category") || defaultCategory,
     customerId: searchParams.get("customerId") || "",
     page: searchParams.get("page") || "1",
     take: "25",
@@ -158,7 +164,7 @@ export function ServiceRequestDashboard() {
     } finally {
       setLoading(false);
     }
-  }, [searchParams.toString(), defaultType]);
+  }, [searchParams.toString(), defaultType, defaultCategory]);
   useEffect(() => {
     load();
   }, [load]);
@@ -170,6 +176,7 @@ export function ServiceRequestDashboard() {
     setSearchParams(next);
   };
   const open = async (item: Item) => {
+    setPhotoOpen(false);
     setSelected(item);
     setDetailLoading(true);
     try {
@@ -220,9 +227,11 @@ export function ServiceRequestDashboard() {
       <div className="page-screen-header flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-slate-900 lg:text-[26px]">
-            {defaultType === "COMPLAINT"
-              ? "Complaints"
-              : "Service requests and complaints"}
+            {defaultCategory === "LEAKAGE"
+              ? "Leak Reports"
+              : defaultType === "COMPLAINT"
+                ? "Complaints"
+                : "Service requests and complaints"}
           </h1>
           <p className="mt-1 text-[15px] text-slate-500">
             Register, assign, track and resolve customer issues within their
@@ -427,6 +436,33 @@ export function ServiceRequestDashboard() {
                 <p className="mt-3 text-sm text-slate-700">
                   {selected.description}
                 </p>
+                {selected.locationDetails && (
+                  <p className="mt-2 text-xs font-medium text-slate-500">
+                    Location: {selected.locationDetails}
+                  </p>
+                )}
+                {selected.photoEvidence && (
+                  <div className="mt-3">
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-emerald-700">
+                      Customer photo evidence
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setPhotoOpen(true)}
+                      className="group block w-full overflow-hidden rounded-xl border border-slate-200 bg-white text-left shadow-sm transition hover:border-aqua-400 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-aqua-500 focus:ring-offset-2"
+                      aria-label="View customer photo evidence full size"
+                    >
+                      <img
+                        src={selected.photoEvidence}
+                        alt={`Customer evidence for ${selected.requestNumber}`}
+                        className="h-40 w-full bg-slate-100 object-cover transition duration-200 group-hover:scale-[1.02]"
+                      />
+                      <span className="block px-3 py-2 text-center text-sm font-semibold text-aqua-700">
+                        View photo full size
+                      </span>
+                    </button>
+                  </div>
+                )}
               </div>
               {!["RESOLVED", "CLOSED", "CANCELLED"].includes(selected.status) && (
                 <Link
@@ -518,7 +554,9 @@ export function ServiceRequestDashboard() {
                       </div>
                       <div className="text-xs text-slate-500">
                         {new Date(event.createdAt).toLocaleString()} ·{" "}
-                        {event.performer.firstName} {event.performer.lastName}
+                        {event.performer
+                          ? `${event.performer.firstName} ${event.performer.lastName}`
+                          : "Customer"}
                       </div>
                       {event.comments && (
                         <p className="mt-1 text-slate-600">{event.comments}</p>
@@ -531,6 +569,50 @@ export function ServiceRequestDashboard() {
           )}
         </Card>
       </div>
+      {photoOpen && selected?.photoEvidence && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Customer photo evidence"
+          onClick={() => setPhotoOpen(false)}
+        >
+          <div
+            className="w-full max-w-5xl overflow-hidden rounded-2xl bg-white shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-4 border-b border-slate-200 px-4 py-3">
+              <div>
+                <p className="font-bold text-slate-900">Customer photo evidence</p>
+                <p className="text-xs text-slate-500">{selected.requestNumber}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPhotoOpen(false)}
+                className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-aqua-500"
+              >
+                Close
+              </button>
+            </div>
+            <div className="flex max-h-[75vh] items-center justify-center bg-slate-950 p-2">
+              <img
+                src={selected.photoEvidence}
+                alt={`Customer evidence for ${selected.requestNumber}`}
+                className="max-h-[73vh] max-w-full object-contain"
+              />
+            </div>
+            <div className="flex justify-end px-4 py-3">
+              <a
+                href={selected.photoEvidence}
+                download={`evidence-${selected.requestNumber}.jpg`}
+                className="rounded-lg bg-aqua-700 px-4 py-2 text-sm font-semibold text-white hover:bg-aqua-800 focus:outline-none focus:ring-2 focus:ring-aqua-500 focus:ring-offset-2"
+              >
+                Download photo
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

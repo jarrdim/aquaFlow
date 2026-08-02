@@ -24,6 +24,8 @@
     "db:legacy-settings-upgrade": "prisma db execute --file prisma/migrations/20260723143000_legacy_majiware_settings/migration.sql --schema prisma/schema.prisma",
     "db:work-order-upgrade": "prisma db execute --file prisma/migrations/20260727143000_work_order_management/migration.sql --schema prisma/schema.prisma",
     "db:connection-upgrade": "prisma db execute --file prisma/migrations/20260727193000_new_connection_management/migration.sql --schema prisma/schema.prisma",
+    "db:customer-workflow-upgrade": "prisma db execute --file prisma/migrations/20260730150000_customer_submission_workflows/migration.sql --schema prisma/schema.prisma",
+    "db:reconnection-payment-upgrade": "prisma db execute --file prisma/migrations/20260801120000_reconnection_fee_payments/migration.sql --schema prisma/schema.prisma",
     "seed": "ts-node prisma/seed.ts"
   },
   "dependencies": {
@@ -34,6 +36,7 @@
     "express": "^4.19.2",
     "jsonwebtoken": "^9.0.2",
     "nodemailer": "^9.0.3",
+    "pdfkit": "^0.19.1",
     "zod": "^3.23.8"
   },
   "devDependencies": {
@@ -43,6 +46,7 @@
     "@types/jsonwebtoken": "^9.0.6",
     "@types/node": "^20.14.9",
     "@types/nodemailer": "^8.0.1",
+    "@types/pdfkit": "^0.17.6",
     "prisma": "^5.20.0",
     "ts-node": "^10.9.2",
     "ts-node-dev": "^2.0.0",

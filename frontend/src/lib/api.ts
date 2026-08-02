@@ -784,6 +784,15 @@ export const api = {
   assignServiceRequest: (id: string, data: Record<string, unknown>) => request(`/service-requests/${id}/assign`, { method: "PATCH", body: JSON.stringify(data) }),
   updateServiceRequestStatus: (id: string, data: Record<string, unknown>) => request(`/service-requests/${id}/status`, { method: "PATCH", body: JSON.stringify(data) }),
   addServiceRequestComment: (id: string, comments: string) => request(`/service-requests/${id}/comments`, { method: "POST", body: JSON.stringify({ comments }) }),
+  listReconnections: (filters: Record<string, string> = {}) => {
+    const query = new URLSearchParams(Object.entries(filters).filter(([, value]) => value)).toString();
+    return request(`/reconnections${query ? `?${query}` : ""}`);
+  },
+  getReconnection: (id: string) => request(`/reconnections/${id}`),
+  decideReconnection: (id: string, data: Record<string, unknown>) =>
+    request(`/reconnections/${id}/decision`, { method: "PATCH", body: JSON.stringify(data) }),
+  createReconnectionWorkOrder: (id: string, data: Record<string, unknown>) =>
+    request(`/reconnections/${id}/work-order`, { method: "POST", body: JSON.stringify(data) }),
   workOrderDashboard: () => request("/work-orders/dashboard"),
   workOrderLookups: () => request("/work-orders/lookups"),
   listWorkOrderTargets: (q = "") => request(`/work-orders/targets${q ? `?q=${encodeURIComponent(q)}` : ""}`),
