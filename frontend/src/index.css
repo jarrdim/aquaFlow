@@ -367,7 +367,7 @@ input[type="radio"] {
 
   @page statement {
     size: A4 portrait;
-    margin: 10mm;
+    margin: 0;
   }
 
   body.printing-invoice {
@@ -467,8 +467,9 @@ input[type="radio"] {
     page: statement;
     box-sizing: border-box !important;
     width: 100% !important;
-    max-width: 190mm !important;
+    max-width: none !important;
     margin: 0 auto !important;
+    padding: 10mm !important;
     border: 0 !important;
     border-radius: 0 !important;
     box-shadow: none !important;
@@ -511,7 +512,8 @@ input[type="radio"] {
     grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
     column-gap: 22px !important;
     row-gap: 3px !important;
-    margin-bottom: 10px !important;
+    margin-top: 5px !important;
+    margin-bottom: 5px !important;
     break-inside: avoid;
   }
 
@@ -520,10 +522,15 @@ input[type="radio"] {
     row-gap: 3px !important;
   }
 
+  body.printing-statement .statement-account-grid strong {
+    white-space: nowrap !important;
+  }
+
   body.printing-statement .statement-title {
-    margin-top: 10px !important;
-    margin-bottom: 10px !important;
-    font-size: 17pt !important;
+    margin-top: 6px !important;
+    margin-bottom: 6px !important;
+    font-size: 14pt !important;
+    white-space: nowrap;
   }
 
   body.printing-statement .statement-period,

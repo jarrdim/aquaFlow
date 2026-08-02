@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import nodemailer from "nodemailer";
+import crypto from "crypto";
 import { prisma } from "../lib/prisma";
 import { requireAuth, requireRole } from "../middleware/auth";
 import {
@@ -9,6 +10,105 @@ import {
 } from "../lib/notificationSecrets";
 
 export const notificationsRouter = Router();
+
+const onfonConfigurationSchema = z.object({
+  driver: z.literal("ONFON").default("ONFON"),
+  senderId: z.string().trim().min(2).max(20),
+  endpointUrl: z.string().url().default("https://api.onfonmedia.co.ke/v1/sms/SendBulkSMS"),
+});
+const onfonSecretSchema = z.object({
+  apiKey: z.string().trim().min(8),
+  clientId: z.string().trim().min(8),
+  accessKey: z.string().trim().min(8),
+  callbackToken: z.string().trim().min(24),
+});
+
+function normalizeSmsPhone(value: string) {
+  const digits = value.replace(/\D/g, "");
+  if (/^254[17]\d{8}$/.test(digits)) return digits;
+  if (/^0[17]\d{8}$/.test(digits)) return `254${digits.slice(1)}`;
+  if (/^[17]\d{8}$/.test(digits)) return `254${digits}`;
+  throw new Error("Use a valid Kenyan mobile number, for example 0712345678.");
+}
+
+function onfonSettings(provider: any) {
+  const configuration = onfonConfigurationSchema.parse(provider.configuration);
+  if (!provider.encryptedSecret) throw new Error("Onfon credentials have not been configured.");
+  const secrets = onfonSecretSchema.parse(JSON.parse(decryptProviderSecret(provider.encryptedSecret)));
+  return { configuration, secrets };
+}
+
+async function onfonRequest(provider: any, recipient: string, message: string) {
+  const { configuration, secrets } = onfonSettings(provider);
+  const number = normalizeSmsPhone(recipient);
+  const payload = {
+    SenderId: configuration.senderId,
+    IsUnicode: /[^\u0000-\u007f]/.test(message),
+    IsFlash: false,
+    MessageParameters: [{ Number: number, Text: message }],
+    ApiKey: secrets.apiKey,
+    ClientId: secrets.clientId,
+  };
+  const response = await fetch(configuration.endpointUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", AccessKey: secrets.accessKey },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(20_000),
+  });
+  const result: any = await response.json().catch(() => ({}));
+  if (!response.ok || Number(result.ErrorCode) !== 0) {
+    throw new Error(result.ErrorDescription || `Onfon returned HTTP ${response.status}.`);
+  }
+  const accepted = Array.isArray(result.Data) ? result.Data[0] : null;
+  if (!accepted?.MessageId) throw new Error("Onfon accepted the request without returning a MessageId.");
+  return { number, messageId: String(accepted.MessageId), result };
+}
+
+// Onfon calls this route without an AquaFlow login. The per-provider token is
+// checked before any delivery state is changed.
+notificationsRouter.get("/onfon/dlr", async (req, res, next) => {
+  try {
+    const messageId = String(req.query.messageId ?? "").trim();
+    const token = String(req.query.token ?? "").trim();
+    if (!messageId || !token) return res.status(400).json({ error: "Missing delivery report parameters." });
+    const notification = await prisma.notification.findFirst({
+      where: { externalReference: messageId },
+      include: { provider: true },
+    });
+    if (!notification?.provider) return res.status(200).json({ received: true });
+    let configuredToken = "";
+    try { configuredToken = onfonSettings(notification.provider).secrets.callbackToken; } catch { return res.status(403).json({ error: "Invalid callback configuration." }); }
+    const supplied = Buffer.from(token);
+    const configured = Buffer.from(configuredToken);
+    if (supplied.length !== configured.length || !crypto.timingSafeEqual(supplied, configured))
+      return res.status(403).json({ error: "Invalid callback token." });
+    const providerStatus = String(req.query.status ?? "").toUpperCase();
+    const delivered = ["DELIVERED", "DELIVRD", "SUCCESS"].includes(providerStatus);
+    const failed = ["FAILED", "UNDELIV", "UNDELIVERED", "EXPIRED", "REJECTD", "REJECTED"].includes(providerStatus);
+    const now = new Date();
+    await prisma.$transaction([
+      prisma.notification.update({
+        where: { notificationId: notification.notificationId },
+        data: {
+          deliveryStatus: delivered ? "DELIVERED" : failed ? "FAILED" : "SENT",
+          deliveredAt: delivered ? now : notification.deliveredAt,
+          failureReason: failed ? String(req.query.shortMessage || `Onfon status: ${providerStatus}`).slice(0, 2000) : null,
+          updatedAt: now,
+        },
+      }),
+      prisma.notificationDeliveryAttempt.updateMany({
+        where: { notificationId: notification.notificationId, providerReference: messageId },
+        data: {
+          status: delivered ? "DELIVERED" : failed ? "FAILED" : "SENT",
+          responsePayload: Object.fromEntries(Object.entries(req.query).map(([key, value]) => [key, String(value ?? "")])),
+          errorMessage: failed ? String(req.query.shortMessage || providerStatus).slice(0, 2000) : null,
+        },
+      }),
+    ]);
+    res.status(200).json({ received: true });
+  } catch (error) { next(error); }
+});
+
 notificationsRouter.use(requireAuth);
 
 const id = z.coerce.bigint().positive();
@@ -294,6 +394,48 @@ async function processOne(notificationId: bigint) {
     }
   }
 
+  if (
+    provider.providerType === "HTTP_API" &&
+    provider.channel === "SMS" &&
+    (provider.configuration as any)?.driver === "ONFON"
+  ) {
+    try {
+      const accepted = await onfonRequest(
+        provider,
+        notification.recipient,
+        notification.messageBody,
+      );
+      await prisma.notificationDeliveryAttempt.create({
+        data: {
+          notificationId,
+          providerId: provider.providerId,
+          attemptNumber,
+          status: "SENT",
+          providerReference: accepted.messageId,
+          requestPayload: { recipient: accepted.number, senderId: (provider.configuration as any).senderId },
+          responsePayload: accepted.result,
+        },
+      });
+      return prisma.notification.update({
+        where: { notificationId },
+        data: {
+          providerId: provider.providerId,
+          deliveryStatus: "SENT",
+          externalReference: accepted.messageId,
+          sentAt: now,
+          lastAttemptAt: now,
+          failureReason: null,
+          retryCount: attemptNumber,
+          updatedAt: now,
+        },
+        include,
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "Onfon SMS delivery failed.";
+      return failAttempt(notification, provider, attemptNumber, reason);
+    }
+  }
+
   if (provider.providerType !== "SIMULATED") {
     const reason = `${provider.providerName} is configured but its live connector is not enabled. Use a simulated provider until credentials are available.`;
     await prisma.notificationDeliveryAttempt.create({
@@ -548,10 +690,10 @@ notificationsRouter.post(
       return res
         .status(400)
         .json({ error: "SMTP providers must use the EMAIL channel." });
-    if (parsed.data.providerType === "SMTP" && parsed.data.isDefault)
+    if (["SMTP", "HTTP_API"].includes(parsed.data.providerType) && parsed.data.isDefault)
       return res.status(409).json({
         error:
-          "Create and configure the SMTP provider before making it default.",
+          "Create and configure the live provider before making it default.",
       });
     try {
       const result = await prisma.$transaction(async (tx) => {
@@ -564,6 +706,9 @@ notificationsRouter.post(
           data: {
             ...parsed.data,
             providerCode: parsed.data.providerCode.toUpperCase(),
+            ...(["SMTP", "HTTP_API"].includes(parsed.data.providerType)
+              ? { status: "INACTIVE", isDefault: false }
+              : {}),
             createdBy: uid(req),
           },
         });
@@ -600,13 +745,13 @@ notificationsRouter.patch(
         where: { providerId: providerId.data },
       });
       if (
-        current.providerType === "SMTP" &&
+        ["SMTP", "HTTP_API"].includes(current.providerType) &&
         (parsed.data.isDefault || parsed.data.status === "ACTIVE") &&
         (!current.encryptedSecret || !current.configuration)
       )
         return res.status(409).json({
           error:
-            "Configure and test the SMTP credentials before activating this provider.",
+            "Configure and test the provider credentials before activating this provider.",
         });
       const result = await prisma.$transaction(async (tx) => {
         if (parsed.data.isDefault)
@@ -668,6 +813,90 @@ notificationsRouter.put(
       res.json({ ...updated, secretConfigured: true });
     } catch (error) {
       next(error);
+    }
+  },
+);
+
+notificationsRouter.put(
+  "/providers/:id/onfon",
+  administrators,
+  async (req, res, next) => {
+    const providerId = id.safeParse(req.params.id);
+    const parsed = onfonConfigurationSchema.extend({
+      apiKey: z.string().trim().min(8).optional(),
+      clientId: z.string().trim().min(8).optional(),
+      accessKey: z.string().trim().min(8).optional(),
+      callbackToken: z.string().trim().min(24).optional(),
+    }).safeParse(req.body);
+    if (!providerId.success || !parsed.success)
+      return res.status(400).json({ error: "Invalid Onfon configuration." });
+    try {
+      const current = await prisma.notificationProvider.findUniqueOrThrow({ where: { providerId: providerId.data } });
+      if (current.channel !== "SMS" || current.providerType !== "HTTP_API")
+        return res.status(409).json({ error: "The selected provider is not an HTTP API SMS provider." });
+      let existing: any = {};
+      if (current.encryptedSecret) {
+        try { existing = JSON.parse(decryptProviderSecret(current.encryptedSecret)); } catch { existing = {}; }
+      }
+      const secrets = {
+        apiKey: parsed.data.apiKey || existing.apiKey,
+        clientId: parsed.data.clientId || existing.clientId,
+        accessKey: parsed.data.accessKey || existing.accessKey,
+        callbackToken: parsed.data.callbackToken || existing.callbackToken,
+      };
+      const validSecrets = onfonSecretSchema.safeParse(secrets);
+      if (!validSecrets.success)
+        return res.status(400).json({ error: "All Onfon credentials and a callback token are required." });
+      const { apiKey: _a, clientId: _c, accessKey: _k, callbackToken: _t, ...configuration } = parsed.data;
+      const updated = await prisma.notificationProvider.update({
+        where: { providerId: providerId.data },
+        data: {
+          endpointUrl: configuration.endpointUrl,
+          configuration,
+          encryptedSecret: encryptProviderSecret(JSON.stringify(validSecrets.data)),
+          secretConfiguredAt: new Date(),
+          updatedAt: new Date(),
+        },
+        select: providerPublicSelect,
+      });
+      res.json({ ...updated, secretConfigured: true });
+    } catch (error) { next(error); }
+  },
+);
+
+notificationsRouter.get(
+  "/providers/:id/onfon/balance",
+  administrators,
+  async (req, res, next) => {
+    const providerId = id.safeParse(req.params.id);
+    if (!providerId.success) return res.status(400).json({ error: "Invalid provider." });
+    try {
+      const provider = await prisma.notificationProvider.findUniqueOrThrow({ where: { providerId: providerId.data } });
+      const { secrets } = onfonSettings(provider);
+      const url = new URL("https://api.onfonmedia.co.ke/v1/sms/Balance");
+      url.searchParams.set("ApiKey", secrets.apiKey);
+      url.searchParams.set("ClientId", secrets.clientId);
+      const response = await fetch(url, { headers: { "Content-Type": "application/json", AccessKey: secrets.accessKey }, signal: AbortSignal.timeout(20_000) });
+      const result: any = await response.json().catch(() => ({}));
+      if (!response.ok || Number(result.ErrorCode) !== 0) return res.status(502).json({ error: result.ErrorDescription || `Onfon returned HTTP ${response.status}.` });
+      res.json({ message: "Onfon connection verified.", balance: result.Data?.[0]?.Credits ?? "Available" });
+    } catch (error) { next(error); }
+  },
+);
+
+notificationsRouter.post(
+  "/providers/:id/onfon/test",
+  administrators,
+  async (req, res, next) => {
+    const providerId = id.safeParse(req.params.id);
+    const parsed = z.object({ recipient: z.string().trim().min(9), message: z.string().trim().min(2).max(1000).default("AquaFlow Onfon SMS configuration test.") }).safeParse(req.body);
+    if (!providerId.success || !parsed.success) return res.status(400).json({ error: "A valid test mobile number is required." });
+    try {
+      const provider = await prisma.notificationProvider.findUniqueOrThrow({ where: { providerId: providerId.data } });
+      const accepted = await onfonRequest(provider, parsed.data.recipient, parsed.data.message);
+      res.json({ message: "Test SMS accepted by Onfon.", reference: accepted.messageId });
+    } catch (error) {
+      res.status(502).json({ error: error instanceof Error ? error.message : "Onfon test failed." });
     }
   },
 );

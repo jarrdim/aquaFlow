@@ -397,17 +397,17 @@ export function CustomerStatements() {
         </div>
       </div>
 
-      <h2 className="statement-title my-5 text-center text-2xl font-black uppercase tracking-wide text-slate-950">Account Statement</h2>
+      <h2 className="statement-title my-3 text-center text-2xl font-black uppercase tracking-wide text-slate-950">Account Statement</h2>
 
-      <div className="statement-account-grid mb-5 grid gap-x-12 gap-y-2 text-sm md:grid-cols-2">
-        <div className="grid grid-cols-[130px_1fr] gap-y-2">
+      <div className="statement-account-grid my-2 grid gap-x-12 gap-y-1 text-sm md:grid-cols-2 [&_strong]:whitespace-nowrap">
+        <div className="grid grid-cols-[130px_1fr] gap-y-1">
           <strong>To:</strong><span>{statement.account.customerName}</span>
           <strong>Mobile:</strong><span>{statement.account.phone || "-"}</span>
           <strong>Email:</strong><span>{statement.account.email || "-"}</span>
-          <strong>Account status:</strong><span>{pretty(statement.account.status)}</span>
-          <strong>Meter number:</strong><span>{statement.account.meterNumber || "-"}</span>
+          <strong className="whitespace-nowrap">Acc status:</strong><span>{pretty(statement.account.status)}</span>
+          <strong>Meter No.:</strong><span>{statement.account.meterNumber || "-"}</span>
         </div>
-        <div className="grid grid-cols-[130px_1fr] gap-y-2">
+        <div className="grid grid-cols-[130px_1fr] gap-y-1">
           <strong>Account:</strong><span>{statement.account.accountNumber}</span>
           <strong>Zone:</strong><span>{statement.account.zone || "-"}</span>
           <strong>Route:</strong><span>{statement.account.route || "-"}</span>
@@ -470,7 +470,8 @@ export function CustomerStatements() {
         </div>
       </div>
       <div className="statement-footer mt-10 border-t border-slate-300 pt-3 text-center text-xs text-slate-500">
-        This statement is generated from posted bills and payments in the utility ledger.
+        {/* This statement is generated from posted bills and payments in the utility ledger. */}
+        We make it safe because water is life
       </div>
     </Card>}
   </Page>;

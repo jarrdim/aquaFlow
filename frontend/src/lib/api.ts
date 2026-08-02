@@ -626,6 +626,18 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(data),
     }),
+  configureOnfonProvider: (id: string, data: Record<string, unknown>) =>
+    request(`/notifications/providers/${id}/onfon`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+  getOnfonBalance: (id: string) =>
+    request(`/notifications/providers/${id}/onfon/balance`),
+  testOnfonProvider: (id: string, recipient: string, message: string) =>
+    request(`/notifications/providers/${id}/onfon/test`, {
+      method: "POST",
+      body: JSON.stringify({ recipient, message }),
+    }),
   testNotificationProvider: (id: string, recipient: string) =>
     request(`/notifications/providers/${id}/test`, {
       method: "POST",

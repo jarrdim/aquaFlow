@@ -39,7 +39,7 @@ function Page({
       <div className="page-screen-header mb-4 flex flex-wrap justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">{title}</h1>
-          <p className="mt-1 text-[15px] text-slate-500">{subtitle}</p>
+          {subtitle && <p className="mt-1 text-[15px] text-slate-500">{subtitle}</p>}
         </div>
         <div className="flex gap-2">{actions}</div>
       </div>
@@ -101,7 +101,7 @@ function LinkButton({
   return (
     <Link
       to={to}
-      className={`rounded-lg px-4 py-2 font-semibold text-white ${colors[tone]}`}
+      className={`inline-flex items-center justify-center rounded-lg px-4 py-2 font-semibold text-white ${colors[tone]}`}
     >
       {children}
     </Link>
@@ -550,6 +550,9 @@ export function MpesaStkPush() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [sending, setSending] = useState(false);
+  const [historySearch, setHistorySearch] = useState("");
+  const [historyPage, setHistoryPage] = useState(1);
+  const historyPageSize = 5;
   const [form, setForm] = useState<Row>({
     accountId: "",
     phoneNumber: "",
@@ -595,6 +598,43 @@ export function MpesaStkPush() {
   const selectedAccount = accounts.find(
     (row) => String(row.accountId) === String(form.accountId),
   );
+  const filteredHistory = useMemo(() => {
+    const query = historySearch.trim().toLowerCase();
+    if (!query) return history;
+    return history.filter((row) =>
+      [
+        row.account?.accountNumber,
+        row.account?.customerName,
+        row.phoneNumber,
+        row.amount,
+        row.status,
+        row.mpesaReceiptNumber,
+        row.payment?.receipt?.receiptNumber,
+      ].some((value) => String(value ?? "").toLowerCase().includes(query)),
+    );
+  }, [history, historySearch]);
+  const historyPages = Math.max(
+    1,
+    Math.ceil(filteredHistory.length / historyPageSize),
+  );
+  const pagedHistory = filteredHistory.slice(
+    (historyPage - 1) * historyPageSize,
+    historyPage * historyPageSize,
+  );
+  const historySummary = useMemo(
+    () => ({
+      completed: history.filter((row) => row.status === "COMPLETED").length,
+      pending: history.filter((row) => row.status === "PENDING").length,
+      unsuccessful: history.filter((row) =>
+        ["FAILED", "CANCELLED", "TIMED_OUT"].includes(row.status),
+      ).length,
+    }),
+    [history],
+  );
+  useEffect(() => setHistoryPage(1), [historySearch]);
+  useEffect(() => {
+    if (historyPage > historyPages) setHistoryPage(historyPages);
+  }, [historyPage, historyPages]);
   function selectAccount(accountId: string) {
     const account = accounts.find((row) => String(row.accountId) === accountId);
     const balance = Math.max(
@@ -632,7 +672,7 @@ export function MpesaStkPush() {
   return (
     <Page
       title="M-Pesa Express payment"
-      subtitle="Send a secure STK Push prompt and post the payment only after Safaricom confirms it"
+      subtitle=""
     >
       {error && <Notice>{error}</Notice>}
       {message && <Notice green>{message}</Notice>}
@@ -641,6 +681,31 @@ export function MpesaStkPush() {
           {config.error || "M-Pesa is not configured on the server."}
         </Notice>
       )}
+      <div className="relative mb-4 overflow-hidden rounded-2xl border border-slate-200 bg-gradient-to-r from-white via-slate-50 to-emerald-50/60 px-5 py-5 text-slate-800 shadow-sm sm:px-6">
+        <div className="absolute -right-12 -top-20 h-52 w-52 rounded-full bg-emerald-100/40" />
+        <div className="absolute -bottom-20 right-32 h-40 w-40 rounded-full bg-slate-100/50" />
+        <div className="relative flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <div className="grid h-12 w-12 flex-none place-items-center rounded-2xl bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100">
+              <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-7 w-7">
+                <rect x="6" y="2" width="12" height="20" rx="3" />
+                <path d="M9 6h6M10 18h4" />
+                <path d="m9.5 12 1.7 1.7 3.5-3.7" />
+              </svg>
+            </div>
+            <div>
+              <div className="text-lg font-bold">Fast, secure M-Pesa collection</div>
+              <p className="mt-0.5 max-w-2xl text-sm text-slate-500">
+                Send a prompt, follow its live status, and issue a receipt automatically after confirmation.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 shadow-sm">
+            <span className={`h-2.5 w-2.5 rounded-full ${config?.configured ? "bg-lime-300 shadow-[0_0_0_4px_rgba(190,242,100,0.18)]" : "bg-amber-300"}`} />
+            {pretty(config?.environment ?? "Checking")} {config?.configured ? "connected" : "configuration"}
+          </div>
+        </div>
+      </div>
       <div className="grid gap-4 lg:grid-cols-[460px_1fr]">
         <Card title="Send payment prompt">
           <form className="space-y-3" onSubmit={submit}>
@@ -660,7 +725,7 @@ export function MpesaStkPush() {
               </SearchableSelect>
             </Field>
             {selectedAccount && (
-              <div className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm text-blue-800">
+              <div className="rounded-xl border border-blue-100 bg-gradient-to-br from-blue-50 to-sky-50 p-3 text-sm text-blue-800 shadow-sm">
                 <div>
                   Customer: <strong>{selectedAccount.customerName}</strong>
                 </div>
@@ -693,7 +758,12 @@ export function MpesaStkPush() {
                 onChange={(e) => setForm({ ...form, amount: e.target.value })}
               />
             </Field>
-            <div className="rounded-lg bg-slate-50 p-3 text-xs text-slate-500">
+            <div className="flex gap-2.5 rounded-xl border border-slate-100 bg-slate-50 p-3 text-xs text-slate-500">
+              <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="mt-0.5 h-4 w-4 flex-none text-emerald-600">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z" />
+                <path d="m9 12 2 2 4-4" />
+              </svg>
+              <div>
               Environment:{" "}
               <strong>{pretty(config?.environment ?? "checking")}</strong>
               {config?.shortCode && (
@@ -705,13 +775,23 @@ export function MpesaStkPush() {
               <br />A payment is posted only after Daraja returns a successful
               callback matching the original checkout request. Do not collect or
               enter the customer's M-Pesa PIN here.
+              </div>
             </div>
             <Button
               tone="green"
               className="w-full"
               disabled={sending || !config?.configured}
             >
-              {sending ? "Sending prompt..." : "Send M-Pesa prompt"}
+              <span className="inline-flex items-center justify-center gap-2">
+                {sending ? (
+                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/50 border-t-white" aria-hidden="true" />
+                ) : (
+                  <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
+                    <path d="M22 2 11 13" /><path d="m22 2-7 20-4-9-9-4Z" />
+                  </svg>
+                )}
+                {sending ? "Sending prompt..." : "Send M-Pesa prompt"}
+              </span>
             </Button>
           </form>
         </Card>
@@ -730,16 +810,42 @@ export function MpesaStkPush() {
                   </div>
                   <Badge value={active.status} />
                 </div>
+                {active.status === "PENDING" && (
+                  <div
+                    className="flex items-center gap-3 rounded-xl border border-sky-100 bg-sky-50 px-4 py-3 text-sm text-sky-800"
+                    role="status"
+                    aria-live="polite"
+                  >
+                    <span
+                      className="h-5 w-5 flex-none animate-spin rounded-full border-2 border-sky-200 border-t-sky-600"
+                      aria-hidden="true"
+                    />
+                    <div>
+                      <strong className="block">Waiting for M-Pesa confirmation</strong>
+                      <span className="text-sky-700">
+                        Ask the customer to complete the prompt on their phone.
+                      </span>
+                    </div>
+                  </div>
+                )}
+                {active.status === "COMPLETED" && (
+                  <div className="flex items-center gap-3 rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+                    <span className="grid h-8 w-8 flex-none place-items-center rounded-full bg-emerald-600 text-white">
+                      <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="h-4 w-4"><path d="m5 12 4 4L19 6" /></svg>
+                    </span>
+                    <div><strong className="block">Payment confirmed</strong><span className="text-emerald-700">The transaction has been posted and receipted.</span></div>
+                  </div>
+                )}
                 <div className="grid gap-3 sm:grid-cols-3">
-                  <div>
+                  <div className="rounded-xl border border-slate-100 bg-slate-50/70 p-3">
                     <div className="text-sm text-slate-500">Phone</div>
                     <strong>{active.phoneNumber}</strong>
                   </div>
-                  <div>
+                  <div className="rounded-xl border border-slate-100 bg-slate-50/70 p-3">
                     <div className="text-sm text-slate-500">Amount</div>
                     <strong>{money(active.amount)}</strong>
                   </div>
-                  <div>
+                  <div className="rounded-xl border border-slate-100 bg-slate-50/70 p-3">
                     <div className="text-sm text-slate-500">M-Pesa receipt</div>
                     <strong>{active.mpesaReceiptNumber || "Pending"}</strong>
                   </div>
@@ -758,6 +864,18 @@ export function MpesaStkPush() {
                   </LinkButton>
                 )}
               </div>
+            ) : sending ? (
+              <div
+                className="flex min-h-28 items-center justify-center gap-3 text-slate-500"
+                role="status"
+                aria-live="polite"
+              >
+                <span
+                  className="h-6 w-6 animate-spin rounded-full border-2 border-aqua-200 border-t-aqua-700"
+                  aria-hidden="true"
+                />
+                Sending M-Pesa prompt…
+              </div>
             ) : (
               <div className="py-8 text-center text-slate-400">
                 Send a prompt to track it here.
@@ -765,6 +883,37 @@ export function MpesaStkPush() {
             )}
           </Card>
           <Card title="Recent STK requests">
+            <div className="mb-4 grid grid-cols-3 gap-2">
+              <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2"><div className="text-xs font-medium text-emerald-700">Completed</div><div className="text-lg font-bold text-emerald-900">{historySummary.completed}</div></div>
+              <div className="rounded-xl border border-amber-100 bg-amber-50 px-3 py-2"><div className="text-xs font-medium text-amber-700">Pending</div><div className="text-lg font-bold text-amber-900">{historySummary.pending}</div></div>
+              <div className="rounded-xl border border-rose-100 bg-rose-50 px-3 py-2"><div className="text-xs font-medium text-rose-700">Unsuccessful</div><div className="text-lg font-bold text-rose-900">{historySummary.unsuccessful}</div></div>
+            </div>
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <label className="relative min-w-[240px] flex-1 sm:max-w-md">
+                <span className="sr-only">Search STK requests</span>
+                <svg
+                  aria-hidden="true"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
+                >
+                  <circle cx="11" cy="11" r="7" />
+                  <path d="m20 20-3.5-3.5" />
+                </svg>
+                <input
+                  type="search"
+                  className={`${INPUT} pl-9`}
+                  placeholder="Search account, phone, status or receipt"
+                  value={historySearch}
+                  onChange={(event) => setHistorySearch(event.target.value)}
+                />
+              </label>
+              <div className="text-sm text-slate-500">
+                {filteredHistory.length} request{filteredHistory.length === 1 ? "" : "s"}
+              </div>
+            </div>
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
@@ -778,8 +927,8 @@ export function MpesaStkPush() {
                   </tr>
                 </thead>
                 <tbody>
-                  {history.map((row) => (
-                    <tr className="border-t" key={row.stkRequestId}>
+                  {pagedHistory.map((row) => (
+                    <tr className="border-t transition-colors hover:bg-slate-50/80" key={row.stkRequestId}>
                       <td className={TD}>{dateTime(row.createdAt)}</td>
                       <td className={TD}>{row.account?.accountNumber}</td>
                       <td className={TD}>{row.phoneNumber}</td>
@@ -790,9 +939,20 @@ export function MpesaStkPush() {
                       <td className={TD}>
                         {row.payment?.receipt ? (
                           <Link
-                            className="font-semibold text-aqua-700"
+                            className="inline-flex items-center gap-1.5 font-semibold text-aqua-700 hover:text-aqua-900"
                             to={`/payments/receipts/${row.payment.receipt.receiptId}`}
                           >
+                            <svg
+                              aria-hidden="true"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2"
+                              className="h-4 w-4"
+                            >
+                              <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" />
+                              <circle cx="12" cy="12" r="3" />
+                            </svg>
                             View
                           </Link>
                         ) : (
@@ -801,18 +961,54 @@ export function MpesaStkPush() {
                       </td>
                     </tr>
                   ))}
-                  {!history.length && (
+                  {!pagedHistory.length && (
                     <tr>
                       <td
                         className="p-8 text-center text-slate-400"
                         colSpan={6}
                       >
-                        No STK Push requests yet.
+                        {historySearch
+                          ? "No STK requests match your search."
+                          : "No STK Push requests yet."}
                       </td>
                     </tr>
                   )}
                 </tbody>
               </table>
+            </div>
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
+              <div className="text-sm text-slate-500">
+                {filteredHistory.length
+                  ? `Showing ${(historyPage - 1) * historyPageSize + 1}–${Math.min(historyPage * historyPageSize, filteredHistory.length)} of ${filteredHistory.length}`
+                  : "Showing 0 results"}
+              </div>
+              <nav className="flex items-center gap-2" aria-label="STK request pagination">
+                <button
+                  type="button"
+                  className="inline-flex h-9 items-center gap-1 rounded-lg border border-slate-200 px-3 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                  disabled={historyPage === 1}
+                  onClick={() => setHistoryPage((page) => Math.max(1, page - 1))}
+                >
+                  <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
+                    <path d="m15 18-6-6 6-6" />
+                  </svg>
+                  Previous
+                </button>
+                <span className="min-w-20 text-center text-sm font-medium text-slate-600">
+                  Page {historyPage} of {historyPages}
+                </span>
+                <button
+                  type="button"
+                  className="inline-flex h-9 items-center gap-1 rounded-lg border border-slate-200 px-3 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                  disabled={historyPage === historyPages}
+                  onClick={() => setHistoryPage((page) => Math.min(historyPages, page + 1))}
+                >
+                  Next
+                  <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
+                    <path d="m9 18 6-6-6-6" />
+                  </svg>
+                </button>
+              </nav>
             </div>
           </Card>
         </div>

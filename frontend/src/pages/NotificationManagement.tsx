@@ -1565,6 +1565,19 @@ export function NotificationProviders() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [smtpProvider, setSmtpProvider] = useState<Row | null>(null);
+  const [onfonProvider, setOnfonProvider] = useState<Row | null>(null);
+  const [onfonBusy, setOnfonBusy] = useState(false);
+  const [onfonResult, setOnfonResult] = useState("");
+  const [onfonTestPhone, setOnfonTestPhone] = useState("");
+  const [onfonForm, setOnfonForm] = useState<Row>({
+    driver: "ONFON",
+    senderId: "SAMDAMTE",
+    endpointUrl: "https://api.onfonmedia.co.ke/v1/sms/SendBulkSMS",
+    apiKey: "",
+    clientId: "",
+    accessKey: "",
+    callbackToken: "",
+  });
   const [smtpBusy, setSmtpBusy] = useState(false);
   const [testRecipient, setTestRecipient] = useState("");
   const [smtpTestResult, setSmtpTestResult] = useState<{
@@ -1695,6 +1708,64 @@ export function NotificationProviders() {
       setSmtpBusy(false);
     }
   }
+  function generateCallbackToken() {
+    const bytes = crypto.getRandomValues(new Uint8Array(32));
+    return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+  }
+  function configureOnfon(row: Row) {
+    const configuration = row.configuration ?? {};
+    setOnfonProvider(row);
+    setOnfonForm({
+      driver: "ONFON",
+      senderId: configuration.senderId ?? "SAMDAMTE",
+      endpointUrl: configuration.endpointUrl ?? row.endpointUrl ?? "https://api.onfonmedia.co.ke/v1/sms/SendBulkSMS",
+      apiKey: "",
+      clientId: "",
+      accessKey: "",
+      callbackToken: row.secretConfiguredAt ? "" : generateCallbackToken(),
+    });
+    setOnfonResult("");
+    setError("");
+    setSuccess("");
+  }
+  async function saveOnfon(event: FormEvent) {
+    event.preventDefault();
+    if (!onfonProvider) return;
+    setOnfonBusy(true);
+    setError("");
+    try {
+      const saved = await api.configureOnfonProvider(String(onfonProvider.providerId), {
+        ...onfonForm,
+        apiKey: onfonForm.apiKey || undefined,
+        clientId: onfonForm.clientId || undefined,
+        accessKey: onfonForm.accessKey || undefined,
+        callbackToken: onfonForm.callbackToken || undefined,
+      });
+      setOnfonProvider({ ...onfonProvider, ...saved });
+      setOnfonForm({ ...onfonForm, apiKey: "", clientId: "", accessKey: "" });
+      setSuccess("Onfon settings saved securely.");
+      await load();
+    } catch (e) { setError(errorText(e)); }
+    finally { setOnfonBusy(false); }
+  }
+  async function checkOnfonBalance() {
+    if (!onfonProvider) return;
+    setOnfonBusy(true); setError(""); setOnfonResult("");
+    try {
+      const result = await api.getOnfonBalance(String(onfonProvider.providerId));
+      setOnfonResult(`Available balance: ${result.balance}`);
+    } catch (e) { setError(errorText(e)); }
+    finally { setOnfonBusy(false); }
+  }
+  async function testOnfon() {
+    if (!onfonProvider || !onfonTestPhone) return;
+    setOnfonBusy(true); setError(""); setOnfonResult("");
+    try {
+      const result = await api.testOnfonProvider(String(onfonProvider.providerId), onfonTestPhone, "Samdamte Water: your Onfon SMS integration is working correctly.");
+      setOnfonResult(`${result.message} Reference: ${result.reference}`);
+    } catch (e) { setError(errorText(e)); }
+    finally { setOnfonBusy(false); }
+  }
   return (
     <Page
       title="Notification providers"
@@ -1744,13 +1815,15 @@ export function NotificationProviders() {
                       providerType: e.target.value,
                       ...(e.target.value === "SMTP"
                         ? { channel: "EMAIL" }
+                        : e.target.value === "HTTP_API"
+                          ? { channel: "SMS", endpointUrl: "https://api.onfonmedia.co.ke/v1/sms/SendBulkSMS" }
                         : {}),
                     })
                   }
                 >
                   <option value="SIMULATED">Simulated</option>
                   <option value="SMTP">SMTP email</option>
-                  <option value="HTTP_API">HTTP API</option>
+                  <option value="HTTP_API">Onfon SMS (HTTP API)</option>
                 </SearchableSelect>
               </div>
               {form.providerType === "HTTP_API" && (
@@ -1827,6 +1900,14 @@ export function NotificationProviders() {
                         onClick={() => configureSmtp(row)}
                       >
                         Configure SMTP
+                      </button>
+                    )}
+                    {row.providerType === "HTTP_API" && row.channel === "SMS" && (
+                      <button
+                        className="text-sm font-semibold text-emerald-700"
+                        onClick={() => configureOnfon(row)}
+                      >
+                        Configure Onfon
                       </button>
                     )}
                     <button
@@ -1996,6 +2077,76 @@ export function NotificationProviders() {
               {smtpTestResult.message}
             </div>
           )}
+        </Card>
+      )}
+      {isAdmin && onfonProvider && (
+        <Card className="mt-4" title={`Onfon SMS settings · ${onfonProvider.providerName}`}>
+          <div className="mb-4 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800">
+            Credentials are encrypted before storage and are never returned to the browser. Use the exact sender ID approved by Onfon.
+          </div>
+          <form onSubmit={saveOnfon} className="grid gap-4 lg:grid-cols-3">
+            <label className="text-sm font-medium">
+              Approved sender ID
+              <input required className={`${INPUT} mt-1`} value={onfonForm.senderId} onChange={(e) => setOnfonForm({ ...onfonForm, senderId: e.target.value })} />
+            </label>
+            <label className="text-sm font-medium lg:col-span-2">
+              SMS endpoint
+              <input required type="url" className={`${INPUT} mt-1`} value={onfonForm.endpointUrl} onChange={(e) => setOnfonForm({ ...onfonForm, endpointUrl: e.target.value })} />
+            </label>
+            {[
+              ["apiKey", "API key"],
+              ["clientId", "Client ID"],
+              ["accessKey", "Access key"],
+            ].map(([key, label]) => (
+              <label className="text-sm font-medium" key={key}>
+                {label}
+                <input
+                  type="password"
+                  autoComplete="new-password"
+                  className={`${INPUT} mt-1`}
+                  placeholder={onfonProvider.secretConfiguredAt ? "Leave blank to keep saved value" : "Required"}
+                  value={onfonForm[key]}
+                  onChange={(e) => setOnfonForm({ ...onfonForm, [key]: e.target.value })}
+                />
+              </label>
+            ))}
+            <label className="text-sm font-medium lg:col-span-2">
+              Delivery callback token
+              <input
+                type="password"
+                autoComplete="new-password"
+                className={`${INPUT} mt-1`}
+                placeholder={onfonProvider.secretConfiguredAt ? "Leave blank to keep saved token" : "Required"}
+                value={onfonForm.callbackToken}
+                onChange={(e) => setOnfonForm({ ...onfonForm, callbackToken: e.target.value })}
+              />
+            </label>
+            <div className="flex items-end">
+              <Button type="button" tone="slate" className="w-full" onClick={() => setOnfonForm({ ...onfonForm, callbackToken: generateCallbackToken() })}>
+                Generate secure token
+              </Button>
+            </div>
+            {onfonForm.callbackToken && (
+              <label className="text-sm font-medium lg:col-span-3">
+                Delivery-report URL to register with Onfon
+                <input
+                  readOnly
+                  className={`${INPUT} mt-1 bg-slate-50 font-mono text-xs`}
+                  value={`${window.location.origin}/api/notifications/onfon/dlr?token=${onfonForm.callbackToken}`}
+                  onFocus={(event) => event.currentTarget.select()}
+                />
+              </label>
+            )}
+            <div className="lg:col-span-3 flex justify-end">
+              <Button tone="green" disabled={onfonBusy}>{onfonBusy ? "Saving…" : "Save encrypted Onfon settings"}</Button>
+            </div>
+          </form>
+          <div className="mt-5 grid gap-3 border-t pt-4 md:grid-cols-[1fr_auto_auto]">
+            <input className={INPUT} placeholder="Test mobile number, e.g. 0712345678" value={onfonTestPhone} onChange={(e) => setOnfonTestPhone(e.target.value)} />
+            <Button type="button" onClick={testOnfon} disabled={onfonBusy || !onfonTestPhone}>Send test SMS</Button>
+            <Button type="button" tone="slate" onClick={checkOnfonBalance} disabled={onfonBusy}>Check balance</Button>
+          </div>
+          {onfonResult && <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{onfonResult}</div>}
         </Card>
       )}
     </Page>
