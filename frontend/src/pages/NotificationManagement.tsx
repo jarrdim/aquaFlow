@@ -7,7 +7,9 @@ import { SweetAlertToast } from "../components/SweetAlertToast";
 
 type Row = Record<string, any>;
 const INPUT =
-  "w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-[15px] text-slate-700 outline-none focus:border-aqua-500 focus:ring-2 focus:ring-aqua-500/20";
+  "w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-[15px] text-slate-700 outline-none transition duration-200 placeholder:text-sm placeholder:italic placeholder:text-slate-400 hover:border-slate-300 focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10";
+const CHECKBOX =
+  "h-5 w-5 shrink-0 cursor-pointer rounded-md border-slate-300 accent-emerald-600 outline-none transition duration-150 hover:ring-4 hover:ring-emerald-500/10 focus:ring-4 focus:ring-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40";
 const TH =
   "px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500";
 const TD = "px-4 py-3 text-[15px] text-slate-600";
@@ -36,17 +38,17 @@ function Page({
   actions,
   children,
 }: {
-  title: string;
+  title: ReactNode;
   subtitle: string;
   actions?: ReactNode;
   children: ReactNode;
 }) {
   return (
     <div className="mx-auto max-w-[1600px] p-4 lg:px-6 lg:py-5">
-      <div className="page-screen-header mb-4 flex flex-wrap items-start justify-between gap-3">
+      <div className="page-screen-header mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">{title}</h1>
-          <p className="mt-1 text-[15px] text-slate-500">{subtitle}</p>
+          <p className="mt-1.5 text-[15px] font-medium text-slate-500">{subtitle}</p>
         </div>
         <div className="flex flex-wrap gap-2">{actions}</div>
       </div>
@@ -59,7 +61,7 @@ function Card({
   children,
   className = "",
 }: {
-  title?: string;
+  title?: ReactNode;
   children: ReactNode;
   className?: string;
 }) {
@@ -68,11 +70,11 @@ function Card({
       className={`overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm ${className}`}
     >
       {title && (
-        <div className="border-b px-4 py-3 font-semibold text-slate-800">
+        <div className="border-b border-slate-100 bg-slate-50/50 px-5 py-4 text-[17px] font-bold text-slate-900">
           {title}
         </div>
       )}
-      <div className="p-4">{children}</div>
+      <div className="p-5 sm:p-6">{children}</div>
     </section>
   );
 }
@@ -83,7 +85,7 @@ function Button({
   tone?: "blue" | "green" | "red" | "orange" | "slate";
 }) {
   const colors = {
-    blue: "bg-aqua-700",
+    blue: "bg-emerald-700",
     green: "bg-emerald-600",
     red: "bg-red-600",
     orange: "bg-orange-500",
@@ -92,7 +94,7 @@ function Button({
   return (
     <button
       {...props}
-      className={`rounded-lg px-4 py-2 text-sm font-semibold text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-40 ${colors[tone]} ${props.className ?? ""}`}
+      className={`rounded-xl px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition duration-200 hover:-translate-y-0.5 hover:brightness-105 hover:shadow-md active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:translate-y-0 ${colors[tone]} ${props.className ?? ""}`}
     />
   );
 }
@@ -107,12 +109,13 @@ function Badge({ value }: { value: string }) {
     QUEUED: "bg-amber-50 text-amber-700",
     FAILED: "bg-red-50 text-red-700",
     ACTIVE: "bg-emerald-50 text-emerald-700",
-    INACTIVE: "bg-slate-100 text-slate-600",
+    INACTIVE: "border border-rose-200 bg-rose-50 text-rose-700",
   };
   return (
     <span
-      className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${colors[value] ?? "bg-slate-100 text-slate-600"}`}
+      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${colors[value] ?? "bg-slate-100 text-slate-600"}`}
     >
+      <span className={`h-1.5 w-1.5 rounded-full ${value === "ACTIVE" || value === "DELIVERED" ? "bg-emerald-500" : value === "INACTIVE" || value === "FAILED" ? "bg-rose-500" : "bg-current opacity-60"}`} />
       {pretty(value)}
     </span>
   );
@@ -133,6 +136,110 @@ const nav = (
     </Link>
   </>
 );
+
+const DELIVERY_COLORS: Record<string, string> = {
+  QUEUED: "#f59e0b",
+  SENT: "#3b82f6",
+  DELIVERED: "#10b981",
+  FAILED: "#ef4444",
+};
+
+function DeliveryStatusChart({ data }: { data: Row }) {
+  const segments = [
+    { label: "Queued", value: Number(data.queued ?? 0), color: DELIVERY_COLORS.QUEUED },
+    { label: "Sent", value: Number(data.sent ?? 0), color: DELIVERY_COLORS.SENT },
+    { label: "Delivered", value: Number(data.delivered ?? 0), color: DELIVERY_COLORS.DELIVERED },
+    { label: "Failed", value: Number(data.failed ?? 0), color: DELIVERY_COLORS.FAILED },
+  ];
+  const total = segments.reduce((sum, item) => sum + item.value, 0);
+  let cursor = 0;
+  const gradient = total
+    ? segments
+        .filter((item) => item.value > 0)
+        .map((item) => {
+          const start = cursor;
+          cursor += (item.value / total) * 100;
+          return `${item.color} ${start}% ${cursor}%`;
+        })
+        .join(", ")
+    : "#e2e8f0 0 100%";
+
+  return (
+    <div>
+      <div className="mb-4 flex items-center justify-between">
+        <div>
+          <h3 className="font-bold text-slate-900">Delivery status</h3>
+          <p className="mt-0.5 text-xs text-slate-500">Current outcome distribution</p>
+        </div>
+        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">All time</span>
+      </div>
+      <div className="flex flex-col items-center gap-5 sm:flex-row sm:justify-center">
+        <div
+          role="img"
+          aria-label={`Delivery status chart for ${total} notifications`}
+          className="relative h-36 w-36 shrink-0 rounded-full shadow-inner transition duration-300 hover:scale-[1.03]"
+          style={{ background: `conic-gradient(${gradient})` }}
+        >
+          <div className="absolute inset-[18px] grid place-items-center rounded-full bg-white shadow-sm">
+            <div className="text-center">
+              <div className="text-2xl font-extrabold text-slate-900">{total.toLocaleString()}</div>
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Messages</div>
+            </div>
+          </div>
+        </div>
+        <div className="grid w-full grid-cols-2 gap-x-5 gap-y-3">
+          {segments.map((item) => (
+            <div key={item.label} className="flex items-center gap-2.5">
+              <span className="h-2.5 w-2.5 rounded-full ring-4 ring-slate-100" style={{ backgroundColor: item.color }} />
+              <div>
+                <div className="text-xs text-slate-500">{item.label}</div>
+                <div className="font-bold text-slate-800">{item.value.toLocaleString()}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ChannelVolumeChart({ rows }: { rows: Row[] }) {
+  const max = Math.max(1, ...rows.map((row) => Number(row.count ?? 0)));
+  return (
+    <div className="border-t border-slate-100 pt-5">
+      <div className="mb-4">
+        <h3 className="font-bold text-slate-900">Messages by channel</h3>
+        <p className="mt-0.5 text-xs text-slate-500">Volume across configured delivery methods</p>
+      </div>
+      {rows.length ? (
+        <div className="space-y-4">
+          {rows.map((row) => {
+            const value = Number(row.count ?? 0);
+            const width = Math.max(5, (value / max) * 100);
+            return (
+              <div key={row.channel}>
+                <div className="mb-1.5 flex items-center justify-between text-sm">
+                  <span className="font-semibold text-slate-700">{row.channel}</span>
+                  <span className="font-bold text-emerald-700">{value.toLocaleString()}</span>
+                </div>
+                <div className="h-2.5 overflow-hidden rounded-full bg-slate-100">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-teal-400 shadow-sm transition-all duration-700 ease-out"
+                    style={{ width: `${width}%` }}
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 py-8 text-center text-sm text-slate-400">
+          Channel activity will appear here after messages are created.
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function NotificationDashboard() {
   const [data, setData] = useState<Row>({});
@@ -168,24 +275,10 @@ export function NotificationDashboard() {
         <Card title="Recent notification activity">
           <NotificationTable rows={data.recent ?? []} compact />
         </Card>
-        <Card title="Messages by channel">
-          <div className="space-y-3">
-            {(data.byChannel ?? []).map((row: Row) => (
-              <div
-                key={row.channel}
-                className="flex items-center justify-between rounded-xl border px-4 py-3"
-              >
-                <span className="font-semibold">{row.channel}</span>
-                <span className="text-xl font-bold text-aqua-700">
-                  {row.count}
-                </span>
-              </div>
-            ))}
-            {!(data.byChannel ?? []).length && (
-              <p className="py-8 text-center text-slate-400">
-                No messages have been created yet.
-              </p>
-            )}
+        <Card title="Notification analytics">
+          <div className="space-y-5">
+            <DeliveryStatusChart data={data} />
+            <ChannelVolumeChart rows={data.byChannel ?? []} />
           </div>
         </Card>
       </div>
@@ -199,27 +292,31 @@ function NotificationTable({
   onRetry,
   selected,
   onSelectionChange,
+  queueMode = false,
 }: {
   rows: Row[];
   compact?: boolean;
   onRetry?: (id: string) => void;
   selected?: string[];
   onSelectionChange?: (ids: string[]) => void;
+  queueMode?: boolean;
 }) {
   const selectableIds = rows
     .filter((row) => ["QUEUED", "FAILED"].includes(row.deliveryStatus))
     .map((row) => String(row.notificationId));
   const selectionEnabled = Boolean(selected && onSelectionChange);
   return (
-    <div className="overflow-x-auto rounded-xl border border-slate-200">
+    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div className="overflow-x-auto">
       <table className="w-full min-w-[760px]">
-        <thead>
+        <thead className="bg-slate-50/90">
           <tr>
             {selectionEnabled && (
               <th className={TH}>
                 <input
                   aria-label="Select all visible queued notifications"
                   type="checkbox"
+                  className={CHECKBOX}
                   checked={
                     selectableIds.length > 0 &&
                     selectableIds.every((id) => selected!.includes(id))
@@ -243,14 +340,15 @@ function NotificationTable({
           </tr>
         </thead>
         <tbody>
-          {rows.map((row) => (
-            <tr className="border-t border-slate-100" key={row.notificationId}>
+          {rows.map((row, index) => (
+            <tr className={`border-t border-slate-100 transition-colors duration-150 hover:bg-emerald-50/40 ${index % 2 ? "bg-slate-50/40" : "bg-white"}`} key={row.notificationId}>
               {selectionEnabled && (
                 <td className={TD}>
                   {["QUEUED", "FAILED"].includes(row.deliveryStatus) ? (
                     <input
                       aria-label={`Select notification ${row.notificationId}`}
                       type="checkbox"
+                      className={CHECKBOX}
                       checked={selected!.includes(String(row.notificationId))}
                       onChange={(event) =>
                         onSelectionChange!(
@@ -267,7 +365,14 @@ function NotificationTable({
                   )}
                 </td>
               )}
-              <td className={TD}>{dateTime(row.createdAt)}</td>
+              <td className={TD}>
+                <div>{dateTime(row.createdAt)}</div>
+                {row.scheduledAt && (
+                  <div className={`mt-1 text-xs font-medium ${new Date(row.scheduledAt) > new Date() ? "text-amber-600" : "text-emerald-600"}`}>
+                    {new Date(row.scheduledAt) > new Date() ? "Scheduled" : "Due"} · {dateTime(row.scheduledAt)}
+                  </div>
+                )}
+              </td>
               <td className={TD}>
                 <div className="font-semibold text-slate-700">
                   {row.recipient}
@@ -301,9 +406,10 @@ function NotificationTable({
                   {row.deliveryStatus === "FAILED" &&
                   row.retryCount < row.maxRetries ? (
                     <button
-                      className="font-semibold text-aqua-700"
+                      className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 font-semibold text-emerald-700 transition hover:bg-emerald-50"
                       onClick={() => onRetry(String(row.notificationId))}
                     >
+                      <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="M20 12a8 8 0 1 1-2.3-5.7L20 8" /><path d="M20 3v5h-5" /></svg>
                       Retry
                     </button>
                   ) : (
@@ -320,14 +426,20 @@ function NotificationTable({
                   (onRetry ? 6 : compact ? 4 : 5) +
                   (selectionEnabled ? 1 : 0)
                 }
-                className="px-4 py-14 text-center text-slate-400"
+                className="px-4 py-16 text-center text-slate-400"
               >
-                No notifications found.
+                <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-emerald-50 text-emerald-600"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" className="h-7 w-7"><path d="M22 2 11 13" /><path d="m22 2-7 20-4-9-9-4Z" /></svg></div>
+                <div className="mt-3 font-semibold text-slate-600">Your queue is clear</div>
+                <div className="mt-1 text-sm text-slate-400">No notifications match the current filters.</div>
               </td>
             </tr>
           )}
         </tbody>
       </table>
+      </div>
+      {queueMode && rows.length > 0 && (
+        <div className="flex items-center justify-center gap-2 border-t border-slate-100 bg-slate-50/60 px-4 py-3 text-xs font-medium text-slate-400"><span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />End of loaded queue · {rows.length} item{rows.length === 1 ? "" : "s"}</div>
+      )}
     </div>
   );
 }
@@ -385,7 +497,7 @@ function BulkNotificationSend({ modeSwitch }: { modeSwitch: ReactNode }) {
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<string[]>([]);
   const [allMatching, setAllMatching] = useState(false);
-  const [channels, setChannels] = useState<string[]>(["EMAIL"]);
+  const [channels, setChannels] = useState<string[]>(["SMS"]);
   const [notificationType, setNotificationType] =
     useState("BALANCE_REMINDER");
   const [subject, setSubject] = useState("");
@@ -472,8 +584,16 @@ function BulkNotificationSend({ modeSwitch }: { modeSwitch: ReactNode }) {
           ? new Date(scheduledAt).toISOString()
           : undefined,
       });
+      const created = Number(result.created ?? 0);
+      if (!created) {
+        throw new Error(
+          "No notifications were queued. Check the selected channel, customer contact details, and active notification template.",
+        );
+      }
+      const skipped = result.skipped ?? {};
+      const skippedCount = Number(skipped.missingSms ?? 0) + Number(skipped.missingEmail ?? 0) + Number(skipped.unavailableTemplate ?? 0);
       setSuccess(
-        `${Number(result.created).toLocaleString()} notification(s) queued for ${Number(result.accounts).toLocaleString()} account(s). Process them from the delivery queue in controlled batches.`,
+        `${created.toLocaleString()} notification(s) queued for ${Number(result.accounts).toLocaleString()} account(s).${skippedCount ? ` ${skippedCount.toLocaleString()} delivery option(s) were skipped.` : ""} Open the delivery queue to process them.`,
       );
       setSelected([]);
       setAllMatching(false);
@@ -648,8 +768,9 @@ function BulkNotificationSend({ modeSwitch }: { modeSwitch: ReactNode }) {
               <tr>
                 <th className={TH}>
                   <input
-                    type="checkbox"
-                    aria-label="Select all accounts on this page"
+                  type="checkbox"
+                  className={CHECKBOX}
+                  aria-label="Select all accounts on this page"
                     checked={allMatching || allPageSelected}
                     disabled={allMatching}
                     onChange={(e) => togglePage(e.target.checked)}
@@ -677,6 +798,7 @@ function BulkNotificationSend({ modeSwitch }: { modeSwitch: ReactNode }) {
                     <td className={TD}>
                       <input
                         type="checkbox"
+                        className={CHECKBOX}
                         aria-label={`Select ${row.accountNumber}`}
                         checked={
                           allMatching ||
@@ -806,17 +928,26 @@ function BulkNotificationSend({ modeSwitch }: { modeSwitch: ReactNode }) {
             <div>
               <div className="mb-2 text-sm font-medium">Delivery channels</div>
               <div className="grid grid-cols-3 gap-2">
-                {["SMS", "EMAIL", "PUSH"].map((channel) => (
+                {["SMS", "EMAIL", "PUSH"].map((channel) => {
+                  const disabled = channel !== "SMS";
+                  return (
                   <label
                     key={channel}
-                    className={`flex cursor-pointer items-center justify-center gap-2 rounded-xl border px-2 py-2.5 text-xs font-semibold ${
+                    aria-disabled={disabled}
+                    className={`flex items-center justify-center gap-2 rounded-xl border px-2 py-2.5 text-xs font-semibold transition ${
+                      disabled
+                        ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400 opacity-70"
+                        : "cursor-pointer border-emerald-300 bg-emerald-50 text-emerald-800 ring-1 ring-emerald-100"
+                    } ${
                       channels.includes(channel)
-                        ? "border-sky-200 bg-sky-50 text-sky-800"
-                        : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                        ? disabled ? "" : "shadow-sm"
+                        : disabled ? "" : "hover:bg-emerald-100"
                     }`}
                   >
                     <input
                       type="checkbox"
+                      className={CHECKBOX}
+                      disabled={disabled}
                       checked={channels.includes(channel)}
                       onChange={(e) =>
                         setChannels(
@@ -827,8 +958,10 @@ function BulkNotificationSend({ modeSwitch }: { modeSwitch: ReactNode }) {
                       }
                     />
                     {channel}
+                    {disabled && <span className="sr-only"> unavailable</span>}
                   </label>
-                ))}
+                  );
+                })}
               </div>
             </div>
             <label className="block text-sm font-medium">
@@ -892,7 +1025,7 @@ function NotificationSendLegacy({ modeSwitch }: { modeSwitch: ReactNode }) {
   const [targetType, setTargetType] = useState("ACCOUNT");
   const [targetId, setTargetId] = useState("");
   const [notificationType, setNotificationType] = useState("BALANCE_REMINDER");
-  const [selectedChannels, setSelectedChannels] = useState<string[]>(["EMAIL"]);
+  const [selectedChannels, setSelectedChannels] = useState<string[]>(["SMS"]);
   const [message, setMessage] = useState("");
   const [subject, setSubject] = useState("");
   const [scheduledAt, setScheduledAt] = useState("");
@@ -1066,17 +1199,26 @@ function NotificationSendLegacy({ modeSwitch }: { modeSwitch: ReactNode }) {
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
               <div className="mb-2 text-sm font-medium">Delivery channels</div>
               <div className="grid grid-cols-3 gap-2">
-                {["SMS", "EMAIL", "PUSH"].map((channel) => (
+                {["SMS", "EMAIL", "PUSH"].map((channel) => {
+                  const disabled = channel !== "SMS";
+                  return (
                   <label
                     key={channel}
-                    className={`flex cursor-pointer items-center justify-center gap-2 rounded-lg border bg-white px-3 py-2 text-sm font-medium ${
+                    aria-disabled={disabled}
+                    className={`flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition ${
+                      disabled
+                        ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400 opacity-70"
+                        : "cursor-pointer border-emerald-300 bg-emerald-50 text-emerald-800 shadow-sm"
+                    } ${
                       selectedChannels.includes(channel)
-                        ? "border-sky-300 text-sky-800 shadow-sm"
-                        : "border-slate-200 text-slate-600"
+                        ? ""
+                        : disabled ? "" : "hover:bg-emerald-100"
                     }`}
                   >
                     <input
                       type="checkbox"
+                      className={CHECKBOX}
+                      disabled={disabled}
                       checked={selectedChannels.includes(channel)}
                       onChange={(e) => {
                         setSelectedChannels(
@@ -1090,8 +1232,10 @@ function NotificationSendLegacy({ modeSwitch }: { modeSwitch: ReactNode }) {
                       }}
                     />
                     {channel}
+                    {disabled && <span className="sr-only"> unavailable</span>}
                   </label>
-                ))}
+                  );
+                })}
               </div>
             </div>
             <label className="block text-sm font-medium">
@@ -1235,14 +1379,23 @@ function NotificationRegister({ queueOnly = false }: { queueOnly?: boolean }) {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [busy, setBusy] = useState(false);
-  const load = () =>
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const [total, setTotal] = useState(0);
+  const [pages, setPages] = useState(1);
+  const load = (pageValue = page) =>
     api
-      .listNotifications({ status, channel, search })
-      .then(setRows)
+      .listNotifications({ status, channel, search, page: String(pageValue), pageSize: String(pageSize) })
+      .then((result) => {
+        setRows(result.items ?? []);
+        setTotal(Number(result.total ?? 0));
+        setPages(Math.max(1, Number(result.pages ?? 1)));
+        if (pageValue > Number(result.pages ?? 1)) setPage(Math.max(1, Number(result.pages ?? 1)));
+      })
       .catch((e) => setError(errorText(e)));
   useEffect(() => {
     void load();
-  }, [status, channel]);
+  }, [status, channel, page, pageSize]);
   async function processQueue() {
     setBusy(true);
     setError("");
@@ -1250,9 +1403,17 @@ function NotificationRegister({ queueOnly = false }: { queueOnly?: boolean }) {
       const result = await api.processNotifications(
         selected.length ? selected : undefined,
       );
-      setSuccess(
-        `${result.processed?.length ?? 0} due notification(s) processed.`,
-      );
+      const processed = result.processed ?? [];
+      const delivered = processed.filter((row: Row) => ["SENT", "DELIVERED"].includes(row?.deliveryStatus));
+      const failed = processed.filter((row: Row) => row?.deliveryStatus === "FAILED");
+      if (failed.length) {
+        const reasons = Array.from(new Set(failed.map((row: Row) => row.failureReason).filter(Boolean))).slice(0, 2).join(" ");
+        setError(`${failed.length} notification(s) failed to send.${reasons ? ` ${reasons}` : " Check the active SMS provider configuration."}`);
+      } else if (!processed.length) {
+        setSuccess("No notifications are due yet. Scheduled items will remain queued until their delivery time.");
+      } else {
+        setSuccess(`${delivered.length} notification(s) submitted to the delivery provider.`);
+      }
       setSelected([]);
       await load();
     } catch (e) {
@@ -1272,7 +1433,7 @@ function NotificationRegister({ queueOnly = false }: { queueOnly?: boolean }) {
   }
   return (
     <Page
-      title={queueOnly ? "Notification queue" : "Notification history"}
+      title={queueOnly ? <span className="flex items-center gap-3"><span className="grid h-10 w-10 place-items-center rounded-xl bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5"><path d="M22 2 11 13" /><path d="m22 2-7 20-4-9-9-4Z" /></svg></span>Delivery queue</span> : "Notification history"}
       subtitle={
         queueOnly
           ? "Process scheduled messages and retry failed deliveries"
@@ -1280,7 +1441,8 @@ function NotificationRegister({ queueOnly = false }: { queueOnly?: boolean }) {
       }
       actions={
         queueOnly ? (
-          <Button tone="green" disabled={busy} onClick={processQueue}>
+          <Button tone="green" disabled={busy} onClick={processQueue} className="inline-flex items-center gap-2">
+            <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`h-4 w-4 ${busy ? "animate-spin" : ""}`}><path d="M20 12a8 8 0 1 1-2.3-5.7L20 8" /><path d="M20 3v5h-5" /></svg>
             {busy
               ? "Processing…"
               : selected.length
@@ -1294,11 +1456,13 @@ function NotificationRegister({ queueOnly = false }: { queueOnly?: boolean }) {
     >
       <Notice error={error} success={success} />
       <Card>
-        <div className="mb-4 grid gap-3 md:grid-cols-3">
+        <div className="mb-5 grid gap-3 lg:grid-cols-[minmax(180px,0.65fr)_minmax(180px,0.65fr)_minmax(280px,1.4fr)]">
+          <div className="relative">
+          <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="pointer-events-none absolute left-3.5 top-1/2 z-10 h-4 w-4 -translate-y-1/2 text-emerald-600"><path d="M4 5h16M7 12h10M10 19h4" /></svg>
           <SearchableSelect
-            className={INPUT}
+            className={`${INPUT} pl-10`}
             value={status}
-            onChange={(e) => setStatus(e.target.value)}
+            onChange={(e) => { setStatus(e.target.value); setPage(1); setSelected([]); }}
           >
             <option value="">All statuses</option>
             <option value="QUEUED">Queued</option>
@@ -1306,29 +1470,38 @@ function NotificationRegister({ queueOnly = false }: { queueOnly?: boolean }) {
             <option value="DELIVERED">Delivered</option>
             <option value="FAILED">Failed</option>
           </SearchableSelect>
+          </div>
+          <div className="relative">
+          <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="pointer-events-none absolute left-3.5 top-1/2 z-10 h-4 w-4 -translate-y-1/2 text-emerald-600"><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M7 9h10" /></svg>
           <SearchableSelect
-            className={INPUT}
+            className={`${INPUT} pl-10`}
             value={channel}
-            onChange={(e) => setChannel(e.target.value)}
+            onChange={(e) => { setChannel(e.target.value); setPage(1); setSelected([]); }}
           >
             <option value="">All channels</option>
             <option>SMS</option>
             <option>EMAIL</option>
             <option>PUSH</option>
           </SearchableSelect>
-          <div className="flex gap-2">
+          </div>
+          <div className="flex min-w-0 gap-2">
+            <label className="relative min-w-0 flex-1">
+              <span className="sr-only">Search notifications</span>
+              <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-emerald-600"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
             <input
-              className={INPUT}
+              className={`${INPUT} pl-10`}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Recipient, account or subject"
             />
-            <Button onClick={load}>Search</Button>
+            </label>
+            <Button onClick={() => { setPage(1); setSelected([]); void load(1); }}><span className="inline-flex items-center gap-1.5"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>Search</span></Button>
           </div>
         </div>
         {queueOnly && (
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-sky-100 bg-sky-50 px-3 py-2 text-sm text-sky-800">
-            <span>
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-emerald-100 bg-emerald-50/70 px-4 py-3 text-sm text-emerald-900">
+            <span className="flex items-center gap-2">
+              <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5 flex-none text-emerald-600"><circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 8h.01" /></svg>
               {selected.length
                 ? `${selected.length} notification(s) selected for this batch.`
                 : "Select rows, select all visible rows, or process the next due batch."}
@@ -1341,7 +1514,48 @@ function NotificationRegister({ queueOnly = false }: { queueOnly?: boolean }) {
           onRetry={retry}
           selected={queueOnly ? selected : undefined}
           onSelectionChange={queueOnly ? setSelected : undefined}
+          queueMode={queueOnly}
         />
+        <div className="mt-5 flex flex-col gap-3 border-t border-slate-100 pt-5 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-wrap items-center gap-3 text-sm text-slate-500">
+            <span>
+              {total
+                ? `Showing ${(page - 1) * pageSize + 1}–${Math.min(page * pageSize, total)} of ${total}`
+                : "Showing 0 results"}
+            </span>
+            <label className="flex items-center gap-2">
+              <span className="text-xs font-medium text-slate-400">Rows</span>
+              <select
+                className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/10"
+                value={pageSize}
+                onChange={(event) => { setPageSize(Number(event.target.value)); setPage(1); setSelected([]); }}
+              >
+                {[10, 25, 50, 100].map((size) => <option key={size} value={size}>{size}</option>)}
+              </select>
+            </label>
+          </div>
+          <nav className="flex items-center gap-2" aria-label="Notification pagination">
+            <button
+              type="button"
+              className="inline-flex h-9 items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-600 transition hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-white"
+              disabled={page <= 1}
+              onClick={() => { setPage((current) => Math.max(1, current - 1)); setSelected([]); }}
+            >
+              <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="m15 18-6-6 6-6" /></svg>
+              Previous
+            </button>
+            <span className="min-w-24 text-center text-sm font-semibold text-slate-600">Page {page} of {pages}</span>
+            <button
+              type="button"
+              className="inline-flex h-9 items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-600 transition hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-white"
+              disabled={page >= pages}
+              onClick={() => { setPage((current) => Math.min(pages, current + 1)); setSelected([]); }}
+            >
+              Next
+              <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="m9 18 6-6-6-6" /></svg>
+            </button>
+          </nav>
+        </div>
       </Card>
     </Page>
   );
@@ -1551,6 +1765,13 @@ export function NotificationTemplates() {
                 )}
               </div>
             ))}
+            {!rows.length && (
+              <div className="flex min-h-56 flex-col items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50/60 p-8 text-center md:col-span-2">
+                <div className="grid h-12 w-12 place-items-center rounded-2xl bg-emerald-50 text-emerald-600"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-6 w-6"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3 1.7-5.1A7 7 0 0 1 3 12V8a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z" /></svg></div>
+                <div className="mt-3 font-semibold text-slate-700">No providers configured</div>
+                <p className="mt-1 max-w-sm text-sm text-slate-400">Add an SMS, email, or push gateway to begin delivering customer notifications.</p>
+              </div>
+            )}
           </div>
         </Card>
       </div>
@@ -1772,29 +1993,13 @@ export function NotificationProviders() {
       subtitle="Delivery gateway configuration and safe testing environments"
     >
       <Notice error={error} success={success} />
-      <div className={`grid gap-4 ${isAdmin ? "xl:grid-cols-[1fr_2fr]" : ""}`}>
+      <div className={`grid gap-6 ${isAdmin ? "lg:grid-cols-[minmax(320px,0.85fr)_minmax(0,1.65fr)]" : ""}`}>
         {isAdmin && (
-          <Card title="Add provider">
-            <form className="space-y-3" onSubmit={create}>
-              <input
-                required
-                className={INPUT}
-                placeholder="Provider code"
-                value={form.providerCode}
-                onChange={(e) =>
-                  setForm({ ...form, providerCode: e.target.value })
-                }
-              />
-              <input
-                required
-                className={INPUT}
-                placeholder="Provider name"
-                value={form.providerName}
-                onChange={(e) =>
-                  setForm({ ...form, providerName: e.target.value })
-                }
-              />
-              <div className="grid grid-cols-2 gap-3">
+          <Card title={<span className="flex items-center gap-2"><span className="grid h-8 w-8 place-items-center rounded-lg bg-emerald-50 text-emerald-700"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="M12 5v14M5 12h14" /></svg></span>Add provider</span>}>
+            <form className="space-y-4" onSubmit={create}>
+              <label className="block text-sm font-semibold text-slate-700">Provider code<span className="mt-1 block text-xs font-normal text-slate-400">A unique internal identifier</span><input required className={`${INPUT} mt-1.5`} placeholder="e.g. ONFON_SMS" value={form.providerCode} onChange={(e) => setForm({ ...form, providerCode: e.target.value })} /></label>
+              <label className="block text-sm font-semibold text-slate-700">Provider name<span className="mt-1 block text-xs font-normal text-slate-400">A recognizable display name</span><input required className={`${INPUT} mt-1.5`} placeholder="e.g. Onfon Media" value={form.providerName} onChange={(e) => setForm({ ...form, providerName: e.target.value })} /></label>
+              <div className="grid gap-3 sm:grid-cols-2">
                 <SearchableSelect
                   className={INPUT}
                   value={form.channel}
@@ -1827,19 +2032,12 @@ export function NotificationProviders() {
                 </SearchableSelect>
               </div>
               {form.providerType === "HTTP_API" && (
-                <input
-                  className={INPUT}
-                  type="url"
-                  placeholder="Provider endpoint URL"
-                  value={form.endpointUrl}
-                  onChange={(e) =>
-                    setForm({ ...form, endpointUrl: e.target.value })
-                  }
-                />
+                <label className="block text-sm font-semibold text-slate-700">API endpoint<input className={`${INPUT} mt-1.5`} type="url" placeholder="https://api.provider.com/..." value={form.endpointUrl} onChange={(e) => setForm({ ...form, endpointUrl: e.target.value })} /></label>
               )}
-              <label className="flex items-center gap-2 text-sm">
+              <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-600 transition hover:border-emerald-200 hover:bg-emerald-50/50">
                 <input
                   type="checkbox"
+                  className={CHECKBOX}
                   checked={form.isDefault}
                   onChange={(e) =>
                     setForm({ ...form, isDefault: e.target.checked })
@@ -1847,37 +2045,32 @@ export function NotificationProviders() {
                 />
                 Set as default for this channel
               </label>
-              <textarea
-                className={INPUT}
-                placeholder="Configuration notes"
-                value={form.remarks}
-                onChange={(e) => setForm({ ...form, remarks: e.target.value })}
-              />
+              <label className="block text-sm font-semibold text-slate-700">Notes <span className="font-normal text-slate-400">(optional)</span><textarea className={`${INPUT} mt-1.5 min-h-24`} placeholder="Add internal configuration notes…" value={form.remarks} onChange={(e) => setForm({ ...form, remarks: e.target.value })} /></label>
               <Button tone="green" className="w-full">
                 Add provider
               </Button>
             </form>
           </Card>
         )}
-        <Card title={`${rows.length} provider(s)`}>
-          <div className="grid gap-3 md:grid-cols-2">
+        <Card title={<span className="flex items-center justify-between gap-3"><span className="flex items-center gap-2"><span className="grid h-8 w-8 place-items-center rounded-lg bg-emerald-50 text-emerald-700"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M7 8h10M7 12h6" /></svg></span>Configured providers</span><span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-bold text-emerald-700">{rows.length}</span></span>}>
+          <div className="grid gap-4 md:grid-cols-2">
             {rows.map((row) => (
-              <div key={row.providerId} className="rounded-xl border p-4">
+              <div key={row.providerId} className="group rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:border-emerald-200 hover:shadow-lg hover:shadow-slate-200/60">
                 <div className="flex justify-between gap-2">
                   <div>
-                    <div className="font-semibold">{row.providerName}</div>
-                    <div className="text-xs text-slate-400">
+                    <div className="text-base font-bold text-slate-900">{row.providerName}</div>
+                    <div className="mt-0.5 font-mono text-[11px] uppercase tracking-wide text-slate-400">
                       {row.providerCode}
                     </div>
                   </div>
                   <Badge value={row.status} />
                 </div>
                 <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
-                  <div>
+                  <div className="rounded-xl bg-slate-50 px-3 py-2.5">
                     <span className="text-slate-400">Channel</span>
                     <div className="font-semibold">{row.channel}</div>
                   </div>
-                  <div>
+                  <div className="rounded-xl bg-slate-50 px-3 py-2.5">
                     <span className="text-slate-400">Type</span>
                     <div className="font-semibold">
                       {pretty(row.providerType)}
@@ -1889,14 +2082,14 @@ export function NotificationProviders() {
                     Default provider
                   </div>
                 )}
-                <p className="mt-3 text-xs text-slate-500">
+                <p className="mt-3 text-xs italic text-slate-400">
                   {row.remarks || "No provider notes."}
                 </p>
                 {isAdmin && (
-                  <div className="mt-3 flex flex-wrap gap-3 border-t pt-3">
+                  <div className="mt-4 flex flex-wrap gap-2 border-t border-slate-100 pt-4">
                     {row.providerType === "SMTP" && (
                       <button
-                        className="text-sm font-semibold text-emerald-700"
+                        className="rounded-lg px-2.5 py-1.5 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-50"
                         onClick={() => configureSmtp(row)}
                       >
                         Configure SMTP
@@ -1904,20 +2097,20 @@ export function NotificationProviders() {
                     )}
                     {row.providerType === "HTTP_API" && row.channel === "SMS" && (
                       <button
-                        className="text-sm font-semibold text-emerald-700"
+                        className="rounded-lg px-2.5 py-1.5 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-50"
                         onClick={() => configureOnfon(row)}
                       >
                         Configure Onfon
                       </button>
                     )}
                     <button
-                      className="text-sm font-semibold text-aqua-700"
+                      className="rounded-lg px-2.5 py-1.5 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-50"
                       onClick={() => update(row, { isDefault: true })}
                     >
                       Make default
                     </button>
                     <button
-                      className="text-sm font-semibold text-slate-600"
+                      className="rounded-lg px-2.5 py-1.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-100 hover:text-slate-900"
                       onClick={() =>
                         update(row, {
                           status:
@@ -1974,6 +2167,7 @@ export function NotificationProviders() {
             <label className="flex items-end gap-2 pb-2 text-sm font-medium">
               <input
                 type="checkbox"
+                className={CHECKBOX}
                 checked={smtpForm.secure}
                 onChange={(e) =>
                   setSmtpForm({ ...smtpForm, secure: e.target.checked })
@@ -2081,15 +2275,25 @@ export function NotificationProviders() {
       )}
       {isAdmin && onfonProvider && (
         <Card className="mt-4" title={`Onfon SMS settings · ${onfonProvider.providerName}`}>
-          <div className="mb-4 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800">
-            Credentials are encrypted before storage and are never returned to the browser. Use the exact sender ID approved by Onfon.
+          <div className="mb-5 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-gradient-to-r from-white via-slate-50 to-emerald-50/60 p-4 shadow-sm">
+            <div className="flex items-center gap-3">
+              <div className="grid h-11 w-11 place-items-center rounded-xl bg-emerald-100 text-emerald-700">
+                <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-6 w-6"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3 1.7-5.1A7 7 0 0 1 3 12V8a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z" /><path d="M8 9h8M8 13h5" /></svg>
+              </div>
+              <div><div className="font-bold text-slate-900">Onfon SMS gateway</div><div className="text-sm text-slate-500">Secure messaging and delivery tracking</div></div>
+            </div>
+            <div className="flex items-center gap-2 rounded-full border border-emerald-200 bg-white px-3 py-1.5 text-xs font-semibold text-emerald-700">
+              <span className="h-2.5 w-2.5 rounded-full bg-emerald-500" />
+              {onfonProvider.secretConfiguredAt ? "Credentials secured" : "Setup required"}
+            </div>
           </div>
-          <form onSubmit={saveOnfon} className="grid gap-4 lg:grid-cols-3">
-            <label className="text-sm font-medium">
+          <div className="mb-3 flex items-center gap-2"><span className="grid h-7 w-7 place-items-center rounded-lg bg-emerald-50 text-sm font-bold text-emerald-700 ring-1 ring-emerald-100">1</span><div><div className="text-base font-bold text-slate-900">Gateway configuration</div><div className="text-xs text-slate-500">Sender identity, endpoint and encrypted API credentials</div></div></div>
+          <form onSubmit={saveOnfon} className="grid gap-4 rounded-2xl border border-slate-200 bg-slate-50/60 p-4 lg:grid-cols-3">
+            <label className="rounded-xl border border-slate-200 bg-white p-3 text-sm font-medium">
               Approved sender ID
               <input required className={`${INPUT} mt-1`} value={onfonForm.senderId} onChange={(e) => setOnfonForm({ ...onfonForm, senderId: e.target.value })} />
             </label>
-            <label className="text-sm font-medium lg:col-span-2">
+            <label className="rounded-xl border border-slate-200 bg-white p-3 text-sm font-medium lg:col-span-2">
               SMS endpoint
               <input required type="url" className={`${INPUT} mt-1`} value={onfonForm.endpointUrl} onChange={(e) => setOnfonForm({ ...onfonForm, endpointUrl: e.target.value })} />
             </label>
@@ -2098,7 +2302,7 @@ export function NotificationProviders() {
               ["clientId", "Client ID"],
               ["accessKey", "Access key"],
             ].map(([key, label]) => (
-              <label className="text-sm font-medium" key={key}>
+              <label className="rounded-xl border border-slate-200 bg-white p-3 text-sm font-medium" key={key}>
                 {label}
                 <input
                   type="password"
@@ -2110,7 +2314,7 @@ export function NotificationProviders() {
                 />
               </label>
             ))}
-            <label className="text-sm font-medium lg:col-span-2">
+            <label className="rounded-xl border border-slate-200 bg-white p-3 text-sm font-medium lg:col-span-2">
               Delivery callback token
               <input
                 type="password"
@@ -2127,7 +2331,7 @@ export function NotificationProviders() {
               </Button>
             </div>
             {onfonForm.callbackToken && (
-              <label className="text-sm font-medium lg:col-span-3">
+              <label className="rounded-xl border border-amber-100 bg-amber-50/60 p-3 text-sm font-medium lg:col-span-3">
                 Delivery-report URL to register with Onfon
                 <input
                   readOnly
@@ -2141,12 +2345,13 @@ export function NotificationProviders() {
               <Button tone="green" disabled={onfonBusy}>{onfonBusy ? "Saving…" : "Save encrypted Onfon settings"}</Button>
             </div>
           </form>
-          <div className="mt-5 grid gap-3 border-t pt-4 md:grid-cols-[1fr_auto_auto]">
+          <div className="mb-3 mt-6 flex items-center gap-2 border-t border-slate-100 pt-5"><span className="grid h-7 w-7 place-items-center rounded-lg bg-emerald-50 text-sm font-bold text-emerald-700 ring-1 ring-emerald-100">2</span><div><div className="text-base font-bold text-slate-900">Connection tools</div><div className="text-xs text-slate-500">Send a live test or confirm your Onfon wallet balance</div></div></div>
+          <div className="grid gap-3 rounded-2xl border border-slate-200 bg-slate-50/60 p-4 md:grid-cols-[1fr_auto_auto]">
             <input className={INPUT} placeholder="Test mobile number, e.g. 0712345678" value={onfonTestPhone} onChange={(e) => setOnfonTestPhone(e.target.value)} />
             <Button type="button" onClick={testOnfon} disabled={onfonBusy || !onfonTestPhone}>Send test SMS</Button>
             <Button type="button" tone="slate" onClick={checkOnfonBalance} disabled={onfonBusy}>Check balance</Button>
           </div>
-          {onfonResult && <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{onfonResult}</div>}
+          {onfonResult && <div className="mt-3 flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="mt-0.5 h-4 w-4 flex-none"><path d="m5 12 4 4L19 6" /></svg><span>{onfonResult}</span></div>}
         </Card>
       )}
     </Page>

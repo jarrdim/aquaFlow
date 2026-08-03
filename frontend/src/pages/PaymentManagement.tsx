@@ -153,6 +153,101 @@ function Kpi({ label, value }: { label: string; value: ReactNode }) {
   );
 }
 
+function CollectionTrendChart({ rows }: { rows: Row[] }) {
+  const points = rows.slice(-14);
+  const width = 700;
+  const height = 210;
+  const left = 16;
+  const right = 16;
+  const top = 20;
+  const bottom = 38;
+  const max = Math.max(1, ...points.map((row) => Number(row.amount ?? 0)));
+  const coordinates: Array<Row & { x: number; y: number }> = points.map((row, index) => ({
+    ...row,
+    x: points.length === 1 ? width / 2 : left + (index / (points.length - 1)) * (width - left - right),
+    y: top + (1 - Number(row.amount ?? 0) / max) * (height - top - bottom),
+  }));
+  const line = coordinates.map((point) => `${point.x},${point.y}`).join(" ");
+  const area = coordinates.length
+    ? `M ${coordinates[0].x} ${height - bottom} L ${coordinates.map((point) => `${point.x} ${point.y}`).join(" L ")} L ${coordinates[coordinates.length - 1].x} ${height - bottom} Z`
+    : "";
+
+  return (
+    <Card title="Collection trend">
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div>
+          <div className="text-sm text-slate-500">Daily posted revenue</div>
+          <div className="mt-1 text-xl font-bold text-slate-900">{money(points.reduce((sum, row) => sum + Number(row.amount ?? 0), 0))}</div>
+        </div>
+        <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">Last 14 active days</span>
+      </div>
+      {coordinates.length ? (
+        <div className="overflow-hidden rounded-xl bg-gradient-to-b from-emerald-50/70 to-white px-2 pt-2">
+          <svg viewBox={`0 0 ${width} ${height}`} className="h-[220px] w-full" role="img" aria-label="Daily collection trend">
+            <defs>
+              <linearGradient id="payment-area" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#10b981" stopOpacity="0.3" />
+                <stop offset="100%" stopColor="#10b981" stopOpacity="0.02" />
+              </linearGradient>
+            </defs>
+            {[0, 0.5, 1].map((ratio) => (
+              <line key={ratio} x1={left} x2={width - right} y1={top + ratio * (height - top - bottom)} y2={top + ratio * (height - top - bottom)} stroke="#cbd5e1" strokeDasharray="4 6" opacity="0.65" />
+            ))}
+            <path d={area} fill="url(#payment-area)" />
+            {coordinates.length > 1 && <polyline points={line} fill="none" stroke="#059669" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />}
+            {coordinates.map((point, index) => (
+              <g key={point.date} className="group">
+                <circle cx={point.x} cy={point.y} r="5" fill="white" stroke="#059669" strokeWidth="3" />
+                <text x={point.x} y={height - 13} textAnchor="middle" className="fill-slate-500 text-[11px]">
+                  {String(point.date).slice(5).replace("-", "/")}
+                </text>
+                {(coordinates.length <= 7 || index === coordinates.length - 1) && (
+                  <text x={point.x} y={Math.max(13, point.y - 11)} textAnchor="middle" className="fill-slate-700 text-[11px] font-bold">
+                    {Number(point.amount).toLocaleString("en-KE")}
+                  </text>
+                )}
+              </g>
+            ))}
+          </svg>
+        </div>
+      ) : (
+        <div className="grid h-[220px] place-items-center rounded-xl border border-dashed border-slate-200 bg-slate-50 text-sm text-slate-400">Collection activity will appear here.</div>
+      )}
+    </Card>
+  );
+}
+
+function RevenueChannelChart({ channels }: { channels: Record<string, number> }) {
+  const rows = Object.entries(channels).sort((a, b) => Number(b[1]) - Number(a[1]));
+  const max = Math.max(1, ...rows.map(([, value]) => Number(value)));
+  return (
+    <Card title="Revenue by channel">
+      <div className="mb-5">
+        <div className="text-sm text-slate-500">Collection source comparison</div>
+        <div className="mt-1 text-xl font-bold text-slate-900">{rows.length} active channel{rows.length === 1 ? "" : "s"}</div>
+      </div>
+      {rows.length ? (
+        <div className="space-y-5">
+          {rows.map(([channel, total], index) => (
+            <div key={channel}>
+              <div className="mb-2 flex items-center justify-between gap-3 text-sm">
+                <span className="flex items-center gap-2 font-semibold text-slate-700"><span className={`h-2.5 w-2.5 rounded-full ${index % 2 ? "bg-sky-500" : "bg-emerald-500"}`} />{channel}</span>
+                <span className="font-bold text-slate-900">{money(total)}</span>
+              </div>
+              <div className="h-3 overflow-hidden rounded-full bg-slate-100">
+                <div className={`h-full rounded-full transition-all duration-700 ${index % 2 ? "bg-gradient-to-r from-sky-600 to-cyan-400" : "bg-gradient-to-r from-emerald-600 to-teal-400"}`} style={{ width: `${Math.max(5, (Number(total) / max) * 100)}%` }} />
+              </div>
+              <div className="mt-1 text-right text-xs text-slate-400">{((Number(total) / Math.max(1, rows.reduce((sum, [, value]) => sum + Number(value), 0))) * 100).toFixed(1)}%</div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="grid h-[220px] place-items-center rounded-xl border border-dashed border-slate-200 bg-slate-50 text-sm text-slate-400">Channel revenue will appear here.</div>
+      )}
+    </Card>
+  );
+}
+
 export function RevenueDashboard() {
   const [data, setData] = useState<Row>();
   const [error, setError] = useState("");
@@ -187,6 +282,10 @@ export function RevenueDashboard() {
         ))}
         <Kpi label="Receipts issued" value={data?.receipts ?? 0} />
       </div>
+      <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1.7fr)_minmax(320px,0.8fr)]">
+        <CollectionTrendChart rows={data?.dailyCollections ?? []} />
+        <RevenueChannelChart channels={data?.channels ?? {}} />
+      </div>
       <Card title="Recent payments" className="mt-4">
         <PaymentTable rows={data?.recent ?? []} />
       </Card>
@@ -195,10 +294,10 @@ export function RevenueDashboard() {
 }
 function PaymentTable({ rows }: { rows: Row[] }) {
   return (
-    <div className="overflow-x-auto">
+    <div className="overflow-x-auto rounded-xl border border-slate-200">
       <table className="w-full min-w-[850px]">
         <thead>
-          <tr>
+          <tr className="bg-slate-50/80">
             <th className={TH}>Reference</th>
             <th className={TH}>Customer</th>
             <th className={TH}>Channel</th>
@@ -211,7 +310,7 @@ function PaymentTable({ rows }: { rows: Row[] }) {
         </thead>
         <tbody>
           {rows.map((p) => (
-            <tr key={p.paymentId} className="border-t">
+            <tr key={p.paymentId} className="border-t transition hover:bg-emerald-50/30">
               <td className={`${TD} font-semibold`}>
                 {p.transactionReference}
               </td>
@@ -241,7 +340,7 @@ function PaymentTable({ rows }: { rows: Row[] }) {
               <td className={TD}>
                 {p.receipt ? (
                   <Link
-                    className="font-semibold text-aqua-700"
+                    className="inline-flex rounded-lg bg-sky-50 px-2.5 py-1.5 text-sm font-bold text-sky-700 transition hover:bg-sky-600 hover:text-white"
                     to={`/payments/receipts/${p.receipt.receiptId}`}
                   >
                     View
@@ -254,8 +353,8 @@ function PaymentTable({ rows }: { rows: Row[] }) {
           ))}
           {!rows.length && (
             <tr>
-              <td colSpan={8} className="p-8 text-center text-slate-400">
-                No payment records found.
+              <td colSpan={8} className="p-14 text-center text-slate-400">
+                <div className="mx-auto mb-3 grid h-12 w-12 place-items-center rounded-2xl bg-slate-100"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-6 w-6"><rect x="3" y="5" width="18" height="14" rx="2" /></svg></div><div className="font-semibold text-slate-600">No payment records found</div><div className="mt-1 text-sm">Transactions will appear here when available.</div>
               </td>
             </tr>
           )}
@@ -269,6 +368,7 @@ export function PaymentChannels() {
   const [rows, setRows] = useState<Row[]>([]),
     [error, setError] = useState(""),
     [message, setMessage] = useState("");
+  const [saving, setSaving] = useState(false);
   const [form, setForm] = useState<Row>({
     channelCode: "",
     channelName: "",
@@ -283,6 +383,9 @@ export function PaymentChannels() {
   }, []);
   async function submit(e: FormEvent) {
     e.preventDefault();
+    setSaving(true);
+    setError("");
+    setMessage("");
     try {
       await api.createPaymentChannel(form);
       setMessage("Payment channel saved.");
@@ -297,8 +400,13 @@ export function PaymentChannels() {
       await load();
     } catch (e: any) {
       setError(e.message);
+    } finally {
+      setSaving(false);
     }
   }
+  const channelInput = `${INPUT} rounded-xl border-slate-200 px-3.5 py-2.5 transition duration-200 placeholder:text-slate-400 hover:border-slate-300 focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10`;
+  const activeCount = rows.filter((row) => row.status === "ACTIVE").length;
+  const automaticCount = rows.filter((row) => row.autoAllocation).length;
   return (
     <Page
       title="Payment channels"
@@ -306,14 +414,19 @@ export function PaymentChannels() {
     >
       {error && <Notice>{error}</Notice>}
       {message && <Notice green>{message}</Notice>}
-      <div className="grid gap-4 lg:grid-cols-[420px_1fr]">
-        <Card title="New payment channel">
-          <form className="space-y-3" onSubmit={submit}>
-            <div className="grid grid-cols-2 gap-3">
+      <div className="grid gap-6 lg:grid-cols-[390px_minmax(0,1fr)] lg:items-start">
+        <Card title="Add payment channel" className="overflow-hidden shadow-md shadow-slate-200/50 lg:sticky lg:top-24">
+          <form className="space-y-4" onSubmit={submit}>
+            <div className="flex items-start gap-3 rounded-xl border border-emerald-100 bg-emerald-50/70 p-3.5">
+              <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-emerald-600 text-white shadow-sm"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5"><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M3 10h18M12 15h6" /></svg></span>
+              <div><div className="text-sm font-bold text-slate-800">Create a collection method</div><p className="mt-0.5 text-xs leading-5 text-slate-500">Configure how customer payments are identified, allocated and receipted.</p></div>
+            </div>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
               <Field label="Channel code">
                 <input
                   required
-                  className={INPUT}
+                  className={channelInput}
+                  placeholder="e.g. 006"
                   value={form.channelCode}
                   onChange={(e) =>
                     setForm({ ...form, channelCode: e.target.value })
@@ -323,7 +436,8 @@ export function PaymentChannels() {
               <Field label="Channel name">
                 <input
                   required
-                  className={INPUT}
+                  className={channelInput}
+                  placeholder="e.g. Card"
                   value={form.channelName}
                   onChange={(e) =>
                     setForm({ ...form, channelName: e.target.value })
@@ -333,38 +447,51 @@ export function PaymentChannels() {
             </div>
             <Field label="Till / paybill / account identifier">
               <input
-                className={INPUT}
+                className={channelInput}
+                placeholder="Optional settlement identifier"
                 value={form.accountIdentifier ?? ""}
                 onChange={(e) =>
                   setForm({ ...form, accountIdentifier: e.target.value })
                 }
               />
             </Field>
-            <div className="space-y-2 text-sm">
+            <div>
+              <div className="mb-2 text-sm font-semibold text-slate-700">Channel rules</div>
+              <div className="space-y-2">
               {[
-                ["requiresReference", "Reference required"],
-                ["autoAllocation", "Automatic allocation"],
-                ["receiptRequired", "Receipt required"],
-              ].map(([key, label]) => (
-                <label key={key} className="flex gap-2">
+                ["requiresReference", "Reference required", "Require a transaction or deposit reference"],
+                ["autoAllocation", "Automatic allocation", "Apply funds to the oldest bills first"],
+                ["receiptRequired", "Receipt required", "Generate a receipt after posting"],
+              ].map(([key, label, description]) => (
+                <label key={key} className={`flex cursor-pointer items-start gap-3 rounded-xl border px-3.5 py-3 transition ${form[key] ? "border-emerald-200 bg-emerald-50/60" : "border-slate-200 bg-slate-50 hover:border-slate-300"}`}>
                   <input
                     type="checkbox"
+                    className="mt-0.5 h-5 w-5 shrink-0 rounded-md border-slate-300 accent-emerald-600"
                     checked={form[key]}
                     onChange={(e) =>
                       setForm({ ...form, [key]: e.target.checked })
                     }
                   />
-                  {label}
+                  <span><span className="block text-sm font-bold text-slate-700">{label}</span><span className="mt-0.5 block text-xs leading-4 text-slate-500">{description}</span></span>
                 </label>
               ))}
+              </div>
             </div>
-            <Button className="w-full">Save channel</Button>
+            <Button disabled={saving} className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3 shadow-sm transition hover:-translate-y-0.5 hover:bg-emerald-700 hover:shadow-md disabled:hover:translate-y-0">
+              {saving ? <><span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />Saving…</> : <><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="M12 5v14M5 12h14" /></svg>Save payment channel</>}
+            </Button>
           </form>
         </Card>
-        <Card title="Channel register">
-          <table className="w-full">
+        <Card title="Channel register" className="overflow-hidden shadow-md shadow-slate-200/50">
+          <div className="mb-5 grid gap-3 sm:grid-cols-3">
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3.5"><div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Total channels</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{rows.length}</div></div>
+            <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-3.5"><div className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Active</div><div className="mt-1 text-2xl font-extrabold text-emerald-700">{activeCount}</div></div>
+            <div className="rounded-xl border border-sky-100 bg-sky-50 p-3.5"><div className="text-xs font-semibold uppercase tracking-wide text-sky-700">Auto allocate</div><div className="mt-1 text-2xl font-extrabold text-sky-700">{automaticCount}</div></div>
+          </div>
+          <div className="overflow-x-auto rounded-xl border border-slate-200">
+          <table className="w-full min-w-[700px]">
             <thead>
-              <tr>
+              <tr className="bg-slate-50/80">
                 <th className={TH}>Code</th>
                 <th className={TH}>Channel</th>
                 <th className={TH}>Identifier</th>
@@ -374,18 +501,20 @@ export function PaymentChannels() {
             </thead>
             <tbody>
               {rows.map((c) => (
-                <tr className="border-t" key={c.channelId}>
-                  <td className={TD}>{c.channelCode}</td>
-                  <td className={TD}>{c.channelName}</td>
+                <tr className="border-t transition hover:bg-emerald-50/30" key={c.channelId}>
+                  <td className={TD}><span className="inline-flex rounded-lg bg-slate-100 px-2.5 py-1 font-mono text-xs font-bold text-slate-600">{c.channelCode}</span></td>
+                  <td className={TD}><span className="flex items-center gap-3"><span className="grid h-9 w-9 place-items-center rounded-xl bg-emerald-50 text-emerald-700"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M3 10h18" /></svg></span><span className="font-bold text-slate-800">{c.channelName}</span></span></td>
                   <td className={TD}>{c.accountIdentifier || "—"}</td>
-                  <td className={TD}>{c.autoAllocation ? "Yes" : "No"}</td>
+                  <td className={TD}><span className={`inline-flex items-center gap-1.5 text-sm font-semibold ${c.autoAllocation ? "text-emerald-700" : "text-slate-400"}`}><span className={`h-2 w-2 rounded-full ${c.autoAllocation ? "bg-emerald-500" : "bg-slate-300"}`} />{c.autoAllocation ? "Enabled" : "Disabled"}</span></td>
                   <td className={TD}>
                     <Badge value={c.status} />
                   </td>
                 </tr>
               ))}
+              {!rows.length && <tr><td colSpan={5} className="px-4 py-16 text-center"><div className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-slate-100 text-slate-400"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-6 w-6"><rect x="3" y="5" width="18" height="14" rx="2" /></svg></div><div className="mt-3 font-semibold text-slate-600">No payment channels yet</div><div className="mt-1 text-sm text-slate-400">Create the first channel using the form.</div></td></tr>}
             </tbody>
           </table>
+          </div>
         </Card>
       </div>
     </Page>
@@ -397,6 +526,7 @@ export function RecordPayment() {
   const [accounts, setAccounts] = useState<Row[]>([]),
     [channels, setChannels] = useState<Row[]>([]),
     [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
   const [form, setForm] = useState<Row>({
     accountId: "",
     channelId: "",
@@ -416,8 +546,14 @@ export function RecordPayment() {
       .catch((e) => setError(e.message));
   }, []);
   const account = accounts.find((a) => String(a.accountId) === form.accountId);
+  const selectedChannel = channels.find((channel) => String(channel.channelId) === form.channelId);
+  const amount = Number(form.amount || 0);
+  const projectedBalance = account ? Number(account.currentBalance ?? 0) - amount : 0;
+  const paymentInput = `${INPUT} rounded-xl border-slate-200 px-3.5 py-2.5 transition duration-200 hover:border-slate-300 focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10`;
   async function submit(e: FormEvent) {
     e.preventDefault();
+    setSaving(true);
+    setError("");
     try {
       const result = await api.recordPayment({
         ...form,
@@ -426,20 +562,30 @@ export function RecordPayment() {
       navigate(`/payments/receipts/${result.receiptId}`);
     } catch (e: any) {
       setError(e.message);
+    } finally {
+      setSaving(false);
     }
   }
   return (
     <Page
       title="Record customer payment"
-      subtitle="Post cash, bank, card or mobile payments and allocate oldest bills first"
+      subtitle=""
     >
       {error && <Notice>{error}</Notice>}
-      <Card className="mx-auto max-w-3xl">
-        <form onSubmit={submit} className="grid gap-3 md:grid-cols-2">
+      <div className="mx-auto grid max-w-6xl gap-5 lg:grid-cols-[minmax(0,1.65fr)_minmax(300px,0.75fr)] lg:items-start">
+      <form onSubmit={submit} className="space-y-5">
+      <Card title="1. Account and channel" className="overflow-hidden shadow-md shadow-slate-200/50">
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="md:col-span-2 flex items-start gap-3 rounded-xl border border-emerald-100 bg-emerald-50/70 px-4 py-3.5">
+            <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-emerald-600 text-white shadow-sm">
+              <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5"><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M3 10h18M16 15h2" /></svg>
+            </span>
+            <div><div className="font-bold text-slate-800">Enter the received payment</div><p className="mt-0.5 text-sm leading-5 text-slate-500">The transaction will be posted and a receipt generated immediately.</p></div>
+          </div>
           <Field label="Customer account">
             <SearchableSelect
               required
-              className={INPUT}
+              className={paymentInput}
               value={form.accountId}
               onChange={(e) => setForm({ ...form, accountId: e.target.value })}
             >
@@ -454,7 +600,7 @@ export function RecordPayment() {
           <Field label="Payment channel">
             <SearchableSelect
               required
-              className={INPUT}
+              className={paymentInput}
               value={form.channelId}
               onChange={(e) => setForm({ ...form, channelId: e.target.value })}
             >
@@ -466,37 +612,37 @@ export function RecordPayment() {
               ))}
             </SearchableSelect>
           </Field>
-          {account && (
-            <div className="md:col-span-2 rounded-lg bg-blue-50 p-3 text-blue-700">
-              Current balance: <strong>{money(account.currentBalance)}</strong>
-            </div>
-          )}
+        </div>
+      </Card>
+      <Card title="2. Transaction details" className="overflow-hidden shadow-md shadow-slate-200/50">
+        <div className="grid gap-4 md:grid-cols-2">
           <Field label="Payment reference">
             <input
               required
-              className={INPUT}
+              className={paymentInput}
               value={form.transactionReference}
               onChange={(e) =>
                 setForm({ ...form, transactionReference: e.target.value })
               }
             />
           </Field>
-          <Field label="Amount paid">
-            <input
+          <Field label="Amount paid (KSh)">
+            <div className="relative"><span className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-sm font-bold text-slate-400">KSh</span><input
               required
               min="0.01"
               step="0.01"
               type="number"
-              className={INPUT}
+              className={`${paymentInput} pl-12`}
+              placeholder="0.00"
               value={form.amount}
               onChange={(e) => setForm({ ...form, amount: e.target.value })}
-            />
+            /></div>
           </Field>
           <Field label="Payment date and time">
             <input
               required
               type="datetime-local"
-              className={INPUT}
+              className={paymentInput}
               value={form.paymentDate}
               onChange={(e) =>
                 setForm({ ...form, paymentDate: e.target.value })
@@ -505,7 +651,7 @@ export function RecordPayment() {
           </Field>
           <Field label="Payment type">
             <SearchableSelect
-              className={INPUT}
+              className={paymentInput}
               value={form.paymentType}
               onChange={(e) =>
                 setForm({ ...form, paymentType: e.target.value })
@@ -516,28 +662,53 @@ export function RecordPayment() {
               <option>DEPOSIT</option>
             </SearchableSelect>
           </Field>
-          <Field label="Remarks">
+          <div className="md:col-span-2">
+          <Field label="Remarks (optional)">
             <textarea
-              className={INPUT}
+              rows={3}
+              className={`${paymentInput} resize-none`}
+              placeholder="Add a note about this payment"
               value={form.remarks}
               onChange={(e) => setForm({ ...form, remarks: e.target.value })}
             />
           </Field>
-          <label className="flex items-center gap-2">
+          </div>
+          <label className="md:col-span-2 flex cursor-pointer items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3.5 transition hover:border-emerald-200 hover:bg-emerald-50/40">
             <input
               type="checkbox"
+              className="mt-0.5 h-5 w-5 rounded-md border-slate-300 accent-emerald-600"
               checked={form.autoAllocate}
               onChange={(e) =>
                 setForm({ ...form, autoAllocate: e.target.checked })
               }
             />
-            Allocate automatically
+            <span><span className="block text-sm font-bold text-slate-700">Allocate automatically</span><span className="mt-0.5 block text-xs leading-5 text-slate-500">Apply this payment to the customer’s oldest outstanding bills first.</span></span>
           </label>
-          <Button className="md:col-span-2">
-            Save payment and generate receipt
+          <Button disabled={saving} className="md:col-span-2 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3 shadow-sm transition hover:-translate-y-0.5 hover:bg-emerald-700 hover:shadow-md disabled:hover:translate-y-0">
+            {saving ? <><span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />Saving payment…</> : <><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="M5 12l4 4L19 6" /></svg>Save payment and generate receipt</>}
           </Button>
-        </form>
+        </div>
       </Card>
+      </form>
+      <div className="space-y-5 lg:sticky lg:top-24">
+        <Card title="Payment summary" className="overflow-hidden shadow-md shadow-slate-200/50">
+          <div className="rounded-xl bg-slate-900 p-4 text-white">
+            <div className="text-xs font-semibold uppercase tracking-wider text-slate-400">Amount received</div>
+            <div className="mt-2 text-3xl font-extrabold">{money(amount)}</div>
+            <div className="mt-2 text-xs text-slate-400">{selectedChannel?.channelName ?? "No channel selected"}</div>
+          </div>
+          <div className="mt-4 space-y-3 text-sm">
+            <div className="flex justify-between gap-4"><span className="text-slate-500">Account</span><span className="text-right font-semibold text-slate-800">{account?.accountNumber ?? "Not selected"}</span></div>
+            <div className="flex justify-between gap-4"><span className="text-slate-500">Customer</span><span className="text-right font-semibold text-slate-800">{account?.customerName ?? "—"}</span></div>
+            <div className="border-t border-slate-100 pt-3"><div className="flex justify-between gap-4"><span className="text-slate-500">Current balance</span><span className="font-bold text-rose-600">{account ? money(account.currentBalance) : "—"}</span></div></div>
+            <div className="flex justify-between gap-4"><span className="text-slate-500">Balance after payment</span><span className="font-bold text-emerald-700">{account ? money(projectedBalance) : "—"}</span></div>
+          </div>
+        </Card>
+        <div className="rounded-2xl border border-sky-100 bg-sky-50/70 p-4 text-sm text-sky-800 shadow-sm">
+          <div className="flex gap-3"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="mt-0.5 h-5 w-5 shrink-0"><circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 8h.01" /></svg><div><div className="font-bold">Receipt created automatically</div><p className="mt-1 text-xs leading-5 text-sky-700">After saving, you’ll be taken directly to the printable payment receipt.</p></div></div>
+        </div>
+      </div>
+      </div>
     </Page>
   );
 }
@@ -1123,6 +1294,8 @@ export function UnmatchedPayments() {
     [reason, setReason] = useState(""),
     [error, setError] = useState(""),
     [message, setMessage] = useState("");
+  const [search, setSearch] = useState("");
+  const [allocating, setAllocating] = useState(false);
   const load = () =>
     Promise.all([api.listPayments(), api.listPaymentAccounts()]).then(
       ([p, a]) => {
@@ -1142,15 +1315,30 @@ export function UnmatchedPayments() {
   }, []);
   async function allocate() {
     if (!focus) return;
+    setAllocating(true);
+    setError("");
+    setMessage("");
     try {
       await api.allocatePayment(String(focus.paymentId), accountId, reason);
       setMessage("Payment allocated and receipt generated.");
       setFocus(undefined);
+      setAccountId("");
+      setReason("");
       await load();
     } catch (e: any) {
       setError(e.message);
+    } finally {
+      setAllocating(false);
     }
   }
+  const filteredRows = rows.filter((payment) => {
+    const query = search.trim().toLowerCase();
+    if (!query) return true;
+    return [payment.transactionReference, payment.payerName, payment.payerPhone, payment.customerReference, payment.channel?.channelName]
+      .some((value) => String(value ?? "").toLowerCase().includes(query));
+  });
+  const unmatchedTotal = rows.reduce((sum, payment) => sum + Number(payment.amount ?? 0), 0);
+  const allocationInput = `${INPUT} rounded-xl border-slate-200 px-3.5 py-2.5 transition duration-200 hover:border-slate-300 focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10`;
   return (
     <Page
       title="Unmatched payment allocation"
@@ -1158,31 +1346,51 @@ export function UnmatchedPayments() {
     >
       {error && <Notice>{error}</Notice>}
       {message && <Notice green>{message}</Notice>}
-      <div className="grid gap-4 lg:grid-cols-[1fr_420px]">
-        <Card title={`${rows.length} unmatched payment(s)`}>
-          <PaymentTable rows={rows} />
-          {rows.map((p) => (
-            <button
-              key={p.paymentId}
-              onClick={() => setFocus(p)}
-              className="mt-2 mr-2 rounded bg-aqua-700 px-3 py-2 text-white"
-            >
-              Allocate {p.transactionReference}
-            </button>
-          ))}
+      <div className="mb-5 grid gap-3 sm:grid-cols-3">
+        <div className="rounded-2xl border border-amber-100 bg-amber-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-amber-700">Unmatched payments</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{rows.length}</div></div>
+        <div className="rounded-2xl border border-rose-100 bg-rose-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-rose-700">Value awaiting allocation</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{money(unmatchedTotal)}</div></div>
+        <div className="rounded-2xl border border-sky-100 bg-sky-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-sky-700">Available accounts</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{accounts.length}</div></div>
+      </div>
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_400px] xl:items-start">
+        <Card title="Payments awaiting reconciliation" className="overflow-hidden shadow-md shadow-slate-200/50">
+          <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div><div className="font-semibold text-slate-800">Select a transaction to allocate</div><div className="mt-0.5 text-xs text-slate-500">Match unresolved deposits to the correct customer account.</div></div>
+            <div className="relative sm:w-72"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></svg><input className={`${allocationInput} pl-10`} placeholder="Search payments" value={search} onChange={(e) => setSearch(e.target.value)} /></div>
+          </div>
+          <div className="overflow-x-auto rounded-xl border border-slate-200">
+            <table className="w-full min-w-[800px]">
+              <thead><tr className="bg-slate-50/80"><th className={TH}>Reference</th><th className={TH}>Payer</th><th className={TH}>Channel</th><th className={TH}>Received</th><th className={TH}>Amount</th><th className={TH}>Action</th></tr></thead>
+              <tbody>
+                {filteredRows.map((payment) => {
+                  const selected = String(focus?.paymentId) === String(payment.paymentId);
+                  return <tr key={payment.paymentId} className={`border-t transition ${selected ? "bg-emerald-50 ring-1 ring-inset ring-emerald-200" : "hover:bg-slate-50"}`}>
+                    <td className={TD}><div className="font-bold text-slate-800">{payment.transactionReference}</div><div className="mt-0.5 text-xs text-slate-400">{payment.customerReference || "No customer reference"}</div></td>
+                    <td className={TD}><div className="font-semibold text-slate-700">{payment.payerName || "Unknown payer"}</div><div className="mt-0.5 text-xs text-slate-400">{payment.payerPhone || "No phone number"}</div></td>
+                    <td className={TD}><span className="inline-flex items-center gap-1.5 rounded-full bg-sky-50 px-2.5 py-1 text-xs font-semibold text-sky-700"><span className="h-1.5 w-1.5 rounded-full bg-sky-500" />{payment.channel?.channelName || "Unknown"}</span></td>
+                    <td className={TD}>{dateTime(payment.paymentDate)}</td>
+                    <td className={`${TD} font-bold text-slate-900`}>{money(payment.amount)}</td>
+                    <td className={TD}><button type="button" onClick={() => { setFocus(payment); setAccountId(""); setReason(""); }} className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-bold transition hover:-translate-y-0.5 ${selected ? "bg-emerald-600 text-white shadow-sm" : "bg-slate-100 text-slate-700 hover:bg-emerald-600 hover:text-white"}`}><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="M5 12h14M13 6l6 6-6 6" /></svg>{selected ? "Selected" : "Allocate"}</button></td>
+                  </tr>;
+                })}
+                {!filteredRows.length && <tr><td colSpan={6} className="px-4 py-16 text-center"><div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-emerald-50 text-emerald-600"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-7 w-7"><path d="M5 12l4 4L19 6" /></svg></div><div className="mt-4 font-bold text-slate-700">{rows.length ? "No payments match your search" : "All payments are reconciled"}</div><div className="mt-1 text-sm text-slate-400">{rows.length ? "Try a different reference, payer or phone number." : "There are no unmatched transactions requiring attention."}</div></td></tr>}
+              </tbody>
+            </table>
+          </div>
         </Card>
-        <Card title="Manual allocation">
+        <Card title="Manual allocation" className="overflow-hidden shadow-md shadow-slate-200/50 xl:sticky xl:top-24">
           {focus ? (
-            <div className="space-y-3">
-              <div className="rounded-lg bg-slate-50 p-3">
+            <div className="space-y-4">
+              <div className="rounded-xl bg-slate-900 p-4 text-white shadow-sm">
+                <div className="mb-2 text-xs font-bold uppercase tracking-wider text-emerald-400">Selected transaction</div>
                 <strong>{focus.transactionReference}</strong>
-                <div>
+                <div className="mt-1 text-xl font-extrabold">
                   {money(focus.amount)} · {focus.payerPhone}
                 </div>
               </div>
+              <div className="rounded-xl border border-sky-100 bg-sky-50 px-3.5 py-3 text-xs leading-5 text-sky-700">Confirm the payer details, choose the correct account and record why the manual match was made.</div>
               <Field label="Customer account">
                 <SearchableSelect
-                  className={INPUT}
+                  className={allocationInput}
                   value={accountId}
                   onChange={(e) => setAccountId(e.target.value)}
                 >
@@ -1196,22 +1404,24 @@ export function UnmatchedPayments() {
               </Field>
               <Field label="Allocation reason">
                 <textarea
-                  className={INPUT}
+                  rows={4}
+                  className={`${allocationInput} resize-none`}
+                  placeholder="Explain why this payment belongs to the selected account"
                   value={reason}
                   onChange={(e) => setReason(e.target.value)}
                 />
               </Field>
               <Button
-                className="w-full"
-                disabled={!accountId || reason.length < 5}
+                className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3 shadow-sm transition hover:-translate-y-0.5 hover:bg-emerald-700 hover:shadow-md disabled:hover:translate-y-0"
+                disabled={allocating || !accountId || reason.trim().length < 5}
                 onClick={allocate}
               >
-                Allocate payment
+                {allocating ? <><span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />Allocating…</> : <><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="M5 12l4 4L19 6" /></svg>Allocate and generate receipt</>}
               </Button>
             </div>
           ) : (
-            <div className="py-10 text-center text-slate-400">
-              Select an unmatched payment.
+            <div className="grid min-h-[320px] place-items-center rounded-xl border border-dashed border-slate-200 bg-slate-50/70 px-6 py-10 text-center">
+              <div><div className="mx-auto grid h-16 w-16 place-items-center rounded-2xl bg-white text-slate-400 shadow-sm ring-1 ring-slate-200"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-8 w-8"><path d="M8 7h10M8 12h8M8 17h6" /><circle cx="4" cy="7" r="1" /><circle cx="4" cy="12" r="1" /><circle cx="4" cy="17" r="1" /></svg></div><div className="mt-4 font-bold text-slate-700">Select an unmatched payment</div><p className="mx-auto mt-1 max-w-xs text-sm leading-5 text-slate-400">Choose Allocate beside a transaction to review it and link it to a customer account.</p></div>
             </div>
           )}
         </Card>
@@ -1306,6 +1516,8 @@ export function PaymentReversals() {
     [rows, setRows] = useState<Row[]>([]),
     [error, setError] = useState(""),
     [message, setMessage] = useState("");
+  const [search, setSearch] = useState("");
+  const [submitting, setSubmitting] = useState(false);
   const [form, setForm] = useState<Row>({
     paymentId: "",
     reversalReason: "DUPLICATE_PAYMENT",
@@ -1324,6 +1536,9 @@ export function PaymentReversals() {
   }, []);
   async function submit(e: FormEvent) {
     e.preventDefault();
+    setSubmitting(true);
+    setError("");
+    setMessage("");
     try {
       await api.requestPaymentReversal(form);
       setMessage("Reversal submitted for independent approval.");
@@ -1335,8 +1550,20 @@ export function PaymentReversals() {
       await load();
     } catch (e: any) {
       setError(e.message);
+    } finally {
+      setSubmitting(false);
     }
   }
+  const selectedPayment = payments.find((payment) => String(payment.paymentId) === form.paymentId);
+  const filteredRows = rows.filter((row) => {
+    const query = search.trim().toLowerCase();
+    return !query || [row.reversalReference, row.payment?.transactionReference, person(row.requester), row.status]
+      .some((value) => String(value ?? "").toLowerCase().includes(query));
+  });
+  const pendingCount = rows.filter((row) => row.status === "PENDING").length;
+  const approvedCount = rows.filter((row) => row.status === "APPROVED").length;
+  const rejectedCount = rows.filter((row) => row.status === "REJECTED").length;
+  const reversalInput = `${INPUT} rounded-xl border-slate-200 px-3.5 py-2.5 transition duration-200 hover:border-slate-300 focus:border-rose-500 focus:ring-4 focus:ring-rose-500/10`;
   return (
     <Page
       title="Payment reversal requests"
@@ -1349,13 +1576,22 @@ export function PaymentReversals() {
     >
       {error && <Notice>{error}</Notice>}
       {message && <Notice green>{message}</Notice>}
-      <div className="grid gap-4 lg:grid-cols-[420px_1fr]">
-        <Card title="New reversal request">
-          <form className="space-y-3" onSubmit={submit}>
+      <div className="mb-5 grid gap-3 sm:grid-cols-3">
+        <div className="rounded-2xl border border-amber-100 bg-amber-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-amber-700">Pending approval</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{pendingCount}</div></div>
+        <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-emerald-700">Approved</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{approvedCount}</div></div>
+        <div className="rounded-2xl border border-rose-100 bg-rose-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-rose-700">Rejected</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{rejectedCount}</div></div>
+      </div>
+      <div className="grid gap-6 lg:grid-cols-[400px_minmax(0,1fr)] lg:items-start">
+        <Card title="New reversal request" className="overflow-hidden shadow-md shadow-slate-200/50 lg:sticky lg:top-24">
+          <form className="space-y-4" onSubmit={submit}>
+            <div className="flex items-start gap-3 rounded-xl border border-rose-100 bg-rose-50/70 p-3.5 text-rose-800">
+              <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-rose-600 text-white shadow-sm"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5"><path d="M9 7H5v4M5 11a7 7 0 1 0 2-5" /></svg></span>
+              <div><div className="text-sm font-bold">Controlled financial action</div><p className="mt-0.5 text-xs leading-5 text-rose-700">This request requires independent approval and preserves the original audit record.</p></div>
+            </div>
             <Field label="Posted payment">
               <SearchableSelect
                 required
-                className={INPUT}
+                className={reversalInput}
                 value={form.paymentId}
                 onChange={(e) =>
                   setForm({ ...form, paymentId: e.target.value })
@@ -1369,37 +1605,48 @@ export function PaymentReversals() {
                 ))}
               </SearchableSelect>
             </Field>
+            {selectedPayment && <div className="rounded-xl bg-slate-900 p-4 text-white"><div className="text-xs font-bold uppercase tracking-wider text-slate-400">Selected payment</div><div className="mt-2 flex items-end justify-between gap-3"><div><div className="font-bold">{selectedPayment.transactionReference}</div><div className="mt-0.5 text-xs text-slate-400">{selectedPayment.channel?.channelName || "Payment channel"}</div></div><div className="text-xl font-extrabold">{money(selectedPayment.amount)}</div></div></div>}
             <Field label="Reason">
               <SearchableSelect
-                className={INPUT}
+                className={reversalInput}
                 value={form.reversalReason}
                 onChange={(e) =>
                   setForm({ ...form, reversalReason: e.target.value })
                 }
               >
-                <option>DUPLICATE_PAYMENT</option>
-                <option>WRONG_ACCOUNT</option>
-                <option>CHARGEBACK</option>
-                <option>INPUT_ERROR</option>
+                <option value="DUPLICATE_PAYMENT">Duplicate payment</option>
+                <option value="WRONG_ACCOUNT">Wrong account</option>
+                <option value="CHARGEBACK">Chargeback</option>
+                <option value="INPUT_ERROR">Input error</option>
               </SearchableSelect>
             </Field>
             <Field label="Detailed explanation">
               <textarea
                 required
-                className={INPUT}
+                rows={4}
+                minLength={10}
+                className={`${reversalInput} resize-none`}
+                placeholder="Explain what happened and why this payment must be reversed"
                 value={form.detailedExplanation}
                 onChange={(e) =>
                   setForm({ ...form, detailedExplanation: e.target.value })
                 }
               />
             </Field>
-            <Button className="w-full">Submit reversal request</Button>
+            <Button disabled={submitting || form.detailedExplanation.trim().length < 10} className="flex w-full items-center justify-center gap-2 rounded-xl bg-rose-600 py-3 shadow-sm transition hover:-translate-y-0.5 hover:bg-rose-700 hover:shadow-md disabled:hover:translate-y-0">
+              {submitting ? <><span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />Submitting…</> : <><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="M12 5v14M5 12h14" /></svg>Submit reversal request</>}
+            </Button>
           </form>
         </Card>
-        <Card title="Reversal history">
-          <table className="w-full">
+        <Card title="Reversal history" className="overflow-hidden shadow-md shadow-slate-200/50">
+          <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div><div className="font-semibold text-slate-800">Audit trail</div><div className="mt-0.5 text-xs text-slate-500">Track every request through independent review.</div></div>
+            <div className="relative sm:w-72"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></svg><input className={`${reversalInput} pl-10 focus:border-emerald-500 focus:ring-emerald-500/10`} placeholder="Search reversal history" value={search} onChange={(e) => setSearch(e.target.value)} /></div>
+          </div>
+          <div className="overflow-x-auto rounded-xl border border-slate-200">
+          <table className="w-full min-w-[760px]">
             <thead>
-              <tr>
+              <tr className="bg-slate-50/80">
                 <th className={TH}>Reference</th>
                 <th className={TH}>Payment</th>
                 <th className={TH}>Amount</th>
@@ -1408,19 +1655,21 @@ export function PaymentReversals() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((x) => (
-                <tr className="border-t" key={x.reversalId}>
-                  <td className={TD}>{x.reversalReference}</td>
-                  <td className={TD}>{x.payment.transactionReference}</td>
-                  <td className={TD}>{money(x.reversalAmount)}</td>
+              {filteredRows.map((x) => (
+                <tr className="border-t transition hover:bg-slate-50" key={x.reversalId}>
+                  <td className={TD}><span className="font-mono text-xs font-bold text-slate-700">{x.reversalReference}</span></td>
+                  <td className={TD}><div className="font-bold text-slate-800">{x.payment.transactionReference}</div><div className="mt-0.5 text-xs text-slate-400">{pretty(x.reversalReason)}</div></td>
+                  <td className={`${TD} font-bold text-slate-900`}>{money(x.reversalAmount)}</td>
                   <td className={TD}>{person(x.requester)}</td>
                   <td className={TD}>
                     <Badge value={x.status} />
                   </td>
                 </tr>
               ))}
+              {!filteredRows.length && <tr><td colSpan={5} className="px-4 py-16 text-center"><div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-slate-100 text-slate-400"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-7 w-7"><path d="M9 7H5v4M5 11a7 7 0 1 0 2-5" /></svg></div><div className="mt-4 font-bold text-slate-700">{rows.length ? "No matching reversal requests" : "No reversal requests yet"}</div><div className="mt-1 text-sm text-slate-400">{rows.length ? "Try a different reference, requester or status." : "Submitted requests will appear here for tracking."}</div></td></tr>}
             </tbody>
           </table>
+          </div>
         </Card>
       </div>
     </Page>
@@ -1433,6 +1682,7 @@ export function ReversalApprovals() {
     [comments, setComments] = useState(""),
     [error, setError] = useState(""),
     [message, setMessage] = useState("");
+  const [deciding, setDeciding] = useState(false);
   const load = () =>
     api.listPaymentReversals("PENDING").then((r) => {
       setRows(r);
@@ -1443,6 +1693,8 @@ export function ReversalApprovals() {
   }, []);
   async function decide(decision: "APPROVE" | "REJECT") {
     if (!focus || comments.length < 3) return;
+    setDeciding(true);
+    setError("");
     try {
       await api.decidePaymentReversal(
         String(focus.reversalId),
@@ -1454,8 +1706,11 @@ export function ReversalApprovals() {
       await load();
     } catch (e: any) {
       setError(e.message);
+    } finally {
+      setDeciding(false);
     }
   }
+  const approvalInput = `${INPUT} rounded-xl border-slate-200 px-3.5 py-2.5 transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10`;
   return (
     <Page
       title="Payment reversal approval"
@@ -1463,27 +1718,25 @@ export function ReversalApprovals() {
     >
       {error && <Notice>{error}</Notice>}
       {message && <Notice green>{message}</Notice>}
-      <div className="grid gap-4 lg:grid-cols-[1fr_500px]">
-        <Card title={`${rows.length} pending reversal(s)`}>
+      <div className="mb-5 rounded-2xl border border-amber-100 bg-amber-50/80 p-4 shadow-sm"><div className="flex items-center gap-3"><span className="grid h-11 w-11 place-items-center rounded-xl bg-amber-500 text-white"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5"><path d="M12 8v5M12 17h.01" /><path d="M10 3h4l7 16H3z" /></svg></span><div><div className="font-bold text-slate-900">{rows.length} request{rows.length === 1 ? "" : "s"} awaiting independent review</div><div className="mt-0.5 text-sm text-slate-600">Review the original payment, reason and explanation before making an irreversible decision.</div></div></div></div>
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_480px] lg:items-start">
+        <Card title="Pending reversal queue" className="overflow-hidden shadow-md shadow-slate-200/50">
           {rows.map((x) => (
             <button
               key={x.reversalId}
               onClick={() => setFocus(x)}
-              className="mb-2 flex w-full justify-between rounded-lg border p-3 text-left"
+              className={`mb-3 flex w-full items-center justify-between gap-4 rounded-xl border p-4 text-left transition hover:-translate-y-0.5 hover:shadow-sm ${String(focus?.reversalId) === String(x.reversalId) ? "border-emerald-300 bg-emerald-50 ring-2 ring-emerald-100" : "border-slate-200 hover:border-slate-300"}`}
             >
-              <span>
-                <strong>{x.reversalReference}</strong>
-                <br />
-                {x.payment.transactionReference}
-              </span>
-              <strong>{money(x.reversalAmount)}</strong>
+              <span className="flex items-center gap-3"><span className="grid h-10 w-10 place-items-center rounded-xl bg-rose-50 text-rose-600"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5"><path d="M9 7H5v4M5 11a7 7 0 1 0 2-5" /></svg></span><span><strong className="block text-slate-800">{x.reversalReference}</strong><span className="mt-0.5 block text-xs text-slate-500">Payment {x.payment.transactionReference} · {pretty(x.reversalReason)}</span></span></span>
+              <strong className="text-rose-700">{money(x.reversalAmount)}</strong>
             </button>
           ))}
+          {!rows.length && <div className="grid min-h-[280px] place-items-center rounded-xl border border-dashed border-slate-200 bg-slate-50 text-center"><div><div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-emerald-50 text-emerald-600"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-7 w-7"><path d="M5 12l4 4L19 6" /></svg></div><div className="mt-4 font-bold text-slate-700">Approval queue is clear</div><div className="mt-1 text-sm text-slate-400">There are no pending reversal requests.</div></div></div>}
         </Card>
-        <Card title="Approval decision">
+        <Card title="Approval decision" className="overflow-hidden shadow-md shadow-slate-200/50 lg:sticky lg:top-24">
           {focus ? (
             <div className="space-y-3">
-              <div className="rounded-lg bg-slate-50 p-4">
+              <div className="rounded-xl bg-slate-900 p-4 text-white">
                 <strong>{focus.reversalReference}</strong>
                 <div>
                   {focus.payment.customerName} · {money(focus.reversalAmount)}
@@ -1497,22 +1750,24 @@ export function ReversalApprovals() {
               </div>
               <Field label="Decision comments">
                 <textarea
-                  className={INPUT}
+                  rows={4}
+                  className={`${approvalInput} resize-none`}
+                  placeholder="Record the reason for your decision"
                   value={comments}
                   onChange={(e) => setComments(e.target.value)}
                 />
               </Field>
               <div className="flex justify-end gap-2">
-                <Button tone="red" onClick={() => decide("REJECT")}>
+                <Button disabled={deciding || comments.trim().length < 3} tone="red" className="flex-1 rounded-xl py-3 transition hover:-translate-y-0.5" onClick={() => decide("REJECT")}>
                   Reject
                 </Button>
-                <Button tone="green" onClick={() => decide("APPROVE")}>
-                  Approve reversal
+                <Button disabled={deciding || comments.trim().length < 3} tone="green" className="flex-1 rounded-xl py-3 transition hover:-translate-y-0.5" onClick={() => decide("APPROVE")}>
+                  {deciding ? "Processing…" : "Approve reversal"}
                 </Button>
               </div>
             </div>
           ) : (
-            "No request selected"
+            <div className="grid min-h-[300px] place-items-center rounded-xl border border-dashed border-slate-200 bg-slate-50 text-center text-sm text-slate-400"><div>Select a pending request to review and decide.</div></div>
           )}
         </Card>
       </div>
@@ -1536,6 +1791,8 @@ export function CollectionReport() {
     () => rows.reduce((s, p) => s + Number(p.amount), 0),
     [rows],
   );
+  const reportInput = `${INPUT} rounded-xl border-slate-200 px-3.5 py-2.5 transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10`;
+  const average = rows.length ? totals / rows.length : 0;
   return (
     <Page
       title="Daily collection report"
@@ -1547,14 +1804,14 @@ export function CollectionReport() {
             exportExcel("daily-collections.xlsx", "Collections", rows)
           }
         >
-          Export Excel
+          <span className="inline-flex items-center gap-2"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="M12 3v12M7 10l5 5 5-5M5 21h14" /></svg>Export Excel</span>
         </Button>
       }
     >
-      <Card className="mb-4">
-        <Field label="Channel">
+      <Card className="mb-5 overflow-hidden shadow-md shadow-slate-200/50">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between"><div className="flex-1"><Field label="Collection channel">
           <SearchableSelect
-            className={INPUT}
+            className={reportInput}
             value={channelId}
             onChange={(e) => setChannelId(e.target.value)}
           >
@@ -1565,10 +1822,10 @@ export function CollectionReport() {
               </option>
             ))}
           </SearchableSelect>
-        </Field>
+        </Field></div><div className="rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-700"><span className="font-bold">{rows.length}</span> posted transaction{rows.length === 1 ? "" : "s"} in this view</div></div>
       </Card>
-      <Kpi label="Total collected" value={money(totals)} />
-      <Card title={`${rows.length} transaction(s)`} className="mt-4">
+      <div className="grid gap-3 sm:grid-cols-3"><div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-emerald-700">Total collected</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{money(totals)}</div></div><div className="rounded-2xl border border-sky-100 bg-sky-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-sky-700">Transactions</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{rows.length}</div></div><div className="rounded-2xl border border-violet-100 bg-violet-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-violet-700">Average payment</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{money(average)}</div></div></div>
+      <Card title="Collection transactions" className="mt-5 overflow-hidden shadow-md shadow-slate-200/50">
         <PaymentTable rows={rows} />
       </Card>
     </Page>
@@ -1587,15 +1844,18 @@ export function PaymentHistory() {
   useEffect(() => {
     if (accountId) api.listPayments({ accountId }).then(setRows);
   }, [accountId]);
+  const selectedAccount = accounts.find((account) => String(account.accountId) === accountId);
+  const historyTotal = rows.filter((payment) => payment.paymentStatus === "POSTED").reduce((sum, payment) => sum + Number(payment.amount ?? 0), 0);
+  const historyInput = `${INPUT} rounded-xl border-slate-200 px-3.5 py-2.5 transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10`;
   return (
     <Page
       title="Customer payment history"
       subtitle="Valid, partial, advance and reversed payments for a customer account"
     >
-      <Card className="mb-4">
+      <Card className="mb-5 overflow-hidden shadow-md shadow-slate-200/50">
         <Field label="Customer account">
           <SearchableSelect
-            className={INPUT}
+            className={historyInput}
             value={accountId}
             onChange={(e) => setAccountId(e.target.value)}
           >
@@ -1607,7 +1867,8 @@ export function PaymentHistory() {
           </SearchableSelect>
         </Field>
       </Card>
-      <Card>
+      <div className="mb-5 grid gap-3 sm:grid-cols-3"><div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-slate-500">Customer</div><div className="mt-1 truncate text-lg font-extrabold text-slate-900">{selectedAccount?.customerName ?? "No account selected"}</div></div><div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-emerald-700">Posted payments</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{rows.filter((payment) => payment.paymentStatus === "POSTED").length}</div></div><div className="rounded-2xl border border-sky-100 bg-sky-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-sky-700">Total received</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{money(historyTotal)}</div></div></div>
+      <Card title="Payment activity" className="overflow-hidden shadow-md shadow-slate-200/50">
         <PaymentTable rows={rows} />
       </Card>
     </Page>
@@ -1615,9 +1876,14 @@ export function PaymentHistory() {
 }
 export function PaymentAudit() {
   const [rows, setRows] = useState<Row[]>([]);
+  const [search, setSearch] = useState("");
   useEffect(() => {
     api.paymentAudit().then(setRows);
   }, []);
+  const auditRows = rows.filter((event) => {
+    const query = search.trim().toLowerCase();
+    return !query || [event.payment?.transactionReference, event.reversal?.reversalReference, event.eventType, person(event.performer), event.details].some((value) => String(value ?? "").toLowerCase().includes(query));
+  });
   return (
     <Page
       title="Payment audit trail"
@@ -1627,14 +1893,16 @@ export function PaymentAudit() {
           tone="green"
           onClick={() => exportExcel("payment-audit.xlsx", "Audit", rows)}
         >
-          Export audit
+          <span className="inline-flex items-center gap-2"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="M12 3v12M7 10l5 5 5-5M5 21h14" /></svg>Export audit</span>
         </Button>
       }
     >
-      <Card>
-        <table className="w-full">
+      <div className="mb-5 grid gap-3 sm:grid-cols-2"><div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-slate-500">Permanent events</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{rows.length}</div></div><div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-emerald-700">Visible results</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{auditRows.length}</div></div></div>
+      <Card title="Financial event register" className="overflow-hidden shadow-md shadow-slate-200/50">
+        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div className="text-sm text-slate-500">Every payment lifecycle change is retained permanently.</div><div className="relative sm:w-80"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></svg><input className={`${INPUT} rounded-xl pl-10 focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10`} placeholder="Search reference, event or user" value={search} onChange={(e) => setSearch(e.target.value)} /></div></div>
+        <div className="overflow-x-auto rounded-xl border border-slate-200"><table className="w-full min-w-[900px]">
           <thead>
-            <tr>
+            <tr className="bg-slate-50/80">
               <th className={TH}>Date</th>
               <th className={TH}>Reference</th>
               <th className={TH}>Action</th>
@@ -1643,20 +1911,21 @@ export function PaymentAudit() {
             </tr>
           </thead>
           <tbody>
-            {rows.map((e) => (
-              <tr className="border-t" key={e.paymentEventId}>
+            {auditRows.map((e) => (
+              <tr className="border-t transition hover:bg-slate-50" key={e.paymentEventId}>
                 <td className={TD}>{dateTime(e.createdAt)}</td>
                 <td className={TD}>
                   {e.payment?.transactionReference ||
                     e.reversal?.reversalReference}
                 </td>
-                <td className={TD}>{pretty(e.eventType)}</td>
+                <td className={TD}><span className="inline-flex rounded-full bg-sky-50 px-2.5 py-1 text-xs font-semibold text-sky-700">{pretty(e.eventType)}</span></td>
                 <td className={TD}>{person(e.performer)}</td>
                 <td className={TD}>{e.details}</td>
               </tr>
             ))}
+            {!auditRows.length && <tr><td colSpan={5} className="px-4 py-16 text-center text-sm text-slate-400">{rows.length ? "No audit events match your search." : "No audit events have been recorded yet."}</td></tr>}
           </tbody>
-        </table>
+        </table></div>
       </Card>
     </Page>
   );
@@ -1668,6 +1937,7 @@ export function PaymentReconciliation() {
     [rows, setRows] = useState<Row[]>([]),
     [error, setError] = useState(""),
     [message, setMessage] = useState("");
+  const [reconciling, setReconciling] = useState(false);
   const [form, setForm] = useState<Row>({
     channelId: "",
     periodStart: now,
@@ -1691,6 +1961,9 @@ export function PaymentReconciliation() {
   }, []);
   async function submit(e: FormEvent) {
     e.preventDefault();
+    setReconciling(true);
+    setError("");
+    setMessage("");
     try {
       const result = await api.createReconciliationBatch({
         ...form,
@@ -1702,8 +1975,13 @@ export function PaymentReconciliation() {
       await load();
     } catch (e: any) {
       setError(e.message);
+    } finally {
+      setReconciling(false);
     }
   }
+  const reconciliationInput = `${INPUT} rounded-xl border-slate-200 px-3.5 py-2.5 transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10`;
+  const balancedCount = rows.filter((batch) => Math.abs(Number(batch.variance ?? 0)) < 0.01).length;
+  const varianceCount = rows.length - balancedCount;
   return (
     <Page
       title="Payment reconciliation"
@@ -1711,13 +1989,15 @@ export function PaymentReconciliation() {
     >
       {error && <Notice>{error}</Notice>}
       {message && <Notice green>{message}</Notice>}
-      <div className="grid gap-4 lg:grid-cols-[420px_1fr]">
-        <Card title="New reconciliation">
-          <form onSubmit={submit} className="space-y-3">
+      <div className="mb-5 grid gap-3 sm:grid-cols-3"><div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-slate-500">Reconciliation batches</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{rows.length}</div></div><div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-emerald-700">Balanced</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{balancedCount}</div></div><div className="rounded-2xl border border-amber-100 bg-amber-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-amber-700">With variance</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{varianceCount}</div></div></div>
+      <div className="grid gap-6 lg:grid-cols-[400px_minmax(0,1fr)] lg:items-start">
+        <Card title="New reconciliation" className="overflow-hidden shadow-md shadow-slate-200/50 lg:sticky lg:top-24">
+          <form onSubmit={submit} className="space-y-4">
+            <div className="flex items-start gap-3 rounded-xl border border-sky-100 bg-sky-50/70 p-3.5"><span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-sky-600 text-white"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5"><path d="M4 7h16M4 12h16M4 17h10" /></svg></span><div><div className="text-sm font-bold text-slate-800">Compare settlement totals</div><p className="mt-0.5 text-xs leading-5 text-slate-500">Match the provider or bank statement against posted system collections.</p></div></div>
             <Field label="Channel">
               <SearchableSelect
                 required
-                className={INPUT}
+                className={reconciliationInput}
                 value={form.channelId}
                 onChange={(e) =>
                   setForm({ ...form, channelId: e.target.value })
@@ -1734,7 +2014,7 @@ export function PaymentReconciliation() {
               <Field label="Period start">
                 <input
                   type="date"
-                  className={INPUT}
+                  className={reconciliationInput}
                   value={form.periodStart}
                   onChange={(e) =>
                     setForm({ ...form, periodStart: e.target.value })
@@ -1744,7 +2024,7 @@ export function PaymentReconciliation() {
               <Field label="Period end">
                 <input
                   type="date"
-                  className={INPUT}
+                  className={reconciliationInput}
                   value={form.periodEnd}
                   onChange={(e) =>
                     setForm({ ...form, periodEnd: e.target.value })
@@ -1758,7 +2038,8 @@ export function PaymentReconciliation() {
                 type="number"
                 min="0"
                 step="0.01"
-                className={INPUT}
+                className={reconciliationInput}
+                placeholder="0.00"
                 value={form.statementTotal}
                 onChange={(e) =>
                   setForm({ ...form, statementTotal: e.target.value })
@@ -1768,7 +2049,7 @@ export function PaymentReconciliation() {
             <Field label="Statement file">
               <input
                 type="file"
-                className={INPUT}
+                className={`${reconciliationInput} file:mr-3 file:rounded-lg file:border-0 file:bg-slate-100 file:px-3 file:py-1 file:text-sm file:font-semibold file:text-slate-700`}
                 onChange={(e) =>
                   setForm({
                     ...form,
@@ -1779,18 +2060,20 @@ export function PaymentReconciliation() {
             </Field>
             <Field label="Remarks">
               <textarea
-                className={INPUT}
+                rows={3}
+                className={`${reconciliationInput} resize-none`}
+                placeholder="Optional reconciliation notes"
                 value={form.remarks}
                 onChange={(e) => setForm({ ...form, remarks: e.target.value })}
               />
             </Field>
-            <Button className="w-full">Compare and reconcile</Button>
+            <Button disabled={reconciling || !form.statementTotal} className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3 shadow-sm transition hover:-translate-y-0.5 hover:bg-emerald-700 hover:shadow-md disabled:hover:translate-y-0">{reconciling ? <><span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />Reconciling…</> : "Compare and reconcile"}</Button>
           </form>
         </Card>
-        <Card title="Reconciliation history">
-          <table className="w-full">
+        <Card title="Reconciliation history" className="overflow-hidden shadow-md shadow-slate-200/50">
+          <div className="overflow-x-auto rounded-xl border border-slate-200"><table className="w-full min-w-[850px]">
             <thead>
-              <tr>
+              <tr className="bg-slate-50/80">
                 <th className={TH}>Batch</th>
                 <th className={TH}>Channel</th>
                 <th className={TH}>Period</th>
@@ -1802,22 +2085,23 @@ export function PaymentReconciliation() {
             </thead>
             <tbody>
               {rows.map((b) => (
-                <tr className="border-t" key={b.batchId}>
-                  <td className={TD}>{b.batchReference}</td>
+                <tr className="border-t transition hover:bg-slate-50" key={b.batchId}>
+                  <td className={TD}><span className="font-mono text-xs font-bold text-slate-700">{b.batchReference}</span></td>
                   <td className={TD}>{b.channel.channelName}</td>
                   <td className={TD}>
                     {date(b.periodStart)} – {date(b.periodEnd)}
                   </td>
                   <td className={TD}>{money(b.systemTotal)}</td>
                   <td className={TD}>{money(b.statementTotal)}</td>
-                  <td className={TD}>{money(b.variance)}</td>
+                  <td className={`${TD} font-bold ${Math.abs(Number(b.variance)) < 0.01 ? "text-emerald-700" : "text-rose-600"}`}>{money(b.variance)}</td>
                   <td className={TD}>
                     <Badge value={b.status} />
                   </td>
                 </tr>
               ))}
+              {!rows.length && <tr><td colSpan={7} className="px-4 py-16 text-center"><div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-slate-100 text-slate-400"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-7 w-7"><path d="M4 7h16M4 12h16M4 17h10" /></svg></div><div className="mt-4 font-bold text-slate-700">No reconciliation batches yet</div><div className="mt-1 text-sm text-slate-400">Completed comparisons will appear here.</div></td></tr>}
             </tbody>
-          </table>
+          </table></div>
         </Card>
       </div>
     </Page>

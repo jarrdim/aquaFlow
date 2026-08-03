@@ -633,3 +633,51 @@ input[type="radio"] {
     padding-top: 7px !important;
   }
 }
+/* Tariff management shares one polished, responsive control system. */
+.tariff-module .tariff-card-content {
+  overflow-x: auto;
+}
+
+.tariff-module input[type="checkbox"] {
+  width: 1.15rem;
+  height: 1.15rem;
+  cursor: pointer;
+  accent-color: #059669;
+}
+
+.tariff-module input[type="radio"] {
+  width: 1.1rem;
+  height: 1.1rem;
+  cursor: pointer;
+  accent-color: #059669;
+}
+
+.tariff-module input[type="file"]::file-selector-button {
+  margin-right: 0.75rem;
+  border: 0;
+  border-radius: 0.6rem;
+  background: #f1f5f9;
+  padding: 0.4rem 0.75rem;
+  color: #334155;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 160ms ease;
+}
+
+.tariff-module input[type="file"]::file-selector-button:hover {
+  background: #d1fae5;
+  color: #047857;
+}
+
+.tariff-module textarea {
+  resize: vertical;
+  min-height: 5.5rem;
+}
+
+.tariff-module .tariff-sidebar-card .tariff-card-content {
+  padding: 1rem;
+}
+
+.tariff-module .tariff-sidebar-card > div:first-child {
+  padding: 0.8rem 1rem;
+}

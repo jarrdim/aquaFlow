@@ -9,6 +9,8 @@ import { api } from "../lib/api";
 import { decodeId, encodeId } from "../lib/hashids";
 import { SearchableSelect } from "../components/SearchableSelect";
 import { SweetAlertToast } from "../components/SweetAlertToast";
+import { GpsMap } from "../components/GpsMap";
+import { Pagination } from "../components/Pagination";
 import {
   exportExcel,
   fileToEvidence,
@@ -194,7 +196,12 @@ function Notice({
   children: ReactNode;
 }) {
   if (kind !== "info") {
-    return <SweetAlertToast message={children} type={kind === "success" ? "success" : "error"} />;
+    return (
+      <SweetAlertToast
+        message={children}
+        type={kind === "success" ? "success" : "error"}
+      />
+    );
   }
   return (
     <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700">
@@ -219,7 +226,7 @@ function Table({
   headers,
   children,
 }: {
-  headers: string[];
+  headers: ReactNode[];
   children: ReactNode;
 }) {
   return (
@@ -227,8 +234,8 @@ function Table({
       <table className="w-full min-w-[760px]">
         <thead className="bg-slate-50">
           <tr>
-            {headers.map((h) => (
-              <th key={h} className={TH}>
+            {headers.map((h, index) => (
+              <th key={index} className={TH}>
                 {h}
               </th>
             ))}
@@ -382,8 +389,7 @@ export function MeterDashboard() {
             ))}
           </div>
 
-
-  <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-6 mb-6">
+          <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-6 mb-6">
             <LinkButton to="/meters/list">Meter register</LinkButton>
             <LinkButton to="/meters/replacements" tone="orange">
               Replacement approvals
@@ -736,6 +742,12 @@ export function RegisterMeter() {
                 />
               </Field>
             </div>
+            <GpsMap
+              latitude={form.gpsLatitude}
+              longitude={form.gpsLongitude}
+              label="Meter location"
+              className="md:col-span-2 xl:col-span-3"
+            />
             <div className="md:col-span-2 xl:col-span-3">
               <Field label="Remarks">
                 <textarea
@@ -771,6 +783,10 @@ export function RegisterMeter() {
 
 export function MeterList() {
   const [meters, setMeters] = useState<AnyRecord[]>([]);
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const pageSize = 25;
   const [zones, setZones] = useState<AnyRecord[]>([]);
   const [filters, setFilters] = useState({
     search: "",
@@ -780,25 +796,34 @@ export function MeterList() {
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  function load() {
+  function load(nextPage = page) {
     setLoading(true);
     Promise.all([
-      api.listMeters(filters),
+      api.listMeters({
+        ...filters,
+        page: String(nextPage),
+        pageSize: String(pageSize),
+      }),
       zones.length ? Promise.resolve(zones) : api.listZones(),
     ])
-      .then(([items, z]) => {
-        setMeters(items);
+      .then(([result, z]) => {
+        setMeters(result.items ?? []);
+        setPage(Number(result.page ?? nextPage));
+        setTotal(Number(result.total ?? 0));
+        setTotalPages(Number(result.totalPages ?? 1));
         setZones(z);
         setError("");
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
   }
-  useEffect(load, []);
+  useEffect(() => {
+    load(1);
+  }, []);
   return (
     <Page
       title="Meter register"
-      subtitle={`${meters.length} meters found`}
+      subtitle={`${total.toLocaleString()} meters found`}
       actions={
         <>
           <LinkButton to="/meters/register">Register meter</LinkButton>
@@ -818,7 +843,7 @@ export function MeterList() {
               onChange={(e) =>
                 setFilters({ ...filters, search: e.target.value })
               }
-              onKeyDown={(e) => e.key === "Enter" && load()}
+              onKeyDown={(e) => e.key === "Enter" && load(1)}
             />
           </Field>
           <Field label="Type">
@@ -873,7 +898,7 @@ export function MeterList() {
             </SearchableSelect>
           </Field>
           <div className="flex items-end">
-            <Button className="w-full" onClick={load}>
+            <Button className="w-full" onClick={() => load(1)}>
               Search
             </Button>
           </div>
@@ -920,6 +945,17 @@ export function MeterList() {
           </Table>
         ) : (
           <Empty text="No meters match these filters." />
+        )}
+        {total > 0 && (
+          <Pagination
+            page={page}
+            totalPages={totalPages}
+            total={total}
+            pageSize={pageSize}
+            disabled={loading}
+            label="meters"
+            onPageChange={load}
+          />
         )}
         <div className="mt-5 flex flex-wrap gap-3">
           <Button
@@ -968,6 +1004,18 @@ export function AssignMeter({
   const [saving, setSaving] = useState(false);
   const [accountSearch, setAccountSearch] = useState("");
   const [evidence, setEvidence] = useState<MeterEvidenceInput[]>([]);
+  const [boreholeOpen, setBoreholeOpen] = useState(false);
+  const [savingBorehole, setSavingBorehole] = useState(false);
+  const [boreholeForm, setBoreholeForm] = useState({
+    boreholeCode: "",
+    boreholeName: "",
+    zoneId: "",
+    gpsLatitude: "",
+    gpsLongitude: "",
+    depthMetres: "",
+    ratedCapacity: "",
+    commissioningDate: "",
+  });
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const [form, setForm] = useState<AnyRecord>({
@@ -1001,6 +1049,42 @@ export function AssignMeter({
   }, []);
   const chosenMeter = meters.find((m) => String(m.meterId) === form.meterId);
   const account = accounts.find((a) => String(a.accountId) === form.accountId);
+  async function createBorehole() {
+    setSavingBorehole(true);
+    setError("");
+    try {
+      const created = await api.createBorehole({
+        ...boreholeForm,
+        depthMetres: boreholeForm.depthMetres || undefined,
+        ratedCapacity: boreholeForm.ratedCapacity || undefined,
+        commissioningDate: boreholeForm.commissioningDate || undefined,
+      });
+      setBoreholes((items) =>
+        [...items, created].sort((a, b) =>
+          String(a.boreholeName).localeCompare(String(b.boreholeName)),
+        ),
+      );
+      setForm((current: AnyRecord) => ({
+        ...current,
+        boreholeId: String(created.boreholeId),
+      }));
+      setBoreholeOpen(false);
+      setBoreholeForm({
+        boreholeCode: "",
+        boreholeName: "",
+        zoneId: "",
+        gpsLatitude: "",
+        gpsLongitude: "",
+        depthMetres: "",
+        ratedCapacity: "",
+        commissioningDate: "",
+      });
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setSavingBorehole(false);
+    }
+  }
   async function addFile(
     file: File | undefined,
     type: MeterEvidenceInput["evidenceType"],
@@ -1065,16 +1149,25 @@ export function AssignMeter({
         </LinkButton>
       }
     >
-      <Card
-        title={
-          nonCustomer
-            ? "Assign non-customer meter"
-            : "Customer and meter assignment"
-        }
-      >
-        <form onSubmit={submit}>
-          {error && <Notice>{error}</Notice>}
-          <div className="grid gap-x-4 gap-y-3 md:grid-cols-2 xl:grid-cols-3">
+      <form onSubmit={submit} className="space-y-5">
+        {error && <Notice>{error}</Notice>}
+        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="flex items-center gap-3 border-b border-slate-100 bg-gradient-to-r from-aqua-50/80 to-white px-5 py-4">
+            <span className="grid h-9 w-9 place-items-center rounded-xl bg-aqua-700 text-sm font-extrabold text-white shadow-sm">
+              1
+            </span>
+            <div>
+              <h2 className="font-bold text-slate-900">
+                {nonCustomer ? "Assignment destination" : "Customer account"}
+              </h2>
+              <p className="text-xs text-slate-500">
+                {nonCustomer
+                  ? "Choose the operational location for this meter."
+                  : "Find and confirm the account receiving this meter."}
+              </p>
+            </div>
+          </div>
+          <div className="grid gap-x-4 gap-y-4 p-5 md:grid-cols-2 xl:grid-cols-3">
             {!nonCustomer && (
               <div>
                 <Field label="Search customer">
@@ -1196,8 +1289,36 @@ export function AssignMeter({
                     </option>
                   ))}
                 </SearchableSelect>
+                <button
+                  type="button"
+                  onClick={() => setBoreholeOpen(true)}
+                  className="mt-2 inline-flex items-center gap-1.5 text-xs font-bold text-aqua-700 transition hover:text-aqua-900 hover:underline"
+                >
+                  <span className="grid h-5 w-5 place-items-center rounded-full bg-aqua-50 text-sm">
+                    +
+                  </span>
+                  Create borehole
+                </button>
               </Field>
             )}
+          </div>
+        </section>
+        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="flex items-center gap-3 border-b border-slate-100 bg-gradient-to-r from-sky-50/80 to-white px-5 py-4">
+            <span className="grid h-9 w-9 place-items-center rounded-xl bg-sky-700 text-sm font-extrabold text-white shadow-sm">
+              2
+            </span>
+            <div>
+              <h2 className="font-bold text-slate-900">
+                Meter and installation
+              </h2>
+              <p className="text-xs text-slate-500">
+                Select an available meter and record its opening installation
+                details.
+              </p>
+            </div>
+          </div>
+          <div className="grid gap-x-4 gap-y-4 p-5 md:grid-cols-2 xl:grid-cols-3">
             <Field label="Meter" required>
               <SearchableSelect
                 required
@@ -1283,6 +1404,24 @@ export function AssignMeter({
                 }
               />
             </Field>
+          </div>
+        </section>
+        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="flex items-center gap-3 border-b border-slate-100 bg-gradient-to-r from-emerald-50/80 to-white px-5 py-4">
+            <span className="grid h-9 w-9 place-items-center rounded-xl bg-emerald-600 text-sm font-extrabold text-white shadow-sm">
+              3
+            </span>
+            <div>
+              <h2 className="font-bold text-slate-900">
+                Location and evidence
+              </h2>
+              <p className="text-xs text-slate-500">
+                Capture the site coordinates and supporting installation
+                evidence.
+              </p>
+            </div>
+          </div>
+          <div className="grid items-start gap-x-4 gap-y-4 p-5 md:grid-cols-2 xl:grid-cols-3">
             <div className="grid grid-cols-2 gap-3">
               <Field label="GPS latitude">
                 <input
@@ -1307,6 +1446,11 @@ export function AssignMeter({
                 />
               </Field>
             </div>
+            <GpsMap
+              latitude={form.gpsLatitude}
+              longitude={form.gpsLongitude}
+              label="Installation location"
+            />
             <Field label="Meter photo">
               <input
                 type="file"
@@ -1356,11 +1500,18 @@ export function AssignMeter({
               </Field>
             </div>
           </div>
-          <div className="mt-3 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700">
-            The API verifies that the selected meter exists, remains in store
-            and has no active assignment.
+        </section>
+        <div className="flex flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-3 text-sm text-slate-600">
+            <span className="mt-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-full bg-sky-100 font-bold text-sky-700">
+              i
+            </span>
+            <p>
+              The selected meter is verified as in stock and without an active
+              assignment before saving.
+            </p>
           </div>
-          <div className="mt-3 flex flex-wrap justify-end gap-2">
+          <div className="flex shrink-0 flex-wrap justify-end gap-2">
             <Button type="button" tone="slate" onClick={() => navigate(-1)}>
               Cancel
             </Button>
@@ -1376,8 +1527,195 @@ export function AssignMeter({
               {saving ? "Assigning…" : "Create installation record"}
             </Button>
           </div>
-        </form>
-      </Card>
+        </div>
+      </form>
+      {boreholeOpen && (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Create borehole"
+        >
+          <button
+            type="button"
+            className="absolute inset-0"
+            aria-label="Close"
+            onClick={() => setBoreholeOpen(false)}
+          />
+          <section className="relative max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-white shadow-2xl">
+            <header className="flex items-start justify-between border-b border-slate-200 bg-gradient-to-r from-aqua-50 to-white px-5 py-4">
+              <div>
+                <div className="text-xs font-bold uppercase tracking-wider text-aqua-700">
+                  New water source
+                </div>
+                <h2 className="mt-1 text-xl font-extrabold text-slate-900">
+                  Create borehole
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Register the source, operational zone and exact GPS position.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setBoreholeOpen(false)}
+                className="grid h-9 w-9 place-items-center rounded-lg text-2xl text-slate-500 hover:bg-white"
+              >
+                ×
+              </button>
+            </header>
+            <div className="grid gap-4 p-5 md:grid-cols-2">
+              <Field label="Borehole code" required>
+                <input
+                  className={INPUT}
+                  value={boreholeForm.boreholeCode}
+                  onChange={(e) =>
+                    setBoreholeForm({
+                      ...boreholeForm,
+                      boreholeCode: e.target.value,
+                    })
+                  }
+                  placeholder="BH-001"
+                />
+              </Field>
+              <Field label="Borehole name" required>
+                <input
+                  className={INPUT}
+                  value={boreholeForm.boreholeName}
+                  onChange={(e) =>
+                    setBoreholeForm({
+                      ...boreholeForm,
+                      boreholeName: e.target.value,
+                    })
+                  }
+                  placeholder="Borehole name"
+                />
+              </Field>
+              <Field label="Zone" required>
+                <SearchableSelect
+                  className={INPUT}
+                  value={boreholeForm.zoneId}
+                  onChange={(e) =>
+                    setBoreholeForm({ ...boreholeForm, zoneId: e.target.value })
+                  }
+                >
+                  <option value="">Select zone</option>
+                  {zones.map((zone) => (
+                    <option key={zone.zoneId} value={zone.zoneId}>
+                      {zone.zoneName}
+                    </option>
+                  ))}
+                </SearchableSelect>
+              </Field>
+              <Field label="Commissioning date">
+                <input
+                  type="date"
+                  className={INPUT}
+                  value={boreholeForm.commissioningDate}
+                  onChange={(e) =>
+                    setBoreholeForm({
+                      ...boreholeForm,
+                      commissioningDate: e.target.value,
+                    })
+                  }
+                />
+              </Field>
+              <Field label="GPS latitude" required>
+                <input
+                  type="number"
+                  min="-90"
+                  max="90"
+                  step="any"
+                  className={INPUT}
+                  value={boreholeForm.gpsLatitude}
+                  onChange={(e) =>
+                    setBoreholeForm({
+                      ...boreholeForm,
+                      gpsLatitude: e.target.value,
+                    })
+                  }
+                />
+              </Field>
+              <Field label="GPS longitude" required>
+                <input
+                  type="number"
+                  min="-180"
+                  max="180"
+                  step="any"
+                  className={INPUT}
+                  value={boreholeForm.gpsLongitude}
+                  onChange={(e) =>
+                    setBoreholeForm({
+                      ...boreholeForm,
+                      gpsLongitude: e.target.value,
+                    })
+                  }
+                />
+              </Field>
+              <Field label="Depth (metres)">
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  className={INPUT}
+                  value={boreholeForm.depthMetres}
+                  onChange={(e) =>
+                    setBoreholeForm({
+                      ...boreholeForm,
+                      depthMetres: e.target.value,
+                    })
+                  }
+                />
+              </Field>
+              <Field label="Capacity (m³/hour)">
+                <input
+                  type="number"
+                  min="0"
+                  step="0.001"
+                  className={INPUT}
+                  value={boreholeForm.ratedCapacity}
+                  onChange={(e) =>
+                    setBoreholeForm({
+                      ...boreholeForm,
+                      ratedCapacity: e.target.value,
+                    })
+                  }
+                />
+              </Field>
+              <GpsMap
+                latitude={boreholeForm.gpsLatitude}
+                longitude={boreholeForm.gpsLongitude}
+                label="Borehole location"
+                className="md:col-span-2"
+                empty
+              />
+            </div>
+            <footer className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 px-5 py-4">
+              <Button
+                type="button"
+                tone="slate"
+                onClick={() => setBoreholeOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                tone="green"
+                disabled={
+                  savingBorehole ||
+                  !boreholeForm.boreholeCode ||
+                  !boreholeForm.boreholeName ||
+                  !boreholeForm.zoneId ||
+                  !boreholeForm.gpsLatitude ||
+                  !boreholeForm.gpsLongitude
+                }
+                onClick={() => void createBorehole()}
+              >
+                {savingBorehole ? "Creating…" : "Create and select"}
+              </Button>
+            </footer>
+          </section>
+        </div>
+      )}
     </Page>
   );
 }
@@ -1413,7 +1751,10 @@ export function MeterProfile() {
 
   function load() {
     setError("");
-    return api.getMeter(id).then(setMeter).catch((e) => setError(e.message));
+    return api
+      .getMeter(id)
+      .then(setMeter)
+      .catch((e) => setError(e.message));
   }
 
   useEffect(() => {
@@ -1503,70 +1844,176 @@ export function MeterProfile() {
               className="mb-6 rounded-xl border border-aqua-200 bg-slate-50 p-4"
             >
               <div className="mb-3">
-                <h3 className="font-semibold text-slate-900">Edit meter details</h3>
+                <h3 className="font-semibold text-slate-900">
+                  Edit meter details
+                </h3>
                 <p className="mt-1 text-sm text-slate-500">
-                  Status, assignment and installation changes use their separate lifecycle actions below.
+                  Status, assignment and installation changes use their separate
+                  lifecycle actions below.
                 </p>
               </div>
               <div className="grid gap-x-4 gap-y-3 md:grid-cols-2 xl:grid-cols-3">
                 <Field label="Meter number" required>
-                  <input required className={INPUT} value={form.meterNumber} onChange={(e) => update("meterNumber", e.target.value)} />
+                  <input
+                    required
+                    className={INPUT}
+                    value={form.meterNumber}
+                    onChange={(e) => update("meterNumber", e.target.value)}
+                  />
                 </Field>
                 <Field label="Meter type" required>
-                  <SearchableSelect className={INPUT} value={form.meterType} onChange={(e) => update("meterType", e.target.value)}>
-                    {["CUSTOMER", "BULK", "ZONE", "BOREHOLE"].map((value) => <option key={value}>{value}</option>)}
+                  <SearchableSelect
+                    className={INPUT}
+                    value={form.meterType}
+                    onChange={(e) => update("meterType", e.target.value)}
+                  >
+                    {["CUSTOMER", "BULK", "ZONE", "BOREHOLE"].map((value) => (
+                      <option key={value}>{value}</option>
+                    ))}
                   </SearchableSelect>
                 </Field>
                 <Field label="Technology" required>
-                  <SearchableSelect className={INPUT} value={form.technology} onChange={(e) => update("technology", e.target.value)}>
-                    {["MANUAL", "PREPAID", "SMART"].map((value) => <option key={value}>{value}</option>)}
+                  <SearchableSelect
+                    className={INPUT}
+                    value={form.technology}
+                    onChange={(e) => update("technology", e.target.value)}
+                  >
+                    {["MANUAL", "PREPAID", "SMART"].map((value) => (
+                      <option key={value}>{value}</option>
+                    ))}
                   </SearchableSelect>
                 </Field>
                 <Field label="Brand">
-                  <input className={INPUT} value={form.brand} onChange={(e) => update("brand", e.target.value)} />
+                  <input
+                    className={INPUT}
+                    value={form.brand}
+                    onChange={(e) => update("brand", e.target.value)}
+                  />
                 </Field>
                 <Field label="Model">
-                  <input className={INPUT} value={form.model} onChange={(e) => update("model", e.target.value)} />
+                  <input
+                    className={INPUT}
+                    value={form.model}
+                    onChange={(e) => update("model", e.target.value)}
+                  />
                 </Field>
                 <Field label="Meter size (mm)" required>
-                  <input required min="0.01" step="0.01" type="number" className={INPUT} value={form.meterSizeMm} onChange={(e) => update("meterSizeMm", e.target.value)} />
+                  <input
+                    required
+                    min="0.01"
+                    step="0.01"
+                    type="number"
+                    className={INPUT}
+                    value={form.meterSizeMm}
+                    onChange={(e) => update("meterSizeMm", e.target.value)}
+                  />
                 </Field>
                 <Field label="Serial number">
-                  <input className={INPUT} value={form.serialNumber} onChange={(e) => update("serialNumber", e.target.value)} />
+                  <input
+                    className={INPUT}
+                    value={form.serialNumber}
+                    onChange={(e) => update("serialNumber", e.target.value)}
+                  />
                 </Field>
                 <Field label="Opening reading" required>
-                  <input required disabled={Boolean(meter.latestReading)} min="0" step="0.001" type="number" className={INPUT} value={form.openingReading} onChange={(e) => update("openingReading", e.target.value)} />
+                  <input
+                    required
+                    disabled={Boolean(meter.latestReading)}
+                    min="0"
+                    step="0.001"
+                    type="number"
+                    className={INPUT}
+                    value={form.openingReading}
+                    onChange={(e) => update("openingReading", e.target.value)}
+                  />
                 </Field>
                 <Field label="Storage location">
-                  <input className={INPUT} value={form.storageLocation} onChange={(e) => update("storageLocation", e.target.value)} />
+                  <input
+                    className={INPUT}
+                    value={form.storageLocation}
+                    onChange={(e) => update("storageLocation", e.target.value)}
+                  />
                 </Field>
                 <Field label="Purchase date">
-                  <input type="date" className={INPUT} value={form.purchaseDate} onChange={(e) => update("purchaseDate", e.target.value)} />
+                  <input
+                    type="date"
+                    className={INPUT}
+                    value={form.purchaseDate}
+                    onChange={(e) => update("purchaseDate", e.target.value)}
+                  />
                 </Field>
                 <Field label="Warranty expiry date">
-                  <input type="date" min={form.purchaseDate || undefined} className={INPUT} value={form.warrantyExpiryDate} onChange={(e) => update("warrantyExpiryDate", e.target.value)} />
+                  <input
+                    type="date"
+                    min={form.purchaseDate || undefined}
+                    className={INPUT}
+                    value={form.warrantyExpiryDate}
+                    onChange={(e) =>
+                      update("warrantyExpiryDate", e.target.value)
+                    }
+                  />
                 </Field>
                 <Field label="Seal number">
-                  <input className={INPUT} value={form.sealNumber} onChange={(e) => update("sealNumber", e.target.value)} />
+                  <input
+                    className={INPUT}
+                    value={form.sealNumber}
+                    onChange={(e) => update("sealNumber", e.target.value)}
+                  />
                 </Field>
                 <Field label="GPS latitude">
-                  <input min="-90" max="90" step="any" type="number" className={INPUT} value={form.gpsLatitude} onChange={(e) => update("gpsLatitude", e.target.value)} />
+                  <input
+                    min="-90"
+                    max="90"
+                    step="any"
+                    type="number"
+                    className={INPUT}
+                    value={form.gpsLatitude}
+                    onChange={(e) => update("gpsLatitude", e.target.value)}
+                  />
                 </Field>
                 <Field label="GPS longitude">
-                  <input min="-180" max="180" step="any" type="number" className={INPUT} value={form.gpsLongitude} onChange={(e) => update("gpsLongitude", e.target.value)} />
+                  <input
+                    min="-180"
+                    max="180"
+                    step="any"
+                    type="number"
+                    className={INPUT}
+                    value={form.gpsLongitude}
+                    onChange={(e) => update("gpsLongitude", e.target.value)}
+                  />
                 </Field>
+                <GpsMap
+                  latitude={form.gpsLatitude}
+                  longitude={form.gpsLongitude}
+                  label="Meter location"
+                  className="md:col-span-2"
+                />
                 <Field label="Remarks">
-                  <input className={INPUT} value={form.remarks} onChange={(e) => update("remarks", e.target.value)} />
+                  <input
+                    className={INPUT}
+                    value={form.remarks}
+                    onChange={(e) => update("remarks", e.target.value)}
+                  />
                 </Field>
               </div>
               {meter.latestReading && (
                 <p className="mt-3 text-sm text-amber-700">
-                  Opening reading is locked because this meter already has reading history.
+                  Opening reading is locked because this meter already has
+                  reading history.
                 </p>
               )}
               <div className="mt-4 flex justify-end gap-2">
-                <Button type="button" tone="slate" onClick={() => setEditing(false)} disabled={saving}>Cancel</Button>
-                <Button type="submit" tone="green" disabled={saving}>{saving ? "Saving..." : "Save changes"}</Button>
+                <Button
+                  type="button"
+                  tone="slate"
+                  onClick={() => setEditing(false)}
+                  disabled={saving}
+                >
+                  Cancel
+                </Button>
+                <Button type="submit" tone="green" disabled={saving}>
+                  {saving ? "Saving..." : "Save changes"}
+                </Button>
               </div>
             </form>
           )}
@@ -1871,6 +2318,12 @@ export function InstallationDetails() {
                 }
               />
             </Field>
+            <GpsMap
+              latitude={form.gpsLatitude}
+              longitude={form.gpsLongitude}
+              label="Installation location"
+              className="md:col-span-2"
+            />
             <Field label="Installation status">
               <input
                 disabled
@@ -2178,6 +2631,12 @@ export function UpdateMeterStatus() {
                   />
                 </Field>
               </div>
+              <GpsMap
+                latitude={form.gpsLatitude}
+                longitude={form.gpsLongitude}
+                label="Removal location"
+                className="md:col-span-2"
+              />
               <div className="md:col-span-2">
                 <Field label="Remarks">
                   <textarea
@@ -2438,6 +2897,12 @@ export function MeterReplacement() {
                   />
                 </Field>
               </div>
+              <GpsMap
+                latitude={form.gpsLatitude}
+                longitude={form.gpsLongitude}
+                label="Inspection location"
+                className="md:col-span-2"
+              />
               <div className="md:col-span-2">
                 <Field label="Remarks">
                   <textarea
@@ -2595,6 +3060,11 @@ export function ReplacementApproval() {
                   )}
                 </div>
               </Field>
+              <GpsMap
+                latitude={selected.gpsLatitude}
+                longitude={selected.gpsLongitude}
+                label="Recorded event location"
+              />
               <Field label="Evidence">
                 {selected.evidence?.length ? (
                   <Button
@@ -2802,6 +3272,7 @@ export function ExceptionReport({ alerts = false }: { alerts?: boolean }) {
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [selectedAlerts, setSelectedAlerts] = useState<string[]>([]);
   function load() {
     setLoading(true);
     setError("");
@@ -2815,6 +3286,7 @@ export function ExceptionReport({ alerts = false }: { alerts?: boolean }) {
     ])
       .then(([rows, z]) => {
         setItems(rows);
+        setSelectedAlerts([]);
         setZones(z);
       })
       .catch((e) => setError(e.message))
@@ -2833,6 +3305,22 @@ export function ExceptionReport({ alerts = false }: { alerts?: boolean }) {
       (!filters.dateTo ||
         new Date(alert.detectedAt) <= new Date(`${filters.dateTo}T23:59:59`)),
   );
+  const visibleIds = filtered.map((alert) => String(alert.alertId));
+  const allVisibleSelected =
+    visibleIds.length > 0 &&
+    visibleIds.every((id) => selectedAlerts.includes(id));
+  const toggleAlert = (id: string) =>
+    setSelectedAlerts((current) =>
+      current.includes(id)
+        ? current.filter((item) => item !== id)
+        : [...current, id],
+    );
+  const toggleAllVisible = () =>
+    setSelectedAlerts((current) =>
+      allVisibleSelected
+        ? current.filter((id) => !visibleIds.includes(id))
+        : Array.from(new Set([...current, ...visibleIds])),
+    );
   async function workOrder(alert: AnyRecord) {
     try {
       const created = await api.createMeterWorkOrder({
@@ -2854,7 +3342,9 @@ export function ExceptionReport({ alerts = false }: { alerts?: boolean }) {
   }
   async function createAll() {
     try {
-      for (const alert of filtered)
+      for (const alert of filtered.filter((item) =>
+        selectedAlerts.includes(String(item.alertId)),
+      ))
         await api.createMeterWorkOrder({
           meterId: String(alert.meterId),
           alertId: String(alert.alertId),
@@ -2866,7 +3356,7 @@ export function ExceptionReport({ alerts = false }: { alerts?: boolean }) {
                 ? "NORMAL"
                 : alert.priority,
         });
-      setMessage(`${filtered.length} investigation work orders created.`);
+      setMessage("Investigation work orders created for the selected alerts.");
       load();
     } catch (e: any) {
       setError(e.message);
@@ -2876,6 +3366,22 @@ export function ExceptionReport({ alerts = false }: { alerts?: boolean }) {
     try {
       await api.dismissMeterAlert(String(alert.alertId));
       setMessage("Alert dismissed with an audit event.");
+      load();
+    } catch (e: any) {
+      setError(e.message);
+    }
+  }
+  async function dismissSelected() {
+    try {
+      const selected = filtered.filter(
+        (item) =>
+          selectedAlerts.includes(String(item.alertId)) &&
+          item.status === "OPEN",
+      );
+      await Promise.all(
+        selected.map((item) => api.dismissMeterAlert(String(item.alertId))),
+      );
+      setMessage("Selected alerts dismissed with audit events.");
       load();
     } catch (e: any) {
       setError(e.message);
@@ -2996,11 +3502,36 @@ export function ExceptionReport({ alerts = false }: { alerts?: boolean }) {
           </div>
         </div>
         {message && <Notice kind="success">{message}</Notice>}
+        {selectedAlerts.length > 0 && (
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-aqua-200 bg-aqua-50/70 px-4 py-3">
+            <span className="text-sm font-semibold text-aqua-900">
+              Selected alerts are ready for a bulk action.
+            </span>
+            <div className="flex gap-2">
+              <Button tone="orange" onClick={createAll}>
+                Create work orders
+              </Button>
+              {alerts && (
+                <Button tone="slate" onClick={dismissSelected}>
+                  Dismiss selected
+                </Button>
+              )}
+            </div>
+          </div>
+        )}
         {loading ? (
           <Spinner />
         ) : filtered.length ? (
           <Table
             headers={[
+              <input
+                key="select"
+                type="checkbox"
+                checked={allVisibleSelected}
+                onChange={toggleAllVisible}
+                aria-label="Select all visible alerts"
+                className="h-4 w-4 cursor-pointer rounded border-slate-300 accent-aqua-700"
+              />,
               "Meter no.",
               "Customer / target",
               "Zone",
@@ -3011,7 +3542,20 @@ export function ExceptionReport({ alerts = false }: { alerts?: boolean }) {
             ]}
           >
             {filtered.map((alert) => (
-              <tr key={alert.alertId}>
+              <tr
+                key={alert.alertId}
+                onClick={() => toggleAlert(String(alert.alertId))}
+                className={`cursor-pointer transition hover:bg-sky-50/60 ${selectedAlerts.includes(String(alert.alertId)) ? "bg-sky-50" : ""}`}
+              >
+                <td className={TD} onClick={(event) => event.stopPropagation()}>
+                  <input
+                    type="checkbox"
+                    checked={selectedAlerts.includes(String(alert.alertId))}
+                    onChange={() => toggleAlert(String(alert.alertId))}
+                    aria-label={`Select alert for meter ${alert.meter.meterNumber}`}
+                    className="h-4 w-4 cursor-pointer rounded border-slate-300 accent-aqua-700"
+                  />
+                </td>
                 <td className={`${TD} font-semibold`}>
                   <Link
                     className="text-aqua-700 hover:underline"
@@ -3025,28 +3569,30 @@ export function ExceptionReport({ alerts = false }: { alerts?: boolean }) {
                 <td className={TD}>{pretty(alert.alertType)}</td>
                 <td className={TD}>
                   <span
-                    className={
-                      alert.priority === "CRITICAL" || alert.priority === "HIGH"
-                        ? "font-semibold text-red-600"
-                        : "text-orange-600"
-                    }
+                    className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-bold ${alert.priority === "CRITICAL" || alert.priority === "HIGH" ? "bg-red-50 text-red-700" : "bg-amber-50 text-amber-700"}`}
                   >
+                    <span
+                      className={`h-1.5 w-1.5 rounded-full ${alert.priority === "CRITICAL" || alert.priority === "HIGH" ? "bg-red-500" : "bg-amber-500"}`}
+                    />
                     {pretty(alert.priority)}
                   </span>
                 </td>
                 <td className={TD}>{formatDate(alert.detectedAt)}</td>
-                <td className={`${TD} space-x-3`}>
+                <td
+                  className={`${TD} space-x-2`}
+                  onClick={(event) => event.stopPropagation()}
+                >
                   {alert.status === "OPEN" && (
                     <>
                       <button
-                        className="font-semibold text-orange-600"
+                        className="rounded-lg bg-orange-50 px-2.5 py-1.5 text-xs font-bold text-orange-700 transition hover:bg-orange-100"
                         onClick={() => workOrder(alert)}
                       >
                         Work order
                       </button>
                       {alerts && (
                         <button
-                          className="font-semibold text-slate-500"
+                          className="rounded-lg px-2.5 py-1.5 text-xs font-bold text-slate-500 transition hover:bg-slate-100"
                           onClick={() => dismiss(alert)}
                         >
                           Dismiss
@@ -3055,7 +3601,7 @@ export function ExceptionReport({ alerts = false }: { alerts?: boolean }) {
                     </>
                   )}
                   <Link
-                    className="font-semibold text-aqua-700"
+                    className="inline-block rounded-lg px-2.5 py-1.5 text-xs font-bold text-aqua-700 transition hover:bg-aqua-50"
                     to={`/meters/${encodeId(alert.meterId)}/status`}
                   >
                     Review
@@ -3078,7 +3624,7 @@ export function ExceptionReport({ alerts = false }: { alerts?: boolean }) {
           {!alerts && (
             <Button
               tone="orange"
-              disabled={!filtered.length || filters.status !== "OPEN"}
+              disabled={!selectedAlerts.length || filters.status !== "OPEN"}
               onClick={createAll}
             >
               Create work orders
@@ -3195,115 +3741,186 @@ export function BulkMeterImport() {
       title="Bulk meter import"
       subtitle="Validate and import meter inventory from Excel or CSV"
     >
-      <Card title="Upload meter register file">
-        {error && <Notice>{error}</Notice>}
-        <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-3">
-          <Field label="Upload Excel / CSV file">
-            <input
-              type="file"
-              accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
-              className={INPUT}
-              onChange={(e) => choose(e.target.files?.[0])}
-            />
-          </Field>
-          <Field label="File format">
-            <input disabled className={INPUT} value="Excel (.xlsx) / CSV" />
-          </Field>
-          <Field label="Duplicate handling">
-            <input disabled className={INPUT} value="Reject duplicates" />
-          </Field>
-          <Field label="Default meter type">
-            <SearchableSelect
-              className={INPUT}
-              value={defaults.meterType}
-              onChange={(e) =>
-                setDefaults({ ...defaults, meterType: e.target.value })
-              }
+      <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(380px,.85fr)]">
+        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="flex items-center gap-3 border-b border-slate-100 bg-gradient-to-r from-sky-50 to-white px-5 py-4">
+            <span className="grid h-10 w-10 place-items-center rounded-xl bg-sky-700 text-white shadow-sm">
+              ↑
+            </span>
+            <div>
+              <h2 className="font-bold text-slate-900">
+                Upload meter register
+              </h2>
+              <p className="text-xs text-slate-500">
+                Excel and CSV files are checked before anything is imported.
+              </p>
+            </div>
+          </div>
+          <div className="space-y-5 p-5">
+            {error && <Notice>{error}</Notice>}
+            <label
+              className="group flex min-h-48 cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50/70 px-6 py-8 text-center transition hover:border-sky-400 hover:bg-sky-50/60"
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={(event) => {
+                event.preventDefault();
+                void choose(event.dataTransfer.files?.[0]);
+              }}
             >
-              {["CUSTOMER", "BULK", "ZONE", "BOREHOLE"].map((item) => (
-                <option key={item}>{item}</option>
-              ))}
-            </SearchableSelect>
-          </Field>
-          <Field label="Default status">
-            <SearchableSelect
-              className={INPUT}
-              value={defaults.status}
-              onChange={(e) =>
-                setDefaults({ ...defaults, status: e.target.value })
-              }
-            >
-              <option value="IN_STOCK">In store</option>
-              <option value="INACTIVE">Inactive</option>
-            </SearchableSelect>
-          </Field>
-          <Field label="Download template">
-            <Button type="button" tone="teal" onClick={template}>
-              Download Excel template
-            </Button>
-          </Field>
-        </div>
-        <div className="mt-7 rounded-xl border border-slate-200 p-5">
-          <h3 className="font-semibold text-slate-800">Validation summary</h3>
-          <div className="mt-5 grid grid-cols-2 gap-4 lg:grid-cols-5">
-            {[
-              ["File", fileName || "None"],
-              ["Total records", validation?.total ?? records.length],
-              ["Valid records", validation?.valid ?? "—"],
-              ["Duplicates", validation?.duplicates ?? "—"],
-              ["Error records", validation?.errors ?? "—"],
-            ].map(([label, value]) => (
-              <div key={label} className="rounded-xl bg-slate-50 p-4">
-                <div className="text-xs text-slate-500">{label}</div>
-                <div className="mt-1 text-xl font-bold text-slate-800">
-                  {value}
+              <span className="grid h-14 w-14 place-items-center rounded-2xl bg-white text-2xl text-sky-700 shadow-sm ring-1 ring-slate-200 transition group-hover:-translate-y-1 group-hover:shadow-md">
+                ⇧
+              </span>
+              <span className="mt-4 text-base font-bold text-slate-800">
+                {fileName || "Choose a file or drag it here"}
+              </span>
+              <span className="mt-1 text-sm text-slate-500">
+                Accepted formats: .xlsx and .csv
+              </span>
+              <span className="mt-4 rounded-lg bg-sky-700 px-4 py-2 text-sm font-bold text-white shadow-sm">
+                Browse files
+              </span>
+              <input
+                type="file"
+                accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
+                className="sr-only"
+                onChange={(e) => choose(e.target.files?.[0])}
+              />
+            </label>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Default meter type">
+                <SearchableSelect
+                  className={INPUT}
+                  value={defaults.meterType}
+                  onChange={(e) =>
+                    setDefaults({ ...defaults, meterType: e.target.value })
+                  }
+                >
+                  {["CUSTOMER", "BULK", "ZONE", "BOREHOLE"].map((item) => (
+                    <option key={item}>{item}</option>
+                  ))}
+                </SearchableSelect>
+              </Field>
+              <Field label="Default status">
+                <SearchableSelect
+                  className={INPUT}
+                  value={defaults.status}
+                  onChange={(e) =>
+                    setDefaults({ ...defaults, status: e.target.value })
+                  }
+                >
+                  <option value="IN_STOCK">In store</option>
+                  <option value="INACTIVE">Inactive</option>
+                </SearchableSelect>
+              </Field>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+              <div>
+                <div className="text-sm font-semibold text-slate-700">
+                  Need the correct column layout?
+                </div>
+                <div className="text-xs text-slate-500">
+                  Download the approved import template.
                 </div>
               </div>
-            ))}
+              <Button type="button" tone="teal" onClick={template}>
+                Download template
+              </Button>
+            </div>
           </div>
-          {errors.length > 0 && (
-            <div className="mt-4 max-h-36 overflow-auto text-sm text-red-600">
-              {errors.slice(0, 20).map((row: AnyRecord) => (
-                <div key={row.row}>
-                  Row {row.row}: {row.errors.join("; ")}
+        </section>
+        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="flex items-center gap-3 border-b border-slate-100 bg-gradient-to-r from-emerald-50 to-white px-5 py-4">
+            <span className="grid h-10 w-10 place-items-center rounded-xl bg-emerald-600 font-bold text-white shadow-sm">
+              ✓
+            </span>
+            <div>
+              <h2 className="font-bold text-slate-900">Validate and import</h2>
+              <p className="text-xs text-slate-500">
+                Review file quality before committing records.
+              </p>
+            </div>
+          </div>
+          <div className="p-5">
+            <div className="grid grid-cols-2 gap-3">
+              {[
+                ["File", fileName || "None"],
+                ["Total records", validation?.total ?? records.length],
+                ["Valid records", validation?.valid ?? "—"],
+                ["Duplicates", validation?.duplicates ?? "—"],
+                ["Error records", validation?.errors ?? "—"],
+              ].map(([label, value]) => (
+                <div
+                  key={label}
+                  className={`rounded-xl border p-4 ${label === "File" ? "col-span-2 border-sky-100 bg-sky-50/60" : "border-slate-100 bg-slate-50"}`}
+                >
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                    {label}
+                  </div>
+                  <div
+                    className={`${label === "File" ? "truncate text-base" : "text-xl"} mt-1 font-extrabold text-slate-800`}
+                  >
+                    {value}
+                  </div>
                 </div>
               ))}
             </div>
-          )}
-        </div>
-        {message && (
-          <div className="mt-5">
-            <Notice kind="success">{message}</Notice>
+            {errors.length > 0 && (
+              <div className="mt-4 max-h-40 overflow-auto rounded-xl border border-red-100 bg-red-50 p-3 text-sm text-red-700">
+                {errors.slice(0, 20).map((row: AnyRecord) => (
+                  <div key={row.row}>
+                    Row {row.row}: {row.errors.join("; ")}
+                  </div>
+                ))}
+              </div>
+            )}
+            {message && (
+              <div className="mt-5">
+                <Notice kind="success">{message}</Notice>
+              </div>
+            )}
+            <div className="mt-5 grid gap-2 sm:grid-cols-2">
+              <Button
+                className="w-full"
+                disabled={!records.length}
+                onClick={validate}
+              >
+                Validate file
+              </Button>
+              <Button
+                className="w-full"
+                tone="green"
+                disabled={!validation?.valid}
+                onClick={upload}
+              >
+                Import valid records
+              </Button>
+              {errors.length > 0 && (
+                <Button
+                  tone="orange"
+                  onClick={() =>
+                    exportExcel(
+                      "meter-import-errors.xlsx",
+                      "Import Errors",
+                      errors.map((row: AnyRecord) => ({
+                        Row: row.row,
+                        MeterNumber: row.meterNumber,
+                        Duplicate: row.duplicate ? "Yes" : "No",
+                        Errors: row.errors.join("; "),
+                      })),
+                    )
+                  }
+                >
+                  Download error report
+                </Button>
+              )}
+            </div>
+            {!records.length && (
+              <p className="mt-4 text-center text-xs text-slate-400">
+                Upload a file to enable validation.
+              </p>
+            )}
           </div>
-        )}
-        <div className="mt-6 flex flex-wrap gap-3">
-          <Button disabled={!records.length} onClick={validate}>
-            Validate file
-          </Button>
-          <Button tone="green" disabled={!validation?.valid} onClick={upload}>
-            Import valid records
-          </Button>
-          {errors.length > 0 && (
-            <Button
-              tone="orange"
-              onClick={() =>
-                exportExcel(
-                  "meter-import-errors.xlsx",
-                  "Import Errors",
-                  errors.map((row: AnyRecord) => ({
-                    Row: row.row,
-                    MeterNumber: row.meterNumber,
-                    Duplicate: row.duplicate ? "Yes" : "No",
-                    Errors: row.errors.join("; "),
-                  })),
-                )
-              }
-            >
-              Download error report
-            </Button>
-          )}
-        </div>
-      </Card>
+        </section>
+      </div>
     </Page>
   );
 }

@@ -128,7 +128,7 @@ export function CheckboxMultiSelect({
           <div role="listbox" aria-multiselectable="true" className="max-h-64 overflow-y-auto p-1">
             {filtered.map((option) => (
               <label key={option.value} role="option" aria-selected={value.includes(option.value)} className={`flex cursor-pointer items-center gap-3 rounded-md px-3 py-2 text-sm hover:bg-slate-50 ${option.disabled || (selectionLimitReached && !value.includes(option.value)) ? "cursor-not-allowed opacity-40" : ""}`}>
-                <input type="checkbox" disabled={option.disabled || (selectionLimitReached && !value.includes(option.value))} checked={value.includes(option.value)} onChange={() => toggle(option.value)} />
+                <input className="h-5 w-5 shrink-0 cursor-pointer rounded-md border-slate-300 accent-emerald-600 outline-none transition duration-150 hover:ring-4 hover:ring-emerald-500/10 focus:ring-4 focus:ring-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40" type="checkbox" disabled={option.disabled || (selectionLimitReached && !value.includes(option.value))} checked={value.includes(option.value)} onChange={() => toggle(option.value)} />
                 <span className="min-w-0 flex-1 truncate">{option.label}</span>
               </label>
             ))}

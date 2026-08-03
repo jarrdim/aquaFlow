@@ -58,6 +58,18 @@ function findOnfonMessageId(value: unknown): string | null {
   return null;
 }
 
+function onfonConnectionError(error: unknown) {
+  const value = error as any;
+  const cause = value?.cause;
+  if (value?.name === "TimeoutError" || value?.name === "AbortError")
+    return "Onfon did not respond within 20 seconds. Please try again.";
+  const detail = cause?.message || value?.message;
+  const code = cause?.code ? ` (${cause.code})` : "";
+  return detail
+    ? `Could not connect to Onfon: ${detail}${code}.`
+    : "Could not connect to Onfon. Check the backend server's internet, DNS, and firewall access to api.onfonmedia.co.ke.";
+}
+
 async function onfonRequest(provider: any, recipient: string, message: string) {
   const { configuration, secrets } = onfonSettings(provider);
   const number = normalizeSmsPhone(recipient);
@@ -69,12 +81,17 @@ async function onfonRequest(provider: any, recipient: string, message: string) {
     ApiKey: secrets.apiKey,
     ClientId: secrets.clientId,
   };
-  const response = await fetch(configuration.endpointUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", AccessKey: secrets.accessKey },
-    body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(20_000),
-  });
+  let response: Response;
+  try {
+    response = await fetch(configuration.endpointUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", AccessKey: secrets.accessKey },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(20_000),
+    });
+  } catch (error) {
+    throw new Error(onfonConnectionError(error));
+  }
   const result: any = await response.json().catch(() => ({}));
   if (!response.ok || Number(result.ErrorCode) !== 0) {
     throw new Error(result.ErrorDescription || `Onfon returned HTTP ${response.status}.`);
@@ -265,10 +282,25 @@ const include = {
 } as const;
 
 async function activeTemplate(notificationType: string, channel: string) {
-  return prisma.notificationTemplate.findFirst({
+  const template = await prisma.notificationTemplate.findFirst({
     where: { notificationType, channel, status: "ACTIVE" },
     orderBy: { templateId: "desc" },
   });
+  if (template) return template;
+  const fallbacks: Record<string, { subject: string | null; messageBody: string }> = {
+    BALANCE_REMINDER_SMS: {
+      subject: null,
+      messageBody:
+        "Dear {{customer_name}}, account {{account_number}} has an outstanding balance of KSh {{balance}}. Please pay to avoid service interruption.",
+    },
+    BALANCE_REMINDER_EMAIL: {
+      subject: "Outstanding balance for {{account_number}}",
+      messageBody:
+        "Dear {{customer_name}}, account {{account_number}} has an outstanding balance of KSh {{balance}}. Please arrange payment or contact the water utility if you need assistance.",
+    },
+  };
+  const fallback = fallbacks[`${notificationType}_${channel}`];
+  return fallback ? ({ templateId: null, ...fallback } as any) : null;
 }
 
 async function smtpTransport(provider: any) {
@@ -338,16 +370,17 @@ async function processOne(notificationId: bigint) {
   if (notification.scheduledAt && notification.scheduledAt > new Date())
     return notification;
 
+  const activeProviders = notification.provider
+    ? []
+    : await prisma.notificationProvider.findMany({
+        where: { channel: notification.channel, status: "ACTIVE" },
+        orderBy: [{ isDefault: "desc" }, { providerId: "asc" }],
+        take: 2,
+      });
   const provider =
     notification.provider ??
-    (await prisma.notificationProvider.findFirst({
-      where: {
-        channel: notification.channel,
-        status: "ACTIVE",
-        isDefault: true,
-      },
-      orderBy: { providerId: "asc" },
-    }));
+    activeProviders.find((candidate) => candidate.isDefault) ??
+    (activeProviders.length === 1 ? activeProviders[0] : null);
   const attemptNumber = notification.retryCount + 1;
   const now = new Date();
   if (!provider) {
@@ -356,14 +389,18 @@ async function processOne(notificationId: bigint) {
         notificationId,
         attemptNumber,
         status: "FAILED",
-        errorMessage: `No active ${notification.channel} provider is configured.`,
+        errorMessage: activeProviders.length > 1
+          ? `Multiple active ${notification.channel} providers exist, but none is set as default.`
+          : `No active ${notification.channel} provider is configured.`,
       },
     });
     return prisma.notification.update({
       where: { notificationId },
       data: {
         deliveryStatus: "FAILED",
-        failureReason: `No active ${notification.channel} provider is configured.`,
+        failureReason: activeProviders.length > 1
+          ? `Multiple active ${notification.channel} providers exist, but none is set as default.`
+          : `No active ${notification.channel} provider is configured.`,
         retryCount: attemptNumber,
         lastAttemptAt: now,
         updatedAt: now,
@@ -917,11 +954,18 @@ notificationsRouter.get(
       const url = new URL("https://api.onfonmedia.co.ke/v1/sms/Balance");
       url.searchParams.set("ApiKey", secrets.apiKey);
       url.searchParams.set("ClientId", secrets.clientId);
-      const response = await fetch(url, { headers: { "Content-Type": "application/json", AccessKey: secrets.accessKey }, signal: AbortSignal.timeout(20_000) });
+      let response: Response;
+      try {
+        response = await fetch(url, { headers: { "Content-Type": "application/json", AccessKey: secrets.accessKey }, signal: AbortSignal.timeout(20_000) });
+      } catch (error) {
+        return res.status(502).json({ error: onfonConnectionError(error) });
+      }
       const result: any = await response.json().catch(() => ({}));
       if (!response.ok || Number(result.ErrorCode) !== 0) return res.status(502).json({ error: result.ErrorDescription || `Onfon returned HTTP ${response.status}.` });
       res.json({ message: "Onfon connection verified.", balance: result.Data?.[0]?.Credits ?? "Available" });
-    } catch (error) { next(error); }
+    } catch (error) {
+      res.status(502).json({ error: error instanceof Error ? error.message : "Onfon balance check failed." });
+    }
   },
 );
 
@@ -1001,6 +1045,8 @@ notificationsRouter.get("/", async (req, res, next) => {
     const status = String(req.query.status ?? "");
     const channel = String(req.query.channel ?? "");
     const search = String(req.query.search ?? "").trim();
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const pageSize = Math.min(100, Math.max(10, Number(req.query.pageSize) || 25));
     const where: any = {};
     if (status) where.deliveryStatus = status;
     if (channel) where.channel = channel;
@@ -1012,14 +1058,17 @@ notificationsRouter.get("/", async (req, res, next) => {
           account: { accountNumber: { contains: search, mode: "insensitive" } },
         },
       ];
-    res.json(
-      await prisma.notification.findMany({
+    const [items, total] = await prisma.$transaction([
+      prisma.notification.findMany({
         where,
         include,
         orderBy: { createdAt: "desc" },
-        take: 500,
+        skip: (page - 1) * pageSize,
+        take: pageSize,
       }),
-    );
+      prisma.notification.count({ where }),
+    ]);
+    res.json({ items, total, page, pageSize, pages: Math.max(1, Math.ceil(total / pageSize)) });
   } catch (error) {
     next(error);
   }
@@ -1291,9 +1340,16 @@ notificationsRouter.post("/send-bulk", managers, async (req, res, next) => {
         });
       }
     }
-    const created = data.length
-      ? await prisma.notification.createMany({ data })
-      : { count: 0 };
+    if (!data.length)
+      return res.status(409).json({
+        error:
+          unavailableChannels.length
+            ? `No notifications were queued because these channels have no active template: ${unavailableChannels.join(", ")}. Add a custom message or activate the required template.`
+            : "No notifications were queued. Confirm that the selected accounts have contact details for the chosen channels.",
+        skipped,
+        unavailableChannels,
+      });
+    const created = await prisma.notification.createMany({ data });
     res.status(201).json({
       accounts: accounts.length,
       created: created.count,

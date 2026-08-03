@@ -229,6 +229,11 @@ export const api = {
   listMeterAccounts: (q = "") =>
     request(`/meters/accounts${q ? `?q=${encodeURIComponent(q)}` : ""}`),
   listBoreholes: () => request("/meters/boreholes"),
+  createBorehole: (data: Record<string, unknown>) =>
+    request("/meters/boreholes", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
   assignMeter: (data: Record<string, unknown>) =>
     request("/meters/assign", { method: "POST", body: JSON.stringify(data) }),
   listMeterAlerts: (filters: Record<string, string> = {}) => {

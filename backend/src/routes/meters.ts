@@ -215,6 +215,40 @@ metersRouter.get("/boreholes", async (_req, res) => {
   res.json(await prisma.borehole.findMany({ where: { status: "ACTIVE" }, include: { zone: true }, orderBy: { boreholeName: "asc" } }));
 });
 
+const boreholeSchema = z.object({
+  boreholeCode: z.string().trim().min(2).max(50),
+  boreholeName: z.string().trim().min(2).max(150),
+  zoneId: z.coerce.bigint().positive(),
+  gpsLatitude: z.coerce.number().min(-90).max(90),
+  gpsLongitude: z.coerce.number().min(-180).max(180),
+  depthMetres: optNumber.pipe(z.number().positive().optional()),
+  ratedCapacity: optNumber.pipe(z.number().positive().optional()),
+  commissioningDate: optText,
+});
+
+metersRouter.post("/boreholes", requireRole("ADMIN", "SYSTEM_ADMIN", "METER_MANAGER"), async (req, res) => {
+  const parsed = boreholeSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid borehole details" });
+  try {
+    const data = parsed.data;
+    const borehole = await prisma.borehole.create({ data: {
+      boreholeCode: data.boreholeCode,
+      boreholeName: data.boreholeName,
+      zoneId: data.zoneId,
+      gpsLatitude: data.gpsLatitude,
+      gpsLongitude: data.gpsLongitude,
+      depthMetres: data.depthMetres,
+      ratedCapacity: data.ratedCapacity,
+      commissioningDate: data.commissioningDate ? new Date(data.commissioningDate) : undefined,
+      status: "ACTIVE",
+    }, include: { zone: true } });
+    res.status(201).json(borehole);
+  } catch (error: any) {
+    if (error?.code === "P2002") return res.status(409).json({ error: "That borehole code already exists" });
+    res.status(400).json({ error: error.message ?? "Unable to create borehole" });
+  }
+});
+
 metersRouter.get("/replacements", async (req, res) => {
   const status = String(req.query.status ?? "");
   const items = await prisma.meterReplacement.findMany({
@@ -258,6 +292,9 @@ metersRouter.get("/", async (req, res) => {
   const take = Number.isFinite(requestedTake)
     ? Math.min(50, Math.max(1, requestedTake))
     : undefined;
+  const paginated = req.query.page !== undefined || req.query.pageSize !== undefined;
+  const page = Math.max(1, Number(req.query.page) || 1);
+  const pageSize = Math.min(100, Math.max(10, Number(req.query.pageSize) || 25));
   const where: any = {};
   if (search) where.OR = [
     { meterNumber: { contains: search, mode: "insensitive" } }, { serialNumber: { contains: search, mode: "insensitive" } },
@@ -268,8 +305,12 @@ metersRouter.get("/", async (req, res) => {
   ];
   if (type) where.meterType = type; if (status) where.status = status;
   if (zoneId || customerId) where.assignments = { some: { assignmentStatus: "ACTIVE", ...(customerId ? { account: { customerId: BigInt(customerId) } } : {}), ...(zoneId ? { OR: [{ zoneId: BigInt(zoneId) }, { account: { property: { zoneId: BigInt(zoneId) } } }, { borehole: { zoneId: BigInt(zoneId) } }] } : {}) } };
-  const items = await prisma.meter.findMany({ where, include: meterListInclude, orderBy: { createdAt: "desc" }, take });
-  res.json(items.map(presentMeter));
+  const [items, total] = await Promise.all([
+    prisma.meter.findMany({ where, include: meterListInclude, orderBy: { createdAt: "desc" }, take: paginated ? pageSize : take, skip: paginated ? (page - 1) * pageSize : undefined }),
+    paginated ? prisma.meter.count({ where }) : Promise.resolve(0),
+  ]);
+  if (!paginated) return res.json(items.map(presentMeter));
+  res.json({ items: items.map(presentMeter), page, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) });
 });
 
 metersRouter.post("/", async (req, res) => {

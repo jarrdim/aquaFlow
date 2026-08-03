@@ -225,7 +225,7 @@ export default function NewCustomer() {
             Customer operations
           </p>
           <h1 className="text-2xl font-bold text-slate-900">
-            {connectionId ? "Create customer for connection" : "Register New Customer"}
+            {connectionId ? "Create customer for connection" : ""}
           </h1>
           <p className="mt-1 text-[15px] text-slate-500">
             {connectionId

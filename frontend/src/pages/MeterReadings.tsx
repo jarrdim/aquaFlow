@@ -5,6 +5,7 @@ import { exportExcel, openEvidence, parseMeterWorkbook } from "../lib/meterFiles
 import { CheckboxMultiSelect } from "../components/CheckboxMultiSelect";
 import { SearchableSelect } from "../components/SearchableSelect";
 import { SweetAlertToast } from "../components/SweetAlertToast";
+import { GpsMap } from "../components/GpsMap";
 
 type Row = Record<string, any>;
 const INPUT =
@@ -815,6 +816,10 @@ export function ReadingCycles() {
     safeCyclePage * cyclePageSize,
     filteredCycles.length,
   );
+  const openCycles = cycles.filter((cycle) => cycle.status === "OPEN").length;
+  const plannedCycles = cycles.filter((cycle) => cycle.status === "PLANNED").length;
+  const totalReadings = cycles.reduce((sum, cycle) => sum + Number(cycle._count?.readings ?? 0), 0);
+  const totalAssignments = cycles.reduce((sum, cycle) => sum + Number(cycle._count?.routeAssignments ?? 0), 0);
   useEffect(() => {
     setCyclePage(1);
   }, [cycleSearch, cyclePageSize]);
@@ -926,9 +931,16 @@ export function ReadingCycles() {
     >
       {error && <Notice>{error}</Notice>}
       {message && <Notice tone="green">{message}</Notice>}
-      <div className="grid gap-4 xl:grid-cols-[420px_1fr]">
-        <Card title={editingId ? "Edit reading cycle" : "Create reading cycle"}>
-          <form onSubmit={submit} className="space-y-3">
+      <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-emerald-700">Open cycles</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{openCycles}</div></div>
+        <div className="rounded-2xl border border-sky-100 bg-sky-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-sky-700">Planned cycles</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{plannedCycles}</div></div>
+        <div className="rounded-2xl border border-violet-100 bg-violet-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-violet-700">Route assignments</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{totalAssignments.toLocaleString()}</div></div>
+        <div className="rounded-2xl border border-amber-100 bg-amber-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-amber-700">Captured readings</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{totalReadings.toLocaleString()}</div></div>
+      </div>
+      <div className="grid gap-5 xl:grid-cols-[370px_minmax(0,1fr)] xl:items-start">
+        <Card title={editingId ? "Edit reading cycle" : "Create reading cycle"} className="overflow-hidden shadow-md shadow-slate-200/50 xl:sticky xl:top-24">
+          <div className="mb-4 flex items-start gap-3 rounded-xl border border-sky-100 bg-sky-50/70 p-3.5"><span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-sky-600 text-white"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5"><rect x="4" y="5" width="16" height="15" rx="2" /><path d="M8 3v4M16 3v4M4 10h16" /></svg></span><div><div className="font-bold text-slate-800">Define a collection period</div><p className="mt-0.5 text-xs leading-5 text-slate-500">Planned cycles can be prepared first, then opened when field collection begins.</p></div></div>
+          <form onSubmit={submit} className="space-y-4">
             <Field label="Cycle code" required>
               <input
                 required
@@ -1007,16 +1019,16 @@ export function ReadingCycles() {
             </Button>
           </form>
         </Card>
-        <Card title="Cycle register">
+        <Card title="Cycle register" className="min-w-0 overflow-hidden shadow-md shadow-slate-200/50">
           <div className="mb-4 grid gap-3 sm:grid-cols-[1fr_150px]">
             <Field label="Search cycle register">
-              <input
+              <div className="relative"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></svg><input
                 type="search"
-                className={INPUT}
+                className={`${INPUT} pl-10`}
                 value={cycleSearch}
                 placeholder="Cycle code, name, status or date"
                 onChange={(event) => setCycleSearch(event.target.value)}
-              />
+              /></div>
             </Field>
             <Field label="Rows per page">
               <SearchableSelect
@@ -1033,10 +1045,10 @@ export function ReadingCycles() {
             </Field>
           </div>
           <CyclePagination position="top" />
-          <div className="overflow-x-auto">
-            <table className="w-full">
+          <div className="mt-3 overflow-x-auto rounded-xl border border-slate-200">
+            <table className="w-full min-w-[900px]">
               <thead>
-                <tr>
+                <tr className="bg-slate-50/90">
                   <th className={TH}>Code</th>
                   <th className={TH}>Cycle</th>
                   <th className={TH}>Cycle date</th>
@@ -1050,17 +1062,17 @@ export function ReadingCycles() {
                 {pagedCycles.map((c) => (
                   <tr
                     key={c.readingCycleId}
-                    className="border-t border-slate-100"
+                    className="border-t border-slate-100 transition hover:bg-sky-50/40"
                   >
                     <td className={`${TD} font-medium text-slate-800`}>
-                      {c.cycleCode}
+                      <span className="inline-flex rounded-lg bg-slate-100 px-2.5 py-1 font-mono text-xs font-bold text-slate-700">{c.cycleCode}</span>
                     </td>
-                    <td className={TD}>{c.cycleName}</td>
+                    <td className={TD}><div className="flex items-center gap-3"><span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-sky-50 text-sky-700"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><rect x="4" y="5" width="16" height="15" rx="2" /><path d="M4 10h16" /></svg></span><span className="font-bold text-slate-800">{c.cycleName}</span></div></td>
                     <td className={TD}>
                       {date(c.startDate)} – {date(c.endDate)}
                     </td>
-                    <td className={TD}>{c._count?.routeAssignments ?? 0}</td>
-                    <td className={TD}>{c._count?.readings ?? 0}</td>
+                    <td className={TD}><span className="inline-flex min-w-9 justify-center rounded-full bg-violet-50 px-2.5 py-1 text-xs font-bold text-violet-700">{c._count?.routeAssignments ?? 0}</span></td>
+                    <td className={TD}><span className="inline-flex min-w-9 justify-center rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700">{Number(c._count?.readings ?? 0).toLocaleString()}</span></td>
                     <td className={TD}>
                       <Badge value={c.status} />
                     </td>
@@ -1124,9 +1136,9 @@ export function ReadingCycles() {
                   <tr>
                     <td
                       colSpan={7}
-                      className="px-4 py-12 text-center text-sm text-slate-400"
+                      className="px-4 py-16 text-center text-sm text-slate-400"
                     >
-                      No reading cycles match your search.
+                      <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-slate-100"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-7 w-7"><rect x="4" y="5" width="16" height="15" rx="2" /></svg></div><div className="mt-4 font-bold text-slate-700">{cycles.length ? "No cycles match your search" : "No reading cycles yet"}</div><div className="mt-1 text-slate-400">{cycles.length ? "Try a different code, name, status or date." : "Create the first collection period using the form."}</div>
                     </td>
                   </tr>
                 )}
@@ -1227,6 +1239,10 @@ function ReadingRouteAssignmentsPlanner() {
       ),
     [assignments],
   );
+  const assignedCount = activeAssignments.length;
+  const completedCount = assignments.filter(
+    (assignment) => assignment.status === "COMPLETED",
+  ).length;
   const assignedByRoute = useMemo(
     () =>
       new Map(
@@ -1416,9 +1432,16 @@ function ReadingRouteAssignmentsPlanner() {
     >
       {error && <Notice>{error}</Notice>}
       {success && <Notice tone="green">{success}</Notice>}
+      <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-slate-500">Reading routes</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{routes.length}</div></div>
+        <div className="rounded-2xl border border-sky-100 bg-sky-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-sky-700">Active assignments</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{assignedCount}</div></div>
+        <div className="rounded-2xl border border-violet-100 bg-violet-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-violet-700">Meter readers</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{officers.length}</div></div>
+        <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-emerald-700">Completed</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{completedCount}</div></div>
+      </div>
       {showOfficer && (
-        <Card title="Create meter reader profile" className="mb-4">
-          <form onSubmit={createOfficer} className="grid gap-3 md:grid-cols-4">
+        <Card title="Create meter reader profile" className="mb-5 overflow-hidden shadow-md shadow-slate-200/50">
+          <div className="mb-4 flex items-start gap-3 rounded-xl border border-violet-100 bg-violet-50/70 p-3.5"><span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-violet-600 text-white"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5"><circle cx="12" cy="8" r="3" /><path d="M6 20v-2a6 6 0 0 1 12 0v2" /></svg></span><div><div className="font-bold text-slate-800">Register a field officer</div><p className="mt-0.5 text-xs leading-5 text-slate-500">Connect an active staff user to a meter-reader profile and optional home zone.</p></div></div>
+          <form onSubmit={createOfficer} className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             <Field label="Staff user" required>
               <SearchableSelect
                 required
@@ -1903,6 +1926,7 @@ export function ReadingRouteAssignments() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [saving, setSaving] = useState(false);
+  const [registerSearch, setRegisterSearch] = useState("");
   const [selectedRouteIds, setSelectedRouteIds] = useState<string[]>([]);
   const [selectedOfficerIds, setSelectedOfficerIds] = useState<string[]>([]);
   const [showOfficer, setShowOfficer] = useState(false);
@@ -1993,6 +2017,13 @@ export function ReadingRouteAssignments() {
       setError(e.message);
     }
   }
+  const assignedCount = items.filter((assignment) => ["ASSIGNED", "ACCEPTED"].includes(assignment.status)).length;
+  const completedCount = items.filter((assignment) => assignment.status === "COMPLETED").length;
+  const filteredAssignments = items.filter((assignment) => {
+    const query = registerSearch.trim().toLowerCase();
+    return !query || [assignment.cycle?.cycleName, assignment.route?.zone?.zoneName, assignment.route?.routeName, assignment.route?.routeCode, assignment.officerName, assignment.status]
+      .some((value) => String(value ?? "").toLowerCase().includes(query));
+  });
   return (
     <Page
       title="Route assignments"
@@ -2005,9 +2036,16 @@ export function ReadingRouteAssignments() {
     >
       {error && <Notice>{error}</Notice>}
       {success && <Notice tone="green">{success}</Notice>}
+      <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-slate-500">Reading routes</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{routes.length}</div></div>
+        <div className="rounded-2xl border border-sky-100 bg-sky-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-sky-700">Active assignments</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{assignedCount}</div></div>
+        <div className="rounded-2xl border border-violet-100 bg-violet-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-violet-700">Meter readers</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{officers.length}</div></div>
+        <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-emerald-700">Completed</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{completedCount}</div></div>
+      </div>
       {showOfficer && (
-        <Card title="Create meter reader profile" className="mb-4">
-          <form onSubmit={createOfficer} className="grid gap-3 md:grid-cols-4">
+        <Card title="Create meter reader profile" className="mb-5 overflow-hidden shadow-md shadow-slate-200/50">
+          <div className="mb-4 flex items-start gap-3 rounded-xl border border-violet-100 bg-violet-50/70 p-3.5"><span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-violet-600 text-white"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5"><circle cx="12" cy="8" r="3" /><path d="M6 20v-2a6 6 0 0 1 12 0v2" /></svg></span><div><div className="font-bold text-slate-800">Register a field officer</div><p className="mt-0.5 text-xs leading-5 text-slate-500">Connect an active staff user to a meter-reader profile and optional home zone.</p></div></div>
+          <form onSubmit={createOfficer} className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             <Field label="Staff user" required>
               <SearchableSelect
                 required
@@ -2074,10 +2112,11 @@ export function ReadingRouteAssignments() {
           </form>
         </Card>
       )}
-      <Card title="Assign routes" className="mb-4">
+      <Card title="Assign routes" className="mb-5 overflow-hidden shadow-md shadow-slate-200/50">
+        <div className="mb-4 flex items-start gap-3 rounded-xl border border-sky-100 bg-sky-50/70 p-3.5"><span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-sky-600 text-white"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5"><path d="M4 17l5-5 4 3 7-8" /><circle cx="4" cy="17" r="1" /><circle cx="20" cy="7" r="1" /></svg></span><div><div className="font-bold text-slate-800">Build the route workload</div><p className="mt-0.5 text-xs leading-5 text-slate-500">Select routes and readers; multiple routes are distributed between readers in order.</p></div></div>
         <form
           onSubmit={assign}
-          className="grid gap-3 md:grid-cols-2 xl:grid-cols-5"
+          className="grid gap-4 md:grid-cols-2 xl:grid-cols-5"
         >
           <Field label="Reading cycle" required>
             <SearchableSelect
@@ -2159,19 +2198,20 @@ export function ReadingRouteAssignments() {
             </Button>
           </div>
           {(selectedRouteIds.length > 0 || selectedOfficerIds.length > 0) && (
-            <div className="md:col-span-2 xl:col-span-5 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-sm text-blue-700">
-              {selectedRouteIds.length} route(s) and {selectedOfficerIds.length} reader(s) selected.
+            <div className="md:col-span-2 xl:col-span-5 flex items-center gap-3 rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-emerald-600 font-bold text-white">{selectedRouteIds.length}</span><span>{selectedRouteIds.length} route(s) and {selectedOfficerIds.length} reader(s) selected.
               {selectedOfficerIds.length > 1 &&
-                " Routes will be distributed between the selected readers in order."}
+                " Routes will be distributed between the selected readers in order."}</span>
             </div>
           )}
         </form>
       </Card>
-      <Card title="Assignment register">
-        <div className="overflow-x-auto">
-          <table className="w-full">
+      <Card title="Assignment register" className="overflow-hidden shadow-md shadow-slate-200/50">
+        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><div className="font-semibold text-slate-800">Route workload register</div><div className="mt-0.5 text-xs text-slate-500">Track assigned routes, field officers and completion status.</div></div><div className="relative sm:w-80"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></svg><input className={`${INPUT} rounded-xl pl-10 focus:ring-4`} placeholder="Search route, cycle or reader" value={registerSearch} onChange={(event) => setRegisterSearch(event.target.value)} /></div></div>
+        <div className="overflow-x-auto rounded-xl border border-slate-200">
+          <table className="w-full min-w-[880px]">
             <thead>
-              <tr>
+              <tr className="bg-slate-50/90">
                 <th className={TH}>Cycle</th>
                 <th className={TH}>Zone / Route</th>
                 <th className={TH}>Officer</th>
@@ -2181,19 +2221,16 @@ export function ReadingRouteAssignments() {
               </tr>
             </thead>
             <tbody>
-              {items.map((a) => (
+              {filteredAssignments.map((a) => (
                 <tr
                   key={a.routeAssignmentId}
-                  className="border-t border-slate-100"
+                  className="border-t border-slate-100 transition hover:bg-sky-50/40"
                 >
                   <td className={TD}>{a.cycle?.cycleName}</td>
                   <td className={TD}>
-                    {a.route?.zone?.zoneName} /{" "}
-                    <span className="font-medium text-slate-800">
-                      {a.route?.routeName}
-                    </span>
+                    <div className="flex items-center gap-3"><span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-sky-50 text-sky-700"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="M4 17l5-5 4 3 7-8" /></svg></span><span><span className="block font-bold text-slate-800">{a.route?.routeName}</span><span className="mt-0.5 block text-xs text-slate-400">{a.route?.zone?.zoneName} · {a.route?.routeCode}</span></span></div>
                   </td>
-                  <td className={TD}>{a.officerName}</td>
+                  <td className={TD}><span className="flex items-center gap-2"><span className="grid h-8 w-8 place-items-center rounded-full bg-violet-50 text-xs font-bold text-violet-700">{String(a.officerName ?? "R").split(/\s+/).slice(0,2).map((part) => part[0]).join("")}</span><span className="font-semibold text-slate-700">{a.officerName}</span></span></td>
                   <td className={TD}>{date(a.assignedDate)}</td>
                   <td className={TD}>
                     <Badge value={a.status} />
@@ -2201,7 +2238,7 @@ export function ReadingRouteAssignments() {
                   <td className={TD}>
                     {a.status !== "COMPLETED" && (
                       <button
-                        className="font-semibold text-emerald-700"
+                        className="inline-flex rounded-lg bg-emerald-50 px-3 py-2 text-sm font-bold text-emerald-700 transition hover:bg-emerald-600 hover:text-white"
                         onClick={async () => {
                           await api.updateRouteAssignmentStatus(
                             String(a.routeAssignmentId),
@@ -2216,6 +2253,7 @@ export function ReadingRouteAssignments() {
                   </td>
                 </tr>
               ))}
+              {!filteredAssignments.length && <tr><td colSpan={6} className="px-4 py-16 text-center"><div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-slate-100 text-slate-400"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-7 w-7"><path d="M4 17l5-5 4 3 7-8" /></svg></div><div className="mt-4 font-bold text-slate-700">{items.length ? "No assignments match your search" : "No route assignments yet"}</div><div className="mt-1 text-sm text-slate-400">{items.length ? "Try another route, cycle or reader." : "Create assignments using the form above."}</div></td></tr>}
             </tbody>
           </table>
         </div>
@@ -3389,6 +3427,7 @@ export function CaptureReading() {
                   </Button>
                 </div>
               </Field>
+              <GpsMap latitude={form.gpsLatitude} longitude={form.gpsLongitude} label="Reading location" className="md:col-span-2 xl:col-span-3" />
               <div className="md:col-span-2 xl:col-span-3">
                 <Field label="Remarks">
                   <textarea
@@ -3424,6 +3463,7 @@ function ReadingTable({
   selectedIds,
   onToggle,
   onToggleAll,
+  onRowClick,
 }: {
   items: Row[];
   actions?: (row: Row) => ReactNode;
@@ -3431,6 +3471,7 @@ function ReadingTable({
   selectedIds?: Set<string>;
   onToggle?: (row: Row, checked: boolean) => void;
   onToggleAll?: (checked: boolean) => void;
+  onRowClick?: (row: Row) => void;
 }) {
   const selectable = Boolean(selectedIds && onToggle && onToggleAll);
   const allSelected =
@@ -3483,7 +3524,17 @@ function ReadingTable({
             return (
             <tr
               key={r.readingId}
-              className="transition odd:bg-white even:bg-slate-50/35 hover:bg-sky-50/60"
+              role={onRowClick ? "button" : undefined}
+              tabIndex={onRowClick ? 0 : undefined}
+              aria-selected={selectedIds?.has(String(r.readingId)) ?? false}
+              onClick={() => onRowClick?.(r)}
+              onKeyDown={(event) => {
+                if (onRowClick && (event.key === "Enter" || event.key === " ")) {
+                  event.preventDefault();
+                  onRowClick(r);
+                }
+              }}
+              className={`transition ${onRowClick ? "cursor-pointer focus:outline-none focus:ring-2 focus:ring-inset focus:ring-sky-400" : ""} ${selectedIds?.has(String(r.readingId)) ? "bg-sky-50 ring-1 ring-inset ring-sky-200" : "odd:bg-white even:bg-slate-50/35 hover:bg-sky-50/60"}`}
             >
               {selectable && (
                 <td className="w-12 px-4 py-3.5 text-center">
@@ -3491,6 +3542,7 @@ function ReadingTable({
                     type="checkbox"
                     aria-label={`Select reading for meter ${r.meter?.meterNumber ?? ""}`}
                     checked={selectedIds?.has(String(r.readingId)) ?? false}
+                    onClick={(event) => event.stopPropagation()}
                     onChange={(event) => onToggle?.(r, event.target.checked)}
                     className="h-4 w-4 rounded border-slate-300 text-aqua-700 focus:ring-aqua-500"
                   />
@@ -4004,10 +4056,25 @@ export function ReadingApprovals() {
               );
               if (checked && items[0]) setSelected(items[0]);
             }}
+            onRowClick={(row) => {
+              const id = String(row.readingId);
+              setSelected(row);
+              setSelectedIds((current) => {
+                const next = new Set(current);
+                next.has(id) ? next.delete(id) : next.add(id);
+                return next;
+              });
+            }}
             actions={(r) => (
               <button
                 className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-aqua-700 shadow-sm transition hover:border-sky-200 hover:bg-sky-50"
-                onClick={() => setSelected(r)}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setSelected(r);
+                  setSelectedIds((current) =>
+                    new Set(current).add(String(r.readingId)),
+                  );
+                }}
               >
                 Review
               </button>
@@ -4113,6 +4180,7 @@ export function ReadingApprovals() {
                   </dd>
                 </div>
               </dl>
+              <GpsMap latitude={selected.gpsLatitude} longitude={selected.gpsLongitude} label="Reading location" />
               {selected.readingType === "ESTIMATED" && (
                 <Notice tone="blue">
                   Estimation reason: {selected.estimationReason}

@@ -7,7 +7,7 @@ import { SweetAlertToast } from "../components/SweetAlertToast";
 
 type Row = Record<string, any>;
 const INPUT =
-  "w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-[15px] leading-5 text-slate-700 outline-none transition focus:border-aqua-500 focus:ring-2 focus:ring-aqua-500/20 disabled:bg-slate-50 disabled:text-slate-400";
+  "w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-[15px] leading-5 text-slate-700 outline-none transition duration-200 placeholder:text-sm placeholder:text-slate-400 hover:border-slate-300 focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400";
 const TH =
   "px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500";
 const TD = "px-4 py-3 text-[15px] text-slate-600";
@@ -25,15 +25,20 @@ function Page({
   children: ReactNode;
 }) {
   return (
-    <div className="mx-auto max-w-[1600px] p-4 lg:px-6 lg:py-5">
-      <div className="page-screen-header mb-4 flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-900 lg:text-[26px]">
+    <div className="tariff-module mx-auto max-w-[1600px] p-4 lg:px-6 lg:py-6">
+      <div className="page-screen-header mb-6 flex flex-wrap items-start justify-between gap-4">
+        <div className="flex items-start gap-3">
+          <span className="mt-0.5 grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-emerald-600 to-teal-500 text-white shadow-lg shadow-emerald-600/15">
+            <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5"><path d="M4 7h16M7 12h10M9 17h6" /><circle cx="6" cy="7" r="1" fill="currentColor" /><circle cx="18" cy="7" r="1" fill="currentColor" /></svg>
+          </span>
+          <div><div className="mb-0.5 text-[11px] font-bold uppercase tracking-[0.16em] text-emerald-700">Tariff management</div>
+          <h1 className="text-2xl font-extrabold tracking-tight text-slate-900 lg:text-[27px]">
             {title}
           </h1>
           {subtitle && (
-            <p className="mt-1 text-[15px] text-slate-500">{subtitle}</p>
+            <p className="mt-1.5 max-w-3xl text-[15px] leading-6 text-slate-500">{subtitle}</p>
           )}
+          </div>
         </div>
         {actions && <div className="flex flex-wrap gap-2">{actions}</div>}
       </div>
@@ -52,14 +57,14 @@ function Card({
 }) {
   return (
     <section
-      className={`rounded-2xl border border-slate-200 bg-white shadow-sm ${className}`}
+      className={`overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-sm shadow-slate-200/60 transition-shadow duration-200 hover:shadow-md hover:shadow-slate-200/70 ${className}`}
     >
       {title && (
-        <div className="border-b border-slate-100 px-4 py-3">
-          <h2 className="text-base font-semibold text-slate-800">{title}</h2>
+        <div className="border-b border-slate-100 bg-gradient-to-r from-slate-50/90 to-white px-5 py-4">
+          <h2 className="text-[17px] font-bold tracking-tight text-slate-900">{title}</h2>
         </div>
       )}
-      <div className="p-4">{children}</div>
+      <div className="tariff-card-content p-5 sm:p-6">{children}</div>
     </section>
   );
 }
@@ -74,7 +79,7 @@ function Field({
 }) {
   return (
     <label className="block">
-      <span className="mb-1 block text-sm font-medium leading-5 text-slate-600">
+      <span className="mb-1.5 block text-sm font-semibold leading-5 text-slate-700">
         {label}
         {required && <span className="text-red-500"> *</span>}
       </span>
@@ -99,7 +104,7 @@ function Button({
   return (
     <button
       {...props}
-      className={`rounded-lg px-4 py-2 text-[15px] font-semibold text-white shadow-sm transition disabled:cursor-not-allowed disabled:opacity-50 ${colors[tone]} ${className}`}
+      className={`rounded-xl px-4 py-2.5 text-[15px] font-semibold text-white shadow-sm transition duration-200 hover:-translate-y-0.5 hover:brightness-105 hover:shadow-md active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0 ${colors[tone]} ${className}`}
     />
   );
 }
@@ -121,7 +126,7 @@ function LinkButton({
   return (
     <Link
       to={to}
-      className={`inline-flex items-center justify-center rounded-lg px-4 py-2 text-[15px] font-semibold text-white shadow-sm ${color}`}
+      className={`inline-flex items-center justify-center rounded-xl px-4 py-2.5 text-[15px] font-semibold text-white shadow-sm transition duration-200 hover:-translate-y-0.5 hover:brightness-105 hover:shadow-md active:translate-y-0 ${color}`}
     >
       {children}
     </Link>
@@ -162,8 +167,9 @@ const tones: Record<string, string> = {
 function Badge({ value }: { value: string }) {
   return (
     <span
-      className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${tones[value] ?? "bg-slate-100 text-slate-600"}`}
+      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-bold ring-1 ring-inset ring-current/10 ${tones[value] ?? "bg-slate-100 text-slate-600"}`}
     >
+      <span className={`h-1.5 w-1.5 rounded-full ${value === "ACTIVE" || value === "APPROVED" ? "bg-emerald-500" : value === "REJECTED" ? "bg-rose-500" : value === "PENDING_APPROVAL" ? "bg-amber-500" : "bg-current opacity-50"}`} />
       {pretty(value)}
     </span>
   );
@@ -197,10 +203,10 @@ function TariffTable({
   action?: (tariff: Row) => ReactNode;
 }) {
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full">
+    <div className="overflow-x-auto rounded-xl border border-slate-200">
+      <table className="w-full min-w-[880px]">
         <thead>
-          <tr>
+          <tr className="bg-slate-50/90">
             <th className={TH}>Tariff</th>
             <th className={TH}>Category</th>
             <th className={TH}>Method</th>
@@ -213,27 +219,25 @@ function TariffTable({
         </thead>
         <tbody>
           {rows.map((t) => (
-            <tr key={t.tariffId} className="border-t border-slate-100">
+            <tr key={t.tariffId} className="border-t border-slate-100 transition duration-150 hover:bg-emerald-50/30">
               <td className={TD}>
-                <div className="font-semibold text-slate-800">
-                  {t.tariffName}
-                </div>
-                <div className="text-xs text-slate-400">{t.tariffCode}</div>
+                <div className="flex items-center gap-3"><span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="M5 7h14M7 12h10M9 17h6" /></svg></span><span><div className="font-bold text-slate-800">{t.tariffName}</div><div className="mt-0.5 font-mono text-[11px] font-semibold text-slate-400">{t.tariffCode}</div></span></div>
               </td>
               <td className={TD}>{t.category?.categoryName}</td>
-              <td className={TD}>{pretty(t.billingMethod)}</td>
-              <td className={TD}>{tariffRate(t)}</td>
+              <td className={TD}><span className="inline-flex rounded-lg bg-sky-50 px-2.5 py-1 text-xs font-semibold text-sky-700">{pretty(t.billingMethod)}</span></td>
+              <td className={`${TD} font-bold text-slate-800`}>{tariffRate(t)}</td>
               <td className={TD}>
                 {date(t.effectiveFrom)} – {date(t.effectiveTo)}
               </td>
               <td className={TD}>
                 <span
-                  className={
+                  className={`inline-flex items-center gap-1.5 text-sm font-semibold ${
                     t.simulationCompleted
                       ? "text-emerald-700"
                       : "text-orange-600"
-                  }
+                  }`}
                 >
+                  <span className={`h-2 w-2 rounded-full ${t.simulationCompleted ? "bg-emerald-500" : "bg-orange-400"}`} />
                   {t.simulationCompleted ? "Completed" : "Required"}
                 </span>
               </td>
@@ -247,9 +251,9 @@ function TariffTable({
             <tr>
               <td
                 colSpan={action ? 8 : 7}
-                className="p-8 text-center text-slate-400"
+                className="p-14 text-center text-slate-400"
               >
-                No tariffs match this view.
+                <div className="mx-auto mb-3 grid h-14 w-14 place-items-center rounded-2xl bg-slate-100"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-7 w-7"><path d="M5 7h14M7 12h10M9 17h6" /></svg></div><div className="font-bold text-slate-600">No tariffs match this view</div><div className="mt-1 text-sm">Adjust the filters or create a new tariff.</div>
               </td>
             </tr>
           )}
@@ -301,8 +305,9 @@ export function TariffDashboard() {
       }
     >
       {error && <Notice>{error}</Notice>}
-      <Card className="mb-4">
-        <div className="grid gap-3 md:grid-cols-2">
+      <Card className="mb-5">
+        <div className="mb-4 flex items-center gap-3"><span className="grid h-9 w-9 place-items-center rounded-xl bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="M4 6h16M7 12h10M10 18h4" /></svg></span><div><div className="font-bold text-slate-800">Dashboard view</div><div className="text-xs text-slate-500">Filter tariff performance by effective year and customer category.</div></div></div>
+        <div className="grid gap-4 md:grid-cols-2">
           <Field label="Effective year">
             <SearchableSelect
               className={INPUT}
@@ -333,23 +338,23 @@ export function TariffDashboard() {
           </Field>
         </div>
       </Card>
-      <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
-        {stats.map(([label, value, color]) => (
-          <Card key={String(label)}>
-            <div className="text-sm font-medium text-slate-500">{label}</div>
-            <div className={`mt-1 text-3xl font-bold ${color}`}>
+      <div className="mb-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
+        {stats.map(([label, value, color], index) => (
+          <Card key={String(label)} className={index === 0 ? "border-emerald-100 bg-emerald-50/40" : index === 1 ? "border-amber-100 bg-amber-50/40" : ""}>
+            <div className="flex items-center justify-between"><div className="text-sm font-semibold text-slate-500">{label}</div><span className={`h-2.5 w-2.5 rounded-full ${index === 0 ? "bg-emerald-500" : index === 1 ? "bg-amber-500" : "bg-slate-300"}`} /></div>
+            <div className={`mt-2 text-3xl font-extrabold ${color}`}>
               {value ?? 0}
             </div>
           </Card>
         ))}
       </div>
-      <div className="grid gap-4 xl:grid-cols-[1.5fr_1fr]">
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px] xl:items-start">
         <Card title="Active tariffs">
           <TariffTable
             rows={data?.activeTariffs ?? []}
             action={(t) => (
               <Link
-                className="font-semibold text-aqua-700"
+                className="inline-flex rounded-lg bg-emerald-50 px-2.5 py-1.5 text-sm font-bold text-emerald-700 transition hover:bg-emerald-600 hover:text-white"
                 to={`/tariffs/${t.tariffId}/audit`}
               >
                 Audit
@@ -357,12 +362,12 @@ export function TariffDashboard() {
             )}
           />
         </Card>
-        <Card title="Recent tariff activity">
+        <Card title="Recent tariff activity" className="tariff-sidebar-card">
           <div className="space-y-2">
             {(data?.recentEvents ?? []).map((e: Row) => (
               <div
                 key={e.eventId}
-                className="rounded-lg border border-slate-100 p-3"
+                className="rounded-xl border border-slate-100 p-3.5 transition hover:-translate-y-0.5 hover:border-emerald-100 hover:bg-emerald-50/30 hover:shadow-sm"
               >
                 <div className="flex justify-between gap-2">
                   <span className="font-semibold text-slate-800">
@@ -1327,7 +1332,7 @@ export function TariffApprovals() {
       subtitle="Maker-checker review of pricing, bands and simulation evidence"
     >
       {error && <Notice>{error}</Notice>}
-      <div className="grid gap-4 xl:grid-cols-[1.35fr_1fr]">
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_400px] xl:items-start">
         <Card title={`${rows.length} pending tariff(s)`}>
           <TariffTable
             rows={rows}
@@ -1341,7 +1346,7 @@ export function TariffApprovals() {
             )}
           />
         </Card>
-        <Card title="Approval decision">
+        <Card title="Approval decision" className="tariff-sidebar-card xl:sticky xl:top-24">
           {selected ? (
             <div className="space-y-4">
               <div className="rounded-xl bg-slate-50 p-4">
@@ -1509,7 +1514,7 @@ export function TariffActivation() {
     >
       {error && <Notice>{error}</Notice>}
       {message && <Notice tone="green">{message}</Notice>}
-      <div className="grid gap-4 xl:grid-cols-[1.4fr_1fr]">
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px] xl:items-start">
         <Card title={`${rows.length} approved tariff(s)`}>
           <TariffTable
             rows={rows}
@@ -1523,7 +1528,7 @@ export function TariffActivation() {
             )}
           />
         </Card>
-        <Card title="Activation control">
+        <Card title="Activation control" className="tariff-sidebar-card xl:sticky xl:top-24">
           {selected ? (
             <div className="space-y-4">
               <div className="rounded-xl bg-slate-50 p-4">

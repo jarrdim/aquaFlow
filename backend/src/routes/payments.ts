@@ -1242,6 +1242,15 @@ paymentsRouter.get("/dashboard/summary", async (req, res, next) => {
           (channels[p.channel.channelName] ?? 0) + Number(p.amount),
         )),
     );
+    const dailyMap = new Map<string, { amount: number; count: number }>();
+    valid.forEach((p: any) => {
+      const key = new Date(p.paymentDate).toISOString().slice(0, 10);
+      const current = dailyMap.get(key) ?? { amount: 0, count: 0 };
+      dailyMap.set(key, {
+        amount: round(current.amount + Number(p.amount)),
+        count: current.count + 1,
+      });
+    });
     res.json({
       total: round(
         valid.reduce((s: number, p: any) => s + Number(p.amount), 0),
@@ -1258,6 +1267,10 @@ paymentsRouter.get("/dashboard/summary", async (req, res, next) => {
       receipts: await prisma.receipt.count({
         where: { issueDate: { gte: from, lte: to } },
       }),
+      dailyCollections: Array.from(dailyMap.entries())
+        .sort(([left], [right]) => left.localeCompare(right))
+        .slice(-14)
+        .map(([date, values]) => ({ date, ...values })),
       recent: payments
         .slice(0, 10)
         .map((p: any) => ({
