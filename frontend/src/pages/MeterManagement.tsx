@@ -3726,9 +3726,13 @@ export function BulkMeterImport() {
           meterSizeMm: Number(row.meterSizeMm),
           openingReading: Number(row.openingReading || 0),
         }));
-      const result = await api.bulkCreateMeters(valid);
+      let imported = 0;
+      for (let offset = 0; offset < valid.length; offset += 1000) {
+        const result = await api.bulkCreateMeters(valid.slice(offset, offset + 1000));
+        imported += Number(result.imported ?? 0);
+      }
       setMessage(
-        `${result.imported} of ${valid.length} validated meter records imported.`,
+        `${imported} of ${valid.length} validated meter records imported.`,
       );
     } catch (e: any) {
       setError(e.message);
