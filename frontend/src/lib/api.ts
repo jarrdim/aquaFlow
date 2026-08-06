@@ -190,6 +190,11 @@ export const api = {
 
   createAccount: (data: Record<string, unknown>) =>
     request("/accounts", { method: "POST", body: JSON.stringify(data) }),
+  bulkImportAccounts: (accounts: Record<string, unknown>[]) =>
+    request("/accounts/bulk-import", {
+      method: "POST",
+      body: JSON.stringify({ accounts }),
+    }),
   listAccounts: (search = "", take = 8) =>
     request(
       `/accounts?search=${encodeURIComponent(search)}&take=${encodeURIComponent(String(take))}`,

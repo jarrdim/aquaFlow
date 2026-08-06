@@ -14,6 +14,78 @@ const createAccountSchema = z.object({
   openingBalance: z.number().optional(),
 });
 
+const bulkAccountSchema = z.object({
+  accounts: z.array(z.object({
+    accountNumber: z.string().trim().min(1).max(50),
+    customerNumber: z.string().trim().min(1).max(50),
+    propertyCode: z.string().trim().min(1).max(50),
+    categoryCode: z.string().trim().min(1).max(50),
+    openingBalance: z.coerce.number().default(0),
+    currentBalance: z.coerce.number().default(0),
+    connectionDate: z.preprocess((value) => value === "" ? undefined : value, z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()),
+    accountStatus: z.enum(["PENDING", "ACTIVE", "SUSPENDED", "CLOSED"]),
+    closureDate: z.preprocess((value) => value === "" ? undefined : value, z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()),
+  })).min(1).max(1000),
+});
+
+accountsRouter.post("/bulk-import", async (req, res) => {
+  const parsed = bulkAccountSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const rows = parsed.data.accounts;
+  const [customers, properties, categories, existing] = await Promise.all([
+    prisma.customer.findMany({
+      where: { customerNumber: { in: rows.map((row) => row.customerNumber) } },
+      select: { customerId: true, customerNumber: true },
+    }),
+    prisma.property.findMany({
+      where: { propertyCode: { in: rows.map((row) => row.propertyCode) } },
+      select: { propertyId: true, propertyCode: true, ownerCustomerId: true },
+    }),
+    prisma.customerCategory.findMany({
+      where: { categoryCode: { in: rows.map((row) => row.categoryCode) } },
+      select: { categoryId: true, categoryCode: true },
+    }),
+    prisma.customerAccount.findMany({
+      where: { accountNumber: { in: rows.map((row) => row.accountNumber) } },
+      select: { accountNumber: true },
+    }),
+  ]);
+  const customerIds = new Map(customers.map((row) => [row.customerNumber, row.customerId]));
+  const propertyByCode = new Map(properties.map((row) => [row.propertyCode, row]));
+  const categoryIds = new Map(categories.map((row) => [row.categoryCode, row.categoryId]));
+  const existingNumbers = new Set(existing.map((row) => row.accountNumber));
+  const seen = new Set<string>();
+  const errors: string[] = [];
+  rows.forEach((row, index) => {
+    const line = index + 2;
+    const customerId = customerIds.get(row.customerNumber);
+    const property = propertyByCode.get(row.propertyCode);
+    if (!customerId) errors.push(`Row ${line}: customer ${row.customerNumber} was not found.`);
+    if (!property) errors.push(`Row ${line}: property ${row.propertyCode} was not found.`);
+    if (customerId && property && property.ownerCustomerId !== customerId) errors.push(`Row ${line}: property ${row.propertyCode} does not belong to customer ${row.customerNumber}.`);
+    if (!categoryIds.has(row.categoryCode)) errors.push(`Row ${line}: category ${row.categoryCode} was not found.`);
+    if (seen.has(row.accountNumber)) errors.push(`Row ${line}: account ${row.accountNumber} is duplicated in this file.`);
+    seen.add(row.accountNumber);
+  });
+  if (errors.length) return res.status(409).json({ error: errors.slice(0, 100).join("\n") });
+
+  const newRows = rows.filter((row) => !existingNumbers.has(row.accountNumber));
+  const result = await prisma.customerAccount.createMany({
+    data: newRows.map((row) => ({
+      accountNumber: row.accountNumber,
+      customerId: customerIds.get(row.customerNumber)!,
+      propertyId: propertyByCode.get(row.propertyCode)!.propertyId,
+      categoryId: categoryIds.get(row.categoryCode)!,
+      openingBalance: row.openingBalance,
+      currentBalance: row.currentBalance,
+      connectionDate: row.connectionDate ? new Date(`${row.connectionDate}T00:00:00.000Z`) : null,
+      accountStatus: row.accountStatus,
+      closureDate: row.closureDate ? new Date(`${row.closureDate}T00:00:00.000Z`) : null,
+    })),
+  });
+  res.status(201).json({ imported: result.count, skipped: rows.length - newRows.length });
+});
+
 async function nextAccountNumber() {
   const year = new Date().getFullYear();
   const count = await prisma.customerAccount.count();
