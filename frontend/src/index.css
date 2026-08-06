@@ -628,6 +628,26 @@ input[type="radio"] {
     font-size: 12pt !important;
   }
 
+  body.printing-statement .other-service-payments {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  body.printing-statement .other-service-payments .overflow-x-auto {
+    overflow: visible !important;
+  }
+
+  body.printing-statement .other-service-payments table {
+    min-width: 0 !important;
+    width: 100% !important;
+    font-size: 8pt !important;
+  }
+
+  body.printing-statement .other-service-payments th,
+  body.printing-statement .other-service-payments td {
+    padding: 6px 5px !important;
+  }
+
   body.printing-statement .statement-footer {
     margin-top: 14px !important;
     padding-top: 7px !important;

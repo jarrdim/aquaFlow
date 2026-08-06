@@ -747,6 +747,17 @@ type StatementEntry = {
   balance: number;
 };
 
+type OtherServicePayment = {
+  type: "RECONNECTION_FEE" | "NEW_CONNECTION_FEE";
+  label: string;
+  reference: string;
+  receiptNumber: string | null;
+  transactionReference: string;
+  date: Date;
+  amount: number;
+  paymentStatus: string;
+};
+
 type CustomerStatementData = {
   utility: {
     name: string;
@@ -774,6 +785,8 @@ type CustomerStatementData = {
   totalPayments: number;
   closingBalance: number;
   entries: StatementEntry[];
+  otherServicePayments: OtherServicePayment[];
+  otherServicePaymentsSubtotal: number;
 };
 
 function roundMoney(value: number) {
@@ -927,6 +940,50 @@ function statementPdf(data: CustomerStatementData & { printedAt: Date }) {
     doc.y = balanceForwardY + 30;
     doc.font("Helvetica-Oblique").fontSize(8).fillColor("#60708A")
       .text("Positive balances are amounts owed. Negative balances represent customer credit.");
+
+    if (data.otherServicePayments.length) {
+      if (doc.y > 650) doc.addPage();
+      doc.moveDown(2);
+      doc.font("Helvetica-Bold").fontSize(12).fillColor("#132036")
+        .text("OTHER SERVICE PAYMENTS");
+      doc.font("Helvetica").fontSize(8).fillColor("#60708A")
+        .text("Informational only — these payments do not affect the water account balance.");
+      doc.moveDown(0.7);
+      const drawOtherHeader = () => {
+        const y = doc.y;
+        doc.rect(42, y, 511, 20).fill("#3B647E");
+        doc.font("Helvetica-Bold").fontSize(7.5).fillColor("#FFFFFF");
+        doc.text("Date", 47, y + 6, { width: 62 });
+        doc.text("Service / Reference", 112, y + 6, { width: 175 });
+        doc.text("Receipt", 290, y + 6, { width: 95 });
+        doc.text("Status", 388, y + 6, { width: 70 });
+        doc.text("Amount", 461, y + 6, { width: 87, align: "right" });
+        doc.y = y + 25;
+      };
+      drawOtherHeader();
+      for (const payment of data.otherServicePayments) {
+        if (doc.y > 748) {
+          doc.addPage();
+          drawOtherHeader();
+        }
+        const y = doc.y;
+        const height = 30;
+        doc.font("Helvetica").fontSize(8).fillColor("#132036");
+        doc.text(payment.date.toISOString().slice(0, 10), 47, y + 5, { width: 62 });
+        doc.font("Helvetica-Bold").text(payment.label, 112, y + 5, { width: 175 });
+        doc.font("Helvetica").fontSize(7).fillColor("#60708A")
+          .text(payment.reference, 112, y + 16, { width: 175 });
+        doc.fontSize(8).fillColor("#132036")
+          .text(payment.receiptNumber || "-", 290, y + 5, { width: 95 })
+          .text(payment.paymentStatus.replace(/_/g, " "), 388, y + 5, { width: 70 })
+          .text(money(payment.amount), 461, y + 5, { width: 87, align: "right" });
+        doc.strokeColor("#DCE4EF").moveTo(42, y + height).lineTo(553, y + height).stroke();
+        doc.y = y + height + 3;
+      }
+      doc.font("Helvetica-Bold").fontSize(9).fillColor("#132036")
+        .text("Other service payments subtotal", 290, doc.y + 5, { width: 168, align: "right" })
+        .text(money(data.otherServicePaymentsSubtotal), 461, doc.y + 5, { width: 87, align: "right" });
+    }
     doc.end();
   });
 }
@@ -974,7 +1031,7 @@ async function loadCustomerStatement(
   if (!customer.accounts.length) throw statementHttpError(404, "Customer account not found");
   const accountIds = customer.accounts.map((account) => account.accountId);
   const primaryAccount = customer.accounts[0];
-  const [bills, payments, priorBills, priorPayments, latestBill, settings] = await Promise.all([
+  const [bills, payments, otherServicePayments, priorBills, priorPayments, latestBill, settings] = await Promise.all([
     prisma.bill.findMany({
       where: {
         accountId: { in: accountIds },
@@ -993,9 +1050,19 @@ async function loadCustomerStatement(
       where: {
         accountId: { in: accountIds },
         paymentStatus: "POSTED",
+        paymentType: { notIn: ["RECONNECTION_FEE", "NEW_CONNECTION_FEE"] },
         paymentDate: { gte: from, lte: to },
       },
       include: { account: { select: { accountNumber: true } }, channel: true },
+      orderBy: { paymentDate: "asc" },
+    }),
+    prisma.payment.findMany({
+      where: {
+        accountId: { in: accountIds },
+        paymentType: { in: ["RECONNECTION_FEE", "NEW_CONNECTION_FEE"] },
+        paymentDate: { gte: from, lte: to },
+      },
+      include: { receipt: true },
       orderBy: { paymentDate: "asc" },
     }),
     prisma.bill.aggregate({
@@ -1007,7 +1074,11 @@ async function loadCustomerStatement(
       _sum: { totalCurrentCharges: true },
     }),
     prisma.payment.aggregate({
-      where: { accountId: { in: accountIds }, paymentStatus: "POSTED", paymentDate: { lt: from } },
+      where: {
+        accountId: { in: accountIds }, paymentStatus: "POSTED",
+        paymentType: { notIn: ["RECONNECTION_FEE", "NEW_CONNECTION_FEE"] },
+        paymentDate: { lt: from },
+      },
       _sum: { amount: true },
     }),
     prisma.bill.findFirst({
@@ -1060,6 +1131,16 @@ async function loadCustomerStatement(
   const totalBills = roundMoney(entries.reduce((sum, entry) => sum + entry.debit, 0));
   const totalPayments = roundMoney(entries.reduce((sum, entry) => sum + entry.credit, 0));
   const closingBalance = roundMoney(openingBalance + totalBills - totalPayments);
+  const servicePayments: OtherServicePayment[] = otherServicePayments.map((payment) => ({
+    type: payment.paymentType as OtherServicePayment["type"],
+    label: payment.paymentType === "RECONNECTION_FEE" ? "Reconnection fee" : "New Connection payment",
+    reference: payment.customerReference || payment.transactionReference,
+    receiptNumber: payment.receipt?.receiptNumber ?? null,
+    transactionReference: payment.transactionReference,
+    date: payment.paymentDate,
+    amount: Number(payment.amount),
+    paymentStatus: payment.paymentStatus,
+  }));
   return {
     utility: {
       name: settings?.utilityName ?? "Samdamte Water Utility Management",
@@ -1088,6 +1169,8 @@ async function loadCustomerStatement(
     totalPayments,
     closingBalance,
     entries,
+    otherServicePayments: servicePayments,
+    otherServicePaymentsSubtotal: roundMoney(servicePayments.reduce((sum, payment) => sum + payment.amount, 0)),
   };
 }
 
@@ -1124,6 +1207,8 @@ mobileRouter.get("/customer/statement/summary", requireRole("CUSTOMER"), async (
       totalBills: statement.totalBills,
       totalPayments: statement.totalPayments,
       closingBalance: statement.closingBalance,
+      otherServicePayments: statement.otherServicePayments,
+      otherServicePaymentsSubtotal: statement.otherServicePaymentsSubtotal,
     });
   } catch (error) {
     sendStatementError(error, res, next);
@@ -1172,7 +1257,11 @@ mobileRouter.get("/customer/overview", requireRole("CUSTOMER"), async (req, res,
           orderBy: { accountNumber: "asc" },
         },
         serviceRequests: { orderBy: { createdAt: "desc" }, take: 20 },
-        notifications: { orderBy: { createdAt: "desc" }, take: 30 },
+        notifications: {
+          where: { deliveryStatus: { in: ["SENT", "DELIVERED"] } },
+          orderBy: { createdAt: "desc" },
+          take: 30,
+        },
       },
     });
     if (!customer || customer.status !== "ACTIVE") {
@@ -1261,6 +1350,40 @@ mobileRouter.get("/customer/overview", requireRole("CUSTOMER"), async (req, res,
       connections,
       notifications: customer.notifications,
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+mobileRouter.get("/customer/notifications", requireRole("CUSTOMER"), async (req, res, next) => {
+  try {
+    const customerId = BigInt(req.user!.userId);
+    const customer = await prisma.customer.findUnique({
+      where: { customerId },
+      select: { status: true },
+    });
+    if (!customer || customer.status !== "ACTIVE") {
+      return res.status(404).json({ error: "Active customer profile not found" });
+    }
+    const rows = await prisma.notification.findMany({
+      where: {
+        customerId,
+        deliveryStatus: { in: ["SENT", "DELIVERED"] },
+      },
+      select: {
+        notificationId: true,
+        notificationType: true,
+        subject: true,
+        messageBody: true,
+        deliveryStatus: true,
+        sentAt: true,
+        deliveredAt: true,
+        createdAt: true,
+      },
+      orderBy: { createdAt: "desc" },
+      take: 100,
+    });
+    res.json({ rows, total: rows.length });
   } catch (error) {
     next(error);
   }

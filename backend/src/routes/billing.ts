@@ -480,20 +480,37 @@ billingRouter.get("/statements/:accountId", async (req, res, next) => {
     if (from > to) {
       return res.status(400).json({ error: "Statement start date cannot be after the end date." });
     }
-    const [bills, payments, priorBills, priorPayments, latestBill, settings] = await Promise.all([
+    const [bills, payments, otherServicePayments, priorBills, priorPayments, latestBill, settings] = await Promise.all([
       prisma.bill.findMany({
         where: { accountId, status: { in: ["POSTED", "PARTIALLY_PAID", "PAID"] }, issueDate: { gte: from, lte: to } },
         include: { billingCycle: true, tariff: true, reading: true },
         orderBy: { issueDate: "asc" },
       }),
       prisma.payment.findMany({
-        where: { accountId, paymentStatus: "POSTED", paymentDate: { gte: from, lte: to } },
+        where: {
+          accountId, paymentStatus: "POSTED",
+          paymentType: { notIn: ["RECONNECTION_FEE", "NEW_CONNECTION_FEE"] },
+          paymentDate: { gte: from, lte: to },
+        },
         include: { channel: true },
+        orderBy: { paymentDate: "asc" },
+      }),
+      prisma.payment.findMany({
+        where: {
+          accountId,
+          paymentType: { in: ["RECONNECTION_FEE", "NEW_CONNECTION_FEE"] },
+          paymentDate: { gte: from, lte: to },
+        },
+        include: { receipt: true },
         orderBy: { paymentDate: "asc" },
       }),
       prisma.bill.aggregate({ where: { accountId, status: { in: ["POSTED", "PARTIALLY_PAID", "PAID"] }, issueDate: { lt: from } }, _sum: { totalCurrentCharges: true } }),
       prisma.payment.aggregate({
-        where: { accountId, paymentStatus: "POSTED", paymentDate: { lt: from } },
+        where: {
+          accountId, paymentStatus: "POSTED",
+          paymentType: { notIn: ["RECONNECTION_FEE", "NEW_CONNECTION_FEE"] },
+          paymentDate: { lt: from },
+        },
         _sum: { amount: true },
       }),
       prisma.bill.findFirst({
@@ -534,6 +551,16 @@ billingRouter.get("/statements/:accountId", async (req, res, next) => {
     const statement = entries.map((entry) => { balance = round(balance + entry.debit - entry.credit); return { ...entry, balance }; });
     const totalDebits = round(entries.reduce((sum, entry) => sum + entry.debit, 0));
     const totalCredits = round(entries.reduce((sum, entry) => sum + entry.credit, 0));
+    const servicePayments = otherServicePayments.map((payment: any) => ({
+      type: payment.paymentType,
+      label: payment.paymentType === "RECONNECTION_FEE" ? "Reconnection fee" : "New Connection payment",
+      reference: payment.customerReference || payment.transactionReference,
+      receiptNumber: payment.receipt?.receiptNumber ?? null,
+      transactionReference: payment.transactionReference,
+      date: payment.paymentDate,
+      amount: Number(payment.amount),
+      paymentStatus: payment.paymentStatus,
+    }));
     res.json({
       utility: {
         name: settings?.utilityName ?? "Samdamte Water Utility Management",
@@ -569,6 +596,8 @@ billingRouter.get("/statements/:accountId", async (req, res, next) => {
       closingBalance: balance,
       currentBalance: Number(account.currentBalance),
       entries: statement,
+      otherServicePayments: servicePayments,
+      otherServicePaymentsSubtotal: round(servicePayments.reduce((sum: number, payment: any) => sum + payment.amount, 0)),
     });
   } catch (error) { next(error); }
 });

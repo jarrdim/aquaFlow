@@ -311,40 +311,40 @@ const CONNECTION_MENU = [
 ] as const;
 
 const METER_MENU = [
-  ["Dashboard", "/meters"],
-  ["Register Meter", "/meters/register"],
-  ["Meter Register", "/meters/list"],
-  ["Assign Customer Meter", "/meters/assign"],
-  ["Assign Bulk / Zone", "/meters/assign/non-customer"],
-  ["Replacement Approval", "/meters/replacements"],
-  ["Exception Report", "/meters/reports/exceptions"],
-  ["Bulk Import", "/meters/import"],
-  ["Exception Alerts", "/meters/alerts"],
+  ["Overview", "/meters"],
+  ["All Meters", "/meters/list"],
+  ["Add Meter", "/meters/register"],
+  ["Customer Assignment", "/meters/assign"],
+  ["Network Assignment", "/meters/assign/non-customer"],
+  ["Import Meters", "/meters/import"],
+  ["Replacement Reviews", "/meters/replacements"],
+  ["Exception Register", "/meters/reports/exceptions"],
+  ["Alert Queue", "/meters/alerts"],
 ] as const;
 
 const READING_MENU = [
-  ["Reading Dashboard", "/readings"],
+  ["Overview", "/readings"],
   ["Reading Cycles", "/readings/cycles"],
-  ["Route Assignments", "/readings/assignments"],
+  ["Reader Assignments", "/readings/assignments"],
   ["Reading Worklist", "/readings/worklist"],
-  ["Reading Register", "/readings/register"],
-  ["Reading Approvals", "/readings/approvals"],
-  ["Reading Exceptions", "/readings/exceptions"],
-  ["Route Progress", "/readings/progress"],
-  ["Offline Queue", "/readings/sync"],
+  ["All Readings", "/readings/register"],
+  ["Approval Queue", "/readings/approvals"],
+  ["Exception Queue", "/readings/exceptions"],
+  ["Route Tracking", "/readings/progress"],
+  ["Sync Queue", "/readings/sync"],
 ] as const;
 
 const TARIFF_MENU = [
-  ["Tariff Dashboard", "/tariffs"],
-  ["Tariff Register", "/tariffs/register"],
-  ["Create Tariff", "/tariffs/new"],
-  ["Category Assignment", "/tariffs/assignments"],
-  ["Simulations", "/tariffs/simulations"],
-  ["Tariff Approval", "/tariffs/approvals"],
-  ["Tariff Activation", "/tariffs/activation"],
-  ["Tariff History", "/tariffs/history"],
-  ["Tariff Comparison", "/tariffs/compare"],
-  ["Tariff Audit Trail", "/tariffs/audit"],
+  ["Overview", "/tariffs"],
+  ["All Tariffs", "/tariffs/register"],
+  ["New Tariff", "/tariffs/new"],
+  ["Category Assignments", "/tariffs/assignments"],
+  ["Tariff Simulations", "/tariffs/simulations"],
+  ["Approval Queue", "/tariffs/approvals"],
+  ["Activation Queue", "/tariffs/activation"],
+  ["Version History", "/tariffs/history"],
+  ["Compare Tariffs", "/tariffs/compare"],
+  ["Audit Trail", "/tariffs/audit"],
 ] as const;
 
 const BILLING_MENU = [

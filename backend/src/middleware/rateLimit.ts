@@ -19,7 +19,8 @@ export function rateLimit(options: {
 }) {
   return (req: Request, res: Response, next: NextFunction) => {
     const now = Date.now();
-    const key = `${options.namespace}:${req.ip}:${String(req.body?.username ?? "").toLowerCase()}`;
+    const loginIdentifier = req.body?.username ?? req.body?.identifier ?? "";
+    const key = `${options.namespace}:${req.ip}:${String(loginIdentifier).toLowerCase()}`;
     const current = attempts.get(key);
     const attempt =
       !current || current.resetAt <= now

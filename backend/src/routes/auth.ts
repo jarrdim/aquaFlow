@@ -13,6 +13,17 @@ const loginSchema = z.object({
   password: z.string().min(1),
 });
 
+const fieldLoginSchema = z.object({
+  identifier: z.string().trim().min(1),
+  password: z.string().min(1),
+});
+
+const FIELD_OFFICER_ROLES = new Set([
+  "METER_READER",
+  "METER_SUPERVISOR",
+  "SUPERVISOR",
+]);
+
 type SessionUser = {
   userId: bigint;
   username: string;
@@ -71,6 +82,52 @@ authRouter.post("/login", loginLimiter, async (req, res) => {
   const valid = await bcrypt.compare(password, user.passwordHash);
   if (!valid) {
     return res.status(401).json({ error: "Invalid credentials" });
+  }
+
+  await prisma.user.update({
+    where: { userId: user.userId },
+    data: { lastLoginAt: new Date() },
+  });
+
+  res.json(issueTokens(user));
+});
+
+authRouter.post("/field/login", loginLimiter, async (req, res) => {
+  const parsed = fieldLoginSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "identifier and password are required" });
+  }
+
+  const { identifier, password } = parsed.data;
+  const user = await prisma.user.findFirst({
+    where: {
+      OR: [
+        { username: { equals: identifier, mode: "insensitive" } },
+        { fieldOfficer: { is: { employeeNumber: { equals: identifier, mode: "insensitive" } } } },
+      ],
+    },
+    include: {
+      fieldOfficer: true,
+      userRoles: { include: { role: true }, where: { status: "ACTIVE" } },
+    },
+  });
+
+  if (!user || user.status !== "ACTIVE" || !(await bcrypt.compare(password, user.passwordHash))) {
+    return res.status(401).json({ error: "Invalid credentials" });
+  }
+
+  const hasFieldRole = user.userRoles.some(({ role }) =>
+    role.status === "ACTIVE" && FIELD_OFFICER_ROLES.has(role.roleCode),
+  );
+  if (
+    user.userType !== "STAFF" ||
+    !user.fieldOfficer ||
+    user.fieldOfficer.status !== "ACTIVE" ||
+    !hasFieldRole
+  ) {
+    return res.status(403).json({
+      error: "This account is not authorized for the Field Officer App",
+    });
   }
 
   await prisma.user.update({

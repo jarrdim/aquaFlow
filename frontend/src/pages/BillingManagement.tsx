@@ -2127,7 +2127,6 @@ function CustomerStatementsOld() {
       ),
     [bills],
   );
-
   useEffect(() => {
     api
       .listBills()
@@ -2445,7 +2444,7 @@ export function CustomerStatements() {
   const now = new Date();
   const localDate = (value: Date) =>
     `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
-  const [bills, setBills] = useState<Row[]>([]);
+  const [accounts, setAccounts] = useState<Row[]>([]);
   const [accountId, setAccountId] = useState("");
   const [from, setFrom] = useState(
     localDate(new Date(now.getFullYear(), now.getMonth(), 1)),
@@ -2455,19 +2454,11 @@ export function CustomerStatements() {
   const [loadingAccounts, setLoadingAccounts] = useState(true);
   const [loadingStatement, setLoadingStatement] = useState(false);
   const [error, setError] = useState("");
-  const accounts = useMemo(
-    () =>
-      Array.from(
-        new Map(bills.map((bill) => [String(bill.accountId), bill])).values(),
-      ),
-    [bills],
-  );
-
   useEffect(() => {
     api
-      .listBills()
+      .listAccounts("", 20000)
       .then((rows) => {
-        setBills(rows);
+        setAccounts(rows);
         if (rows[0]) setAccountId(String(rows[0].accountId));
       })
       .catch((e) => setError(e.message))
@@ -2591,9 +2582,12 @@ export function CustomerStatements() {
               <option value="">
                 {loadingAccounts ? "Loading accounts..." : "Select account"}
               </option>
-              {accounts.map((bill: Row) => (
-                <option key={bill.accountId} value={bill.accountId}>
-                  {bill.account.accountNumber} - {bill.customerName}
+              {accounts.map((account: Row) => (
+                <option key={account.accountId} value={account.accountId}>
+                  {account.accountNumber} - {account.customer.organizationName ||
+                    [account.customer.firstName, account.customer.middleName, account.customer.lastName]
+                      .filter(Boolean)
+                      .join(" ")}
                 </option>
               ))}
             </SearchableSelect>
@@ -2835,6 +2829,54 @@ export function CustomerStatements() {
                 <strong>{money(statement.closingBalance)}</strong>
               </div>
             </div>
+            {statement.otherServicePayments?.length > 0 && (
+              <section className="other-service-payments mt-8 border-t-2 border-slate-700 pt-5">
+                <h3 className="text-lg font-black uppercase tracking-wide text-slate-900">
+                  Other Service Payments
+                </h3>
+                <p className="mb-4 mt-1 text-xs text-slate-500">
+                  Informational only — these payments do not affect the water account balance.
+                </p>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[780px] border-collapse text-sm">
+                    <thead>
+                      <tr className="bg-slate-700 text-white">
+                        <th className={`${TH} text-left`}>#</th>
+                        <th className={`${TH} text-left`}>Date</th>
+                        <th className={`${TH} text-left`}>Service</th>
+                        <th className={`${TH} text-left`}>Reference</th>
+                        <th className={`${TH} text-left`}>Receipt number</th>
+                        <th className={`${TH} text-left`}>Status</th>
+                        <th className={`${TH} text-right`}>Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {statement.otherServicePayments.map((payment: Row, index: number) => (
+                        <tr key={`${payment.type}-${payment.transactionReference}`} className="border-b border-slate-200">
+                          <td className={TD}>{index + 1}</td>
+                          <td className={`${TD} whitespace-nowrap`}>{date(payment.date)}</td>
+                          <td className={`${TD} font-semibold`}>{payment.label}</td>
+                          <td className={`${TD} whitespace-nowrap`}>{payment.reference}</td>
+                          <td className={`${TD} whitespace-nowrap`}>{payment.receiptNumber || "-"}</td>
+                          <td className={TD}>{pretty(payment.paymentStatus)}</td>
+                          <td className={`${TD} whitespace-nowrap text-right font-semibold`}>{money(payment.amount)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr className="border-t-2 border-slate-900">
+                        <td colSpan={6} className={`${TD} text-right font-black`}>
+                          Other Service Payments subtotal
+                        </td>
+                        <td className={`${TD} whitespace-nowrap text-right font-black`}>
+                          {money(statement.otherServicePaymentsSubtotal)}
+                        </td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </section>
+            )}
             <div className="statement-footer mt-10 border-t border-slate-300 pt-3 text-center text-xs text-slate-500">
               {/* This statement is generated from posted bills and payments in the utility ledger. */}
               We make it safe because water is life

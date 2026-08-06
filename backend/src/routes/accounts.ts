@@ -23,7 +23,9 @@ async function nextAccountNumber() {
 accountsRouter.get("/", async (req, res, next) => {
   try {
     const search = String(req.query.search ?? "").trim();
-    const take = Math.min(20, Math.max(1, Number(req.query.take) || 8));
+    // Larger callers such as Customer Statements need the complete account
+    // directory; compact autocomplete callers retain their small default.
+    const take = Math.min(20_000, Math.max(1, Number(req.query.take) || 8));
     const accounts = await prisma.customerAccount.findMany({
       where: search
         ? {
