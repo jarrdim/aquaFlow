@@ -164,6 +164,113 @@ const bulkCustomerStatusSchema = z.object({
   status: z.enum(["ACTIVE", "INACTIVE", "SUSPENDED", "CLOSED"]),
 });
 
+const bulkCustomerRowSchema = z
+  .object({
+    customerNumber: z.string().trim().min(1).max(50),
+    customerType: z.enum(["INDIVIDUAL", "ORGANIZATION"]),
+    firstName: z.string().trim().optional(),
+    middleName: z.string().trim().optional(),
+    lastName: z.string().trim().optional(),
+    organizationName: z.string().trim().optional(),
+    nationalId: z.string().trim().optional(),
+    registrationNumber: z.string().trim().optional(),
+    phoneNumber: z.string().trim().min(1).max(30),
+    alternativePhone: z.string().trim().optional(),
+    emailAddress: z.string().trim().email().optional(),
+    preferredLanguage: z.enum(["EN", "SW"]).default("EN"),
+    status: z.enum(["ACTIVE", "INACTIVE", "SUSPENDED", "CLOSED"]).default("ACTIVE"),
+    registrationDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  })
+  .refine(
+    (row) =>
+      row.customerType === "INDIVIDUAL"
+        ? Boolean(row.firstName && row.lastName)
+        : Boolean(row.organizationName),
+    { message: "Individual customers require first and last names; organizations require an organization name" },
+  );
+
+const bulkCustomerImportSchema = z.object({
+  customers: z.array(bulkCustomerRowSchema).min(1).max(1000),
+});
+
+customersRouter.post("/bulk-import", async (req, res) => {
+  const parsed = bulkCustomerImportSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.flatten() });
+  }
+
+  const rows = parsed.data.customers;
+  const duplicateErrors: string[] = [];
+  const duplicateFields: Array<[keyof (typeof rows)[number], string]> = [
+    ["customerNumber", "customer number"],
+    ["nationalId", "national ID"],
+    ["registrationNumber", "registration number"],
+  ];
+
+  for (const [field, label] of duplicateFields) {
+    const seen = new Map<string, number>();
+    rows.forEach((row, index) => {
+      const value = row[field];
+      if (typeof value !== "string" || !value) return;
+      const key = value.toLocaleUpperCase();
+      const first = seen.get(key);
+      if (first !== undefined) {
+        duplicateErrors.push(`Rows ${first + 2} and ${index + 2} use the same ${label} (${value}).`);
+      } else {
+        seen.set(key, index);
+      }
+    });
+  }
+
+  const existing = await prisma.customer.findMany({
+    where: {
+      OR: [
+        { customerNumber: { in: rows.map((row) => row.customerNumber) } },
+        { nationalId: { in: rows.map((row) => row.nationalId).filter((value): value is string => Boolean(value)) } },
+        { registrationNumber: { in: rows.map((row) => row.registrationNumber).filter((value): value is string => Boolean(value)) } },
+      ],
+    },
+    select: { customerNumber: true, nationalId: true, registrationNumber: true },
+  });
+
+  const existingNumbers = new Set(existing.map((row) => row.customerNumber));
+  const existingNationalIds = new Set(existing.map((row) => row.nationalId).filter(Boolean));
+  const existingRegistrationNumbers = new Set(existing.map((row) => row.registrationNumber).filter(Boolean));
+  rows.forEach((row, index) => {
+    if (existingNumbers.has(row.customerNumber)) duplicateErrors.push(`Row ${index + 2}: customer number ${row.customerNumber} already exists.`);
+    if (row.nationalId && existingNationalIds.has(row.nationalId)) duplicateErrors.push(`Row ${index + 2}: national ID ${row.nationalId} already exists.`);
+    if (row.registrationNumber && existingRegistrationNumbers.has(row.registrationNumber)) duplicateErrors.push(`Row ${index + 2}: registration number ${row.registrationNumber} already exists.`);
+  });
+
+  if (duplicateErrors.length) {
+    return res.status(409).json({ error: duplicateErrors.slice(0, 100).join("\n") });
+  }
+
+  const result = await prisma.customer.createMany({
+    data: rows.map((row) => ({
+      customerNumber: row.customerNumber,
+      customerType: row.customerType,
+      firstName: row.firstName || null,
+      middleName: row.middleName || null,
+      lastName: row.lastName || null,
+      organizationName: row.organizationName || null,
+      nationalId: row.nationalId || null,
+      registrationNumber: row.registrationNumber || null,
+      phoneNumber: row.phoneNumber,
+      alternativePhone: row.alternativePhone || null,
+      emailAddress: row.emailAddress || null,
+      preferredLanguage: row.preferredLanguage,
+      status: row.status,
+      registrationDate: row.registrationDate
+        ? new Date(`${row.registrationDate}T00:00:00.000Z`)
+        : new Date(),
+      createdBy: req.user ? BigInt(req.user.userId) : null,
+    })),
+  });
+
+  res.status(201).json({ imported: result.count });
+});
+
 customersRouter.patch("/bulk-status", async (req, res) => {
   const parsed = bulkCustomerStatusSchema.safeParse(req.body);
   if (!parsed.success) {

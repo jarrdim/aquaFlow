@@ -4,6 +4,7 @@ import { api } from "../lib/api";
 import { encodeId } from "../lib/hashids";
 import { SearchableSelect } from "../components/SearchableSelect";
 import { SweetAlertToast } from "../components/SweetAlertToast";
+import { exportExcel, parseMeterWorkbook } from "../lib/meterFiles";
 
 interface Customer {
   customerId: string;
@@ -142,6 +143,10 @@ export default function Customers() {
   const [bulkStatus, setBulkStatus] = useState("ACTIVE");
   const [updating, setUpdating] = useState(false);
   const [withoutActiveMeter, setWithoutActiveMeter] = useState(0);
+  const [showImport, setShowImport] = useState(false);
+  const [importRows, setImportRows] = useState<Record<string, unknown>[]>([]);
+  const [importErrors, setImportErrors] = useState<string[]>([]);
+  const [importing, setImporting] = useState(false);
 
   async function load(
     q = search,
@@ -245,6 +250,73 @@ export default function Customers() {
     }
   }
 
+  function cell(row: Record<string, unknown>, name: string) {
+    const entry = Object.entries(row).find(
+      ([key]) => key.trim().toLowerCase() === name.toLowerCase(),
+    );
+    return String(entry?.[1] ?? "").trim();
+  }
+
+  async function selectImportFile(file?: File) {
+    if (!file) return;
+    setError("");
+    try {
+      const sourceRows = await parseMeterWorkbook(file);
+      const errors: string[] = [];
+      const normalized = sourceRows.map((row, index) => {
+        const customerType = cell(row, "Customer Type").toUpperCase();
+        const firstName = cell(row, "First Name");
+        const lastName = cell(row, "Last Name");
+        const organizationName = cell(row, "Organization Name");
+        const emailAddress = cell(row, "Email Address");
+        const registrationDate = cell(row, "Registration Date");
+        if (!cell(row, "Customer Number")) errors.push(`Row ${index + 2}: Customer Number is required.`);
+        if (!cell(row, "Phone Number")) errors.push(`Row ${index + 2}: Phone Number is required.`);
+        if (!["INDIVIDUAL", "ORGANIZATION"].includes(customerType)) errors.push(`Row ${index + 2}: Customer Type must be INDIVIDUAL or ORGANIZATION.`);
+        if (customerType === "INDIVIDUAL" && (!firstName || !lastName)) errors.push(`Row ${index + 2}: First Name and Last Name are required.`);
+        if (customerType === "ORGANIZATION" && !organizationName) errors.push(`Row ${index + 2}: Organization Name is required.`);
+        if (emailAddress && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailAddress)) errors.push(`Row ${index + 2}: Email Address is invalid.`);
+        if (registrationDate && !/^\d{4}-\d{2}-\d{2}$/.test(registrationDate)) errors.push(`Row ${index + 2}: Registration Date must be YYYY-MM-DD.`);
+        return {
+          customerNumber: cell(row, "Customer Number"), customerType,
+          firstName, middleName: cell(row, "Middle Name"), lastName, organizationName,
+          nationalId: cell(row, "National ID"), registrationNumber: cell(row, "Registration Number"),
+          phoneNumber: cell(row, "Phone Number"), alternativePhone: cell(row, "Alternative Phone"),
+          emailAddress, preferredLanguage: cell(row, "Preferred Language").toUpperCase() || "EN",
+          status: cell(row, "Status").toUpperCase() || "ACTIVE", registrationDate: registrationDate || undefined,
+        };
+      });
+      if (!sourceRows.length) errors.push("The selected file has no customer rows.");
+      setImportRows(normalized);
+      setImportErrors(errors);
+    } catch (err) {
+      setImportRows([]);
+      setImportErrors([err instanceof Error ? err.message : "The file could not be read."]);
+    }
+  }
+
+  async function importCustomers() {
+    if (!importRows.length || importErrors.length) return;
+    setImporting(true);
+    setError("");
+    try {
+      let imported = 0;
+      for (let offset = 0; offset < importRows.length; offset += 1000) {
+        const result = await api.bulkImportCustomers(importRows.slice(offset, offset + 1000));
+        imported += Number(result.imported ?? 0);
+      }
+      setSuccess(`${imported} customer(s) imported successfully.`);
+      setImportRows([]);
+      setShowImport(false);
+      setPage(1);
+      await load(search, statusFilter, meterAssignmentFilter, 1);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Customers could not be imported.");
+    } finally {
+      setImporting(false);
+    }
+  }
+
   return (
     <div className="mx-auto max-w-[1600px] px-5 py-6 lg:px-8">
       <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
@@ -261,10 +333,11 @@ export default function Customers() {
             </p>
           </div>
         </div>
-        <Link
-          to="/customers/new"
-          className="inline-flex items-center gap-2 rounded-xl bg-aqua-700 px-5 py-3 text-sm font-bold text-white shadow-lg shadow-sky-200/70 transition hover:-translate-y-0.5 hover:bg-aqua-600"
-        >
+        <div className="flex flex-wrap gap-2">
+        <button type="button" onClick={() => setShowImport((value) => !value)} className="inline-flex items-center rounded-xl border border-aqua-700 bg-white px-5 py-3 text-sm font-bold text-aqua-700">
+          {showImport ? "Close import" : "Bulk import"}
+        </button>
+        <Link to="/customers/new" className="inline-flex items-center gap-2 rounded-xl bg-aqua-700 px-5 py-3 text-sm font-bold text-white shadow-lg shadow-sky-200/70 transition hover:-translate-y-0.5 hover:bg-aqua-600">
           <svg
             width="16"
             height="16"
@@ -277,7 +350,23 @@ export default function Customers() {
           </svg>
           Add customer
         </Link>
+        </div>
       </div>
+
+      {showImport && (
+        <section className="mb-5 rounded-2xl border border-sky-200 bg-white p-5 shadow-sm">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div><h2 className="font-bold text-slate-900">Bulk customer import</h2><p className="mt-1 text-sm text-slate-500">Upload up to 1,000 customers from Excel or CSV. The whole batch is rejected if any row is invalid.</p></div>
+            <button type="button" className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700" onClick={() => exportExcel("customer-import-template.xlsx", "Customers", [{ "Customer Number": "CUST-00001", "Customer Type": "INDIVIDUAL", "First Name": "Jane", "Middle Name": "", "Last Name": "Doe", "Organization Name": "", "National ID": "12345678", "Registration Number": "", "Phone Number": "0712345678", "Alternative Phone": "", "Email Address": "jane@example.com", "Preferred Language": "EN", "Status": "ACTIVE", "Registration Date": new Date().toISOString().slice(0, 10) }])}>Download template</button>
+          </div>
+          <div className="mt-4 grid gap-4 md:grid-cols-[1fr_auto] md:items-end">
+            <label className="block"><span className="mb-1 block text-sm font-semibold text-slate-700">Excel or CSV file</span><input type="file" accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" onChange={(event) => void selectImportFile(event.target.files?.[0])} className="block w-full rounded-xl border border-slate-200 bg-slate-50 p-2 text-sm" /></label>
+            <button type="button" disabled={!importRows.length || importErrors.length > 0 || importing} onClick={() => void importCustomers()} className="h-11 rounded-xl bg-aqua-700 px-6 text-sm font-bold text-white disabled:opacity-40">{importing ? "Importing..." : `Import ${importRows.length || ""} customers`}</button>
+          </div>
+          {importRows.length > 0 && !importErrors.length && <p className="mt-3 text-sm font-semibold text-emerald-700">{importRows.length} rows validated and ready to import.</p>}
+          {importErrors.length > 0 && <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700"><strong>Fix these issues:</strong><ul className="mt-1 list-disc pl-5">{importErrors.slice(0, 20).map((message) => <li key={message}>{message}</li>)}</ul>{importErrors.length > 20 && <p className="mt-1">And {importErrors.length - 20} more.</p>}</div>}
+        </section>
+      )}
 
       <section className="mb-5 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div className="grid divide-y divide-slate-100 sm:grid-cols-2 sm:divide-x sm:divide-y-0 xl:grid-cols-5">

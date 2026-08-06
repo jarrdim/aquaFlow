@@ -165,6 +165,11 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ customerIds, status }),
     }),
+  bulkImportCustomers: (customers: Record<string, unknown>[]) =>
+    request("/customers/bulk-import", {
+      method: "POST",
+      body: JSON.stringify({ customers }),
+    }),
 
   listZones: () => request("/lookups/zones"),
   listServiceAreas: (zoneId?: string) =>
