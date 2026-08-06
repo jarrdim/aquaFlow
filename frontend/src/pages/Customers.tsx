@@ -362,11 +362,13 @@ export default function Customers() {
     setError("");
     try {
       let imported = 0;
+      let skipped = 0;
       for (let offset = 0; offset < propertyRows.length; offset += 1000) {
         const result = await api.bulkImportProperties(propertyRows.slice(offset, offset + 1000));
         imported += Number(result.imported ?? 0);
+        skipped += Number(result.skipped ?? 0);
       }
-      setSuccess(`${imported} properties imported successfully.`);
+      setSuccess(`${imported} properties imported successfully${skipped ? `; ${skipped} existing properties skipped` : ""}.`);
       setPropertyRows([]);
       setShowPropertyImport(false);
     } catch (err) {

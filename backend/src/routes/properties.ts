@@ -57,14 +57,14 @@ propertiesRouter.post("/bulk-import", async (req, res) => {
     const line = index + 2;
     if (!customerIds.has(row.customerNumber)) errors.push(`Row ${line}: customer ${row.customerNumber} was not found.`);
     if (!areaByCode.has(row.serviceAreaCode)) errors.push(`Row ${line}: service area ${row.serviceAreaCode} was not found.`);
-    if (existingCodes.has(row.propertyCode)) errors.push(`Row ${line}: property ${row.propertyCode} already exists.`);
     if (seenCodes.has(row.propertyCode)) errors.push(`Row ${line}: property ${row.propertyCode} is duplicated in this file.`);
     seenCodes.add(row.propertyCode);
   });
   if (errors.length) return res.status(409).json({ error: errors.slice(0, 100).join("\n") });
 
+  const newRows = rows.filter((row) => !existingCodes.has(row.propertyCode));
   const result = await prisma.property.createMany({
-    data: rows.map((row) => {
+    data: newRows.map((row) => {
       const area = areaByCode.get(row.serviceAreaCode)!;
       return {
         propertyCode: row.propertyCode,
@@ -79,7 +79,7 @@ propertiesRouter.post("/bulk-import", async (req, res) => {
       };
     }),
   });
-  res.status(201).json({ imported: result.count });
+  res.status(201).json({ imported: result.count, skipped: rows.length - newRows.length });
 });
 
 async function nextPropertyCode() {
