@@ -460,7 +460,7 @@ paymentsRouter.patch(
 
 paymentsRouter.get("/accounts", async (req, res, next) => {
   try {
-    const q = String(req.query.q ?? "");
+    const q = String(req.query.q ?? "").trim();
     const rows = await prisma.customerAccount.findMany({
       where: {
         accountStatus: "ACTIVE",
@@ -471,7 +471,9 @@ paymentsRouter.get("/accounts", async (req, res, next) => {
                 {
                   customer: {
                     OR: [
+                      { customerNumber: { contains: q, mode: "insensitive" } },
                       { firstName: { contains: q, mode: "insensitive" } },
+                      { middleName: { contains: q, mode: "insensitive" } },
                       { lastName: { contains: q, mode: "insensitive" } },
                       {
                         organizationName: { contains: q, mode: "insensitive" },

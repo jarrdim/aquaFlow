@@ -715,6 +715,7 @@ export function RecordPayment() {
 
 export function MpesaStkPush() {
   const [accounts, setAccounts] = useState<Row[]>([]);
+  const [accountSearch, setAccountSearch] = useState("");
   const [config, setConfig] = useState<Row>();
   const [history, setHistory] = useState<Row[]>([]);
   const [active, setActive] = useState<Row>();
@@ -744,6 +745,25 @@ export function MpesaStkPush() {
       })
       .catch((e) => setError(e.message));
   }, []);
+  useEffect(() => {
+    const query = accountSearch.trim();
+    if (!query) return;
+    let activeRequest = true;
+    const timer = window.setTimeout(() => {
+      api
+        .listPaymentAccounts(query)
+        .then((rows) => {
+          if (activeRequest) setAccounts(rows);
+        })
+        .catch((e) => {
+          if (activeRequest) setError(e.message);
+        });
+    }, 250);
+    return () => {
+      activeRequest = false;
+      window.clearTimeout(timer);
+    };
+  }, [accountSearch]);
   useEffect(() => {
     if (!active || active.status !== "PENDING") return;
     const timer = window.setInterval(() => {
@@ -886,6 +906,7 @@ export function MpesaStkPush() {
                 className={INPUT}
                 value={form.accountId}
                 onChange={(e) => selectAccount(e.target.value)}
+                onSearchQuery={setAccountSearch}
               >
                 <option value="">Select customer account</option>
                 {accounts.map((a) => (

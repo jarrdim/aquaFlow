@@ -13,7 +13,9 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 
-type SearchableSelectProps = Omit<SelectHTMLAttributes<HTMLSelectElement>, "multiple" | "size">;
+type SearchableSelectProps = Omit<SelectHTMLAttributes<HTMLSelectElement>, "multiple" | "size"> & {
+  onSearchQuery?: (query: string) => void;
+};
 
 type SelectOption = {
   disabled: boolean;
@@ -65,6 +67,7 @@ export function SearchableSelect({
   onBlur,
   onChange,
   onFocus,
+  onSearchQuery,
   required,
   style,
   value,
@@ -203,7 +206,10 @@ export function SearchableSelect({
                 ref={searchRef}
                 type="search"
                 value={query}
-                onChange={(event) => setQuery(event.target.value)}
+                onChange={(event) => {
+                  setQuery(event.target.value);
+                  onSearchQuery?.(event.target.value);
+                }}
                 onKeyDown={(event) => {
                   if (event.key === "Escape") {
                     setOpen(false);
