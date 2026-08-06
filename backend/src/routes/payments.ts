@@ -488,7 +488,9 @@ paymentsRouter.get("/accounts", async (req, res, next) => {
       },
       include: { customer: true },
       orderBy: { accountNumber: "asc" },
-      take: 100,
+      // The M-Pesa selector must expose the complete active account directory.
+      // Typed searches remain capped because they are only autocomplete results.
+      take: q ? 100 : 20_000,
     });
     res.json(rows.map((a: any) => ({ ...a, customerName: name(a.customer) })));
   } catch (e) {
