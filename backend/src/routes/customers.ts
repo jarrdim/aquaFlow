@@ -176,7 +176,13 @@ const bulkCustomerRowSchema = z
     registrationNumber: z.string().trim().optional(),
     phoneNumber: z.string().trim().min(1).max(30),
     alternativePhone: z.string().trim().optional(),
-    emailAddress: z.string().trim().email().optional(),
+    emailAddress: z.preprocess(
+      (value) =>
+        typeof value === "string" && value.trim() === ""
+          ? undefined
+          : value,
+      z.string().trim().email().optional(),
+    ),
     preferredLanguage: z.enum(["EN", "SW"]).default("EN"),
     status: z.enum(["ACTIVE", "INACTIVE", "SUSPENDED", "CLOSED"]).default("ACTIVE"),
     registrationDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
