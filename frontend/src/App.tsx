@@ -27,6 +27,7 @@ import ConnectionDashboard, {
 } from "./pages/ConnectionManagement";
 import {
   AssignMeter,
+  BulkMeterAssignmentImport,
   BulkMeterImport,
   ExceptionReport,
   InstallationDetails,
@@ -317,6 +318,7 @@ const METER_MENU = [
   ["Customer Assignment", "/meters/assign"],
   ["Network Assignment", "/meters/assign/non-customer"],
   ["Import Meters", "/meters/import"],
+  ["Import Assignments", "/meters/import-assignments"],
   ["Replacement Reviews", "/meters/replacements"],
   ["Exception Register", "/meters/reports/exceptions"],
   ["Alert Queue", "/meters/alerts"],
@@ -2255,6 +2257,16 @@ export default function App() {
           <Protected>
             <Shell>
               <BulkMeterImport />
+            </Shell>
+          </Protected>
+        }
+      />
+      <Route
+        path="/meters/import-assignments"
+        element={
+          <Protected>
+            <Shell>
+              <BulkMeterAssignmentImport />
             </Shell>
           </Protected>
         }

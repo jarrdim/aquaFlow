@@ -367,6 +367,86 @@ metersRouter.post("/bulk", async (req, res) => {
   res.json({ results, imported: results.filter((item) => item.ok).length });
 });
 
+const bulkAssignmentSchema = z.object({
+  items: z.array(z.object({
+    meterNumber: z.string().trim().min(1),
+    accountNumber: z.string().trim().min(1),
+    assignmentDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    installationPoint: optText,
+    installationStatus: z.enum(["PENDING", "IN_PROGRESS", "COMPLETED"]).default("COMPLETED"),
+    remarks: optText,
+  })).min(1).max(1000),
+});
+
+metersRouter.post("/bulk-assign", async (req, res) => {
+  const parsed = bulkAssignmentSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const rows = parsed.data.items;
+  const [meters, accounts] = await Promise.all([
+    prisma.meter.findMany({
+      where: { meterNumber: { in: rows.map((row) => row.meterNumber) } },
+      select: { meterId: true, meterNumber: true },
+    }),
+    prisma.customerAccount.findMany({
+      where: { accountNumber: { in: rows.map((row) => row.accountNumber) } },
+      select: { accountId: true, accountNumber: true },
+    }),
+  ]);
+  const meterIds = new Map(meters.map((row) => [row.meterNumber, row.meterId]));
+  const accountIds = new Map(accounts.map((row) => [row.accountNumber, row.accountId]));
+  const existing = await prisma.meterAssignment.findMany({
+    where: {
+      assignmentStatus: "ACTIVE",
+      OR: [
+        { meterId: { in: meters.map((row) => row.meterId) } },
+        { accountId: { in: accounts.map((row) => row.accountId) } },
+      ],
+    },
+    select: { meterId: true, accountId: true },
+  });
+  const activeByMeter = new Map(existing.map((row) => [row.meterId, row]));
+  const activeByAccount = new Map(existing.filter((row) => row.accountId).map((row) => [row.accountId!, row]));
+  const seenMeters = new Set<string>();
+  const seenAccounts = new Set<string>();
+  const errors: string[] = [];
+  rows.forEach((row, index) => {
+    const line = index + 2;
+    const meterId = meterIds.get(row.meterNumber);
+    const accountId = accountIds.get(row.accountNumber);
+    if (!meterId) errors.push(`Row ${line}: meter ${row.meterNumber} was not found.`);
+    if (!accountId) errors.push(`Row ${line}: account ${row.accountNumber} was not found.`);
+    if (seenMeters.has(row.meterNumber)) errors.push(`Row ${line}: meter ${row.meterNumber} appears more than once.`);
+    if (seenAccounts.has(row.accountNumber)) errors.push(`Row ${line}: account ${row.accountNumber} appears more than once.`);
+    seenMeters.add(row.meterNumber);
+    seenAccounts.add(row.accountNumber);
+    if (meterId && accountId) {
+      const meterAssignment = activeByMeter.get(meterId);
+      const accountAssignment = activeByAccount.get(accountId);
+      if (meterAssignment && meterAssignment.accountId !== accountId) errors.push(`Row ${line}: meter ${row.meterNumber} is assigned to another account.`);
+      if (accountAssignment && accountAssignment.meterId !== meterId) errors.push(`Row ${line}: account ${row.accountNumber} has another active meter.`);
+    }
+  });
+  if (errors.length) return res.status(409).json({ error: errors.slice(0, 100).join("\n") });
+
+  const newRows = rows.filter((row) => {
+    const current = activeByMeter.get(meterIds.get(row.meterNumber)!);
+    return !current || current.accountId !== accountIds.get(row.accountNumber)!;
+  });
+  const result = await prisma.meterAssignment.createMany({
+    data: newRows.map((row) => ({
+      meterId: meterIds.get(row.meterNumber)!,
+      accountId: accountIds.get(row.accountNumber)!,
+      assignmentDate: new Date(`${row.assignmentDate}T00:00:00.000Z`),
+      assignmentStatus: "ACTIVE",
+      installationPoint: row.installationPoint || null,
+      installationStatus: row.installationStatus,
+      remarks: row.remarks || null,
+      installedBy: userId(req),
+    })),
+  });
+  res.status(201).json({ imported: result.count, skipped: rows.length - newRows.length });
+});
+
 metersRouter.post("/assign", async (req, res) => {
   const parsed = z.object({
     meterId: z.string().min(1), accountId: optText, zoneId: optText, boreholeId: optText, assignmentDate: z.string(),

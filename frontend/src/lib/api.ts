@@ -226,6 +226,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ items }),
     }),
+  bulkAssignMeters: (items: Record<string, unknown>[]) =>
+    request("/meters/bulk-assign", {
+      method: "POST",
+      body: JSON.stringify({ items }),
+    }),
   validateMeterImport: (items: Record<string, unknown>[]) =>
     request("/meters/bulk/validate", {
       method: "POST",

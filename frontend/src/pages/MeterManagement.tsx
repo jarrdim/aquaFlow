@@ -3928,3 +3928,83 @@ export function BulkMeterImport() {
     </Page>
   );
 }
+
+export function BulkMeterAssignmentImport() {
+  const [fileName, setFileName] = useState("");
+  const [records, setRecords] = useState<AnyRecord[]>([]);
+  const [errors, setErrors] = useState<string[]>([]);
+  const [message, setMessage] = useState("");
+  const [uploading, setUploading] = useState(false);
+
+  async function choose(file?: File) {
+    if (!file) return;
+    setFileName(file.name);
+    setMessage("");
+    try {
+      const rows = await parseMeterWorkbook(file);
+      const issues: string[] = [];
+      const normalized = rows.map((row, index) => {
+        const meterNumber = String(row.meterNumber ?? "").trim();
+        const accountNumber = String(row.accountNumber ?? "").trim();
+        const assignmentDate = String(row.assignmentDate ?? "").trim();
+        if (!meterNumber) issues.push(`Row ${index + 2}: meterNumber is required.`);
+        if (!accountNumber) issues.push(`Row ${index + 2}: accountNumber is required.`);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(assignmentDate)) issues.push(`Row ${index + 2}: assignmentDate must be YYYY-MM-DD.`);
+        return {
+          meterNumber,
+          accountNumber,
+          assignmentDate,
+          installationPoint: String(row.installationPoint ?? "").trim(),
+          installationStatus: String(row.installationStatus ?? "COMPLETED").trim().toUpperCase(),
+          remarks: String(row.remarks ?? "").trim(),
+        };
+      });
+      if (!rows.length) issues.push("The selected file has no assignment rows.");
+      setRecords(normalized);
+      setErrors(issues);
+    } catch (error: any) {
+      setRecords([]);
+      setErrors([error.message || "The file could not be read."]);
+    }
+  }
+
+  async function upload() {
+    if (!records.length || errors.length) return;
+    setUploading(true);
+    setMessage("");
+    try {
+      let imported = 0;
+      let skipped = 0;
+      for (let offset = 0; offset < records.length; offset += 1000) {
+        const result = await api.bulkAssignMeters(records.slice(offset, offset + 1000));
+        imported += Number(result.imported ?? 0);
+        skipped += Number(result.skipped ?? 0);
+      }
+      setMessage(`${imported} meter assignments imported${skipped ? `; ${skipped} existing assignments skipped` : ""}.`);
+    } catch (error: any) {
+      setErrors([error.message || "Meter assignments could not be imported."]);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  return (
+    <Page title="Bulk meter assignments" subtitle="Link imported customer meters to their service accounts">
+      <section className="mx-auto max-w-5xl rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div><h2 className="font-bold text-slate-900">Assignment workbook</h2><p className="mt-1 text-sm text-slate-500">Import customers, properties, accounts and meters before running this step.</p></div>
+          <Button tone="teal" onClick={() => exportExcel("meter-assignment-import-template.xlsx", "Assignments", [{ meterNumber: "MTR-2026-00001", accountNumber: "ACC-00001", assignmentDate: new Date().toISOString().slice(0, 10), installationPoint: "Plot 1", installationStatus: "COMPLETED", remarks: "" }])}>Download template</Button>
+        </div>
+        <label className="mt-5 block rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 p-8 text-center">
+          <span className="block font-bold text-slate-800">{fileName || "Choose assignment Excel or CSV file"}</span>
+          <span className="mt-1 block text-sm text-slate-500">Accepted formats: .xlsx and .csv</span>
+          <input type="file" accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" className="mt-4 text-sm" onChange={(event) => void choose(event.target.files?.[0])} />
+        </label>
+        {records.length > 0 && !errors.length && <Notice kind="success">{records.length} assignment rows validated and ready.</Notice>}
+        {errors.length > 0 && <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{errors.slice(0, 20).map((error) => <div key={error}>{error}</div>)}</div>}
+        {message && <div className="mt-4"><Notice kind="success">{message}</Notice></div>}
+        <div className="mt-5 flex justify-end"><Button tone="green" disabled={!records.length || errors.length > 0 || uploading} onClick={upload}>{uploading ? "Importing..." : `Import ${records.length || ""} assignments`}</Button></div>
+      </section>
+    </Page>
+  );
+}
