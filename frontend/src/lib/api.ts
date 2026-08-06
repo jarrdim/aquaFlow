@@ -182,6 +182,11 @@ export const api = {
     request(`/properties${customerId ? `?customerId=${customerId}` : ""}`),
   createProperty: (data: Record<string, unknown>) =>
     request("/properties", { method: "POST", body: JSON.stringify(data) }),
+  bulkImportProperties: (properties: Record<string, unknown>[]) =>
+    request("/properties/bulk-import", {
+      method: "POST",
+      body: JSON.stringify({ properties }),
+    }),
 
   createAccount: (data: Record<string, unknown>) =>
     request("/accounts", { method: "POST", body: JSON.stringify(data) }),
