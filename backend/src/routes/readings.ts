@@ -583,6 +583,93 @@ readingsRouter.post(
   },
 );
 
+const legacyCurrentImportSchema = z.object({
+  items: z.array(z.object({
+    meterNumber: z.string().trim().min(1),
+    accountNumber: z.string().trim().min(1),
+    cycleCode: z.string().trim().min(1).max(50),
+    previousReading: z.coerce.number().min(0),
+    currentReading: z.coerce.number().min(0),
+    readingDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  })).min(1).max(1000),
+});
+
+readingsRouter.post("/bulk-import-current", async (req, res, next) => {
+  const parsed = legacyCurrentImportSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const rows = parsed.data.items;
+  try {
+    const cycleCodes = [...new Set(rows.map((row) => row.cycleCode))];
+    if (cycleCodes.length !== 1) return res.status(400).json({ error: "Each batch must contain one reading cycle" });
+    const cycleCode = cycleCodes[0];
+    const dates = rows.map((row) => row.readingDate).sort();
+    let cycle = await prisma.readingCycle.findUnique({ where: { cycleCode } });
+    if (!cycle) {
+      cycle = await prisma.readingCycle.create({
+        data: {
+          cycleCode,
+          cycleName: `Legacy current readings ${cycleCode.replace(/^RC-/, "")}`,
+          startDate: new Date(`${dates[0]}T00:00:00.000Z`),
+          endDate: new Date(`${dates[dates.length - 1]}T00:00:00.000Z`),
+          status: "COMPLETED",
+          createdBy: req.user ? BigInt(req.user.userId) : null,
+          remarks: "Imported from MajiWare MeterReadingsCurrent",
+        },
+      });
+    } else {
+      const batchStart = new Date(`${dates[0]}T00:00:00.000Z`);
+      const batchEnd = new Date(`${dates[dates.length - 1]}T00:00:00.000Z`);
+      if (batchStart < cycle.startDate || batchEnd > cycle.endDate) {
+        cycle = await prisma.readingCycle.update({
+          where: { readingCycleId: cycle.readingCycleId },
+          data: {
+            startDate: batchStart < cycle.startDate ? batchStart : cycle.startDate,
+            endDate: batchEnd > cycle.endDate ? batchEnd : cycle.endDate,
+          },
+        });
+      }
+    }
+    const [meters, accounts] = await Promise.all([
+      prisma.meter.findMany({ where: { meterNumber: { in: rows.map((row) => row.meterNumber) } }, select: { meterId: true, meterNumber: true } }),
+      prisma.customerAccount.findMany({ where: { accountNumber: { in: rows.map((row) => row.accountNumber) } }, select: { accountId: true, accountNumber: true } }),
+    ]);
+    const meterIds = new Map(meters.map((row) => [row.meterNumber, row.meterId]));
+    const accountIds = new Map(accounts.map((row) => [row.accountNumber, row.accountId]));
+    const syncIds = rows.map((row) => `legacy-current-${cycleCode}-${row.meterNumber}`);
+    const existing = await prisma.meterReading.findMany({ where: { syncId: { in: syncIds } }, select: { syncId: true } });
+    const existingSyncIds = new Set(existing.map((row) => row.syncId));
+    const seenMeters = new Set<string>();
+    const errors: string[] = [];
+    rows.forEach((row, index) => {
+      const line = index + 2;
+      if (!meterIds.has(row.meterNumber)) errors.push(`Row ${line}: meter ${row.meterNumber} was not found.`);
+      if (!accountIds.has(row.accountNumber)) errors.push(`Row ${line}: account ${row.accountNumber} was not found.`);
+      if (seenMeters.has(row.meterNumber)) errors.push(`Row ${line}: meter ${row.meterNumber} appears more than once.`);
+      seenMeters.add(row.meterNumber);
+    });
+    if (errors.length) return res.status(409).json({ error: errors.slice(0, 100).join("\n") });
+
+    const newRows = rows.filter((row) => !existingSyncIds.has(`legacy-current-${cycleCode}-${row.meterNumber}`));
+    const result = await prisma.meterReading.createMany({
+      data: newRows.map((row) => ({
+        meterId: meterIds.get(row.meterNumber)!,
+        accountId: accountIds.get(row.accountNumber)!,
+        readingCycleId: cycle!.readingCycleId,
+        previousReading: row.previousReading,
+        currentReading: row.currentReading,
+        readingType: "ACTUAL",
+        readingDate: new Date(`${row.readingDate}T00:00:00.000Z`),
+        abnormalFlag: row.currentReading < row.previousReading,
+        exceptionType: row.currentReading < row.previousReading ? "NEGATIVE" : "NONE",
+        approvalStatus: "APPROVED",
+        approvalComments: "Imported legacy current reading",
+        syncId: `legacy-current-${cycleCode}-${row.meterNumber}`,
+      })),
+    });
+    res.status(201).json({ imported: result.count, skipped: rows.length - newRows.length, cycleCode });
+  } catch (error) { next(error); }
+});
+
 readingsRouter.get("/", async (req, res, next) => {
   try {
     const cycleId = req.query.cycleId ? BigInt(String(req.query.cycleId)) : undefined;

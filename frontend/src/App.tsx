@@ -41,6 +41,7 @@ import {
   UpdateMeterStatus,
 } from "./pages/MeterManagement";
 import {
+  BulkCurrentReadingImport,
   CaptureReading,
   ReadingApprovals,
   ReadingCycles,
@@ -330,6 +331,7 @@ const READING_MENU = [
   ["Reader Assignments", "/readings/assignments"],
   ["Reading Worklist", "/readings/worklist"],
   ["All Readings", "/readings/register"],
+  ["Import Current Readings", "/readings/import-current"],
   ["Approval Queue", "/readings/approvals"],
   ["Exception Queue", "/readings/exceptions"],
   ["Route Tracking", "/readings/progress"],
@@ -2137,6 +2139,16 @@ export default function App() {
           <Protected>
             <Shell>
               <ReadingRegister />
+            </Shell>
+          </Protected>
+        }
+      />
+      <Route
+        path="/readings/import-current"
+        element={
+          <Protected>
+            <Shell>
+              <BulkCurrentReadingImport />
             </Shell>
           </Protected>
         }

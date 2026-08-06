@@ -353,6 +353,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ readings }),
     }),
+  bulkImportCurrentReadings: (items: Record<string, unknown>[]) =>
+    request("/readings/bulk-import-current", {
+      method: "POST",
+      body: JSON.stringify({ items }),
+    }),
   decideReading: (
     id: string,
     decision: "APPROVED" | "REJECTED",

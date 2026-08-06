@@ -4617,3 +4617,81 @@ export function ReadingSyncQueue() {
     </Page>
   );
 }
+
+export function BulkCurrentReadingImport() {
+  const [fileName, setFileName] = useState("");
+  const [records, setRecords] = useState<Row[]>([]);
+  const [errors, setErrors] = useState<string[]>([]);
+  const [message, setMessage] = useState("");
+  const [uploading, setUploading] = useState(false);
+
+  async function choose(file?: File) {
+    if (!file) return;
+    setFileName(file.name);
+    setMessage("");
+    try {
+      const rows = await parseMeterWorkbook(file);
+      const issues: string[] = [];
+      const normalized = rows.map((row, index) => {
+        const meterNumber = String(row.meterNumber ?? "").trim();
+        const accountNumber = String(row.accountNumber ?? "").trim();
+        const cycleCode = String(row.cycleCode ?? "").trim();
+        const readingDate = String(row.readingDate ?? "").trim();
+        const previousReading = Number(row.previousReading);
+        const currentReading = Number(row.currentReading);
+        if (!meterNumber) issues.push(`Row ${index + 2}: meterNumber is required.`);
+        if (!accountNumber) issues.push(`Row ${index + 2}: accountNumber is required.`);
+        if (!cycleCode) issues.push(`Row ${index + 2}: cycleCode is required.`);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(readingDate)) issues.push(`Row ${index + 2}: readingDate must be YYYY-MM-DD.`);
+        if (!Number.isFinite(previousReading) || previousReading < 0) issues.push(`Row ${index + 2}: previousReading is invalid.`);
+        if (!Number.isFinite(currentReading) || currentReading < 0) issues.push(`Row ${index + 2}: currentReading is invalid.`);
+        return { meterNumber, accountNumber, cycleCode, previousReading, currentReading, readingDate };
+      });
+      if (!rows.length) issues.push("The selected file has no reading rows.");
+      setRecords(normalized);
+      setErrors(issues);
+    } catch (error: any) {
+      setRecords([]);
+      setErrors([error.message || "The file could not be read."]);
+    }
+  }
+
+  async function upload() {
+    if (!records.length || errors.length) return;
+    setUploading(true);
+    setMessage("");
+    try {
+      let imported = 0;
+      let skipped = 0;
+      for (let offset = 0; offset < records.length; offset += 1000) {
+        const result = await api.bulkImportCurrentReadings(records.slice(offset, offset + 1000));
+        imported += Number(result.imported ?? 0);
+        skipped += Number(result.skipped ?? 0);
+      }
+      setMessage(`${imported} current readings imported and approved${skipped ? `; ${skipped} existing readings skipped` : ""}.`);
+    } catch (error: any) {
+      setErrors([error.message || "Current readings could not be imported."]);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  return (
+    <Page title="Import current readings" subtitle="Load the approved MajiWare reading baseline">
+      <section className="mx-auto max-w-5xl rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div><h2 className="font-bold text-slate-900">Current-reading workbook</h2><p className="mt-1 text-sm text-slate-500">Meters, customer accounts and assignments must be imported first.</p></div>
+          <button type="button" className="rounded-lg bg-aqua-700 px-4 py-2 text-sm font-bold text-white" onClick={() => exportExcel("current-reading-import-template.xlsx", "Current Readings", [{ meterNumber: "MTR-2026-00001", accountNumber: "ACC-00001", cycleCode: "RC-2026-07", previousReading: 100, currentReading: 110, readingDate: "2026-07-31" }])}>Download template</button>
+        </div>
+        <label className="mt-5 block rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 p-8 text-center">
+          <span className="block font-bold text-slate-800">{fileName || "Choose current-reading Excel or CSV file"}</span>
+          <input type="file" accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" className="mt-4 text-sm" onChange={(event) => void choose(event.target.files?.[0])} />
+        </label>
+        {records.length > 0 && !errors.length && <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm font-semibold text-emerald-700">{records.length} reading rows validated and ready.</div>}
+        {errors.length > 0 && <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{errors.slice(0, 20).map((error) => <div key={error}>{error}</div>)}</div>}
+        {message && <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm font-semibold text-emerald-700">{message}</div>}
+        <div className="mt-5 flex justify-end"><button type="button" disabled={!records.length || errors.length > 0 || uploading} onClick={upload} className="rounded-xl bg-emerald-600 px-6 py-3 text-sm font-bold text-white disabled:opacity-40">{uploading ? "Importing..." : `Import ${records.length || ""} readings`}</button></div>
+      </section>
+    </Page>
+  );
+}
