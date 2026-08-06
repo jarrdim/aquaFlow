@@ -588,6 +588,8 @@ const legacyCurrentImportSchema = z.object({
     meterNumber: z.string().trim().min(1),
     accountNumber: z.string().trim().min(1),
     cycleCode: z.string().trim().min(1).max(50),
+    cycleStartDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    cycleEndDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     previousReading: z.coerce.number().min(0),
     currentReading: z.coerce.number().min(0),
     readingDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -602,30 +604,30 @@ readingsRouter.post("/bulk-import-current", async (req, res, next) => {
     const cycleCodes = [...new Set(rows.map((row) => row.cycleCode))];
     if (cycleCodes.length !== 1) return res.status(400).json({ error: "Each batch must contain one reading cycle" });
     const cycleCode = cycleCodes[0];
-    const dates = rows.map((row) => row.readingDate).sort();
+    const cycleStarts = [...new Set(rows.map((row) => row.cycleStartDate))];
+    const cycleEnds = [...new Set(rows.map((row) => row.cycleEndDate))];
+    if (cycleStarts.length !== 1 || cycleEnds.length !== 1) return res.status(400).json({ error: "Each cycle must have one consistent start and end date" });
+    const cycleStart = new Date(`${cycleStarts[0]}T00:00:00.000Z`);
+    const cycleEnd = new Date(`${cycleEnds[0]}T00:00:00.000Z`);
+    if (cycleEnd < cycleStart) return res.status(400).json({ error: "Cycle end date cannot be before its start date" });
     let cycle = await prisma.readingCycle.findUnique({ where: { cycleCode } });
     if (!cycle) {
       cycle = await prisma.readingCycle.create({
         data: {
           cycleCode,
           cycleName: `Legacy current readings ${cycleCode.replace(/^RC-/, "")}`,
-          startDate: new Date(`${dates[0]}T00:00:00.000Z`),
-          endDate: new Date(`${dates[dates.length - 1]}T00:00:00.000Z`),
+          startDate: cycleStart,
+          endDate: cycleEnd,
           status: "COMPLETED",
           createdBy: req.user ? BigInt(req.user.userId) : null,
           remarks: "Imported from MajiWare MeterReadingsCurrent",
         },
       });
     } else {
-      const batchStart = new Date(`${dates[0]}T00:00:00.000Z`);
-      const batchEnd = new Date(`${dates[dates.length - 1]}T00:00:00.000Z`);
-      if (batchStart < cycle.startDate || batchEnd > cycle.endDate) {
+      if (cycleStart.getTime() !== cycle.startDate.getTime() || cycleEnd.getTime() !== cycle.endDate.getTime()) {
         cycle = await prisma.readingCycle.update({
           where: { readingCycleId: cycle.readingCycleId },
-          data: {
-            startDate: batchStart < cycle.startDate ? batchStart : cycle.startDate,
-            endDate: batchEnd > cycle.endDate ? batchEnd : cycle.endDate,
-          },
+          data: { startDate: cycleStart, endDate: cycleEnd },
         });
       }
     }
@@ -650,23 +652,69 @@ readingsRouter.post("/bulk-import-current", async (req, res, next) => {
     if (errors.length) return res.status(409).json({ error: errors.slice(0, 100).join("\n") });
 
     const newRows = rows.filter((row) => !existingSyncIds.has(`legacy-current-${cycleCode}-${row.meterNumber}`));
-    const result = await prisma.meterReading.createMany({
-      data: newRows.map((row) => ({
-        meterId: meterIds.get(row.meterNumber)!,
-        accountId: accountIds.get(row.accountNumber)!,
-        readingCycleId: cycle!.readingCycleId,
-        previousReading: row.previousReading,
-        currentReading: row.currentReading,
-        readingType: "ACTUAL",
-        readingDate: new Date(`${row.readingDate}T00:00:00.000Z`),
-        abnormalFlag: row.currentReading < row.previousReading,
-        exceptionType: row.currentReading < row.previousReading ? "NEGATIVE" : "NONE",
-        approvalStatus: "APPROVED",
-        approvalComments: "Imported legacy current reading",
-        syncId: `legacy-current-${cycleCode}-${row.meterNumber}`,
-      })),
+    const result = await prisma.$transaction(async (tx) => {
+      const created = await tx.meterReading.createMany({
+        data: newRows.map((row) => ({
+          meterId: meterIds.get(row.meterNumber)!,
+          accountId: accountIds.get(row.accountNumber)!,
+          readingCycleId: cycle!.readingCycleId,
+          previousReading: row.previousReading,
+          currentReading: row.currentReading,
+          readingType: "ACTUAL",
+          readingDate: new Date(`${row.readingDate}T00:00:00.000Z`),
+          abnormalFlag: row.currentReading < row.previousReading,
+          exceptionType: row.currentReading < row.previousReading ? "NEGATIVE" : "NONE",
+          approvalStatus: "APPROVED",
+          approvalComments: "Imported legacy previous/current reading pair",
+          approvedBy: req.user ? BigInt(req.user.userId) : null,
+          approvedAt: new Date(),
+          syncId: `legacy-current-${cycleCode}-${row.meterNumber}`,
+        })),
+      });
+
+      // A retry must also repair any legacy row that has the correct sync ID but
+      // was previously linked to the wrong cycle/account.
+      for (const row of rows.filter((item) => existingSyncIds.has(`legacy-current-${cycleCode}-${item.meterNumber}`))) {
+        await tx.meterReading.update({
+          where: { syncId: `legacy-current-${cycleCode}-${row.meterNumber}` },
+          data: {
+            meterId: meterIds.get(row.meterNumber)!,
+            accountId: accountIds.get(row.accountNumber)!,
+            readingCycleId: cycle!.readingCycleId,
+            previousReading: row.previousReading,
+            currentReading: row.currentReading,
+            readingDate: new Date(`${row.readingDate}T00:00:00.000Z`),
+            readingType: "ACTUAL",
+            abnormalFlag: row.currentReading < row.previousReading,
+            exceptionType: row.currentReading < row.previousReading ? "NEGATIVE" : "NONE",
+            approvalStatus: "APPROVED",
+            approvalComments: "Imported legacy previous/current reading pair",
+            approvedBy: req.user ? BigInt(req.user.userId) : null,
+            approvedAt: new Date(),
+          },
+        });
+      }
+
+      const verified = await tx.meterReading.count({
+        where: {
+          readingCycleId: cycle!.readingCycleId,
+          syncId: { in: syncIds },
+        },
+      });
+      return { created: created.count, verified };
     });
-    res.status(201).json({ imported: result.count, skipped: rows.length - newRows.length, cycleCode });
+    if (result.verified !== rows.length) {
+      return res.status(500).json({
+        error: `The batch was not fully linked to ${cycleCode}: expected ${rows.length}, verified ${result.verified}.`,
+      });
+    }
+    res.status(201).json({
+      imported: result.created,
+      repaired: rows.length - newRows.length,
+      verified: result.verified,
+      cycleCode,
+      readingCycleId: cycle.readingCycleId.toString(),
+    });
   } catch (error) { next(error); }
 });
 

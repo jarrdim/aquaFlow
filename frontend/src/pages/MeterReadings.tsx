@@ -2112,7 +2112,7 @@ export function ReadingRouteAssignments() {
           </form>
         </Card>
       )}
-      <Card title="Assign routes" className="mb-5 overflow-hidden shadow-md shadow-slate-200/50">
+      <Card title="Assign routes" className="relative z-20 mb-5 overflow-visible shadow-md shadow-slate-200/50">
         <div className="mb-4 flex items-start gap-3 rounded-xl border border-sky-100 bg-sky-50/70 p-3.5"><span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-sky-600 text-white"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5"><path d="M4 17l5-5 4 3 7-8" /><circle cx="4" cy="17" r="1" /><circle cx="20" cy="7" r="1" /></svg></span><div><div className="font-bold text-slate-800">Build the route workload</div><p className="mt-0.5 text-xs leading-5 text-slate-500">Select routes and readers; multiple routes are distributed between readers in order.</p></div></div>
         <form
           onSubmit={assign}
@@ -4636,16 +4636,20 @@ export function BulkCurrentReadingImport() {
         const meterNumber = String(row.meterNumber ?? "").trim();
         const accountNumber = String(row.accountNumber ?? "").trim();
         const cycleCode = String(row.cycleCode ?? "").trim();
+        const cycleStartDate = String(row.cycleStartDate ?? "").trim();
+        const cycleEndDate = String(row.cycleEndDate ?? "").trim();
         const readingDate = String(row.readingDate ?? "").trim();
         const previousReading = Number(row.previousReading);
         const currentReading = Number(row.currentReading);
         if (!meterNumber) issues.push(`Row ${index + 2}: meterNumber is required.`);
         if (!accountNumber) issues.push(`Row ${index + 2}: accountNumber is required.`);
         if (!cycleCode) issues.push(`Row ${index + 2}: cycleCode is required.`);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(cycleStartDate)) issues.push(`Row ${index + 2}: cycleStartDate must be YYYY-MM-DD.`);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(cycleEndDate)) issues.push(`Row ${index + 2}: cycleEndDate must be YYYY-MM-DD.`);
         if (!/^\d{4}-\d{2}-\d{2}$/.test(readingDate)) issues.push(`Row ${index + 2}: readingDate must be YYYY-MM-DD.`);
         if (!Number.isFinite(previousReading) || previousReading < 0) issues.push(`Row ${index + 2}: previousReading is invalid.`);
         if (!Number.isFinite(currentReading) || currentReading < 0) issues.push(`Row ${index + 2}: currentReading is invalid.`);
-        return { meterNumber, accountNumber, cycleCode, previousReading, currentReading, readingDate };
+        return { meterNumber, accountNumber, cycleCode, cycleStartDate, cycleEndDate, previousReading, currentReading, readingDate };
       });
       if (!rows.length) issues.push("The selected file has no reading rows.");
       setRecords(normalized);
@@ -4662,13 +4666,18 @@ export function BulkCurrentReadingImport() {
     setMessage("");
     try {
       let imported = 0;
-      let skipped = 0;
+      let repaired = 0;
+      let verified = 0;
       for (let offset = 0; offset < records.length; offset += 1000) {
         const result = await api.bulkImportCurrentReadings(records.slice(offset, offset + 1000));
         imported += Number(result.imported ?? 0);
-        skipped += Number(result.skipped ?? 0);
+        repaired += Number(result.repaired ?? result.skipped ?? 0);
+        verified += Number(result.verified ?? result.imported ?? 0);
       }
-      setMessage(`${imported} current readings imported and approved${skipped ? `; ${skipped} existing readings skipped` : ""}.`);
+      setMessage(
+        `${verified} previous/current reading pairs verified in ${records[0]?.cycleCode}` +
+          ` (${imported} created${repaired ? `, ${repaired} existing rows repaired` : ""}).`,
+      );
     } catch (error: any) {
       setErrors([error.message || "Current readings could not be imported."]);
     } finally {
@@ -4681,7 +4690,7 @@ export function BulkCurrentReadingImport() {
       <section className="mx-auto max-w-5xl rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div><h2 className="font-bold text-slate-900">Current-reading workbook</h2><p className="mt-1 text-sm text-slate-500">Meters, customer accounts and assignments must be imported first.</p></div>
-          <button type="button" className="rounded-lg bg-aqua-700 px-4 py-2 text-sm font-bold text-white" onClick={() => exportExcel("current-reading-import-template.xlsx", "Current Readings", [{ meterNumber: "MTR-2026-00001", accountNumber: "ACC-00001", cycleCode: "RC-2026-07", previousReading: 100, currentReading: 110, readingDate: "2026-07-31" }])}>Download template</button>
+          <button type="button" className="rounded-lg bg-aqua-700 px-4 py-2 text-sm font-bold text-white" onClick={() => exportExcel("current-reading-import-template.xlsx", "Current Readings", [{ meterNumber: "MTR-2026-00001", accountNumber: "ACC-00001", cycleCode: "RC-2026-07", cycleStartDate: "2026-07-01", cycleEndDate: "2026-08-04", previousReading: 100, currentReading: 110, readingDate: "2026-07-31" }])}>Download template</button>
         </div>
         <label className="mt-5 block rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 p-8 text-center">
           <span className="block font-bold text-slate-800">{fileName || "Choose current-reading Excel or CSV file"}</span>
