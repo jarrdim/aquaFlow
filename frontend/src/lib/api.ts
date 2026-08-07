@@ -557,6 +557,20 @@ export const api = {
   ingestMpesaPayment: (data: Record<string, unknown>) =>
     request("/payments/mpesa", { method: "POST", body: JSON.stringify(data) }),
   getMpesaConfig: () => request("/payments/mpesa/config"),
+  getPublicPaymentLink: (token: string) =>
+    request(`/payments/public-link/${encodeURIComponent(token)}`),
+  initiatePublicPayment: (
+    token: string,
+    data: { phoneNumber: string; amount: number },
+  ) =>
+    request(`/payments/public-link/${encodeURIComponent(token)}/stk`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  getPublicPaymentStatus: (token: string, id: string) =>
+    request(
+      `/payments/public-link/${encodeURIComponent(token)}/stk/${encodeURIComponent(id)}`,
+    ),
   initiateMpesaStk: (data: Record<string, unknown>) =>
     request("/payments/mpesa/stk", {
       method: "POST",

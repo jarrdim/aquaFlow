@@ -16,6 +16,7 @@ import {
 } from "react-router-dom";
 import Login from "./pages/Login";
 import LandingPage from "./pages/LandingPage";
+import PublicPaymentPage from "./pages/PublicPaymentPage";
 import OperationalDashboard from "./pages/OperationalDashboard";
 import WorkOrderManagement from "./pages/WorkOrderManagement";
 import Customers from "./pages/Customers";
@@ -1441,6 +1442,7 @@ export default function App() {
   return (
     <Routes>
       <Route path="/" element={<LandingPage />} />
+      <Route path="/pay/:token" element={<PublicPaymentPage />} />
       <Route
         path="/login"
         element={

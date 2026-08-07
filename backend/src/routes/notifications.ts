@@ -8,8 +8,29 @@ import {
   decryptProviderSecret,
   encryptProviderSecret,
 } from "../lib/notificationSecrets";
+import { createPaymentLinkToken, publicAppUrl } from "../lib/paymentLink";
 
 export const notificationsRouter = Router();
+
+function withBalancePaymentLink(
+  message: string,
+  accountId: bigint,
+  notificationType: string,
+  channel: string,
+  scheduledAt?: Date | null,
+) {
+  if (notificationType !== "BALANCE_REMINDER" || channel !== "SMS")
+    return message;
+  const startsAt = scheduledAt && scheduledAt > new Date() ? scheduledAt : new Date();
+  const expiresAt = new Date(startsAt.getTime() + 7 * 86_400_000);
+  const token = createPaymentLinkToken({
+    accountId: accountId.toString(),
+    expiresAt: expiresAt.toISOString(),
+  });
+  const url = `${publicAppUrl()}/pay/${token}`;
+  const optOut = process.env.SMS_OPT_OUT_TEXT?.trim() || "STOP *456*9*5#";
+  return `${message}\n\nClick ${url} to pay now. Thanks\n${optOut}`;
+}
 
 const onfonConfigurationSchema = z.object({
   driver: z.literal("ONFON").default("ONFON"),
@@ -1327,9 +1348,12 @@ notificationsRouter.post("/send-bulk", managers, async (req, res, next) => {
           channel,
           recipient,
           subject: render(parsed.data.subject ?? template?.subject, values),
-          messageBody: render(
-            parsed.data.message ?? template?.messageBody ?? "",
-            values,
+          messageBody: withBalancePaymentLink(
+            render(parsed.data.message ?? template?.messageBody ?? "", values),
+            account.accountId,
+            parsed.data.notificationType,
+            channel,
+            parsed.data.scheduledAt,
           ),
           scheduledAt: parsed.data.scheduledAt,
           requestedBy: uid(req),
@@ -1471,9 +1495,12 @@ notificationsRouter.post("/send", managers, async (req, res, next) => {
           channel,
           recipient,
           subject: render(parsed.data.subject ?? template?.subject, values),
-          messageBody: render(
-            parsed.data.message ?? template?.messageBody ?? "",
-            values,
+          messageBody: withBalancePaymentLink(
+            render(parsed.data.message ?? template?.messageBody ?? "", values),
+            account.accountId,
+            parsed.data.notificationType,
+            channel,
+            parsed.data.scheduledAt,
           ),
           scheduledAt: parsed.data.scheduledAt,
           requestedBy: uid(req),

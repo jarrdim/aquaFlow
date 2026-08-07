@@ -4,6 +4,7 @@ import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { isSystemAdmin, requireAuth, requireRole } from "../middleware/auth";
 import { processOne } from "./notifications";
+import { createPaymentLinkToken, publicAppUrl } from "../lib/paymentLink";
 
 export const arrearsRouter = Router();
 arrearsRouter.use(requireAuth);
@@ -236,6 +237,9 @@ async function queueApprovedDebtNotices(
       where: { channel, status: "ACTIVE", isDefault: true },
       select: { providerId: true },
     });
+    const messageBody = channel === "SMS"
+      ? debtNoticeSmsMessage(notice)
+      : notice.messageBody;
     await tx.notification.create({
       data: {
         providerId: provider?.providerId,
@@ -245,7 +249,7 @@ async function queueApprovedDebtNotices(
         channel,
         recipient,
         subject: channel === "EMAIL" ? `${notice.noticeType.replace(/_/g, " ")} notice` : null,
-        messageBody: notice.messageBody,
+        messageBody,
         deliveryStatus: "QUEUED",
         requestedBy,
         externalReference: notice.noticeNumber,
@@ -261,6 +265,21 @@ async function queueApprovedDebtNotices(
       data: { deliveryStatus: "QUEUED", updatedAt: new Date() },
     });
   }
+}
+
+function debtNoticeSmsMessage(notice: any) {
+  const deadline = notice.paymentDeadline
+    ? new Date(notice.paymentDeadline)
+    : new Date(Date.now() + 30 * 86_400_000);
+  deadline.setUTCHours(23, 59, 59, 999);
+  const paymentToken = createPaymentLinkToken({
+    accountId: notice.accountId.toString(),
+    noticeId: notice.noticeId.toString(),
+    expiresAt: deadline.toISOString(),
+  });
+  const paymentUrl = `${publicAppUrl()}/pay/${paymentToken}`;
+  const optOut = process.env.SMS_OPT_OUT_TEXT?.trim() || "STOP *456*9*5#";
+  return `${notice.messageBody}\n\nClick ${paymentUrl} to pay now. Thanks\n${optOut}`;
 }
 
 async function refreshStatuses() {
@@ -414,6 +433,17 @@ arrearsRouter.post("/reminders", officer, async (req, res, next) => {
           const provider = await tx.notificationProvider.findFirst({
             where: { channel, status: "ACTIVE", isDefault: true },
           });
+          const personalizedMessage = data.message
+            .replace(/\{\{customerName\}\}/g, customerName(account.customer))
+            .replace(/\{\{accountNumber\}\}/g, account.accountNumber)
+            .replace(/\{\{balance\}\}/g, Number(account.currentBalance).toFixed(2));
+          const expiresAt = new Date(Date.now() + 7 * 86_400_000);
+          const paymentToken = createPaymentLinkToken({
+            accountId: account.accountId.toString(),
+            expiresAt: expiresAt.toISOString(),
+          });
+          const paymentUrl = `${publicAppUrl()}/pay/${paymentToken}`;
+          const optOut = process.env.SMS_OPT_OUT_TEXT?.trim() || "STOP *456*9*5#";
           await tx.notification.create({
             data: {
               providerId: provider?.providerId,
@@ -423,10 +453,9 @@ arrearsRouter.post("/reminders", officer, async (req, res, next) => {
               channel,
               recipient,
               subject: channel === "EMAIL" ? "Outstanding water account balance" : null,
-              messageBody: data.message
-                .replace(/\{\{customerName\}\}/g, customerName(account.customer))
-                .replace(/\{\{accountNumber\}\}/g, account.accountNumber)
-                .replace(/\{\{balance\}\}/g, Number(account.currentBalance).toFixed(2)),
+              messageBody: channel === "SMS"
+                ? `${personalizedMessage}\n\nClick ${paymentUrl} to pay now. Thanks\n${optOut}`
+                : personalizedMessage,
               deliveryStatus: "QUEUED",
               requestedBy: uid(req),
             },
@@ -749,6 +778,19 @@ arrearsRouter.post("/notices/:id/send", supervisor, async (req, res, next) => {
     }
     if (!notification)
       return res.status(409).json({ error: "The notice has no valid delivery recipient" });
+    if (["SMS", "SMS_PDF"].includes(notice.deliveryChannel)) {
+      notification = await prisma.notification.update({
+        where: { notificationId: notification.notificationId },
+        data: {
+          messageBody: debtNoticeSmsMessage(notice),
+          deliveryStatus: ["SENT", "DELIVERED"].includes(notification.deliveryStatus)
+            ? notification.deliveryStatus
+            : "QUEUED",
+          failureReason: null,
+          updatedAt: new Date(),
+        },
+      });
+    }
     const processed = await processOne(notification.notificationId);
     const deliveryStatus = processed?.deliveryStatus ?? "FAILED";
     await prisma.debtNotice.update({

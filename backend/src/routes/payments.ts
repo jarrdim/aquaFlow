@@ -8,6 +8,7 @@ import {
   parseMpesaDate,
 } from "../lib/mpesa";
 import { initiateMpesaStk } from "../lib/mpesaStk";
+import { readPaymentLinkToken } from "../lib/paymentLink";
 
 export const paymentsRouter = Router();
 
@@ -255,6 +256,119 @@ paymentsRouter.post("/mpesa/callback", async (req, res, next) => {
     res.json({ ResultCode: 0, ResultDesc: "Accepted" });
   } catch (e) {
     next(e);
+  }
+});
+
+// Public, token-scoped payment page endpoints. The encrypted token binds every
+// request to one account and approved notice, so no staff session is required.
+paymentsRouter.get("/public-link/:token", async (req, res, next) => {
+  try {
+    const payload = readPaymentLinkToken(req.params.token);
+    const [account, notice] = await Promise.all([
+      prisma.customerAccount.findUnique({
+        where: { accountId: BigInt(payload.accountId) },
+        include: { customer: true },
+      }),
+      payload.noticeId
+        ? prisma.debtNotice.findFirst({
+            where: {
+              noticeId: BigInt(payload.noticeId),
+              accountId: BigInt(payload.accountId),
+              noticeStatus: "APPROVED",
+            },
+          })
+        : Promise.resolve(null),
+    ]);
+    if (!account || account.accountStatus !== "ACTIVE")
+      return res.status(404).json({ error: "Active customer account not found" });
+    if (payload.noticeId && !notice)
+      return res.status(404).json({ error: "Approved payment notice not found" });
+    res.json({
+      accountNumber: account.accountNumber,
+      customerName:
+        account.customer.organizationName ||
+        [account.customer.firstName, account.customer.middleName, account.customer.lastName]
+          .filter(Boolean)
+          .join(" "),
+      phoneNumber: account.customer.phoneNumber,
+      outstandingBalance: Number(account.currentBalance),
+      noticeNumber: notice?.noticeNumber,
+      paymentDeadline: notice?.paymentDeadline,
+      expiresAt: payload.expiresAt,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+paymentsRouter.post("/public-link/:token/stk", async (req, res, next) => {
+  const parsed = z.object({
+    phoneNumber: z.string().trim().min(9).max(20),
+    amount: z.coerce.number().int().positive().max(250_000),
+  }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  try {
+    const payload = readPaymentLinkToken(req.params.token);
+    const account = await prisma.customerAccount.findUnique({
+      where: { accountId: BigInt(payload.accountId) },
+    });
+    if (!account || account.accountStatus !== "ACTIVE")
+      return res.status(404).json({ error: "Active customer account not found" });
+    if (payload.noticeId) {
+      const approvedNotice = await prisma.debtNotice.count({
+        where: {
+          noticeId: BigInt(payload.noticeId),
+          accountId: account.accountId,
+          noticeStatus: "APPROVED",
+        },
+      });
+      if (!approvedNotice)
+        return res.status(404).json({ error: "Approved payment notice not found" });
+    }
+    const balance = Math.max(0, Math.ceil(Number(account.currentBalance)));
+    if (!balance) return res.status(409).json({ error: "This account has no outstanding balance" });
+    if (parsed.data.amount > balance)
+      return res.status(400).json({ error: `Amount cannot exceed the current balance of KSh ${balance.toLocaleString()}` });
+    const row = await initiateMpesaStk({
+      account,
+      phoneNumber: parsed.data.phoneNumber,
+      amount: parsed.data.amount,
+      initiatedBy: null,
+      description: "Samdamte water account payment",
+    });
+    res.status(201).json({
+      stkRequestId: row.stkRequestId.toString(),
+      status: row.status,
+      customerMessage: row.customerMessage,
+    });
+  } catch (error: any) {
+    if (error.status)
+      return res.status(error.status).json({ error: error.message, ...(error.stkRequestId ? { stkRequestId: String(error.stkRequestId) } : {}) });
+    next(error);
+  }
+});
+
+paymentsRouter.get("/public-link/:token/stk/:id", async (req, res, next) => {
+  try {
+    const payload = readPaymentLinkToken(req.params.token);
+    if (!/^\d+$/.test(req.params.id)) return res.status(400).json({ error: "Invalid payment request" });
+    const row = await prisma.mpesaStkRequest.findFirst({
+      where: {
+        stkRequestId: BigInt(req.params.id),
+        accountId: BigInt(payload.accountId),
+      },
+      include: { payment: { include: { receipt: true } } },
+    });
+    if (!row) return res.status(404).json({ error: "Payment request not found" });
+    res.json({
+      stkRequestId: row.stkRequestId.toString(),
+      status: row.status,
+      resultDescription: row.resultDescription,
+      mpesaReceiptNumber: row.mpesaReceiptNumber,
+      receiptNumber: row.payment?.receipt?.receiptNumber,
+    });
+  } catch (error) {
+    next(error);
   }
 });
 
