@@ -81,15 +81,15 @@ export default function PublicPaymentPage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-100 px-4 py-8 text-slate-900 sm:py-12">
-      <main className="mx-auto max-w-xl overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-xl shadow-slate-300/30">
-        <header className="border-b border-slate-100 bg-gradient-to-r from-white to-cyan-50 px-6 py-5 sm:px-8">
+    <div className="fixed inset-0 min-h-[100dvh] overflow-x-hidden overflow-y-auto overscroll-y-contain bg-slate-100 px-3 py-3 text-slate-900 sm:px-4 sm:py-12">
+      <main className="mx-auto mb-6 max-w-xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl shadow-slate-300/30 sm:rounded-3xl">
+        <header className="border-b border-slate-100 bg-gradient-to-r from-white to-cyan-50 px-5 py-3 sm:px-8 sm:py-5">
           <Link to="/" aria-label="Samdamte home">
-            <img src="/samdamte-water-logo-print.png" alt="Samdamte Water Utility Management" className="h-16 w-auto" />
+            <img src="/samdamte-water-logo-print.png" alt="Samdamte Water Utility Management" className="h-12 w-auto sm:h-16" />
           </Link>
         </header>
-        <section className="px-6 py-7 sm:px-8">
-          <div className="mb-6">
+        <section className="px-5 py-5 sm:px-8 sm:py-7">
+          <div className="mb-4 sm:mb-6">
             <p className="text-xs font-bold uppercase tracking-[0.16em] text-aqua-700">Secure M-Pesa payment</p>
             <h1 className="mt-2 text-2xl font-extrabold">Pay your water account</h1>
             <p className="mt-1 text-sm text-slate-500">Confirm the details below, then approve the prompt sent to your phone.</p>

@@ -1131,7 +1131,7 @@ export function DemandNotices() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(true);
-  const [acting, setActing] = useState<"APPROVE" | "REJECT" | "RETURN" | "SEND" | "">(
+  const [acting, setActing] = useState<"APPROVE" | "REJECT" | "RETURN" | "">(
     "",
   );
   const [search, setSearch] = useState("");
@@ -1263,30 +1263,12 @@ export function DemandNotices() {
       if (noticeIds.length === 1 && !selectedIds.length)
         await api.decideDebtNotice(noticeIds[0], decision, comments);
       else await api.decideDebtNotices(noticeIds, decision, comments);
-      setMessage(`${noticeIds.length} notice(s) ${decision.toLowerCase()}d.`);
+      setMessage(
+        decision === "APPROVE"
+          ? `${noticeIds.length} notice(s) approved and sent to the notification queue.`
+          : `${noticeIds.length} notice(s) ${decision.toLowerCase()}d.`,
+      );
       setComments("");
-      await load();
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setActing("");
-    }
-  }
-  async function sendApprovedNotice() {
-    if (decisionRows.length !== 1) return;
-    try {
-      setActing("SEND");
-      setError("");
-      const result = await api.sendDebtNotice(String(decisionRows[0].noticeId));
-      if (["SENT", "DELIVERED"].includes(result.deliveryStatus))
-        setMessage(`Notice sent successfully (${result.deliveryStatus.toLowerCase()}).`);
-      else if (result.deliveryStatus === "READY_TO_PRINT")
-        setMessage("Notice approved and ready to print.");
-      else
-        setError(
-          result.failureReason ||
-            `Notice delivery ${String(result.deliveryStatus ?? "failed").toLowerCase()}. Check the SMS provider configuration.`,
-        );
       await load();
     } catch (e: any) {
       setError(e.message);
@@ -1703,23 +1685,6 @@ export function DemandNotices() {
                 />
               </Field>
               <div className="mt-3 flex flex-wrap justify-end gap-2">
-                {decisionRows.length === 1 &&
-                  decisionRows[0].noticeStatus === "APPROVED" &&
-                  !["SENT", "DELIVERED"].includes(
-                    decisionRows[0].deliveryStatus,
-                  ) && (
-                    <Button
-                      tone="green"
-                      disabled={!!acting}
-                      onClick={sendApprovedNotice}
-                    >
-                      {acting === "SEND"
-                        ? "Sending…"
-                        : decisionRows[0].deliveryStatus === "FAILED"
-                          ? "Retry SMS"
-                          : "Send SMS now"}
-                    </Button>
-                  )}
                 <Button
                   tone="red"
                   disabled={!!acting || comments.length < 3 || !decisionPending}
@@ -1745,7 +1710,7 @@ export function DemandNotices() {
                 >
                   {acting === "APPROVE"
                     ? "Approving…"
-                    : `Approve${decisionRows.length > 1 ? ` selected (${decisionRows.length})` : " notice"}`}
+                    : `Approve & queue${decisionRows.length > 1 ? ` (${decisionRows.length})` : ""}`}
                 </Button>
               </div>
             </Card>
