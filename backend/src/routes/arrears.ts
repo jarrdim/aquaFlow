@@ -203,6 +203,65 @@ async function action(
   });
 }
 
+async function queueApprovedDebtNotices(
+  tx: any,
+  notices: any[],
+  requestedBy: bigint,
+) {
+  for (const notice of notices) {
+    if (notice.deliveryChannel === "PRINT") {
+      await tx.debtNotice.update({
+        where: { noticeId: notice.noticeId },
+        data: { deliveryStatus: "READY_TO_PRINT", updatedAt: new Date() },
+      });
+      continue;
+    }
+    const channel = notice.deliveryChannel === "SMS_PDF"
+      ? "SMS"
+      : notice.deliveryChannel;
+    const recipient = channel === "SMS"
+      ? notice.account.customer.phoneNumber
+      : channel === "EMAIL"
+        ? notice.account.customer.emailAddress
+        : notice.account.accountNumber;
+    if (!recipient) {
+      await tx.debtNotice.update({
+        where: { noticeId: notice.noticeId },
+        data: { deliveryStatus: "FAILED", updatedAt: new Date() },
+      });
+      continue;
+    }
+    const provider = await tx.notificationProvider.findFirst({
+      where: { channel, status: "ACTIVE", isDefault: true },
+      select: { providerId: true },
+    });
+    await tx.notification.create({
+      data: {
+        providerId: provider?.providerId,
+        customerId: notice.account.customerId,
+        accountId: notice.accountId,
+        notificationType: "DEBT_NOTICE",
+        channel,
+        recipient,
+        subject: channel === "EMAIL" ? `${notice.noticeType.replace(/_/g, " ")} notice` : null,
+        messageBody: notice.messageBody,
+        deliveryStatus: "QUEUED",
+        requestedBy,
+        externalReference: notice.noticeNumber,
+        metadata: {
+          debtNoticeId: notice.noticeId.toString(),
+          noticeNumber: notice.noticeNumber,
+          deliveryChannel: notice.deliveryChannel,
+        },
+      },
+    });
+    await tx.debtNotice.update({
+      where: { noticeId: notice.noticeId },
+      data: { deliveryStatus: "QUEUED", updatedAt: new Date() },
+    });
+  }
+}
+
 async function refreshStatuses() {
   const now = today();
   await prisma.promiseToPay.updateMany({
@@ -538,6 +597,7 @@ arrearsRouter.patch("/notices/decision", supervisor, async (req, res, next) => {
     const noticeIds = [...new Set(data.noticeIds.map(String))].map(BigInt);
     const notices = await prisma.debtNotice.findMany({
       where: { noticeId: { in: noticeIds } },
+      include: { account: { include: { customer: true } } },
     });
     if (notices.length !== noticeIds.length)
       return res.status(404).json({ error: "One or more notices were not found" });
@@ -576,6 +636,8 @@ arrearsRouter.patch("/notices/decision", supervisor, async (req, res, next) => {
           referenceId: notice.noticeId,
         })),
       });
+      if (data.decision === "APPROVE")
+        await queueApprovedDebtNotices(tx, notices, uid(req));
     });
     res.json({ updated: notices.length, status });
   } catch (error) {
@@ -595,7 +657,10 @@ arrearsRouter.patch("/notices/:id/decision", supervisor, async (req, res, next) 
   );
   if (!noticeId || !data) return;
   try {
-    const notice = await prisma.debtNotice.findUnique({ where: { noticeId } });
+    const notice = await prisma.debtNotice.findUnique({
+      where: { noticeId },
+      include: { account: { include: { customer: true } } },
+    });
     if (!notice) return res.status(404).json({ error: "Notice not found" });
     if (notice.noticeStatus !== "PENDING_APPROVAL")
       return res.status(409).json({ error: "Only pending notices can be decided" });
@@ -627,7 +692,33 @@ arrearsRouter.patch("/notices/:id/decision", supervisor, async (req, res, next) 
       "DEBT_NOTICE",
       noticeId,
     );
+    if (data.decision === "APPROVE")
+      await prisma.$transaction((tx) =>
+        queueApprovedDebtNotices(tx, [notice], uid(req)),
+      );
     res.json(updated);
+  } catch (error) {
+    next(error);
+  }
+});
+
+arrearsRouter.post("/notices/:id/send", supervisor, async (req, res, next) => {
+  const noticeId = parse(id, req.params.id, res);
+  if (!noticeId) return;
+  try {
+    const notice = await prisma.debtNotice.findUnique({
+      where: { noticeId },
+      include: { account: { include: { customer: true } } },
+    });
+    if (!notice) return res.status(404).json({ error: "Notice not found" });
+    if (notice.noticeStatus !== "APPROVED")
+      return res.status(409).json({ error: "Only approved notices can be sent" });
+    if (["QUEUED", "SENT", "DELIVERED"].includes(notice.deliveryStatus))
+      return res.status(409).json({ error: `Notice delivery is already ${notice.deliveryStatus.toLowerCase()}` });
+    await prisma.$transaction((tx) =>
+      queueApprovedDebtNotices(tx, [notice], uid(req)),
+    );
+    res.json({ noticeId: notice.noticeId, deliveryStatus: notice.deliveryChannel === "PRINT" ? "READY_TO_PRINT" : "QUEUED" });
   } catch (error) {
     next(error);
   }

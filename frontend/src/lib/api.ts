@@ -712,6 +712,8 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ decision, comments }),
     }),
+  sendDebtNotice: (id: string) =>
+    request(`/arrears/notices/${id}/send`, { method: "POST" }),
   decideDebtNotices: (
     noticeIds: string[],
     decision: "APPROVE" | "REJECT" | "RETURN",

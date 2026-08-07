@@ -1131,7 +1131,7 @@ export function DemandNotices() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(true);
-  const [acting, setActing] = useState<"APPROVE" | "REJECT" | "RETURN" | "">(
+  const [acting, setActing] = useState<"APPROVE" | "REJECT" | "RETURN" | "SEND" | "">(
     "",
   );
   const [search, setSearch] = useState("");
@@ -1265,6 +1265,20 @@ export function DemandNotices() {
       else await api.decideDebtNotices(noticeIds, decision, comments);
       setMessage(`${noticeIds.length} notice(s) ${decision.toLowerCase()}d.`);
       setComments("");
+      await load();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setActing("");
+    }
+  }
+  async function sendApprovedNotice() {
+    if (decisionRows.length !== 1) return;
+    try {
+      setActing("SEND");
+      setError("");
+      await api.sendDebtNotice(String(decisionRows[0].noticeId));
+      setMessage("Approved notice queued. Open Notifications → Delivery Queue and process the due queue to send it.");
       await load();
     } catch (e: any) {
       setError(e.message);
@@ -1681,6 +1695,19 @@ export function DemandNotices() {
                 />
               </Field>
               <div className="mt-3 flex flex-wrap justify-end gap-2">
+                {decisionRows.length === 1 &&
+                  decisionRows[0].noticeStatus === "APPROVED" &&
+                  !["QUEUED", "SENT", "DELIVERED"].includes(
+                    decisionRows[0].deliveryStatus,
+                  ) && (
+                    <Button
+                      tone="green"
+                      disabled={!!acting}
+                      onClick={sendApprovedNotice}
+                    >
+                      {acting === "SEND" ? "Queueing…" : "Send approved notice"}
+                    </Button>
+                  )}
                 <Button
                   tone="red"
                   disabled={!!acting || comments.length < 3 || !decisionPending}
