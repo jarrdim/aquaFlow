@@ -31,7 +31,7 @@ function withBalancePaymentLink(
   const optOut = process.env.SMS_OPT_OUT_TEXT?.trim() || "STOP *456*9*5#";
   const customerMessage = message.replace(
     /^Dear\s+(.+?),\s*account\s+(.+?)\s+has an outstanding balance of\s+(.+?)\.\s*Please pay to avoid service interruption\.?$/i,
-    "Dear $1,\nYour water account $2 has an outstanding water bill balance of $3. Kindly make payment to avoid service interruption. Ignore if you have paid.",
+    "Dear $1,\nYour water account $2 has an outstanding balance of $3. Kindly make payment to avoid service disruption.\nIGNORE this text if you have paid.",
   );
   return `${customerMessage}\n\nClick the link below to pay\n${url}\nThanks\n${optOut}`;
 }
@@ -316,7 +316,7 @@ async function activeTemplate(notificationType: string, channel: string) {
     BALANCE_REMINDER_SMS: {
       subject: null,
       messageBody:
-        "Dear {{customer_name}},\nYour water account {{account_number}} has an outstanding water bill balance of KSh {{balance}}. Kindly make payment to avoid service interruption. Ignore if you have paid.",
+        "Dear {{customer_name}},\nYour water account {{account_number}} has an outstanding balance of KSh {{balance}}. Kindly make payment to avoid service disruption.\nIGNORE this text if you have paid.",
     },
     BALANCE_REMINDER_EMAIL: {
       subject: "Outstanding balance for {{account_number}}",
