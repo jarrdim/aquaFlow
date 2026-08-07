@@ -437,7 +437,7 @@ arrearsRouter.post("/reminders", officer, async (req, res, next) => {
             .replace(/\{\{customerName\}\}/g, customerName(account.customer))
             .replace(/\{\{accountNumber\}\}/g, account.accountNumber)
             .replace(/\{\{balance\}\}/g, Number(account.currentBalance).toFixed(2));
-          const expiresAt = new Date(Date.now() + 7 * 86_400_000);
+          const expiresAt = new Date(Date.now() + 14 * 86_400_000);
           const paymentToken = createPaymentLinkToken({
             accountId: account.accountId.toString(),
             expiresAt: expiresAt.toISOString(),

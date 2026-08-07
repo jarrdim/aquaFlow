@@ -22,7 +22,7 @@ function withBalancePaymentLink(
   if (notificationType !== "BALANCE_REMINDER" || channel !== "SMS")
     return message;
   const startsAt = scheduledAt && scheduledAt > new Date() ? scheduledAt : new Date();
-  const expiresAt = new Date(startsAt.getTime() + 7 * 86_400_000);
+  const expiresAt = new Date(startsAt.getTime() + 14 * 86_400_000);
   const token = createPaymentLinkToken({
     accountId: accountId.toString(),
     expiresAt: expiresAt.toISOString(),
