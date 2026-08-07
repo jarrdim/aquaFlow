@@ -279,7 +279,7 @@ function debtNoticeSmsMessage(notice: any) {
   });
   const paymentUrl = `${publicAppUrl()}/pay/${paymentToken}`;
   const optOut = process.env.SMS_OPT_OUT_TEXT?.trim() || "STOP *456*9*5#";
-  return `${notice.messageBody}\n\nClick ${paymentUrl} to pay now. Thanks\n${optOut}`;
+  return `${notice.messageBody}\n\nClick the link below to pay\n${paymentUrl}\nThanks\n${optOut}`;
 }
 
 async function refreshStatuses() {
@@ -454,7 +454,7 @@ arrearsRouter.post("/reminders", officer, async (req, res, next) => {
               recipient,
               subject: channel === "EMAIL" ? "Outstanding water account balance" : null,
               messageBody: channel === "SMS"
-                ? `${personalizedMessage}\n\nClick ${paymentUrl} to pay now. Thanks\n${optOut}`
+                ? `${personalizedMessage}\n\nClick the link below to pay\n${paymentUrl}\nThanks\n${optOut}`
                 : personalizedMessage,
               deliveryStatus: "QUEUED",
               requestedBy: uid(req),
