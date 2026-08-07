@@ -718,7 +718,11 @@ arrearsRouter.post("/notices/:id/send", supervisor, async (req, res, next) => {
     await prisma.$transaction((tx) =>
       queueApprovedDebtNotices(tx, [notice], uid(req)),
     );
-    res.json({ noticeId: notice.noticeId, deliveryStatus: notice.deliveryChannel === "PRINT" ? "READY_TO_PRINT" : "QUEUED" });
+    res.json({
+      noticeId: notice.noticeId.toString(),
+      deliveryStatus:
+        notice.deliveryChannel === "PRINT" ? "READY_TO_PRINT" : "QUEUED",
+    });
   } catch (error) {
     next(error);
   }
