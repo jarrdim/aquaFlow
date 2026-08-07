@@ -130,8 +130,14 @@ async function arrearsRows(asOf: Date, filters: any = {}) {
           0,
         ),
       );
+      // Migrated opening balances pre-date AquaFlow bill records. Treat the
+      // unpaid portion as arrears as well as balances from overdue native bills.
+      const legacyOpeningBalance = Math.max(0, Number(account.openingBalance));
       const outstanding = round(
-        Math.min(Number(account.currentBalance), overdueBillBalance),
+        Math.min(
+          Number(account.currentBalance),
+          overdueBillBalance + legacyOpeningBalance,
+        ),
       );
       const oldestDueDate = overdueBills[0]?.dueDate as Date | undefined;
       const days = oldestDueDate ? ageDays(oldestDueDate, asOf) : 0;

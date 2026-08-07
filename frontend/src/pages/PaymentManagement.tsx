@@ -927,11 +927,10 @@ export function MpesaStkPush() {
                 </div>
               </div>
             )}
-            <Field label="Safaricom phone number">
+            <Field label="Safaricom phone number (uses customer phone)">
               <input
-                required
                 className={INPUT}
-                placeholder="0712345678"
+                placeholder="Loaded automatically from the customer"
                 value={form.phoneNumber}
                 onChange={(e) =>
                   setForm({ ...form, phoneNumber: e.target.value })

@@ -560,7 +560,7 @@ paymentsRouter.post("/mpesa/stk", staff, async (req, res, next) => {
   const data = parse(
     z.object({
       accountId: id,
-      phoneNumber: z.string().trim().min(9).max(20),
+      phoneNumber: z.string().trim().max(20).optional(),
       amount: z.coerce.number().positive().max(250_000),
     }),
     req.body,
@@ -576,9 +576,16 @@ paymentsRouter.post("/mpesa/stk", staff, async (req, res, next) => {
       return res
         .status(404)
         .json({ error: "Active customer account not found" });
+    const phoneNumber = String(
+      data.phoneNumber || account.customer.phoneNumber || "",
+    ).trim();
+    if (phoneNumber.length < 9)
+      return res.status(409).json({
+        error: "The selected customer does not have a valid phone number",
+      });
     const row = await initiateMpesaStk({
       account,
-      phoneNumber: data.phoneNumber,
+      phoneNumber,
       amount: data.amount,
       initiatedBy: uid(req),
     });
