@@ -3,6 +3,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { isSystemAdmin, requireAuth, requireRole } from "../middleware/auth";
+import { processOne } from "./notifications";
 
 export const arrearsRouter = Router();
 arrearsRouter.use(requireAuth);
@@ -713,15 +714,52 @@ arrearsRouter.post("/notices/:id/send", supervisor, async (req, res, next) => {
     if (!notice) return res.status(404).json({ error: "Notice not found" });
     if (notice.noticeStatus !== "APPROVED")
       return res.status(409).json({ error: "Only approved notices can be sent" });
-    if (["QUEUED", "SENT", "DELIVERED"].includes(notice.deliveryStatus))
+    if (["SENT", "DELIVERED"].includes(notice.deliveryStatus))
       return res.status(409).json({ error: `Notice delivery is already ${notice.deliveryStatus.toLowerCase()}` });
-    await prisma.$transaction((tx) =>
-      queueApprovedDebtNotices(tx, [notice], uid(req)),
-    );
+    if (notice.deliveryChannel === "PRINT") {
+      if (notice.deliveryStatus !== "READY_TO_PRINT")
+        await prisma.$transaction((tx) =>
+          queueApprovedDebtNotices(tx, [notice], uid(req)),
+        );
+      return res.json({
+        noticeId: notice.noticeId.toString(),
+        deliveryStatus: "READY_TO_PRINT",
+      });
+    }
+    let notification = await prisma.notification.findFirst({
+      where: {
+        notificationType: "DEBT_NOTICE",
+        accountId: notice.accountId,
+        metadata: { path: ["debtNoticeId"], equals: notice.noticeId.toString() },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    if (!notification) {
+      await prisma.$transaction((tx) =>
+        queueApprovedDebtNotices(tx, [notice], uid(req)),
+      );
+      notification = await prisma.notification.findFirst({
+        where: {
+          notificationType: "DEBT_NOTICE",
+          accountId: notice.accountId,
+          metadata: { path: ["debtNoticeId"], equals: notice.noticeId.toString() },
+        },
+        orderBy: { createdAt: "desc" },
+      });
+    }
+    if (!notification)
+      return res.status(409).json({ error: "The notice has no valid delivery recipient" });
+    const processed = await processOne(notification.notificationId);
+    const deliveryStatus = processed?.deliveryStatus ?? "FAILED";
+    await prisma.debtNotice.update({
+      where: { noticeId: notice.noticeId },
+      data: { deliveryStatus, updatedAt: new Date() },
+    });
     res.json({
       noticeId: notice.noticeId.toString(),
-      deliveryStatus:
-        notice.deliveryChannel === "PRINT" ? "READY_TO_PRINT" : "QUEUED",
+      notificationId: notification.notificationId.toString(),
+      deliveryStatus,
+      failureReason: processed?.failureReason ?? null,
     });
   } catch (error) {
     next(error);

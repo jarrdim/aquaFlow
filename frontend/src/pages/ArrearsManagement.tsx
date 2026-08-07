@@ -1277,8 +1277,16 @@ export function DemandNotices() {
     try {
       setActing("SEND");
       setError("");
-      await api.sendDebtNotice(String(decisionRows[0].noticeId));
-      setMessage("Approved notice queued. Open Notifications → Delivery Queue and process the due queue to send it.");
+      const result = await api.sendDebtNotice(String(decisionRows[0].noticeId));
+      if (["SENT", "DELIVERED"].includes(result.deliveryStatus))
+        setMessage(`Notice sent successfully (${result.deliveryStatus.toLowerCase()}).`);
+      else if (result.deliveryStatus === "READY_TO_PRINT")
+        setMessage("Notice approved and ready to print.");
+      else
+        setError(
+          result.failureReason ||
+            `Notice delivery ${String(result.deliveryStatus ?? "failed").toLowerCase()}. Check the SMS provider configuration.`,
+        );
       await load();
     } catch (e: any) {
       setError(e.message);
@@ -1697,7 +1705,7 @@ export function DemandNotices() {
               <div className="mt-3 flex flex-wrap justify-end gap-2">
                 {decisionRows.length === 1 &&
                   decisionRows[0].noticeStatus === "APPROVED" &&
-                  !["QUEUED", "SENT", "DELIVERED"].includes(
+                  !["SENT", "DELIVERED"].includes(
                     decisionRows[0].deliveryStatus,
                   ) && (
                     <Button
@@ -1705,7 +1713,11 @@ export function DemandNotices() {
                       disabled={!!acting}
                       onClick={sendApprovedNotice}
                     >
-                      {acting === "SEND" ? "Queueing…" : "Send approved notice"}
+                      {acting === "SEND"
+                        ? "Sending…"
+                        : decisionRows[0].deliveryStatus === "FAILED"
+                          ? "Retry SMS"
+                          : "Send SMS now"}
                     </Button>
                   )}
                 <Button

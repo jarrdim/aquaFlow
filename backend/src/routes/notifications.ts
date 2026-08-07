@@ -356,7 +356,7 @@ async function failAttempt(
   });
 }
 
-async function processOne(notificationId: bigint) {
+export async function processOne(notificationId: bigint) {
   const notification = await prisma.notification.findUnique({
     where: { notificationId },
     include: { provider: true },
