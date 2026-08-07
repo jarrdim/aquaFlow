@@ -759,7 +759,10 @@ arrearsRouter.post("/notices/:id/send", supervisor, async (req, res, next) => {
       where: {
         notificationType: "DEBT_NOTICE",
         accountId: notice.accountId,
-        metadata: { path: ["debtNoticeId"], equals: notice.noticeId.toString() },
+        OR: [
+          { externalReference: notice.noticeNumber },
+          { metadata: { path: ["debtNoticeId"], equals: notice.noticeId.toString() } },
+        ],
       },
       orderBy: { createdAt: "desc" },
     });
@@ -771,7 +774,7 @@ arrearsRouter.post("/notices/:id/send", supervisor, async (req, res, next) => {
         where: {
           notificationType: "DEBT_NOTICE",
           accountId: notice.accountId,
-          metadata: { path: ["debtNoticeId"], equals: notice.noticeId.toString() },
+          externalReference: notice.noticeNumber,
         },
         orderBy: { createdAt: "desc" },
       });
