@@ -755,45 +755,52 @@ arrearsRouter.post("/notices/:id/send", supervisor, async (req, res, next) => {
         deliveryStatus: "READY_TO_PRINT",
       });
     }
-    let notification = await prisma.notification.findFirst({
-      where: {
-        notificationType: "DEBT_NOTICE",
-        accountId: notice.accountId,
-        OR: [
-          { externalReference: notice.noticeNumber },
-          { metadata: { path: ["debtNoticeId"], equals: notice.noticeId.toString() } },
-        ],
-      },
-      orderBy: { createdAt: "desc" },
+    const channel = notice.deliveryChannel === "SMS_PDF"
+      ? "SMS"
+      : notice.deliveryChannel;
+    const recipient = (channel === "SMS"
+      ? notice.account.customer.phoneNumber
+      : channel === "EMAIL"
+        ? notice.account.customer.emailAddress
+        : notice.account.accountNumber)?.trim();
+    if (!recipient)
+      return res.status(409).json({
+        error: channel === "SMS"
+          ? "The customer has no phone number"
+          : "The notice has no valid delivery recipient",
+      });
+
+    // Create and process this exact row. Re-querying a previously queued row made
+    // retries depend on stale notification data and could lose a valid recipient.
+    const provider = await prisma.notificationProvider.findFirst({
+      where: { channel, status: "ACTIVE", isDefault: true },
+      select: { providerId: true },
     });
-    if (!notification) {
-      await prisma.$transaction((tx) =>
-        queueApprovedDebtNotices(tx, [notice], uid(req)),
-      );
-      notification = await prisma.notification.findFirst({
-        where: {
-          notificationType: "DEBT_NOTICE",
-          accountId: notice.accountId,
-          externalReference: notice.noticeNumber,
+    const notification = await prisma.notification.create({
+      data: {
+        providerId: provider?.providerId,
+        customerId: notice.account.customerId,
+        accountId: notice.accountId,
+        notificationType: "DEBT_NOTICE",
+        channel,
+        recipient,
+        subject: channel === "EMAIL"
+          ? `${notice.noticeType.replace(/_/g, " ")} notice`
+          : null,
+        messageBody: channel === "SMS"
+          ? debtNoticeSmsMessage(notice)
+          : notice.messageBody,
+        deliveryStatus: "QUEUED",
+        requestedBy: uid(req),
+        externalReference: notice.noticeNumber,
+        metadata: {
+          debtNoticeId: notice.noticeId.toString(),
+          noticeNumber: notice.noticeNumber,
+          deliveryChannel: notice.deliveryChannel,
+          directSend: true,
         },
-        orderBy: { createdAt: "desc" },
-      });
-    }
-    if (!notification)
-      return res.status(409).json({ error: "The notice has no valid delivery recipient" });
-    if (["SMS", "SMS_PDF"].includes(notice.deliveryChannel)) {
-      notification = await prisma.notification.update({
-        where: { notificationId: notification.notificationId },
-        data: {
-          messageBody: debtNoticeSmsMessage(notice),
-          deliveryStatus: ["SENT", "DELIVERED"].includes(notification.deliveryStatus)
-            ? notification.deliveryStatus
-            : "QUEUED",
-          failureReason: null,
-          updatedAt: new Date(),
-        },
-      });
-    }
+      },
+    });
     const processed = await processOne(notification.notificationId);
     const deliveryStatus = processed?.deliveryStatus ?? "FAILED";
     await prisma.debtNotice.update({
