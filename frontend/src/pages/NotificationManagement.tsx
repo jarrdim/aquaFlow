@@ -591,9 +591,10 @@ function BulkNotificationSend({ modeSwitch }: { modeSwitch: ReactNode }) {
         );
       }
       const skipped = result.skipped ?? {};
-      const skippedCount = Number(skipped.missingSms ?? 0) + Number(skipped.missingEmail ?? 0) + Number(skipped.unavailableTemplate ?? 0);
+      const skippedCount = Number(skipped.missingSms ?? 0) + Number(skipped.missingEmail ?? 0) + Number(skipped.unavailableTemplate ?? 0) + Number(skipped.duplicateQueued ?? 0);
+      const duplicateCount = Number(skipped.duplicateQueued ?? 0);
       setSuccess(
-        `${created.toLocaleString()} notification(s) queued for ${Number(result.accounts).toLocaleString()} account(s).${skippedCount ? ` ${skippedCount.toLocaleString()} delivery option(s) were skipped.` : ""} Open the delivery queue to process them.`,
+        `${created.toLocaleString()} notification(s) queued for ${Number(result.accounts).toLocaleString()} account(s).${skippedCount ? ` ${skippedCount.toLocaleString()} delivery option(s) were skipped.` : ""}${duplicateCount ? ` ${duplicateCount.toLocaleString()} duplicate queued notification(s) were prevented.` : ""} Open the delivery queue to process them.`,
       );
       setSelected([]);
       setAllMatching(false);
@@ -762,6 +763,26 @@ function BulkNotificationSend({ modeSwitch }: { modeSwitch: ReactNode }) {
             1,000 rows across pages.
           </div>
         )}
+        <div className="mb-3 flex items-center justify-end gap-2">
+          <Button
+            type="button"
+            tone="slate"
+            disabled={page <= 1 || loading}
+            onClick={() => setPage((value) => Math.max(1, value - 1))}
+          >
+            Previous
+          </Button>
+          <span className="min-w-24 text-center text-sm font-semibold text-slate-600">
+            Page {page} of {pages}
+          </span>
+          <Button
+            type="button"
+            disabled={page >= pages || loading}
+            onClick={() => setPage((value) => Math.min(pages, value + 1))}
+          >
+            Next
+          </Button>
+        </div>
         <div className="overflow-x-auto rounded-xl border border-slate-200">
           <table className="w-full min-w-[920px]">
             <thead>
@@ -1509,6 +1530,27 @@ function NotificationRegister({ queueOnly = false }: { queueOnly?: boolean }) {
             <span className="font-semibold">Maximum 200 processed per run</span>
           </div>
         )}
+        <nav className="mb-3 flex items-center justify-end gap-2" aria-label="Top notification pagination">
+          <button
+            type="button"
+            className="inline-flex h-9 items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-600 transition hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-white"
+            disabled={page <= 1}
+            onClick={() => { setPage((current) => Math.max(1, current - 1)); setSelected([]); }}
+          >
+            <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="m15 18-6-6 6-6" /></svg>
+            Previous
+          </button>
+          <span className="min-w-24 text-center text-sm font-semibold text-slate-600">Page {page} of {pages}</span>
+          <button
+            type="button"
+            className="inline-flex h-9 items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-600 transition hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-white"
+            disabled={page >= pages}
+            onClick={() => { setPage((current) => Math.min(pages, current + 1)); setSelected([]); }}
+          >
+            Next
+            <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="m9 18 6-6-6-6" /></svg>
+          </button>
+        </nav>
         <NotificationTable
           rows={rows}
           onRetry={retry}

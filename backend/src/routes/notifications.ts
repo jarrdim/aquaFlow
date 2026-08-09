@@ -1376,8 +1376,27 @@ notificationsRouter.post("/send-bulk", managers, async (req, res, next) => {
             select: { reconnectionFee: true },
           })
         : null;
+    const queuedDuplicates = accounts.length
+      ? await prisma.notification.findMany({
+          where: {
+            accountId: { in: accounts.map((account) => account.accountId) },
+            notificationType: parsed.data.notificationType,
+            channel: { in: parsed.data.channels },
+            deliveryStatus: "QUEUED",
+          },
+          select: { accountId: true, channel: true },
+        })
+      : [];
+    const queuedDuplicateKeys = new Set(
+      queuedDuplicates.map((row) => `${String(row.accountId)}:${row.channel}`),
+    );
     const data: any[] = [];
-    const skipped = { missingSms: 0, missingEmail: 0, unavailableTemplate: 0 };
+    const skipped = {
+      missingSms: 0,
+      missingEmail: 0,
+      unavailableTemplate: 0,
+      duplicateQueued: 0,
+    };
     for (const account of accounts) {
       const values: Record<string, string> = {
         customer_name: customerName(account.customer),
@@ -1385,6 +1404,10 @@ notificationsRouter.post("/send-bulk", managers, async (req, res, next) => {
         balance: money(account.currentBalance),
       };
       for (const { channel, template } of templateEntries) {
+        if (queuedDuplicateKeys.has(`${String(account.accountId)}:${channel}`)) {
+          skipped.duplicateQueued += 1;
+          continue;
+        }
         if (!template && !parsed.data.message) {
           skipped.unavailableTemplate += 1;
           continue;
@@ -1437,6 +1460,8 @@ notificationsRouter.post("/send-bulk", managers, async (req, res, next) => {
         error:
           unavailableChannels.length
             ? `No notifications were queued because these channels have no active template: ${unavailableChannels.join(", ")}. Add a custom message or activate the required template.`
+            : skipped.duplicateQueued > 0
+              ? "No notifications were queued because equivalent notifications are already waiting in the delivery queue."
             : "No notifications were queued. Confirm that the selected accounts have contact details for the chosen channels.",
         skipped,
         unavailableChannels,
@@ -1537,6 +1562,22 @@ notificationsRouter.post("/send", managers, async (req, res, next) => {
           })
         : null;
     for (const channel of parsed.data.channels) {
+      const queuedDuplicate = await prisma.notification.findFirst({
+        where: {
+          accountId: account.accountId,
+          notificationType: parsed.data.notificationType,
+          channel,
+          deliveryStatus: "QUEUED",
+        },
+        select: { notificationId: true },
+      });
+      if (queuedDuplicate) {
+        skipped.push({
+          channel,
+          reason: `An equivalent ${channel} notification is already queued for this account.`,
+        });
+        continue;
+      }
       const recipient =
         channel === "EMAIL"
           ? account.customer.emailAddress
