@@ -26,6 +26,11 @@ const pretty = (v: any) =>
     .replace(/_/g, " ")
     .replace(/\b\w/g, (c) => c.toUpperCase());
 const person = (u: any) => (u ? `${u.firstName} ${u.lastName}` : "—");
+const customerDisplayName = (customer: any) =>
+  customer?.organizationName ||
+  [customer?.firstName, customer?.middleName, customer?.lastName]
+    .filter(Boolean)
+    .join(" ");
 function Page({
   title,
   subtitle,
@@ -1865,6 +1870,14 @@ export function CollectionReport() {
   const [rows, setRows] = useState<Row[]>([]),
     [channels, setChannels] = useState<Row[]>([]),
     [channelId, setChannelId] = useState("");
+  const [search, setSearch] = useState("");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+  const [allocation, setAllocation] = useState("");
+  const [minimumAmount, setMinimumAmount] = useState("");
+  const [maximumAmount, setMaximumAmount] = useState("");
+  const [sortBy, setSortBy] = useState("paymentDate");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
   useEffect(() => {
     api.listPaymentChannels().then(setChannels);
   }, []);
@@ -1873,12 +1886,57 @@ export function CollectionReport() {
       .listPayments(channelId ? { channelId } : {})
       .then((p) => setRows(p.filter((x: Row) => x.paymentStatus === "POSTED")));
   }, [channelId]);
+  const filteredRows = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    const minimum = minimumAmount === "" ? null : Number(minimumAmount);
+    const maximum = maximumAmount === "" ? null : Number(maximumAmount);
+    return rows
+      .filter((payment) => {
+        const paymentDay = String(payment.paymentDate ?? payment.valueDate ?? "").slice(0, 10);
+        const normalizedAllocation = payment.matchingStatus === "PARTIALLY_MATCHED"
+          ? "MATCHED"
+          : String(payment.matchingStatus ?? "");
+        const searchable = [
+          payment.transactionReference,
+          payment.account?.accountNumber,
+          payment.accountNumber,
+          payment.customerName,
+          customerDisplayName(payment.account?.customer),
+          payment.payerName,
+          payment.payerPhone,
+          payment.receipt?.receiptNumber,
+        ].map((value) => String(value ?? "").toLowerCase());
+        return (
+          (!query || searchable.some((value) => value.includes(query))) &&
+          (!fromDate || paymentDay >= fromDate) &&
+          (!toDate || paymentDay <= toDate) &&
+          (!allocation || normalizedAllocation === allocation) &&
+          (minimum === null || Number(payment.amount) >= minimum) &&
+          (maximum === null || Number(payment.amount) <= maximum)
+        );
+      })
+      .sort((left, right) => {
+        const value = (payment: Row) => {
+          if (sortBy === "amount") return Number(payment.amount ?? 0);
+          if (sortBy === "customer") return String(payment.customerName ?? customerDisplayName(payment.account?.customer) ?? "").toLowerCase();
+          if (sortBy === "reference") return String(payment.transactionReference ?? "").toLowerCase();
+          if (sortBy === "channel") return String(payment.channel?.channelName ?? payment.channel?.channelCode ?? "").toLowerCase();
+          return new Date(payment.paymentDate ?? payment.valueDate ?? 0).getTime();
+        };
+        const a = value(left);
+        const b = value(right);
+        const comparison = typeof a === "number" && typeof b === "number"
+          ? a - b
+          : String(a).localeCompare(String(b));
+        return sortDirection === "asc" ? comparison : -comparison;
+      });
+  }, [rows, search, fromDate, toDate, allocation, minimumAmount, maximumAmount, sortBy, sortDirection]);
   const totals = useMemo(
-    () => rows.reduce((s, p) => s + Number(p.amount), 0),
-    [rows],
+    () => filteredRows.reduce((s, p) => s + Number(p.amount), 0),
+    [filteredRows],
   );
   const reportInput = `${INPUT} rounded-xl border-slate-200 px-3.5 py-2.5 transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10`;
-  const average = rows.length ? totals / rows.length : 0;
+  const average = filteredRows.length ? totals / filteredRows.length : 0;
   return (
     <Page
       title="Daily collection report"
@@ -1887,7 +1945,7 @@ export function CollectionReport() {
         <Button
           tone="green"
           onClick={() =>
-            exportExcel("daily-collections.xlsx", "Collections", rows)
+            exportExcel("daily-collections.xlsx", "Collections", filteredRows)
           }
         >
           <span className="inline-flex items-center gap-2"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="M12 3v12M7 10l5 5 5-5M5 21h14" /></svg>Export Excel</span>
@@ -1895,7 +1953,7 @@ export function CollectionReport() {
       }
     >
       <Card className="mb-5 overflow-hidden shadow-md shadow-slate-200/50">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between"><div className="flex-1"><Field label="Collection channel">
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4"><Field label="Collection channel">
           <SearchableSelect
             className={reportInput}
             value={channelId}
@@ -1908,11 +1966,20 @@ export function CollectionReport() {
               </option>
             ))}
           </SearchableSelect>
-        </Field></div><div className="rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-700"><span className="font-bold">{rows.length}</span> posted transaction{rows.length === 1 ? "" : "s"} in this view</div></div>
+        </Field>
+        <Field label="Search customer, account or reference"><input className={reportInput} value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search collections" /></Field>
+        <Field label="From date"><input type="date" className={reportInput} value={fromDate} onChange={(e) => setFromDate(e.target.value)} /></Field>
+        <Field label="To date"><input type="date" className={reportInput} value={toDate} onChange={(e) => setToDate(e.target.value)} /></Field>
+        <Field label="Allocation"><SearchableSelect className={reportInput} value={allocation} onChange={(e) => setAllocation(e.target.value)}><option value="">All allocations</option><option value="MATCHED">Matched</option><option value="UNMATCHED">Unmatched</option></SearchableSelect></Field>
+        <Field label="Minimum amount"><input type="number" min="0" step="0.01" className={reportInput} value={minimumAmount} onChange={(e) => setMinimumAmount(e.target.value)} placeholder="0.00" /></Field>
+        <Field label="Maximum amount"><input type="number" min="0" step="0.01" className={reportInput} value={maximumAmount} onChange={(e) => setMaximumAmount(e.target.value)} placeholder="No maximum" /></Field>
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2"><Field label="Sort by"><SearchableSelect className={reportInput} value={sortBy} onChange={(e) => setSortBy(e.target.value)}><option value="paymentDate">Date</option><option value="amount">Amount</option><option value="customer">Customer</option><option value="reference">Reference</option><option value="channel">Channel</option></SearchableSelect></Field><Field label="Order"><button type="button" className={`${reportInput} min-w-28 font-semibold`} onClick={() => setSortDirection((value) => value === "asc" ? "desc" : "asc")}>{sortDirection === "asc" ? "Ascending" : "Descending"}</button></Field></div>
+        </div>
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3"><div className="rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-700"><span className="font-bold">{filteredRows.length}</span> posted transaction{filteredRows.length === 1 ? "" : "s"} in this view</div><button type="button" className="text-sm font-semibold text-slate-500 hover:text-emerald-700" onClick={() => { setSearch(""); setFromDate(""); setToDate(""); setAllocation(""); setMinimumAmount(""); setMaximumAmount(""); setSortBy("paymentDate"); setSortDirection("desc"); }}>Clear filters</button></div>
       </Card>
-      <div className="grid gap-3 sm:grid-cols-3"><div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-emerald-700">Total collected</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{money(totals)}</div></div><div className="rounded-2xl border border-sky-100 bg-sky-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-sky-700">Transactions</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{rows.length}</div></div><div className="rounded-2xl border border-violet-100 bg-violet-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-violet-700">Average payment</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{money(average)}</div></div></div>
+      <div className="grid gap-3 sm:grid-cols-3"><div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-emerald-700">Total collected</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{money(totals)}</div></div><div className="rounded-2xl border border-sky-100 bg-sky-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-sky-700">Transactions</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{filteredRows.length}</div></div><div className="rounded-2xl border border-violet-100 bg-violet-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-violet-700">Average payment</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{money(average)}</div></div></div>
       <Card title="Collection transactions" className="mt-5 overflow-hidden shadow-md shadow-slate-200/50">
-        <PaymentTable rows={rows} />
+        <PaymentTable rows={filteredRows} />
       </Card>
     </Page>
   );
