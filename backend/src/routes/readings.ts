@@ -620,7 +620,7 @@ readingsRouter.post("/bulk-import-current", async (req, res, next) => {
           cycleName: `Legacy current readings ${cycleCode.replace(/^RC-/, "")}`,
           startDate: cycleStart,
           endDate: cycleEnd,
-          status: "COMPLETED",
+          status: "CLOSED",
           createdBy: req.user ? BigInt(req.user.userId) : null,
           remarks: "Imported from MajiWare MeterReadingsCurrent",
         },
