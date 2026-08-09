@@ -1658,7 +1658,10 @@ notificationsRouter.post("/send", managers, async (req, res, next) => {
 
 notificationsRouter.post("/process", managers, async (req, res, next) => {
   const parsed = z
-    .object({ notificationIds: z.array(id).optional() })
+    .object({
+      notificationIds: z.array(id).max(1000).optional(),
+      batchSize: z.coerce.number().int().min(1).max(1000).default(200),
+    })
     .safeParse(req.body);
   if (!parsed.success)
     return res.status(400).json({ error: parsed.error.flatten() });
@@ -1672,11 +1675,18 @@ notificationsRouter.post("/process", managers, async (req, res, next) => {
         OR: [{ scheduledAt: null }, { scheduledAt: { lte: new Date() } }],
       },
       select: { notificationId: true },
-      take: 200,
+      take: parsed.data.batchSize,
     });
-    const processed = [];
-    for (const row of queued)
-      processed.push(await processOne(row.notificationId));
+    const processed: any[] = [];
+    const concurrency = 10;
+    for (let offset = 0; offset < queued.length; offset += concurrency) {
+      const batch = queued.slice(offset, offset + concurrency);
+      processed.push(
+        ...(await Promise.all(
+          batch.map((row) => processOne(row.notificationId)),
+        )),
+      );
+    }
     res.json({ processed });
   } catch (error) {
     next(error);

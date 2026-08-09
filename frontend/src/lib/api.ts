@@ -646,10 +646,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify(data),
     }),
-  processNotifications: (notificationIds?: string[]) =>
+  processNotifications: (notificationIds?: string[], batchSize = 200) =>
     request("/notifications/process", {
       method: "POST",
-      body: JSON.stringify({ notificationIds }),
+      body: JSON.stringify({ notificationIds, batchSize }),
     }),
   retryNotification: (id: string) =>
     request(`/notifications/${id}/retry`, { method: "POST" }),

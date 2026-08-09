@@ -1402,6 +1402,7 @@ function NotificationRegister({ queueOnly = false }: { queueOnly?: boolean }) {
   const [busy, setBusy] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(1000);
+  const [processingBatchSize, setProcessingBatchSize] = useState(1000);
   const [total, setTotal] = useState(0);
   const [pages, setPages] = useState(1);
   const load = (pageValue = page) =>
@@ -1423,6 +1424,7 @@ function NotificationRegister({ queueOnly = false }: { queueOnly?: boolean }) {
     try {
       const result = await api.processNotifications(
         selected.length ? selected : undefined,
+        selected.length ? Math.min(selected.length, 1000) : processingBatchSize,
       );
       const processed = result.processed ?? [];
       const delivered = processed.filter((row: Row) => ["SENT", "DELIVERED"].includes(row?.deliveryStatus));
@@ -1527,7 +1529,17 @@ function NotificationRegister({ queueOnly = false }: { queueOnly?: boolean }) {
                 ? `${selected.length} notification(s) selected for this batch.`
                 : "Select rows, select all visible rows, or process the next due batch."}
             </span>
-            <span className="font-semibold">Maximum 200 processed per run</span>
+            <label className="flex items-center gap-2 font-semibold">
+              <span>Process per run</span>
+              <select
+                className="rounded-lg border border-emerald-200 bg-white px-2.5 py-1.5 text-sm text-emerald-900 outline-none"
+                value={processingBatchSize}
+                disabled={busy || selected.length > 0}
+                onChange={(event) => setProcessingBatchSize(Number(event.target.value))}
+              >
+                {[200, 500, 1000].map((size) => <option key={size} value={size}>{size.toLocaleString()}</option>)}
+              </select>
+            </label>
           </div>
         )}
         <nav className="mb-3 flex items-center justify-end gap-2" aria-label="Top notification pagination">
