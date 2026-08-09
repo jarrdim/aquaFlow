@@ -155,6 +155,10 @@ export default function Customers() {
   const [accountRows, setAccountRows] = useState<Record<string, unknown>[]>([]);
   const [accountErrors, setAccountErrors] = useState<string[]>([]);
   const [importingAccounts, setImportingAccounts] = useState(false);
+  const [showBalanceImport, setShowBalanceImport] = useState(false);
+  const [balanceRows, setBalanceRows] = useState<Record<string, unknown>[]>([]);
+  const [balanceErrors, setBalanceErrors] = useState<string[]>([]);
+  const [importingBalances, setImportingBalances] = useState(false);
 
   async function load(
     q = search,
@@ -439,6 +443,55 @@ export default function Customers() {
     }
   }
 
+  async function selectBalanceFile(file?: File) {
+    if (!file) return;
+    setError("");
+    try {
+      const sourceRows = await parseMeterWorkbook(file);
+      const errors: string[] = [];
+      const seen = new Set<string>();
+      const normalized = sourceRows.map((row, index) => {
+        const accountNumber = cell(row, "accountNumber");
+        const openingText = cell(row, "openingBalance");
+        const currentText = cell(row, "currentBalance");
+        const openingBalance = Number(openingText);
+        const currentBalance = Number(currentText);
+        if (!accountNumber) errors.push(`Row ${index + 2}: accountNumber is required.`);
+        if (accountNumber && seen.has(accountNumber)) errors.push(`Row ${index + 2}: account ${accountNumber} is duplicated in this file.`);
+        seen.add(accountNumber);
+        if (openingText === "" || !Number.isFinite(openingBalance)) errors.push(`Row ${index + 2}: openingBalance must be a number.`);
+        if (currentText === "" || !Number.isFinite(currentBalance)) errors.push(`Row ${index + 2}: currentBalance must be a number.`);
+        return { accountNumber, openingBalance, currentBalance };
+      });
+      if (!sourceRows.length) errors.push("The selected file has no balance rows.");
+      setBalanceRows(normalized);
+      setBalanceErrors(errors);
+    } catch (err) {
+      setBalanceRows([]);
+      setBalanceErrors([err instanceof Error ? err.message : "The file could not be read."]);
+    }
+  }
+
+  async function importBalances() {
+    if (!balanceRows.length || balanceErrors.length) return;
+    setImportingBalances(true);
+    setError("");
+    try {
+      let updated = 0;
+      for (let offset = 0; offset < balanceRows.length; offset += 1000) {
+        const result = await api.bulkImportAccountBalances(balanceRows.slice(offset, offset + 1000));
+        updated += Number(result.updated ?? 0);
+      }
+      setSuccess(`${updated.toLocaleString()} existing account balances updated successfully.`);
+      setBalanceRows([]);
+      setShowBalanceImport(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Account balances could not be imported.");
+    } finally {
+      setImportingBalances(false);
+    }
+  }
+
   return (
     <div className="mx-auto max-w-[1600px] px-5 py-6 lg:px-8">
       <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
@@ -456,6 +509,9 @@ export default function Customers() {
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
+        <button type="button" onClick={() => setShowBalanceImport((value) => !value)} className="inline-flex items-center rounded-xl border border-emerald-300 bg-white px-5 py-3 text-sm font-bold text-emerald-700">
+          {showBalanceImport ? "Close balances" : "Import balances"}
+        </button>
         <button type="button" onClick={() => setShowAccountImport((value) => !value)} className="inline-flex items-center rounded-xl border border-amber-300 bg-white px-5 py-3 text-sm font-bold text-amber-700">
           {showAccountImport ? "Close accounts" : "Import accounts"}
         </button>
@@ -480,6 +536,21 @@ export default function Customers() {
         </Link>
         </div>
       </div>
+
+      {showBalanceImport && (
+        <section className="mb-5 rounded-2xl border border-emerald-200 bg-white p-5 shadow-sm">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div><h2 className="font-bold text-slate-900">Import existing account balances</h2><p className="mt-1 text-sm text-slate-500">Match existing accounts by account number and replace their opening and current balances. Unknown or duplicate accounts reject the batch.</p></div>
+            <button type="button" className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700" onClick={() => exportExcel("account-balance-import-template.xlsx", "Balances", [{ accountNumber: "ACC-00001", openingBalance: 0, currentBalance: 0 }])}>Download template</button>
+          </div>
+          <div className="mt-4 grid gap-4 md:grid-cols-[1fr_auto] md:items-end">
+            <label className="block"><span className="mb-1 block text-sm font-semibold text-slate-700">Balance Excel or CSV file</span><input type="file" accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" onChange={(event) => void selectBalanceFile(event.target.files?.[0])} className="block w-full rounded-xl border border-slate-200 bg-slate-50 p-2 text-sm" /></label>
+            <button type="button" disabled={!balanceRows.length || balanceErrors.length > 0 || importingBalances} onClick={() => void importBalances()} className="h-11 rounded-xl bg-emerald-700 px-6 text-sm font-bold text-white disabled:opacity-40">{importingBalances ? "Updating..." : `Update ${balanceRows.length || ""} balances`}</button>
+          </div>
+          {balanceRows.length > 0 && !balanceErrors.length && <div className="mt-3 rounded-xl border border-emerald-100 bg-emerald-50 p-3 text-sm text-emerald-800"><strong>{balanceRows.length.toLocaleString()} rows validated.</strong> Opening total: KSh {balanceRows.reduce((sum, row) => sum + Number(row.openingBalance || 0), 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}; current total: KSh {balanceRows.reduce((sum, row) => sum + Number(row.currentBalance || 0), 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}.</div>}
+          {balanceErrors.length > 0 && <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700"><strong>Fix these issues:</strong><ul className="mt-1 list-disc pl-5">{balanceErrors.slice(0, 20).map((message) => <li key={message}>{message}</li>)}</ul>{balanceErrors.length > 20 && <p className="mt-1">And {balanceErrors.length - 20} more.</p>}</div>}
+        </section>
+      )}
 
       {showImport && (
         <section className="mb-5 rounded-2xl border border-sky-200 bg-white p-5 shadow-sm">

@@ -195,6 +195,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ accounts }),
     }),
+  bulkImportAccountBalances: (balances: Record<string, unknown>[]) =>
+    request("/accounts/bulk-balance-import", {
+      method: "POST",
+      body: JSON.stringify({ balances }),
+    }),
   listAccounts: (search = "", take = 8) =>
     request(
       `/accounts?search=${encodeURIComponent(search)}&take=${encodeURIComponent(String(take))}`,

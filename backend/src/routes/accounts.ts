@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
-import { requireAuth } from "../middleware/auth";
+import { requireAuth, requireRole } from "../middleware/auth";
 
 export const accountsRouter = Router();
 accountsRouter.use(requireAuth);
@@ -27,6 +27,68 @@ const bulkAccountSchema = z.object({
     closureDate: z.preprocess((value) => value === "" ? undefined : value, z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()),
   })).min(1).max(1000),
 });
+
+const bulkBalanceSchema = z.object({
+  balances: z.array(z.object({
+    accountNumber: z.string().trim().min(1).max(50),
+    openingBalance: z.coerce.number().finite().min(-999_999_999_999_999.99).max(999_999_999_999_999.99),
+    currentBalance: z.coerce.number().finite().min(-999_999_999_999_999.99).max(999_999_999_999_999.99),
+  })).min(1).max(1000),
+});
+
+accountsRouter.post(
+  "/bulk-balance-import",
+  requireRole("SYSTEM_ADMIN", "FINANCE_MANAGER"),
+  async (req, res, next) => {
+    try {
+      const parsed = bulkBalanceSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+      const rows = parsed.data.balances;
+      const seen = new Set<string>();
+      const duplicates = rows
+        .map((row) => row.accountNumber)
+        .filter((accountNumber) => {
+          if (seen.has(accountNumber)) return true;
+          seen.add(accountNumber);
+          return false;
+        });
+      if (duplicates.length) {
+        return res.status(409).json({
+          error: `Duplicate account number(s) in the file: ${[...new Set(duplicates)].slice(0, 50).join(", ")}`,
+        });
+      }
+
+      const existing = await prisma.customerAccount.findMany({
+        where: { accountNumber: { in: rows.map((row) => row.accountNumber) } },
+        select: { accountNumber: true },
+      });
+      const existingNumbers = new Set(existing.map((row) => row.accountNumber));
+      const missing = rows
+        .map((row) => row.accountNumber)
+        .filter((accountNumber) => !existingNumbers.has(accountNumber));
+      if (missing.length) {
+        return res.status(409).json({
+          error: `${missing.length} account(s) were not found: ${missing.slice(0, 50).join(", ")}${missing.length > 50 ? "..." : ""}`,
+        });
+      }
+
+      await prisma.$transaction(
+        rows.map((row) => prisma.customerAccount.update({
+          where: { accountNumber: row.accountNumber },
+          data: {
+            openingBalance: row.openingBalance,
+            currentBalance: row.currentBalance,
+          },
+        })),
+      );
+
+      res.json({ updated: rows.length });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
 
 accountsRouter.post("/bulk-import", async (req, res) => {
   const parsed = bulkAccountSchema.safeParse(req.body);
