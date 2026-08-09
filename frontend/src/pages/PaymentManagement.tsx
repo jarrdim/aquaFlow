@@ -1883,9 +1883,7 @@ export function CollectionReport() {
       setChannels(items);
       const mpesa = items.find(
         (channel: Row) =>
-          String(channel.channelCode ?? "").toUpperCase() === "MPESA" ||
-          String(channel.channelName ?? "").toUpperCase().includes("M-PESA") ||
-          String(channel.channelName ?? "").toUpperCase() === "MPESA",
+          String(channel.channelName ?? "").trim().toUpperCase() === "MPESA",
       );
       if (mpesa) setChannelId(String(mpesa.channelId));
     });
