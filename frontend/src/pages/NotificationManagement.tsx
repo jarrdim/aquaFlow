@@ -45,7 +45,7 @@ function Page({
 }) {
   return (
     <div className="mx-auto max-w-[1600px] p-4 lg:px-6 lg:py-5">
-      <div className="page-screen-header mb-6 flex flex-wrap items-start justify-between gap-4">
+      <div className="page-screen-header sticky top-0 z-30 -mx-4 mb-6 flex flex-wrap items-start justify-between gap-4 border-b border-slate-200/80 bg-slate-50/95 px-4 py-3 shadow-sm backdrop-blur lg:-mx-6 lg:px-6">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">{title}</h1>
           <p className="mt-1.5 text-[15px] font-medium text-slate-500">{subtitle}</p>
@@ -491,7 +491,7 @@ function BulkNotificationSend({ modeSwitch }: { modeSwitch: ReactNode }) {
   const [audience, setAudience] = useState<Row>({
     items: [],
     total: 0,
-    pageSize: 25,
+    pageSize: 1000,
     totalBalance: 0,
   });
   const [page, setPage] = useState(1);
@@ -527,7 +527,7 @@ function BulkNotificationSend({ modeSwitch }: { modeSwitch: ReactNode }) {
         zoneIds: applied.zoneIds.join(","),
         categoryIds: applied.categoryIds.join(","),
         page: String(page),
-        pageSize: "25",
+        pageSize: "1000",
       })
       .then(setAudience)
       .catch((e) => setError(errorText(e)))
@@ -541,7 +541,7 @@ function BulkNotificationSend({ modeSwitch }: { modeSwitch: ReactNode }) {
   const selectedCount = allMatching ? Number(audience.total) : selected.length;
   const pages = Math.max(
     1,
-    Math.ceil(Number(audience.total) / Number(audience.pageSize ?? 25)),
+    Math.ceil(Number(audience.total) / Number(audience.pageSize ?? 1000)),
   );
   const customRequired = notificationType === "GENERAL";
 
@@ -1380,7 +1380,7 @@ function NotificationRegister({ queueOnly = false }: { queueOnly?: boolean }) {
   const [success, setSuccess] = useState("");
   const [busy, setBusy] = useState(false);
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(25);
+  const [pageSize, setPageSize] = useState(1000);
   const [total, setTotal] = useState(0);
   const [pages, setPages] = useState(1);
   const load = (pageValue = page) =>
@@ -1530,7 +1530,7 @@ function NotificationRegister({ queueOnly = false }: { queueOnly?: boolean }) {
                 value={pageSize}
                 onChange={(event) => { setPageSize(Number(event.target.value)); setPage(1); setSelected([]); }}
               >
-                {[10, 25, 50, 100].map((size) => <option key={size} value={size}>{size}</option>)}
+                {[10, 25, 50, 100, 250, 500, 1000].map((size) => <option key={size} value={size}>{size}</option>)}
               </select>
             </label>
           </div>

@@ -12,12 +12,30 @@ import { createPaymentLinkToken, publicAppUrl } from "../lib/paymentLink";
 
 export const notificationsRouter = Router();
 
+function messageDate(value: Date) {
+  return `${String(value.getUTCDate()).padStart(2, "0")}/${String(value.getUTCMonth() + 1).padStart(2, "0")}/${value.getUTCFullYear()}`;
+}
+
+function nextPaymentDeadline(value: Date) {
+  const year = value.getUTCFullYear();
+  const month = value.getUTCMonth();
+  return value.getUTCDate() <= 10
+    ? new Date(Date.UTC(year, month, 10))
+    : new Date(Date.UTC(year, month + 1, 10));
+}
+
 function withBalancePaymentLink(
   message: string,
   accountId: bigint,
   notificationType: string,
   channel: string,
   scheduledAt?: Date | null,
+  details?: {
+    customerName: string;
+    accountNumber: string;
+    balance: string;
+    reconnectionFee: number;
+  },
 ) {
   if (notificationType !== "BALANCE_REMINDER" || channel !== "SMS")
     return message;
@@ -28,12 +46,13 @@ function withBalancePaymentLink(
     expiresAt: expiresAt.toISOString(),
   });
   const url = `${publicAppUrl()}/pay/${token}`;
-  const optOut = process.env.SMS_OPT_OUT_TEXT?.trim() || "STOP *456*9*5#";
-  const customerMessage = message.replace(
-    /^Dear\s+(.+?),\s*account\s+(.+?)\s+has an outstanding balance of\s+(.+?)\.\s*Please pay to avoid service interruption\.?$/i,
-    "Dear $1,\nYour water account $2 has an outstanding balance of $3. Kindly make payment to avoid service disruption.\nIGNORE this text if you have paid.",
-  );
-  return `${customerMessage}\n\nClick the link below to pay\n${url}\nThanks\n${optOut}`;
+  if (!details) return `${message}\n\nClick the link below to pay\n${url}`;
+  const deadline = nextPaymentDeadline(startsAt);
+  const fee = details.reconnectionFee.toLocaleString("en-KE", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  });
+  return `Dear ${details.customerName},\n\nWe are excited to introduce our system, designed to make our services faster, easier, and more convenient.\n\nYour water account ${details.accountNumber} has an outstanding balance of ${details.balance}. Kindly make payment by ${messageDate(deadline)} to avoid service disruption.\n\nIGNORE this text if you have paid.\n\nClick the link below to pay\n${url}\n\nReconnection Fee is KSh ${fee}.\n\nWe make it safe because water is life.\n\nThanks.`;
 }
 
 const onfonConfigurationSchema = z.object({
@@ -382,9 +401,9 @@ async function failAttempt(
 }
 
 export async function processOne(notificationId: bigint) {
-  const notification = await prisma.notification.findUnique({
+  let notification = await prisma.notification.findUnique({
     where: { notificationId },
-    include: { provider: true },
+    include: { provider: true, account: { include: { customer: true } } },
   });
   if (
     !notification ||
@@ -394,6 +413,35 @@ export async function processOne(notificationId: bigint) {
   if (notification.retryCount >= notification.maxRetries) return notification;
   if (notification.scheduledAt && notification.scheduledAt > new Date())
     return notification;
+
+  if (
+    notification.notificationType === "BALANCE_REMINDER" &&
+    notification.channel === "SMS" &&
+    notification.account
+  ) {
+    const settings = await prisma.systemSetting.findUnique({
+      where: { settingId: 1n },
+      select: { reconnectionFee: true },
+    });
+    const messageBody = withBalancePaymentLink(
+      notification.messageBody,
+      notification.account.accountId,
+      notification.notificationType,
+      notification.channel,
+      notification.scheduledAt,
+      {
+        customerName: customerName(notification.account.customer),
+        accountNumber: notification.account.accountNumber,
+        balance: money(notification.account.currentBalance),
+        reconnectionFee: Number(settings?.reconnectionFee ?? 1155),
+      },
+    );
+    notification = await prisma.notification.update({
+      where: { notificationId },
+      data: { messageBody, updatedAt: new Date() },
+      include: { provider: true, account: { include: { customer: true } } },
+    });
+  }
 
   const activeProviders = notification.provider
     ? []
@@ -1071,7 +1119,7 @@ notificationsRouter.get("/", async (req, res, next) => {
     const channel = String(req.query.channel ?? "");
     const search = String(req.query.search ?? "").trim();
     const page = Math.max(1, Number(req.query.page) || 1);
-    const pageSize = Math.min(100, Math.max(10, Number(req.query.pageSize) || 25));
+    const pageSize = Math.min(1000, Math.max(10, Number(req.query.pageSize) || 1000));
     const where: any = {};
     if (status) where.deliveryStatus = status;
     if (channel) where.channel = channel;
@@ -1116,7 +1164,7 @@ notificationsRouter.get("/audience", managers, async (req, res, next) => {
         return values;
       }),
       page: z.coerce.number().int().min(1).default(1),
-      pageSize: z.coerce.number().int().min(10).max(100).default(25),
+      pageSize: z.coerce.number().int().min(10).max(1000).default(1000),
     })
     .safeParse(req.query);
   if (!parsed.success)
@@ -1320,6 +1368,14 @@ notificationsRouter.post("/send-bulk", managers, async (req, res, next) => {
     const unavailableChannels = templateEntries
       .filter(({ template }) => !template && !parsed.data.message)
       .map(({ channel }) => channel);
+    const balanceReminderSettings =
+      parsed.data.notificationType === "BALANCE_REMINDER" &&
+      parsed.data.channels.includes("SMS")
+        ? await prisma.systemSetting.findUnique({
+            where: { settingId: 1n },
+            select: { reconnectionFee: true },
+          })
+        : null;
     const data: any[] = [];
     const skipped = { missingSms: 0, missingEmail: 0, unavailableTemplate: 0 };
     for (const account of accounts) {
@@ -1358,6 +1414,14 @@ notificationsRouter.post("/send-bulk", managers, async (req, res, next) => {
             parsed.data.notificationType,
             channel,
             parsed.data.scheduledAt,
+            {
+              customerName: customerName(account.customer),
+              accountNumber: account.accountNumber,
+              balance: money(account.currentBalance),
+              reconnectionFee: Number(
+                balanceReminderSettings?.reconnectionFee ?? 1155,
+              ),
+            },
           ),
           scheduledAt: parsed.data.scheduledAt,
           requestedBy: uid(req),
@@ -1464,6 +1528,14 @@ notificationsRouter.post("/send", managers, async (req, res, next) => {
     };
     const created: any[] = [];
     const skipped: { channel: string; reason: string }[] = [];
+    const balanceReminderSettings =
+      parsed.data.notificationType === "BALANCE_REMINDER" &&
+      parsed.data.channels.includes("SMS")
+        ? await prisma.systemSetting.findUnique({
+            where: { settingId: 1n },
+            select: { reconnectionFee: true },
+          })
+        : null;
     for (const channel of parsed.data.channels) {
       const recipient =
         channel === "EMAIL"
@@ -1505,6 +1577,14 @@ notificationsRouter.post("/send", managers, async (req, res, next) => {
             parsed.data.notificationType,
             channel,
             parsed.data.scheduledAt,
+            {
+              customerName: customerName(account.customer),
+              accountNumber: account.accountNumber,
+              balance: money(account.currentBalance),
+              reconnectionFee: Number(
+                balanceReminderSettings?.reconnectionFee ?? 1155,
+              ),
+            },
           ),
           scheduledAt: parsed.data.scheduledAt,
           requestedBy: uid(req),

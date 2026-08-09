@@ -43,6 +43,8 @@ const moneyForMessage = (value: unknown) =>
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
+const dateForMessage = (value: Date) =>
+  `${String(value.getUTCDate()).padStart(2, "0")}/${String(value.getUTCMonth() + 1).padStart(2, "0")}/${value.getUTCFullYear()}`;
 const customerName = (customer: any) =>
   customer?.organizationName ||
   [customer?.firstName, customer?.middleName, customer?.lastName]
@@ -238,7 +240,7 @@ async function queueApprovedDebtNotices(
       select: { providerId: true },
     });
     const messageBody = channel === "SMS"
-      ? debtNoticeSmsMessage(notice)
+      ? await debtNoticeSmsMessage(notice, tx)
       : notice.messageBody;
     await tx.notification.create({
       data: {
@@ -267,7 +269,7 @@ async function queueApprovedDebtNotices(
   }
 }
 
-function debtNoticeSmsMessage(notice: any) {
+async function debtNoticeSmsMessage(notice: any, db: any = prisma) {
   const deadline = notice.paymentDeadline
     ? new Date(notice.paymentDeadline)
     : new Date(Date.now() + 30 * 86_400_000);
@@ -278,8 +280,18 @@ function debtNoticeSmsMessage(notice: any) {
     expiresAt: deadline.toISOString(),
   });
   const paymentUrl = `${publicAppUrl()}/pay/${paymentToken}`;
-  const optOut = process.env.SMS_OPT_OUT_TEXT?.trim() || "STOP *456*9*5#";
-  return `${notice.messageBody}\n\nClick the link below to pay\n${paymentUrl}\nThanks\n${optOut}`;
+  const settings = await db.systemSetting.findUnique({
+    where: { settingId: 1n },
+    select: { reconnectionFee: true },
+  });
+  const reconnectionFee = Number(settings?.reconnectionFee ?? 1155).toLocaleString("en-KE", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  });
+  const name = customerName(notice.account.customer);
+  const accountNumber = notice.account.accountNumber;
+  const balance = moneyForMessage(notice.outstandingAmount);
+  return `Dear ${name},\n\nWe are excited to introduce our system, designed to make our services faster, easier, and more convenient.\n\nYour water account ${accountNumber} has an outstanding balance of ${balance}. Kindly make payment by ${dateForMessage(deadline)} to avoid service disruption.\n\nIGNORE this text if you have paid.\n\nClick the link below to pay\n${paymentUrl}\n\nReconnection Fee is KSh ${reconnectionFee}.\n\nWe make it safe because water is life.\n\nThanks.`;
 }
 
 async function refreshStatuses() {
@@ -577,7 +589,8 @@ arrearsRouter.post("/notices", officer, async (req, res, next) => {
         const personalizedMessage = data.messageBody
           .replace(/\{\{customerName\}\}/g, customerName(account.customer))
           .replace(/\{\{accountNumber\}\}/g, account.accountNumber)
-          .replace(/\{\{balance\}\}/g, moneyForMessage(account.currentBalance));
+          .replace(/\{\{balance\}\}/g, moneyForMessage(account.currentBalance))
+          .replace(/\{\{paymentDeadline\}\}/g, dateForMessage(day(data.paymentDeadline)));
         const notice = await tx.debtNotice.create({
           data: {
             noticeNumber: `DN-${timestamp}-${String(account.accountId)}`,
@@ -788,7 +801,7 @@ arrearsRouter.post("/notices/:id/send", supervisor, async (req, res, next) => {
           ? `${notice.noticeType.replace(/_/g, " ")} notice`
           : null,
         messageBody: channel === "SMS"
-          ? debtNoticeSmsMessage(notice)
+          ? await debtNoticeSmsMessage(notice)
           : notice.messageBody,
         deliveryStatus: "QUEUED",
         requestedBy: uid(req),

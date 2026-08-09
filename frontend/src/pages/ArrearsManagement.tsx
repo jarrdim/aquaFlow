@@ -14,7 +14,11 @@ const TH =
 const TD = "px-4 py-3 text-[15px] text-slate-600";
 const isoToday = () => new Date().toISOString().slice(0, 10);
 const NOTICE_MESSAGE_TEMPLATE =
-  "Dear {{customerName}}, your water account {{accountNumber}} has an outstanding balance of {{balance}}. Kindly pay by the stated deadline to avoid further recovery action.";
+  "Dear {{customerName}},\n\nWe are excited to introduce our system, designed to make our services faster, easier, and more convenient.\n\nYour water account {{accountNumber}} has an outstanding balance of {{balance}}. Kindly make payment by {{paymentDeadline}} to avoid service disruption.\n\nIGNORE this text if you have paid.";
+const messageDate = (value: any) => {
+  const match = String(value ?? "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return match ? `${match[3]}/${match[2]}/${match[1]}` : "DD/MM/YYYY";
+};
 const money = (value: any) =>
   `KSh ${Number(value ?? 0).toLocaleString("en-KE", {
     minimumFractionDigits: 2,
@@ -1212,6 +1216,7 @@ export function DemandNotices() {
         .replace(/\{\{customerName\}\}/g, previewAccount.customerName)
         .replace(/\{\{accountNumber\}\}/g, previewAccount.accountNumber)
         .replace(/\{\{balance\}\}/g, money(previewAccount.currentBalance))
+        .replace(/\{\{paymentDeadline\}\}/g, messageDate(form.paymentDeadline))
     : "";
   function updateAudienceFilters(
     nextZoneIds: string[],
@@ -1408,8 +1413,9 @@ export function DemandNotices() {
             </Field>
             <div className="text-xs leading-5 text-slate-500">
               Personalization tokens: <code>{"{{customerName}}"}</code>,{" "}
-              <code>{"{{accountNumber}}"}</code>, and{" "}
-              <code>{"{{balance}}"}</code>.
+              <code>{"{{accountNumber}}"}</code>,{" "}
+              <code>{"{{balance}}"}</code>, and{" "}
+              <code>{"{{paymentDeadline}}"}</code>.
             </div>
             {previewMessage && (
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">

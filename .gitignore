@@ -22,3 +22,4 @@ samdamte-customer-import.xlsx*.xlsx
 *.mdb
 *.accdb
 *.tsbuildinfo
+system-data/*
