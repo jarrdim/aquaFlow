@@ -335,7 +335,9 @@ function PaymentTable({ rows }: { rows: Row[] }) {
                   value={
                     p.paymentStatus === "REVERSED"
                       ? "REVERSED"
-                      : p.matchingStatus
+                      : p.matchingStatus === "PARTIALLY_MATCHED"
+                        ? "MATCHED"
+                        : p.matchingStatus
                   }
                 />
               </td>
@@ -1574,7 +1576,7 @@ export function PaymentReceipt() {
             ["Received by", person(r.issuer)],
             [
               "Allocation",
-              r.payment.matchingStatus === "MATCHED" &&
+              ["MATCHED", "PARTIALLY_MATCHED"].includes(r.payment.matchingStatus) &&
               Number(r.payment.unallocatedAmount) > 0
                 ? `Matched · ${money(r.payment.unallocatedAmount)} account credit`
                 : pretty(r.payment.matchingStatus),

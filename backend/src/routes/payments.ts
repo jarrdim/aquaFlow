@@ -531,8 +531,7 @@ async function allocate(
   // verified customer account. A payment can have no bill allocation when the
   // account has no open bill; that remainder is valid account credit, not an
   // unmatched payment.
-  const matchingStatus =
-    allocated > 0 && remaining > 0 ? "PARTIALLY_MATCHED" : "MATCHED";
+  const matchingStatus = "MATCHED";
   await tx.payment.update({
     where: { paymentId: payment.paymentId },
     data: {
