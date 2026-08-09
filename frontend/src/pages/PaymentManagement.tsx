@@ -1889,9 +1889,19 @@ export function CollectionReport() {
     });
   }, []);
   useEffect(() => {
+    let cancelled = false;
     api
       .listPayments(channelId ? { channelId } : {})
-      .then((p) => setRows(p.filter((x: Row) => x.paymentStatus === "POSTED")));
+      .then((payments) => {
+        if (!cancelled) {
+          setRows(
+            payments.filter((payment: Row) => payment.paymentStatus === "POSTED"),
+          );
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [channelId]);
   const filteredRows = useMemo(() => {
     const query = search.trim().toLowerCase();
