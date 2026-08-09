@@ -1,11 +1,16 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../lib/api";
-import { exportExcel } from "../lib/meterFiles";
+import { exportExcel, parseMeterWorkbook } from "../lib/meterFiles";
 import { SearchableSelect } from "../components/SearchableSelect";
 import { SweetAlertToast } from "../components/SweetAlertToast";
 
 type Row = Record<string, any>;
+const importCell = (row: Record<string, unknown>, key: string) => {
+  const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const match = Object.entries(row).find(([column]) => column.toLowerCase().replace(/[^a-z0-9]/g, "") === normalized);
+  return String(match?.[1] ?? "").trim();
+};
 const INPUT =
   "w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-[15px] text-slate-700 outline-none focus:border-aqua-500 focus:ring-2 focus:ring-aqua-500/20";
 const TH =
@@ -1213,7 +1218,12 @@ export function PaymentRegister() {
     [search, setSearch] = useState(""),
     [status, setStatus] = useState(""),
     [page, setPage] = useState(1),
-    [total, setTotal] = useState(0);
+    [total, setTotal] = useState(0),
+    [showImport, setShowImport] = useState(false),
+    [importRows, setImportRows] = useState<Record<string, unknown>[]>([]),
+    [importErrors, setImportErrors] = useState<string[]>([]),
+    [importing, setImporting] = useState(false),
+    [importMessage, setImportMessage] = useState("");
   const pageSize = 50;
   useEffect(() => {
     api
@@ -1229,6 +1239,60 @@ export function PaymentRegister() {
       });
   }, [search, status, page]);
   const pages = Math.max(1, Math.ceil(total / pageSize));
+  async function selectReceiptFile(file?: File) {
+    if (!file) return;
+    setImportMessage("");
+    try {
+      const source = await parseMeterWorkbook(file);
+      const errors: string[] = [];
+      const references = new Set<string>();
+      const normalized = source.map((row, index) => {
+        const accountNumber = importCell(row, "accountNumber");
+        const transactionReference = importCell(row, "transactionReference");
+        const originalReference = importCell(row, "originalReference") || transactionReference;
+        const amount = Number(importCell(row, "amount"));
+        const paymentDate = importCell(row, "paymentDate");
+        if (!accountNumber) errors.push(`Row ${index + 2}: accountNumber is required.`);
+        if (!transactionReference) errors.push(`Row ${index + 2}: transactionReference is required.`);
+        if (references.has(transactionReference)) errors.push(`Row ${index + 2}: reference ${transactionReference} is duplicated.`);
+        references.add(transactionReference);
+        if (!Number.isFinite(amount) || amount <= 0) errors.push(`Row ${index + 2}: amount must be greater than zero.`);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(paymentDate)) errors.push(`Row ${index + 2}: paymentDate must use YYYY-MM-DD.`);
+        return { accountNumber, transactionReference, originalReference, amount, paymentDate };
+      });
+      if (!normalized.length) errors.push("The selected workbook has no receipt rows.");
+      setImportRows(normalized);
+      setImportErrors(errors);
+    } catch (error) {
+      setImportRows([]);
+      setImportErrors([error instanceof Error ? error.message : "The receipt workbook could not be read."]);
+    }
+  }
+  async function importReceipts() {
+    if (!importRows.length || importErrors.length) return;
+    setImporting(true);
+    setImportMessage("");
+    try {
+      const accounts = await api.listAccounts("", 20_000);
+      const known = new Set(accounts.map((account: Row) => account.accountNumber));
+      const missing = [...new Set(importRows.map((row) => String(row.accountNumber)).filter((number) => !known.has(number)))];
+      if (missing.length) throw new Error(`${missing.length} account(s) were not found: ${missing.slice(0, 50).join(", ")}`);
+      let imported = 0, skipped = 0;
+      for (let offset = 0; offset < importRows.length; offset += 100) {
+        const result = await api.importHistoricalReceipts(importRows.slice(offset, offset + 100));
+        imported += Number(result.imported ?? 0);
+        skipped += Number(result.skipped ?? 0);
+      }
+      setImportMessage(`${imported.toLocaleString()} historical receipts imported${skipped ? `; ${skipped.toLocaleString()} duplicates safely skipped` : ""}.`);
+      setImportRows([]);
+      setPage(1);
+      setSearch("");
+    } catch (error) {
+      setImportErrors([error instanceof Error ? error.message : "Historical receipts could not be imported."]);
+    } finally {
+      setImporting(false);
+    }
+  }
   const pagination = (
     <div className="flex flex-wrap items-center justify-between gap-3 border-y border-slate-100 bg-slate-50/70 px-4 py-3">
       <span className="text-sm text-slate-500">
@@ -1258,15 +1322,15 @@ export function PaymentRegister() {
     <Page
       title="Payment register"
       subtitle="Search all valid, unmatched and reversed payment transactions"
-      actions={
-        <Button
-          tone="green"
-          onClick={() => exportExcel("payment-register.xlsx", "Payments", rows)}
-        >
-          Export register
-        </Button>
-      }
+      actions={<div className="flex gap-2"><Button tone="blue" onClick={() => setShowImport((value) => !value)}>{showImport ? "Close import" : "Import receipts"}</Button><Button tone="green" onClick={() => exportExcel("payment-register.xlsx", "Payments", rows)}>Export register</Button></div>}
     >
+      {showImport && <Card title="Import historical receipts" className="mb-4">
+        <p className="mb-3 text-sm text-slate-500">Imports posted MajiWare receipts against existing accounts. Duplicate references are safely skipped and each new receipt reduces the account balance once.</p>
+        <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-end"><Field label="Receipt Excel or CSV file"><input type="file" accept=".xlsx,.csv" className={INPUT} onChange={(event) => void selectReceiptFile(event.target.files?.[0])} /></Field><Button tone="green" disabled={!importRows.length || importErrors.length > 0 || importing} onClick={() => void importReceipts()}>{importing ? "Importing..." : `Import ${importRows.length || ""} receipts`}</Button></div>
+        {importRows.length > 0 && !importErrors.length && <p className="mt-3 rounded-lg bg-emerald-50 p-3 text-sm font-semibold text-emerald-700">{importRows.length.toLocaleString()} receipts ready. Total: {money(importRows.reduce((sum, row) => sum + Number(row.amount), 0))}</p>}
+        {importErrors.length > 0 && <div className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-700">{importErrors.slice(0, 20).map((error) => <div key={error}>{error}</div>)}</div>}
+        {importMessage && <p className="mt-3 rounded-lg bg-emerald-50 p-3 text-sm font-semibold text-emerald-700">{importMessage}</p>}
+      </Card>}
       <Card className="mb-4">
         <div className="grid gap-3 md:grid-cols-2">
           <Field label="Status">

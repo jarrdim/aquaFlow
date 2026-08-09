@@ -391,6 +391,15 @@ const name = (customer: any) =>
     .join(" ");
 const round = (value: number) =>
   Math.round((value + Number.EPSILON) * 100) / 100;
+const historicalReceiptSchema = z.object({
+  receipts: z.array(z.object({
+    accountNumber: z.string().trim().min(1).max(50),
+    transactionReference: z.string().trim().min(1).max(100),
+    originalReference: z.string().trim().min(1).max(100).optional(),
+    amount: z.coerce.number().positive().max(999_999_999),
+    paymentDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  })).min(1).max(250),
+});
 function parse<T>(
   schema: z.ZodType<T>,
   value: unknown,
@@ -403,6 +412,50 @@ function parse<T>(
   }
   return result.data;
 }
+
+paymentsRouter.post("/historical-receipts/import", requireRole("SYSTEM_ADMIN", "FINANCE_MANAGER"), async (req, res, next) => {
+  const parsed = historicalReceiptSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const rows = parsed.data.receipts;
+  const references = rows.map((row) => row.transactionReference);
+  const duplicates = references.filter((reference, index) => references.indexOf(reference) !== index);
+  if (duplicates.length) return res.status(409).json({ error: `Duplicate reference(s) in batch: ${[...new Set(duplicates)].join(", ")}` });
+  try {
+    const [accounts, existing] = await Promise.all([
+      prisma.customerAccount.findMany({ where: { accountNumber: { in: rows.map((row) => row.accountNumber) } }, select: { accountId: true, accountNumber: true } }),
+      prisma.payment.findMany({ where: { transactionReference: { in: references } }, select: { transactionReference: true } }),
+    ]);
+    const accountByNumber = new Map(accounts.map((account) => [account.accountNumber, account]));
+    const missing = [...new Set(rows.map((row) => row.accountNumber).filter((number) => !accountByNumber.has(number)))];
+    if (missing.length) return res.status(409).json({ error: `${missing.length} account(s) were not found: ${missing.join(", ")}` });
+    const existingReferences = new Set(existing.map((payment) => payment.transactionReference));
+    const newRows = rows.filter((row) => !existingReferences.has(row.transactionReference));
+    const importer = uid(req);
+    await prisma.$transaction(async (tx) => {
+      const channel = await tx.paymentChannel.upsert({
+        where: { channelCode: "LEGACY_MAJIWARE" },
+        update: { status: "ACTIVE" },
+        create: { channelCode: "LEGACY_MAJIWARE", channelName: "Legacy MajiWare Receipts", requiresReference: true, autoAllocation: false, receiptRequired: true, remarks: "Historical receipts migrated from MajiWare", status: "ACTIVE" },
+      });
+      for (const row of newRows) {
+        const account = accountByNumber.get(row.accountNumber)!;
+        const paymentDate = day(row.paymentDate);
+        const payment = await tx.payment.create({ data: {
+          transactionReference: row.transactionReference, accountId: account.accountId, channelId: channel.channelId,
+          amount: row.amount, paymentDate, valueDate: paymentDate, customerReference: row.accountNumber,
+          paymentType: "BILL_PAYMENT", remarks: `Historical MajiWare receipt ${row.originalReference ?? row.transactionReference}`,
+          matchingStatus: "MATCHED", paymentStatus: "POSTED", unallocatedAmount: 0, postedAt: new Date(),
+          reconciliationStatus: "UNRECONCILED", receivedBy: importer,
+          externalPayload: { source: "MAJIWARE", originalReference: row.originalReference ?? row.transactionReference },
+        } });
+        await tx.customerAccount.update({ where: { accountId: account.accountId }, data: { currentBalance: { decrement: row.amount } } });
+        await tx.receipt.create({ data: { receiptNumber: row.transactionReference, paymentId: payment.paymentId, accountId: account.accountId, amount: row.amount, issueDate: paymentDate, issuedBy: importer } });
+        await tx.paymentEvent.create({ data: { paymentId: payment.paymentId, eventType: "HISTORICAL_RECEIPT_IMPORTED", newStatus: "POSTED", details: `Imported MajiWare receipt ${row.originalReference ?? row.transactionReference}`, performedBy: importer, metadata: { source: "MAJIWARE", originalReference: row.originalReference ?? row.transactionReference } } });
+      }
+    }, { timeout: 120_000 });
+    res.json({ imported: newRows.length, skipped: rows.length - newRows.length });
+  } catch (error) { next(error); }
+});
 
 const paymentInclude = {
   account: { include: { customer: true, category: true } },

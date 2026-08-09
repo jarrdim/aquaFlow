@@ -559,6 +559,11 @@ export const api = {
   },
   recordPayment: (data: Record<string, unknown>) =>
     request("/payments/record", { method: "POST", body: JSON.stringify(data) }),
+  importHistoricalReceipts: (receipts: Record<string, unknown>[]) =>
+    request("/payments/historical-receipts/import", {
+      method: "POST",
+      body: JSON.stringify({ receipts }),
+    }),
   ingestMpesaPayment: (data: Record<string, unknown>) =>
     request("/payments/mpesa", { method: "POST", body: JSON.stringify(data) }),
   getMpesaConfig: () => request("/payments/mpesa/config"),
