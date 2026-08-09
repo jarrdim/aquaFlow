@@ -1879,7 +1879,16 @@ export function CollectionReport() {
   const [sortBy, setSortBy] = useState("paymentDate");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
   useEffect(() => {
-    api.listPaymentChannels().then(setChannels);
+    api.listPaymentChannels().then((items) => {
+      setChannels(items);
+      const mpesa = items.find(
+        (channel: Row) =>
+          String(channel.channelCode ?? "").toUpperCase() === "MPESA" ||
+          String(channel.channelName ?? "").toUpperCase().includes("M-PESA") ||
+          String(channel.channelName ?? "").toUpperCase() === "MPESA",
+      );
+      if (mpesa) setChannelId(String(mpesa.channelId));
+    });
   }, []);
   useEffect(() => {
     api
