@@ -600,6 +600,7 @@ readingsRouter.post("/bulk-import-current", async (req, res, next) => {
   const parsed = legacyCurrentImportSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const rows = parsed.data.items;
+  let importStage = "validating cycle details";
   try {
     const cycleCodes = [...new Set(rows.map((row) => row.cycleCode))];
     if (cycleCodes.length !== 1) return res.status(400).json({ error: "Each batch must contain one reading cycle" });
@@ -610,6 +611,7 @@ readingsRouter.post("/bulk-import-current", async (req, res, next) => {
     const cycleStart = new Date(`${cycleStarts[0]}T00:00:00.000Z`);
     const cycleEnd = new Date(`${cycleEnds[0]}T00:00:00.000Z`);
     if (cycleEnd < cycleStart) return res.status(400).json({ error: "Cycle end date cannot be before its start date" });
+    importStage = "loading or creating the reading cycle";
     let cycle = await prisma.readingCycle.findUnique({ where: { cycleCode } });
     if (!cycle) {
       cycle = await prisma.readingCycle.create({
@@ -631,6 +633,7 @@ readingsRouter.post("/bulk-import-current", async (req, res, next) => {
         });
       }
     }
+    importStage = "matching meters and customer accounts";
     const [meters, accounts] = await Promise.all([
       prisma.meter.findMany({ where: { meterNumber: { in: rows.map((row) => row.meterNumber) } }, select: { meterId: true, meterNumber: true } }),
       prisma.customerAccount.findMany({ where: { accountNumber: { in: rows.map((row) => row.accountNumber) } }, select: { accountId: true, accountNumber: true } }),
@@ -638,6 +641,7 @@ readingsRouter.post("/bulk-import-current", async (req, res, next) => {
     const meterIds = new Map(meters.map((row) => [row.meterNumber, row.meterId]));
     const accountIds = new Map(accounts.map((row) => [row.accountNumber, row.accountId]));
     const syncIds = rows.map((row) => `legacy-current-${cycleCode}-${row.meterNumber}`);
+    importStage = "checking existing imported readings";
     const existing = await prisma.meterReading.findMany({ where: { syncId: { in: syncIds } }, select: { syncId: true } });
     const existingSyncIds = new Set(existing.map((row) => row.syncId));
     const seenMeters = new Set<string>();
@@ -652,6 +656,7 @@ readingsRouter.post("/bulk-import-current", async (req, res, next) => {
     if (errors.length) return res.status(409).json({ error: errors.slice(0, 100).join("\n") });
 
     const newRows = rows.filter((row) => !existingSyncIds.has(`legacy-current-${cycleCode}-${row.meterNumber}`));
+    importStage = "saving the reading batch";
     const result = await prisma.$transaction(async (tx) => {
       const created = await tx.meterReading.createMany({
         skipDuplicates: true,
@@ -719,7 +724,22 @@ readingsRouter.post("/bulk-import-current", async (req, res, next) => {
       cycleCode,
       readingCycleId: cycle.readingCycleId.toString(),
     });
-  } catch (error) { next(error); }
+  } catch (error: any) {
+    console.error(`Legacy current-reading import failed while ${importStage}`, error);
+    const code =
+      error instanceof Prisma.PrismaClientKnownRequestError
+        ? ` (${error.code})`
+        : "";
+    const cause =
+      typeof error?.meta?.cause === "string"
+        ? error.meta.cause
+        : typeof error?.message === "string"
+          ? error.message.split("\n").filter(Boolean).at(-1)
+          : "Unknown database error";
+    res.status(500).json({
+      error: `Current-reading import failed while ${importStage}${code}: ${cause}`,
+    });
+  }
 });
 
 readingsRouter.get("/", async (req, res, next) => {
