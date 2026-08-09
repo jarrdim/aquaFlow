@@ -654,6 +654,7 @@ readingsRouter.post("/bulk-import-current", async (req, res, next) => {
     const newRows = rows.filter((row) => !existingSyncIds.has(`legacy-current-${cycleCode}-${row.meterNumber}`));
     const result = await prisma.$transaction(async (tx) => {
       const created = await tx.meterReading.createMany({
+        skipDuplicates: true,
         data: newRows.map((row) => ({
           meterId: meterIds.get(row.meterNumber)!,
           accountId: accountIds.get(row.accountNumber)!,
@@ -702,6 +703,9 @@ readingsRouter.post("/bulk-import-current", async (req, res, next) => {
         },
       });
       return { created: created.count, verified };
+    }, {
+      maxWait: 10_000,
+      timeout: 120_000,
     });
     if (result.verified !== rows.length) {
       return res.status(500).json({

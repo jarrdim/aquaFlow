@@ -4668,8 +4668,13 @@ export function BulkCurrentReadingImport() {
       let imported = 0;
       let repaired = 0;
       let verified = 0;
-      for (let offset = 0; offset < records.length; offset += 1000) {
-        const result = await api.bulkImportCurrentReadings(records.slice(offset, offset + 1000));
+      // Keep migration requests small enough for shared production databases.
+      // The endpoint is idempotent, so completed batches remain safe on retry.
+      const batchSize = 250;
+      for (let offset = 0; offset < records.length; offset += batchSize) {
+        const result = await api.bulkImportCurrentReadings(
+          records.slice(offset, offset + batchSize),
+        );
         imported += Number(result.imported ?? 0);
         repaired += Number(result.repaired ?? result.skipped ?? 0);
         verified += Number(result.verified ?? result.imported ?? 0);
