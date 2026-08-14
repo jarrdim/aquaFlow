@@ -4,6 +4,7 @@ import { api, getSessionUser } from "../lib/api";
 import { exportExcel } from "../lib/meterFiles";
 import { SearchableSelect } from "../components/SearchableSelect";
 import { SweetAlertToast } from "../components/SweetAlertToast";
+import { maskAddress, maskEmail, maskIdentifier, maskName, maskPhone, usePrivacyMode } from "../lib/privacyMode";
 
 type Row = Record<string, any>;
 const INPUT =
@@ -1797,6 +1798,7 @@ export function InvoiceRegister() {
 }
 
 export function BillInvoice() {
+  const { enabled: privacyMode } = usePrivacyMode();
   const { id = "" } = useParams();
   const [bill, setBill] = useState<Row | null>(null);
   const [error, setError] = useState("");
@@ -1855,8 +1857,8 @@ export function BillInvoice() {
         <div className="border-b pb-4">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <img
-              src="/samdamte-water-logo-print.png"
-              alt="Samdamte Water Utility Management"
+              src={privacyMode ? "/zevra-demo-logo.png" : "/samdamte-water-logo-print.png"}
+              alt={privacyMode ? "Zevra Holdings Ltd demo branding" : "Samdamte Water Utility Management"}
               className="invoice-brand-logo h-auto w-[280px] max-w-[55%] object-contain"
             />
             <div className="text-right">
@@ -1869,9 +1871,9 @@ export function BillInvoice() {
         <div className="grid gap-4 border-b py-4 md:grid-cols-2">
           <div>
             <h3 className="mb-2 font-semibold">Bill to</h3>
-            <div>{bill.customerName}</div>
-            <div>{bill.account.accountNumber}</div>
-            <div>{bill.account.property.physicalAddress}</div>
+            <div>{privacyMode ? maskName(bill.customerName) : bill.customerName}</div>
+            <div>{privacyMode ? maskIdentifier(bill.account.accountNumber) : bill.account.accountNumber}</div>
+            <div>{privacyMode ? maskAddress(bill.account.property.physicalAddress) : bill.account.property.physicalAddress}</div>
             <div>{bill.account.property.zone.zoneName}</div>
           </div>
           <div className="grid grid-cols-2 gap-2 text-sm">
@@ -2441,6 +2443,7 @@ function CustomerStatementsOld() {
 }
 
 export function CustomerStatements() {
+  const { enabled: privacyMode } = usePrivacyMode();
   const now = new Date();
   const localDate = (value: Date) =>
     `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
@@ -2528,7 +2531,7 @@ export function CustomerStatements() {
       },
     ];
     exportExcel(
-      `statement-${statement.account.accountNumber}-${from}-to-${to}.xlsx`,
+      privacyMode ? `statement-demo-${from}-to-${to}.xlsx` : `statement-${statement.account.accountNumber}-${from}-to-${to}.xlsx`,
       "Statement",
       rows,
     );
@@ -2584,7 +2587,7 @@ export function CustomerStatements() {
               </option>
               {accounts.map((account: Row) => (
                 <option key={account.accountId} value={account.accountId}>
-                  {account.accountNumber} - {account.customer.organizationName ||
+                  {privacyMode ? maskIdentifier(account.accountNumber) : account.accountNumber} - {privacyMode ? "Customer masked for demo" : account.customer.organizationName ||
                     [account.customer.firstName, account.customer.middleName, account.customer.lastName]
                       .filter(Boolean)
                       .join(" ")}
@@ -2649,8 +2652,8 @@ export function CustomerStatements() {
 
             <div className="statement-letterhead grid items-center gap-5 border-b-[3px] border-aqua-800 pb-4 md:grid-cols-[1fr_300px]">
               <img
-                src="/samdamte-water-logo-print.png"
-                alt={statement.utility.name}
+                src={privacyMode ? "/zevra-demo-logo.png" : "/samdamte-water-logo-print.png"}
+                alt={privacyMode ? "Zevra Holdings Ltd demo branding" : statement.utility.name}
                 className="statement-brand-logo h-auto max-h-32 w-full max-w-[300px] object-contain object-left"
               />
               <div className="statement-utility-contact border-l border-slate-300 pl-5 text-sm leading-6">
@@ -2685,11 +2688,11 @@ export function CustomerStatements() {
             <div className="statement-account-grid my-2 grid gap-x-12 gap-y-1 text-sm md:grid-cols-2 [&_strong]:whitespace-nowrap">
               <div className="grid grid-cols-[130px_1fr] gap-y-1">
                 <strong>To:</strong>
-                <span>{statement.account.customerName}</span>
+                <span>{privacyMode ? maskName(statement.account.customerName) : statement.account.customerName}</span>
                 <strong>Mobile:</strong>
-                <span>{statement.account.phone || "-"}</span>
+                <span>{privacyMode ? maskPhone(statement.account.phone) : statement.account.phone || "-"}</span>
                 <strong>Email:</strong>
-                <span>{statement.account.email || "-"}</span>
+                <span>{privacyMode ? maskEmail(statement.account.email) : statement.account.email || "-"}</span>
                 <strong className="whitespace-nowrap">Acc status:</strong>
                 <span>{pretty(statement.account.status)}</span>
                 <strong>Meter No.:</strong>
@@ -2697,7 +2700,7 @@ export function CustomerStatements() {
               </div>
               <div className="grid grid-cols-[130px_1fr] gap-y-1">
                 <strong>Account:</strong>
-                <span>{statement.account.accountNumber}</span>
+                <span>{privacyMode ? maskIdentifier(statement.account.accountNumber) : statement.account.accountNumber}</span>
                 <strong>Zone:</strong>
                 <span>{statement.account.zone || "-"}</span>
                 <strong>Route:</strong>
@@ -2718,7 +2721,7 @@ export function CustomerStatements() {
               </span>
               {statement.account.address && (
                 <span>
-                  <strong>Service address:</strong> {statement.account.address}
+                  <strong>Service address:</strong> {privacyMode ? maskAddress(statement.account.address) : statement.account.address}
                 </span>
               )}
             </div>
