@@ -3,8 +3,10 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { setSessionUser, setToken } from "../lib/api";
 import { SweetAlertToast } from "../components/SweetAlertToast";
+import { usePrivacyMode } from "../lib/privacyMode";
 
 export default function Login() {
+  const { enabled: privacyMode } = usePrivacyMode();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -37,13 +39,14 @@ export default function Login() {
     <div className="min-h-screen flex items-center justify-center">
       <form onSubmit={handleSubmit} className="bg-white shadow-sm rounded-xl p-8 w-full max-w-sm border border-slate-200">
         <div className="mb-6 border-b border-slate-100 pb-5 text-center">
-          <img
-            src="/samdamte-water-logo-print.png"
-            
-            alt="Samdamte Water Utility Management"
-            className="mx-auto h-auto w-full max-w-[250px] object-contain"
-          />
-          <p className="mt-3 text-sm text-slate-500">Sign in to the utility management system</p>
+          <div className={privacyMode ? "mx-auto max-w-[250px] overflow-hidden rounded-xl bg-white ring-1 ring-amber-200" : ""}>
+            <img
+              src={privacyMode ? "/zevra-demo-logo.png" : "/samdamte-water-logo-print.png"}
+              alt={privacyMode ? "Zevra Holdings Ltd demo branding" : "Samdamte Water Utility Management"}
+              className={`mx-auto h-auto w-full object-contain ${privacyMode ? "scale-[1.42]" : "max-w-[250px]"}`}
+            />
+          </div>
+          <p className="mt-3 text-sm text-slate-500">{privacyMode ? "Demo access to the management system" : "Sign in to the utility management system"}</p>
         </div>
 
         <SweetAlertToast

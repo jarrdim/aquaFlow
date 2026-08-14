@@ -300,7 +300,7 @@ export default function CustomerDetail() {
     customer.customerType === "ORGANIZATION"
       ? customer.organizationName
       : [customer.firstName, customer.middleName, customer.lastName].filter(Boolean).join(" ");
-  const displayMoney = (value: unknown) => privacyMode ? "KSh •••••" : money(value);
+  const displayMoney = (value: unknown) => money(value);
 
   const TABS: { key: Tab; label: string }[] = [
     { key: "billing",          label: "Billing History" },

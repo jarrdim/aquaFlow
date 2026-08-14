@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import { getToken } from "../lib/api";
+import { usePrivacyMode } from "../lib/privacyMode";
 
 type IconProps = { className?: string };
 
@@ -63,6 +64,7 @@ const modules = [
 ];
 
 export default function LandingPage() {
+  const { enabled: privacyMode } = usePrivacyMode();
   const authenticated = Boolean(getToken());
   const primaryPath = authenticated ? "/customers" : "/login";
   const primaryLabel = authenticated ? "Open workspace" : "Sign in securely";
@@ -71,11 +73,11 @@ export default function LandingPage() {
     <div className="landing-page h-screen overflow-y-auto bg-white text-slate-900">
       <header className="sticky top-0 z-40 border-b border-slate-200/80 bg-white/90 backdrop-blur-xl">
         <div className="mx-auto flex h-20 max-w-7xl items-center justify-between px-6 lg:px-8">
-          <Link to="/" className="flex items-center" aria-label="Samdamte home">
+          <Link to="/" className={`flex items-center overflow-hidden rounded-xl ${privacyMode ? "bg-white ring-1 ring-amber-200" : ""}`} aria-label={privacyMode ? "Zevra Holdings demo home" : "Samdamte home"}>
             <img
-              src="/samdamte-water-logo-print.png"
-              alt="Samdamte Water Utility Management"
-              className="h-16 w-auto max-w-[270px] object-contain"
+              src={privacyMode ? "/zevra-demo-logo.png" : "/samdamte-water-logo-print.png"}
+              alt={privacyMode ? "Zevra Holdings Ltd demo branding" : "Samdamte Water Utility Management"}
+              className={`h-16 w-auto max-w-[270px] object-contain ${privacyMode ? "scale-[1.52]" : ""}`}
             />
           </Link>
 
@@ -289,11 +291,13 @@ export default function LandingPage() {
 
       <footer className="border-t border-slate-200 bg-white">
         <div className="mx-auto flex max-w-7xl flex-col gap-4 px-6 py-8 text-sm text-slate-500 sm:flex-row sm:items-center sm:justify-between lg:px-8">
-          <img
-            src="/samdamte-water-logo-print.png"
-            alt="Samdamte Water Utility Management"
-            className="h-12 w-auto max-w-[220px] object-contain"
-          />
+          <div className={`overflow-hidden rounded-lg ${privacyMode ? "bg-white ring-1 ring-amber-200" : ""}`}>
+            <img
+              src={privacyMode ? "/zevra-demo-logo.png" : "/samdamte-water-logo-print.png"}
+              alt={privacyMode ? "Zevra Holdings Ltd demo branding" : "Samdamte Water Utility Management"}
+              className={`h-12 w-auto max-w-[220px] object-contain ${privacyMode ? "scale-[1.52]" : ""}`}
+            />
+          </div>
           <p>Professional water utility operations, connected end to end.</p>
           <p>© {new Date().getFullYear()} Samdamte Water</p>
         </div>
