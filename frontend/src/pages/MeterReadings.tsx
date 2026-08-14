@@ -8,6 +8,79 @@ import { SweetAlertToast } from "../components/SweetAlertToast";
 import { GpsMap } from "../components/GpsMap";
 
 type Row = Record<string, any>;
+
+function evidenceImageSource(item?: Row) {
+  const content = item?.contentData ?? item?.content;
+  if (!content) return "";
+  if (String(content).startsWith("data:")) return String(content);
+  return `data:${item?.mimeType || "image/jpeg"};base64,${content}`;
+}
+
+function ReadingEvidenceModal({ reading, onClose }: { reading: Row; onClose: () => void }) {
+  const photos = (reading.evidence ?? []).filter((item: Row) =>
+    String(item.mimeType ?? "image/jpeg").startsWith("image/"),
+  );
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => event.key === "Escape" && onClose();
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="reading-evidence-title"
+      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
+    >
+      <section className="max-h-[92vh] w-full max-w-4xl overflow-y-auto rounded-2xl bg-white shadow-2xl">
+        <header className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-slate-200 bg-white/95 px-5 py-4 backdrop-blur">
+          <div>
+            <h2 id="reading-evidence-title" className="text-xl font-extrabold text-slate-900">Reading evidence</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              {reading.meter?.meterNumber ?? "Meter"} · {reading.account?.accountNumber ?? "Account"}
+            </p>
+          </div>
+          <button type="button" onClick={onClose} aria-label="Close evidence" className="grid h-10 w-10 place-items-center rounded-full bg-slate-100 text-xl font-bold text-slate-600 transition hover:bg-slate-200">×</button>
+        </header>
+        <div className="grid gap-5 p-5 lg:grid-cols-[1.15fr_0.85fr]">
+          <div>
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="font-bold text-slate-900">Meter photo</h3>
+              <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700">{photos.length} attached</span>
+            </div>
+            {photos.length ? (
+              <div className="space-y-3">
+                {photos.map((photo: Row, index: number) => (
+                  <figure key={photo.evidenceId ?? index} className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
+                    <img src={evidenceImageSource(photo)} alt={`Meter evidence ${index + 1}`} className="max-h-[460px] w-full object-contain" />
+                    <figcaption className="border-t border-slate-200 bg-white px-3 py-2 text-xs text-slate-500">{photo.fileName || `Meter photo ${index + 1}`}</figcaption>
+                  </figure>
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-10 text-center text-sm text-slate-500">No photo evidence is attached.</div>
+            )}
+          </div>
+          <div className="space-y-4">
+            <div>
+              <h3 className="mb-3 font-bold text-slate-900">GPS location</h3>
+              <GpsMap latitude={reading.gpsLatitude} longitude={reading.gpsLongitude} label="Meter reading location" empty />
+            </div>
+            <dl className="grid grid-cols-2 gap-3 rounded-2xl bg-slate-50 p-4 text-sm">
+              <div><dt className="text-slate-500">Previous</dt><dd className="mt-1 font-bold text-slate-900">{number(reading.previousReading)}</dd></div>
+              <div><dt className="text-slate-500">Current</dt><dd className="mt-1 font-bold text-aqua-700">{number(reading.currentReading)}</dd></div>
+              <div><dt className="text-slate-500">Consumption</dt><dd className="mt-1 font-bold text-emerald-700">{number(reading.consumption)} units</dd></div>
+              <div><dt className="text-slate-500">Approval</dt><dd className="mt-1"><Badge value={reading.approvalStatus} /></dd></div>
+              <div className="col-span-2"><dt className="text-slate-500">Captured</dt><dd className="mt-1 font-semibold text-slate-800">{date(reading.capturedAt ?? reading.readingDate)}</dd></div>
+            </dl>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
 const INPUT =
   "w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-[15px] leading-5 text-slate-700 outline-none transition focus:border-aqua-500 focus:ring-2 focus:ring-aqua-500/20 disabled:bg-slate-50 disabled:text-slate-400";
 const TH =
@@ -2269,6 +2342,7 @@ export function ReadingWorklist() {
   const [items, setItems] = useState<Row[]>([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [evidenceReading, setEvidenceReading] = useState<Row | null>(null);
   const [showBulkUpload, setShowBulkUpload] = useState(false);
   const [bulkFileName, setBulkFileName] = useState("");
   const [bulkRows, setBulkRows] = useState<
@@ -3010,13 +3084,26 @@ export function ReadingWorklist() {
                     </span>
                   </td>
                   <td className="px-4 py-3.5">
-                    {a.cycleReading?.approvalStatus === "APPROVED" ? (
+                    {a.cycleReading ? (
                       <div>
-                        <span className="font-extrabold tabular-nums text-emerald-700">
+                        <span
+                          className={`font-extrabold tabular-nums ${
+                            a.cycleReading.approvalStatus === "APPROVED"
+                              ? "text-emerald-700"
+                              : "text-amber-700"
+                          }`}
+                          title={
+                            a.cycleReading.approvalStatus === "APPROVED"
+                              ? "Approved current reading"
+                              : `Captured current reading awaiting approval (${a.cycleReading.approvalStatus.toLowerCase()})`
+                          }
+                        >
                           {number(a.cycleReading.currentReading)}
                         </span>
-                        <div className="mt-0.5 text-[11px] font-semibold text-emerald-600">
-                          Approved
+                        <div className={`mt-0.5 text-[11px] font-semibold ${
+                          a.cycleReading.approvalStatus === "APPROVED" ? "text-emerald-600" : "text-amber-600"
+                        }`}>
+                          {a.cycleReading.approvalStatus === "APPROVED" ? "Approved" : "Awaiting approval"}
                         </div>
                       </div>
                     ) : (
@@ -3035,12 +3122,27 @@ export function ReadingWorklist() {
                   </td>
                   <td className="px-4 py-3.5 text-right">
                     {a.cycleReading ? (
-                      <Link
-                        className="inline-flex rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-aqua-700 transition hover:border-sky-200 hover:bg-sky-50"
-                        to={`/readings/register?search=${encodeURIComponent(a.meter.meterNumber)}`}
-                      >
-                        View reading
-                      </Link>
+                      <div className="flex items-center justify-end gap-2">
+                        {a.cycleReading.evidence?.length > 0 && (
+                          <button
+                            type="button"
+                            className="inline-flex rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm font-bold text-aqua-700 transition hover:border-sky-300 hover:bg-sky-100"
+                            onClick={() => setEvidenceReading({
+                              ...a.cycleReading,
+                              meter: a.meter,
+                              account: a.account,
+                            })}
+                          >
+                            View evidence
+                          </button>
+                        )}
+                        <Link
+                          className="inline-flex rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-aqua-700 transition hover:border-sky-200 hover:bg-sky-50"
+                          to={`/readings/register?search=${encodeURIComponent(a.meter.meterNumber)}`}
+                        >
+                          View reading
+                        </Link>
+                      </div>
                     ) : (
                       <Link
                         className="inline-flex rounded-lg bg-emerald-600 px-3.5 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-500"
@@ -3076,6 +3178,9 @@ export function ReadingWorklist() {
           <Pagination position="bottom" />
         </div>
       </section>
+      {evidenceReading && (
+        <ReadingEvidenceModal reading={evidenceReading} onClose={() => setEvidenceReading(null)} />
+      )}
     </Page>
   );
 }
@@ -3653,6 +3758,7 @@ export function ReadingRegister({
   const [loading, setLoading] = useState(true);
   const pageSize = 25;
   const [error, setError] = useState("");
+  const [evidenceReading, setEvidenceReading] = useState<Row | null>(null);
   const [filters, setFilters] = useState({
     cycleId: "",
     approvalStatus: "",
@@ -3892,7 +3998,7 @@ export function ReadingRegister({
             r.evidence?.[0] ? (
               <button
                 className="inline-flex rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-aqua-700 shadow-sm transition hover:border-sky-200 hover:bg-sky-50"
-                onClick={() => openEvidence(r.evidence[0])}
+                onClick={() => setEvidenceReading(r)}
               >
                 View evidence
               </button>
@@ -3905,6 +4011,9 @@ export function ReadingRegister({
           <Pagination position="bottom" />
         </div>
       </section>
+      {evidenceReading && (
+        <ReadingEvidenceModal reading={evidenceReading} onClose={() => setEvidenceReading(null)} />
+      )}
     </Page>
   );
 }

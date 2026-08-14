@@ -130,6 +130,7 @@ import SettingsManagement from "./pages/SettingsManagement";
 import ReconnectionManagement from "./pages/ReconnectionManagement";
 import { api, clearToken, getSessionUser, getToken } from "./lib/api";
 import { encodeId } from "./lib/hashids";
+import { maskPhone, usePrivacyMode } from "./lib/privacyMode";
 
 class PageErrorBoundary extends Component<
   { children: ReactNode; resetKey: string },
@@ -633,6 +634,7 @@ function notificationLabel(notification: any) {
 function Shell({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate();
   const location = useLocation();
+  const { enabled: privacyMode, setEnabled: setPrivacyMode } = usePrivacyMode();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => localStorage.getItem("aquaflow_sidebar_collapsed") === "true",
   );
@@ -831,15 +833,14 @@ function Shell({ children }: { children: React.ReactNode }) {
             to="/dashboard"
             aria-label="Go to dashboard"
             title="Dashboard"
-            className={`overflow-hidden rounded-xl shadow-sm ${
-              sidebarCollapsed ? "h-11 w-11" : "h-16 w-full"
+            className={`overflow-hidden rounded-xl shadow-sm ${privacyMode ? "bg-white ring-1 ring-amber-300/70" : ""} ${
+              sidebarCollapsed ? "h-11 w-11" : privacyMode ? "h-16 w-full" : "h-16 w-full"
             }`}
           >
             <img
-              src="/samdamte-navbar-logo-transparent.png"
-              alt="Samdamte Water Utility Management"
-              className={`max-w-none object-contain ${
-                sidebarCollapsed ? "h-11 w-auto object-left" : "h-full w-full"
+              src={privacyMode ? "/zevra-demo-logo.png" : "/samdamte-navbar-logo-transparent.png"}
+              alt={privacyMode ? "Zevra Holdings Ltd demo branding" : "Samdamte Water Utility Management"}
+              className={`max-w-none object-contain ${privacyMode ? "h-full w-full scale-[1.72]" : sidebarCollapsed ? "h-11 w-auto object-left" : "h-full w-full"
               }`}
             />
           </Link>
@@ -1307,6 +1308,15 @@ function Shell({ children }: { children: React.ReactNode }) {
             )}
           </div>
           <div className="ml-auto flex items-center gap-1">
+            <button
+              type="button"
+              aria-pressed={privacyMode}
+              title={privacyMode ? "Turn off demo privacy mode" : "Turn on demo privacy mode"}
+              onClick={() => setPrivacyMode(!privacyMode)}
+              className={`mr-2 rounded-lg px-3 py-1.5 text-xs font-bold transition-colors ${privacyMode ? "bg-amber-100 text-amber-800 ring-1 ring-amber-300" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
+            >
+              {privacyMode ? "Privacy mode on" : "Privacy mode"}
+            </button>
             <div ref={notificationRef} className="relative">
               <button
                 type="button"
@@ -1428,6 +1438,12 @@ function Shell({ children }: { children: React.ReactNode }) {
 
         {/* Page content */}
         <main className="app-content min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
+          {privacyMode && (
+            <div className="sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-amber-200 bg-amber-50 px-5 py-2 text-sm text-amber-900">
+              <span><strong>DEMO PRIVACY MODE</strong> — contact details are masked on supported views. No data has been changed.</span>
+              <button type="button" onClick={() => setPrivacyMode(false)} className="whitespace-nowrap font-bold underline">Show real details</button>
+            </div>
+          )}
           <AppBreadcrumbs />
           <PageErrorBoundary resetKey={location.pathname}>
             {children}

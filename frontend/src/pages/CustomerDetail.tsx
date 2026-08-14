@@ -4,6 +4,7 @@ import { api } from "../lib/api";
 import { decodeId, encodeId } from "../lib/hashids";
 import { SearchableSelect } from "../components/SearchableSelect";
 import { SweetAlertToast } from "../components/SweetAlertToast";
+import { maskAddress, maskEmail, maskName, maskPhone, usePrivacyMode } from "../lib/privacyMode";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface Customer {
@@ -131,6 +132,7 @@ type Tab = "properties" | "billing" | "payments" | "service_requests" | "meters"
 
 // ── Component ──────────────────────────────────────────────────────────────────
 export default function CustomerDetail() {
+  const { enabled: privacyMode } = usePrivacyMode();
   const { id: encodedId } = useParams<{ id: string }>();
   const rawId = encodedId ? String(decodeId(encodedId)) : "";
   const [customer, setCustomer]   = useState<Customer | null>(null);
@@ -298,6 +300,7 @@ export default function CustomerDetail() {
     customer.customerType === "ORGANIZATION"
       ? customer.organizationName
       : [customer.firstName, customer.middleName, customer.lastName].filter(Boolean).join(" ");
+  const displayMoney = (value: unknown) => privacyMode ? "KSh •••••" : money(value);
 
   const TABS: { key: Tab; label: string }[] = [
     { key: "billing",          label: "Billing History" },
@@ -321,11 +324,11 @@ export default function CustomerDetail() {
       <div className="mb-5 flex flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm md:flex-row md:items-center md:justify-between">
         <div className="flex min-w-0 items-center gap-4">
           <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-aqua-600 to-blue-700 text-lg font-bold text-white shadow-md">
-            {initials(displayName)}
+            {privacyMode ? "CU" : initials(displayName)}
           </div>
           <div className="min-w-0">
             <div className="mb-1 flex flex-wrap items-center gap-2">
-              <h1 className="truncate text-2xl font-bold tracking-tight text-slate-900">{displayName}</h1>
+              <h1 className="truncate text-2xl font-bold tracking-tight text-slate-900">{privacyMode ? maskName(displayName) : displayName}</h1>
               <StatusBadge status={customer.status} />
             </div>
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-slate-500">
@@ -424,10 +427,10 @@ export default function CustomerDetail() {
         <div className="mb-5 space-y-4">
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             {[
-              { label: "Outstanding balance", value: money(primaryAccount?.currentBalance), accent: Number(primaryAccount?.currentBalance ?? 0) > 0 ? "text-rose-600" : "text-emerald-600", note: primaryAccount?.accountNumber ?? "No linked account" },
-              { label: "Total billed", value: money(totalBilled), accent: "text-slate-900", note: `${bills.length} invoice${bills.length === 1 ? "" : "s"}` },
-              { label: "Payment records", value: money(totalPaid), accent: "text-emerald-600", note: `${validPayments.length} valid payment${validPayments.length === 1 ? "" : "s"} · includes migrated receipts` },
-              { label: "Last payment", value: latestPayment ? money(latestPayment.amount) : "No payments", accent: "text-aqua-700", note: latestPayment ? `${date(latestPayment.paymentDate)} · ${latestPayment.channel?.channelName ?? "Payment"}` : "Nothing received yet" },
+              { label: "Outstanding balance", value: displayMoney(primaryAccount?.currentBalance), accent: Number(primaryAccount?.currentBalance ?? 0) > 0 ? "text-rose-600" : "text-emerald-600", note: primaryAccount?.accountNumber ?? "No linked account" },
+              { label: "Total billed", value: displayMoney(totalBilled), accent: "text-slate-900", note: `${bills.length} invoice${bills.length === 1 ? "" : "s"}` },
+              { label: "Payment records", value: displayMoney(totalPaid), accent: "text-emerald-600", note: `${validPayments.length} valid payment${validPayments.length === 1 ? "" : "s"} · includes migrated receipts` },
+              { label: "Last payment", value: latestPayment ? displayMoney(latestPayment.amount) : "No payments", accent: "text-aqua-700", note: latestPayment ? `${date(latestPayment.paymentDate)} · ${latestPayment.channel?.channelName ?? "Payment"}` : "Nothing received yet" },
             ].map((item) => (
               <div key={item.label} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                 <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{item.label}</p>
@@ -446,9 +449,9 @@ export default function CustomerDetail() {
               <div className="grid gap-x-8 px-5 py-3 sm:grid-cols-2">
                 <InfoRow label="Customer ID" value={customer.customerNumber} />
                 <InfoRow label="Customer type" value={customer.customerType === "INDIVIDUAL" ? "Individual" : "Organization"} />
-                <InfoRow label="Phone" value={customer.phoneNumber} />
-                <InfoRow label="Email" value={customer.emailAddress} />
-                <InfoRow label="Address" value={primaryProperty?.physicalAddress} />
+                <InfoRow label="Phone" value={privacyMode ? maskPhone(customer.phoneNumber) : customer.phoneNumber} />
+                <InfoRow label="Email" value={privacyMode ? maskEmail(customer.emailAddress) : customer.emailAddress} />
+                <InfoRow label="Address" value={privacyMode ? maskAddress(primaryProperty?.physicalAddress) : primaryProperty?.physicalAddress} />
                 <InfoRow label="Registered" value={date(customer.registrationDate)} />
               </div>
             </section>
@@ -534,8 +537,8 @@ export default function CustomerDetail() {
                         <td className="px-5 py-4 text-slate-600">{bill.billingCycle?.cycleName ?? "—"}</td>
                         <td className="px-5 py-4 text-slate-600">{bill.account?.accountNumber ?? "—"}</td>
                         <td className="px-5 py-4 text-slate-600">{date(bill.issueDate)}<div className="mt-0.5 text-xs text-slate-400">Due {date(bill.dueDate)}</div></td>
-                        <td className="px-5 py-4 text-right font-semibold text-slate-800">{money(bill.totalAmountDue)}</td>
-                        <td className={`px-5 py-4 text-right font-semibold ${outstanding > 0 ? "text-rose-600" : "text-emerald-600"}`}>{money(outstanding)}</td>
+                        <td className="px-5 py-4 text-right font-semibold text-slate-800">{displayMoney(bill.totalAmountDue)}</td>
+                        <td className={`px-5 py-4 text-right font-semibold ${outstanding > 0 ? "text-rose-600" : "text-emerald-600"}`}>{displayMoney(outstanding)}</td>
                         <td className="px-5 py-4"><StatusBadge status={bill.status} /></td>
                         <td className="px-5 py-4 text-right"><Link to={`/billing/invoices/${bill.billId}`} className="font-semibold text-aqua-700 hover:text-aqua-600 hover:underline">View invoice</Link></td>
                       </tr>
@@ -557,7 +560,7 @@ export default function CustomerDetail() {
               <p className="mt-0.5 text-xs text-slate-500">Receipts, channels, allocation and transaction status</p>
             </div>
             <div className="flex items-center gap-2">
-              <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">{money(totalPaid)} received</span>
+              <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">{displayMoney(totalPaid)} received</span>
               <Link to="/payments/register" className="rounded-lg bg-aqua-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-aqua-600">Payment register</Link>
             </div>
           </div>
@@ -591,7 +594,7 @@ export default function CustomerDetail() {
                       <td className="px-5 py-4 text-slate-600">{date(payment.paymentDate)}</td>
                       <td className="px-5 py-4 text-slate-600">{payment.account?.accountNumber ?? "—"}</td>
                       <td className="px-5 py-4 text-slate-600">{payment.channel?.channelName ?? "—"}</td>
-                      <td className="px-5 py-4 text-right font-semibold text-slate-800">{money(payment.amount)}</td>
+                      <td className="px-5 py-4 text-right font-semibold text-slate-800">{displayMoney(payment.amount)}</td>
                       <td className="px-5 py-4"><StatusBadge status={payment.matchingStatus} /></td>
                       <td className="px-5 py-4"><StatusBadge status={payment.paymentStatus} /></td>
                       <td className="px-5 py-4 text-right">

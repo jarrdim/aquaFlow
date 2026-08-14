@@ -440,7 +440,10 @@ readingsRouter.get("/worklist", async (req, res, next) => {
       meterId,
       allowedRouteIds,
     );
-    const currentReadings = await prisma.meterReading.findMany({ where: { readingCycleId: cycleId, meterId: { in: items.map((a) => a.meterId) } } });
+    const currentReadings = await prisma.meterReading.findMany({
+      where: { readingCycleId: cycleId, meterId: { in: items.map((a) => a.meterId) } },
+      include: { evidence: true },
+    });
     const byMeter = new Map(currentReadings.map((reading) => [reading.meterId.toString(), reading]));
     res.json(items.map((a) => ({
       ...a,

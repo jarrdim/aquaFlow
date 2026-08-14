@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Request, Response, Router } from "express";
 import { existsSync } from "fs";
 import jwt from "jsonwebtoken";
 import path from "path";
@@ -1605,3 +1605,433 @@ mobileRouter.get(
     }
   },
 );
+
+const fieldWorkOrderRoles = requireRole("METER_READER", "FIELD_OFFICER", "METER_SUPERVISOR", "SUPERVISOR");
+const workOrderIdSchema = z.coerce.bigint().positive();
+const mobileWorkOrderStatuses = ["ASSIGNED", "ACCEPTED", "IN_PROGRESS", "COMPLETED", "ESCALATED"] as const;
+const activeWorkOrderAssignmentStatuses = ["ASSIGNED", "ACCEPTED"];
+
+async function activeFieldOfficer(req: Request, res: Response) {
+  const officer = await prisma.fieldOfficer.findUnique({
+    where: { userId: BigInt(req.user!.userId) },
+    select: { fieldOfficerId: true, status: true },
+  });
+  if (!officer || officer.status !== "ACTIVE") {
+    res.status(403).json({ error: "No active field officer profile is linked to this user" });
+    return null;
+  }
+  return officer;
+}
+
+async function ownedWorkOrder(req: Request, res: Response, workOrderId: bigint) {
+  const officer = await activeFieldOfficer(req, res);
+  if (!officer) return null;
+  const rows = await prisma.$queryRaw<any[]>`
+    SELECT wo.work_order_id, wo.status, a.assignment_id, a.field_officer_id, a.status AS assignment_status
+    FROM aquaflow.work_orders wo
+    JOIN LATERAL (
+      SELECT assignment_id, field_officer_id, status, assigned_at
+      FROM aquaflow.work_order_assignments
+      WHERE work_order_id = wo.work_order_id
+      ORDER BY assigned_at DESC, assignment_id DESC LIMIT 1
+    ) a ON TRUE
+    WHERE wo.work_order_id = ${workOrderId}`;
+  if (!rows[0]) {
+    res.status(404).json({ error: "Work order not found" });
+    return null;
+  }
+  if (
+    rows[0].field_officer_id !== officer.fieldOfficerId ||
+    !activeWorkOrderAssignmentStatuses.includes(rows[0].assignment_status)
+  ) {
+    res.status(403).json({ error: "This work order is not assigned to you" });
+    return null;
+  }
+  return { ...rows[0], fieldOfficerId: officer.fieldOfficerId };
+}
+
+function evidenceMetadata(row: any, workOrderId: bigint) {
+  const dataUri = String(row.file_path ?? "");
+  const mimeType = dataUri.match(/^data:([^;,]+)/)?.[1] ?? "image/jpeg";
+  return {
+    evidenceId: row.evidence_id,
+    evidenceType: row.evidence_type,
+    description: row.description,
+    mimeType,
+    gpsLatitude: row.gps_latitude,
+    gpsLongitude: row.gps_longitude,
+    capturedAt: row.captured_at,
+    thumbnailUrl: `/api/mobile/field/work-orders/${workOrderId}/evidence/${row.evidence_id}/content`,
+  };
+}
+
+mobileRouter.get("/field/work-orders", fieldWorkOrderRoles, async (req, res, next) => {
+  try {
+    const officer = await activeFieldOfficer(req, res);
+    if (!officer) return;
+    const rows = await prisma.$queryRaw<any[]>`
+      SELECT wo.work_order_id AS "workOrderId", wo.work_order_number AS "workOrderNumber",
+             wt.type_name AS "taskType", wo.priority, wo.status, wo.scheduled_date AS "scheduledDate",
+             wo.started_at AS "startTime", wo.completed_at AS "completionTime",
+             z.zone_name AS "zoneName", ca.account_number AS "accountNumber",
+             COALESCE(NULLIF(TRIM(CONCAT_WS(' ', c.first_name, c.middle_name, c.last_name)), ''), c.organization_name, c.customer_number) AS "customerName",
+             a.assignment_id AS "assignmentId", a.status AS "assignmentStatus"
+      FROM aquaflow.work_orders wo
+      JOIN aquaflow.work_order_types wt ON wt.work_order_type_id = wo.work_order_type_id
+      JOIN aquaflow.zones z ON z.zone_id = wo.zone_id
+      LEFT JOIN aquaflow.customer_accounts ca ON ca.account_id = wo.account_id
+      LEFT JOIN aquaflow.customers c ON c.customer_id = ca.customer_id
+      JOIN LATERAL (
+        SELECT assignment_id, field_officer_id, status, assigned_at
+        FROM aquaflow.work_order_assignments
+        WHERE work_order_id = wo.work_order_id
+        ORDER BY assigned_at DESC, assignment_id DESC LIMIT 1
+      ) a ON a.field_officer_id = ${officer.fieldOfficerId}
+         AND a.status IN ('ASSIGNED', 'ACCEPTED')
+      ORDER BY wo.scheduled_date NULLS LAST, wo.created_at DESC`;
+    res.json({ items: rows });
+  } catch (error) { next(error); }
+});
+
+mobileRouter.get("/field/work-orders/:id", fieldWorkOrderRoles, async (req, res, next) => {
+  try {
+    const parsed = workOrderIdSchema.safeParse(req.params.id);
+    if (!parsed.success) return res.status(400).json({ error: "Invalid work order id" });
+    const owned = await ownedWorkOrder(req, res, parsed.data);
+    if (!owned) return;
+    const [details, updates, evidence] = await Promise.all([
+      prisma.$queryRaw<any[]>`
+        SELECT wo.work_order_id AS "workOrderId", wo.work_order_number AS "workOrderNumber",
+               wt.type_name AS "taskType", wt.type_code AS "taskTypeCode",
+               COALESCE(NULLIF(TRIM(CONCAT_WS(' ', c.first_name, c.middle_name, c.last_name)), ''), c.organization_name, c.customer_number) AS "customerName",
+               ca.account_number AS "accountNumber", z.zone_name AS "zoneName",
+               CONCAT_WS(', ', p.plot_number, p.building_name, p.physical_address) AS location,
+               p.gps_latitude AS "latitude", p.gps_longitude AS "longitude",
+               wo.scheduled_date AS "scheduledDate", wo.due_date AS "dueDate", wo.priority,
+               wo.description, wo.status, wo.started_at AS "startTime",
+               wo.completed_at AS "completionTime", wo.completion_notes AS "completionNotes",
+               wo.created_at AS "createdAt", wo.updated_at AS "updatedAt"
+        FROM aquaflow.work_orders wo
+        JOIN aquaflow.work_order_types wt ON wt.work_order_type_id = wo.work_order_type_id
+        JOIN aquaflow.zones z ON z.zone_id = wo.zone_id
+        LEFT JOIN aquaflow.customer_accounts ca ON ca.account_id = wo.account_id
+        LEFT JOIN aquaflow.customers c ON c.customer_id = ca.customer_id
+        LEFT JOIN aquaflow.properties p ON p.property_id = wo.property_id
+        WHERE wo.work_order_id = ${parsed.data}`,
+      prisma.$queryRaw<any[]>`
+        SELECT update_id AS "updateId", previous_status AS "previousStatus", new_status AS "newStatus",
+               notes, updated_at AS "updatedAt" FROM aquaflow.work_order_updates
+        WHERE work_order_id = ${parsed.data} ORDER BY updated_at DESC`,
+      prisma.$queryRaw<any[]>`SELECT * FROM aquaflow.work_order_evidence WHERE work_order_id = ${parsed.data} ORDER BY captured_at DESC`,
+    ]);
+    res.json({ ...details[0], assignmentId: owned.assignment_id, assignmentStatus: owned.assignment_status,
+      notes: updates, evidence: evidence.map((row) => evidenceMetadata(row, parsed.data)) });
+  } catch (error) { next(error); }
+});
+
+const mobileTransitionSchema = z.object({
+  status: z.enum(mobileWorkOrderStatuses),
+  notes: z.string().trim().min(2).max(5000),
+});
+const mobileTransitions: Record<string, string[]> = {
+  ASSIGNED: ["ACCEPTED", "ESCALATED"],
+  ACCEPTED: ["IN_PROGRESS", "ESCALATED"],
+  IN_PROGRESS: ["COMPLETED", "ESCALATED"],
+  COMPLETED: ["ESCALATED"],
+};
+
+mobileRouter.patch("/field/work-orders/:id/status", fieldWorkOrderRoles, async (req, res, next) => {
+  try {
+    const workOrderId = workOrderIdSchema.safeParse(req.params.id);
+    const input = mobileTransitionSchema.safeParse(req.body);
+    if (!workOrderId.success || !input.success) return res.status(400).json({ error: input.success ? "Invalid work order id" : input.error.issues[0].message });
+    const owned = await ownedWorkOrder(req, res, workOrderId.data);
+    if (!owned) return;
+    if (!(mobileTransitions[owned.status] ?? []).includes(input.data.status)) {
+      return res.status(409).json({ error: `Cannot change a ${owned.status} work order to ${input.data.status}` });
+    }
+    if (input.data.status === "ESCALATED" && input.data.notes.trim().length < 5) {
+      return res.status(400).json({ error: "An escalation reason of at least 5 characters is required" });
+    }
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`UPDATE aquaflow.work_orders SET status=${input.data.status},
+        started_at=CASE WHEN ${input.data.status}='IN_PROGRESS' THEN CURRENT_TIMESTAMP ELSE started_at END,
+        completed_at=CASE WHEN ${input.data.status}='COMPLETED' THEN CURRENT_TIMESTAMP ELSE completed_at END,
+        completion_notes=CASE WHEN ${input.data.status}='COMPLETED' THEN ${input.data.notes} ELSE completion_notes END,
+        updated_at=CURRENT_TIMESTAMP WHERE work_order_id=${workOrderId.data}`;
+      await tx.$executeRaw`INSERT INTO aquaflow.work_order_updates
+        (work_order_id, field_officer_id, previous_status, new_status, notes)
+        VALUES (${workOrderId.data}, ${owned.fieldOfficerId}, ${owned.status}, ${input.data.status}, ${input.data.notes})`;
+      if (input.data.status === "ACCEPTED") await tx.$executeRaw`UPDATE aquaflow.work_order_assignments SET status='ACCEPTED', accepted_at=CURRENT_TIMESTAMP WHERE assignment_id=${owned.assignment_id}`;
+    });
+    res.json({ workOrderId: workOrderId.data, previousStatus: owned.status, status: input.data.status });
+  } catch (error) { next(error); }
+});
+
+const mobileEvidenceSchema = z.object({
+  evidenceType: z.enum(["BEFORE_PHOTO", "AFTER_PHOTO", "METER_PHOTO"]),
+  content: z.string().trim().min(20).max(6_000_000),
+  description: z.string().trim().max(500).optional(),
+  gpsLatitude: z.coerce.number().min(-90).max(90).optional().nullable(),
+  gpsLongitude: z.coerce.number().min(-180).max(180).optional().nullable(),
+});
+
+mobileRouter.post("/field/work-orders/:id/evidence", fieldWorkOrderRoles, async (req, res, next) => {
+  try {
+    const workOrderId = workOrderIdSchema.safeParse(req.params.id);
+    const input = mobileEvidenceSchema.safeParse(req.body);
+    if (!workOrderId.success || !input.success) return res.status(400).json({ error: input.success ? "Invalid work order id" : input.error.issues[0].message });
+    const owned = await ownedWorkOrder(req, res, workOrderId.data);
+    if (!owned) return;
+    const rows = await prisma.$queryRaw<any[]>`INSERT INTO aquaflow.work_order_evidence
+      (work_order_id, evidence_type, file_path, description, gps_latitude, gps_longitude, captured_by)
+      VALUES (${workOrderId.data}, ${input.data.evidenceType}, ${input.data.content}, ${input.data.description ?? null},
+      ${input.data.gpsLatitude ?? null}, ${input.data.gpsLongitude ?? null}, ${owned.fieldOfficerId}) RETURNING *`;
+    res.status(201).json(evidenceMetadata(rows[0], workOrderId.data));
+  } catch (error) { next(error); }
+});
+
+mobileRouter.get("/field/work-orders/:id/evidence/:evidenceId/content", fieldWorkOrderRoles, async (req, res, next) => {
+  try {
+    const workOrderId = workOrderIdSchema.safeParse(req.params.id);
+    const evidenceId = workOrderIdSchema.safeParse(req.params.evidenceId);
+    if (!workOrderId.success || !evidenceId.success) return res.status(400).json({ error: "Invalid evidence reference" });
+    if (!(await ownedWorkOrder(req, res, workOrderId.data))) return;
+    const rows = await prisma.$queryRaw<any[]>`SELECT file_path FROM aquaflow.work_order_evidence WHERE evidence_id=${evidenceId.data} AND work_order_id=${workOrderId.data}`;
+    if (!rows[0]) return res.status(404).json({ error: "Evidence not found" });
+    const match = String(rows[0].file_path).match(/^data:([^;,]+);base64,(.+)$/s);
+    if (!match) return res.status(422).json({ error: "Evidence content is unavailable" });
+    res.type(match[1]).send(Buffer.from(match[2], "base64"));
+  } catch (error) { next(error); }
+});
+
+mobileRouter.delete("/field/work-orders/:id/evidence/:evidenceId", fieldWorkOrderRoles, async (req, res, next) => {
+  try {
+    const workOrderId = workOrderIdSchema.safeParse(req.params.id);
+    const evidenceId = workOrderIdSchema.safeParse(req.params.evidenceId);
+    if (!workOrderId.success || !evidenceId.success) return res.status(400).json({ error: "Invalid evidence reference" });
+    const owned = await ownedWorkOrder(req, res, workOrderId.data);
+    if (!owned) return;
+    const removed = await prisma.$executeRaw`DELETE FROM aquaflow.work_order_evidence WHERE evidence_id=${evidenceId.data} AND work_order_id=${workOrderId.data} AND captured_by=${owned.fieldOfficerId}`;
+    if (!removed) return res.status(404).json({ error: "Evidence not found or was not captured by you" });
+    res.json({ message: "Evidence removed" });
+  } catch (error) { next(error); }
+});
+
+const inspectionAnswer = z.enum(["YES", "NO", "NA"]);
+const inspectionBody = z.object({
+  checklist: z.object({
+    waterAvailability: inspectionAnswer,
+    accessRoad: inspectionAnswer,
+    siteSuitability: inspectionAnswer,
+    connectionPoint: inspectionAnswer,
+    safetyRisks: inspectionAnswer,
+  }),
+  findings: z.string().trim().min(2).max(5000),
+  recommendations: z.string().trim().min(2).max(5000),
+  estimatedMaterialCost: z.coerce.number().min(0).max(100_000_000),
+  estimatedLabourCost: z.coerce.number().min(0).max(100_000_000),
+  gpsLatitude: z.coerce.number().min(-90).max(90),
+  gpsLongitude: z.coerce.number().min(-180).max(180),
+  gpsCapturedAt: z.coerce.date(),
+});
+const inspectionPhotoBody = z.object({
+  content: z.string().trim().min(20).max(6_000_000),
+});
+
+async function ownedInspection(req: Request, res: Response, applicationId: bigint) {
+  const officer = await activeFieldOfficer(req, res);
+  if (!officer) return null;
+  const rows = await prisma.$queryRaw<any[]>`
+    SELECT connection_application_id, application_number, status, inspection_officer_id
+    FROM aquaflow.new_connection_applications
+    WHERE connection_application_id = ${applicationId}`;
+  if (!rows[0]) {
+    res.status(404).json({ error: "Connection application not found" });
+    return null;
+  }
+  if (rows[0].inspection_officer_id !== BigInt(req.user!.userId)) {
+    res.status(403).json({ error: "This inspection is not assigned to you" });
+    return null;
+  }
+  return { application: rows[0], fieldOfficerId: officer.fieldOfficerId };
+}
+
+function inspectionPhotoMetadata(row: any, applicationId: bigint) {
+  return {
+    photoId: row.inspection_photo_id,
+    mimeType: row.mime_type,
+    capturedAt: row.captured_at,
+    thumbnailUrl: `/api/mobile/field/inspections/${applicationId}/photos/${row.inspection_photo_id}/content`,
+  };
+}
+
+async function inspectionDetail(applicationId: bigint) {
+  const [applicationRows, reportRows, photoRows] = await Promise.all([
+    prisma.$queryRaw<any[]>`
+      SELECT a.connection_application_id AS "applicationId", a.application_number AS "applicationReference",
+             a.applicant_name AS "applicantName", a.physical_address AS "siteLocation",
+             a.plot_number AS "plotNumber", a.inspection_scheduled_at AS "scheduledInspectionDate",
+             a.status AS "applicationStatus", z.zone_name AS "zoneName"
+      FROM aquaflow.new_connection_applications a
+      LEFT JOIN aquaflow.zones z ON z.zone_id = a.zone_id
+      WHERE a.connection_application_id=${applicationId}`,
+    prisma.$queryRaw<any[]>`SELECT * FROM aquaflow.field_inspection_reports WHERE connection_application_id=${applicationId}`,
+    prisma.$queryRaw<any[]>`SELECT * FROM aquaflow.field_inspection_photos WHERE connection_application_id=${applicationId} ORDER BY captured_at DESC`,
+  ]);
+  const report = reportRows[0];
+  return {
+    ...applicationRows[0],
+    inspectionStatus: report?.status ?? null,
+    inspectionRecommendation: report?.recommendation ?? null,
+    draft: report ? {
+      checklist: report.checklist,
+      findings: report.findings,
+      recommendations: report.recommendations,
+      estimatedMaterialCost: report.estimated_material_cost,
+      estimatedLabourCost: report.estimated_labour_cost,
+      gpsLatitude: report.gps_latitude,
+      gpsLongitude: report.gps_longitude,
+      gpsCapturedAt: report.gps_captured_at,
+      recommendation: report.recommendation,
+      status: report.status,
+      submittedAt: report.submitted_at,
+      updatedAt: report.updated_at,
+    } : null,
+    photos: photoRows.map((row) => inspectionPhotoMetadata(row, applicationId)),
+  };
+}
+
+mobileRouter.get("/field/inspections", fieldWorkOrderRoles, async (req, res, next) => {
+  try {
+    const officer = await activeFieldOfficer(req, res);
+    if (!officer) return;
+    const rows = await prisma.$queryRaw<any[]>`
+      SELECT a.connection_application_id AS "applicationId", a.application_number AS "applicationReference",
+             a.applicant_name AS "applicantName", a.physical_address AS "siteLocation",
+             a.inspection_scheduled_at AS "scheduledInspectionDate", a.status AS "applicationStatus",
+             z.zone_name AS "zoneName", r.status AS "inspectionStatus",
+             r.recommendation AS "inspectionRecommendation"
+      FROM aquaflow.new_connection_applications a
+      LEFT JOIN aquaflow.zones z ON z.zone_id = a.zone_id
+      LEFT JOIN aquaflow.field_inspection_reports r ON r.connection_application_id=a.connection_application_id
+      WHERE a.inspection_officer_id=${BigInt(req.user!.userId)}
+        AND a.status='INSPECTION_SCHEDULED'
+      ORDER BY a.inspection_scheduled_at NULLS LAST, a.created_at DESC`;
+    res.json({ items: rows });
+  } catch (error) { next(error); }
+});
+
+mobileRouter.get("/field/inspections/:applicationId", fieldWorkOrderRoles, async (req, res, next) => {
+  try {
+    const id = workOrderIdSchema.safeParse(req.params.applicationId);
+    if (!id.success) return res.status(400).json({ error: "Invalid connection application" });
+    if (!(await ownedInspection(req, res, id.data))) return;
+    res.json(await inspectionDetail(id.data));
+  } catch (error) { next(error); }
+});
+
+async function upsertInspectionDraft(
+  client: typeof prisma,
+  applicationId: bigint,
+  officerId: bigint,
+  data: z.infer<typeof inspectionBody>,
+  submitted: boolean,
+  recommendation?: "RECOMMENDED" | "NOT_RECOMMENDED",
+) {
+  const rows = await client.$queryRaw<any[]>`
+    INSERT INTO aquaflow.field_inspection_reports
+      (connection_application_id, field_officer_id, checklist, findings, recommendations,
+       estimated_material_cost, estimated_labour_cost, gps_latitude, gps_longitude, gps_captured_at,
+       recommendation, status, submitted_at, updated_at)
+    VALUES (${applicationId}, ${officerId}, ${JSON.stringify(data.checklist)}::jsonb, ${data.findings}, ${data.recommendations},
+      ${data.estimatedMaterialCost}, ${data.estimatedLabourCost}, ${data.gpsLatitude}, ${data.gpsLongitude}, ${data.gpsCapturedAt},
+      ${recommendation ?? null}, ${submitted ? "SUBMITTED" : "DRAFT"}, ${submitted ? new Date() : null}, CURRENT_TIMESTAMP)
+    ON CONFLICT (connection_application_id) DO UPDATE SET
+      field_officer_id=EXCLUDED.field_officer_id, checklist=EXCLUDED.checklist, findings=EXCLUDED.findings,
+      recommendations=EXCLUDED.recommendations, estimated_material_cost=EXCLUDED.estimated_material_cost,
+      estimated_labour_cost=EXCLUDED.estimated_labour_cost, gps_latitude=EXCLUDED.gps_latitude,
+      gps_longitude=EXCLUDED.gps_longitude, gps_captured_at=EXCLUDED.gps_captured_at,
+      recommendation=EXCLUDED.recommendation, status=EXCLUDED.status,
+      submitted_at=EXCLUDED.submitted_at, updated_at=CURRENT_TIMESTAMP
+    RETURNING inspection_report_id`;
+  return rows[0];
+}
+
+mobileRouter.post("/field/inspections/:applicationId/draft", fieldWorkOrderRoles, async (req, res, next) => {
+  try {
+    const id = workOrderIdSchema.safeParse(req.params.applicationId);
+    const data = inspectionBody.safeParse(req.body);
+    if (!id.success || !data.success) return res.status(400).json({ error: data.success ? "Invalid connection application" : data.error.issues[0].message });
+    const owned = await ownedInspection(req, res, id.data);
+    if (!owned) return;
+    if (owned.application.status !== "INSPECTION_SCHEDULED") return res.status(409).json({ error: "This inspection is no longer open for drafting" });
+    await upsertInspectionDraft(prisma, id.data, owned.fieldOfficerId, data.data, false);
+    res.json(await inspectionDetail(id.data));
+  } catch (error) { next(error); }
+});
+
+mobileRouter.post("/field/inspections/:applicationId/submit", fieldWorkOrderRoles, async (req, res, next) => {
+  try {
+    const id = workOrderIdSchema.safeParse(req.params.applicationId);
+    const data = inspectionBody.extend({ recommendation: z.enum(["RECOMMENDED", "NOT_RECOMMENDED"]) }).safeParse(req.body);
+    if (!id.success || !data.success) return res.status(400).json({ error: data.success ? "Invalid connection application" : data.error.issues[0].message });
+    const owned = await ownedInspection(req, res, id.data);
+    if (!owned) return;
+    if (owned.application.status !== "INSPECTION_SCHEDULED") return res.status(409).json({ error: "This inspection has already been submitted or reassigned" });
+    const outcome = data.data.recommendation === "RECOMMENDED" ? "FEASIBLE" : "NOT_FEASIBLE";
+    await prisma.$transaction(async (tx) => {
+      await upsertInspectionDraft(tx as typeof prisma, id.data, owned.fieldOfficerId, data.data, true, data.data.recommendation);
+      await tx.$executeRaw`UPDATE aquaflow.new_connection_applications SET status=${outcome === "FEASIBLE" ? "INSPECTED" : "REJECTED"},
+        inspection_outcome=${outcome}, inspection_notes=${data.data.findings}, materials_cost=${data.data.estimatedMaterialCost},
+        labour_cost=${data.data.estimatedLabourCost}, updated_at=CURRENT_TIMESTAMP WHERE connection_application_id=${id.data}`;
+      await tx.$executeRaw`INSERT INTO aquaflow.new_connection_activities
+        (connection_application_id, activity_type, notes, performed_by)
+        VALUES (${id.data}, 'RECORD_INSPECTION', ${`Inspection ${outcome}: ${data.data.findings}`}, ${BigInt(req.user!.userId)})`;
+    });
+    res.json(await inspectionDetail(id.data));
+  } catch (error) { next(error); }
+});
+
+mobileRouter.post("/field/inspections/:applicationId/photos", fieldWorkOrderRoles, async (req, res, next) => {
+  try {
+    const id = workOrderIdSchema.safeParse(req.params.applicationId);
+    const data = inspectionPhotoBody.safeParse(req.body);
+    if (!id.success || !data.success) return res.status(400).json({ error: data.success ? "Invalid connection application" : data.error.issues[0].message });
+    const owned = await ownedInspection(req, res, id.data);
+    if (!owned) return;
+    const match = data.data.content.match(/^data:([^;,]+);base64,[A-Za-z0-9+/=\r\n]+$/);
+    if (!match) return res.status(400).json({ error: "Photo must be a base64 data URI" });
+    const rows = await prisma.$queryRaw<any[]>`INSERT INTO aquaflow.field_inspection_photos
+      (connection_application_id, captured_by, content, mime_type)
+      VALUES (${id.data}, ${owned.fieldOfficerId}, ${data.data.content}, ${match[1]}) RETURNING *`;
+    res.status(201).json(inspectionPhotoMetadata(rows[0], id.data));
+  } catch (error) { next(error); }
+});
+
+mobileRouter.get("/field/inspections/:applicationId/photos/:photoId/content", fieldWorkOrderRoles, async (req, res, next) => {
+  try {
+    const id = workOrderIdSchema.safeParse(req.params.applicationId);
+    const photoId = workOrderIdSchema.safeParse(req.params.photoId);
+    if (!id.success || !photoId.success) return res.status(400).json({ error: "Invalid inspection photo reference" });
+    if (!(await ownedInspection(req, res, id.data))) return;
+    const rows = await prisma.$queryRaw<any[]>`SELECT content, mime_type FROM aquaflow.field_inspection_photos WHERE inspection_photo_id=${photoId.data} AND connection_application_id=${id.data}`;
+    if (!rows[0]) return res.status(404).json({ error: "Inspection photo not found" });
+    const content = String(rows[0].content).replace(/^data:[^;,]+;base64,/, "");
+    res.type(rows[0].mime_type).send(Buffer.from(content, "base64"));
+  } catch (error) { next(error); }
+});
+
+mobileRouter.delete("/field/inspections/:applicationId/photos/:photoId", fieldWorkOrderRoles, async (req, res, next) => {
+  try {
+    const id = workOrderIdSchema.safeParse(req.params.applicationId);
+    const photoId = workOrderIdSchema.safeParse(req.params.photoId);
+    if (!id.success || !photoId.success) return res.status(400).json({ error: "Invalid inspection photo reference" });
+    const owned = await ownedInspection(req, res, id.data);
+    if (!owned) return;
+    const removed = await prisma.$executeRaw`DELETE FROM aquaflow.field_inspection_photos
+      WHERE inspection_photo_id=${photoId.data} AND connection_application_id=${id.data} AND captured_by=${owned.fieldOfficerId}`;
+    if (!removed) return res.status(404).json({ error: "Inspection photo not found or was not captured by you" });
+    res.json({ message: "Inspection photo removed" });
+  } catch (error) { next(error); }
+});

@@ -1,5 +1,5 @@
 import { Prisma } from "@prisma/client";
-import { Router } from "express";
+import { Request, Response, Router } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { isSystemAdmin, requireAuth, requirePermission } from "../middleware/auth";
@@ -32,6 +32,32 @@ async function officerForUser(currentUserId: bigint) {
     WHERE user_id = ${currentUserId} AND status = 'ACTIVE'
     LIMIT 1`;
   return rows[0]?.field_officer_id ?? null;
+}
+
+async function enforceOfficerOwnership(req: Request, res: Response, workOrderId: bigint) {
+  const officerId = await officerForUser(userId(req));
+  // Administrative users without a field profile continue through the
+  // permission-gated admin workflow. Any active field officer is restricted
+  // to the latest assignment that belongs to them.
+  if (!officerId) {
+    const fieldRole = req.user?.roles.some((role) =>
+      ["METER_READER", "FIELD_OFFICER"].includes(role),
+    );
+    if (fieldRole) {
+      res.status(403).json({ error: "No active field officer profile is linked to this user" });
+      return { officerId: null, allowed: false };
+    }
+    return { officerId: null, allowed: true };
+  }
+  const rows = await prisma.$queryRaw<{ field_officer_id: bigint; status: string }[]>`
+    SELECT field_officer_id, status FROM aquaflow.work_order_assignments
+    WHERE work_order_id = ${workOrderId}
+    ORDER BY assigned_at DESC, assignment_id DESC LIMIT 1`;
+  if (!rows[0] || rows[0].field_officer_id !== officerId || !["ASSIGNED", "ACCEPTED"].includes(rows[0].status)) {
+    res.status(403).json({ error: "This work order is not assigned to you" });
+    return { officerId, allowed: false };
+  }
+  return { officerId, allowed: true };
 }
 
 workOrdersRouter.get("/dashboard", canView, async (_req, res) => {
@@ -390,12 +416,14 @@ workOrdersRouter.patch("/:id/status", canExecute, async (req, res) => {
   const workOrderId = id.safeParse(req.params.id);
   const parsed = transitionInput.safeParse(req.body);
   if (!workOrderId.success || !parsed.success) return res.status(400).json({ error: parsed.success ? "Invalid work order id" : parsed.error.issues[0].message });
+  const ownership = await enforceOfficerOwnership(req, res, workOrderId.data);
+  if (!ownership.allowed) return;
   const current = await prisma.$queryRaw<any[]>`SELECT status, service_request_id FROM aquaflow.work_orders WHERE work_order_id = ${workOrderId.data}`;
   if (!current[0]) return res.status(404).json({ error: "Work order not found" });
   if (!(transitions[current[0].status] ?? []).includes(parsed.data.status)) {
     return res.status(409).json({ error: `Cannot change a ${current[0].status} work order to ${parsed.data.status}` });
   }
-  const officerId = await officerForUser(userId(req));
+  const officerId = ownership.officerId;
   await prisma.$transaction(async (tx) => {
     await tx.$executeRaw`
       UPDATE aquaflow.work_orders SET status = ${parsed.data.status},
@@ -434,7 +462,9 @@ workOrdersRouter.post("/:id/evidence", canExecute, async (req, res) => {
   const workOrderId = id.safeParse(req.params.id);
   const parsed = evidenceInput.safeParse(req.body);
   if (!workOrderId.success || !parsed.success) return res.status(400).json({ error: parsed.success ? "Invalid work order id" : parsed.error.issues[0].message });
-  const officerId = await officerForUser(userId(req));
+  const ownership = await enforceOfficerOwnership(req, res, workOrderId.data);
+  if (!ownership.allowed) return;
+  const officerId = ownership.officerId;
   const rows = await prisma.$queryRaw<any[]>`
     INSERT INTO aquaflow.work_order_evidence
       (work_order_id, evidence_type, file_path, description, gps_latitude, gps_longitude, captured_by)
@@ -454,6 +484,8 @@ workOrdersRouter.post("/:id/consumables", canExecute, async (req, res) => {
   const workOrderId = id.safeParse(req.params.id);
   const parsed = consumableInput.safeParse(req.body);
   if (!workOrderId.success || !parsed.success) return res.status(400).json({ error: parsed.success ? "Invalid work order id" : parsed.error.issues[0].message });
+  const ownership = await enforceOfficerOwnership(req, res, workOrderId.data);
+  if (!ownership.allowed) return;
   const rows = await prisma.$queryRaw<any[]>`
     INSERT INTO aquaflow.work_order_consumables
       (work_order_id, material_name, quantity, unit, unit_cost, recorded_by)

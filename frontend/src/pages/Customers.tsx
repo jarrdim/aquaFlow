@@ -5,6 +5,7 @@ import { encodeId } from "../lib/hashids";
 import { SearchableSelect } from "../components/SearchableSelect";
 import { SweetAlertToast } from "../components/SweetAlertToast";
 import { exportExcel, parseMeterWorkbook } from "../lib/meterFiles";
+import { maskEmail, maskName, maskPhone, usePrivacyMode } from "../lib/privacyMode";
 
 interface Customer {
   customerId: string;
@@ -125,6 +126,7 @@ const MeterIcon = () => (
 );
 
 export default function Customers() {
+  const { enabled: privacyMode } = usePrivacyMode();
   const [urlParams, setUrlParams] = useSearchParams();
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [search, setSearch] = useState(() => urlParams.get("search") ?? "");
@@ -860,14 +862,14 @@ export default function Customers() {
                       <td className="px-4 py-3.5">
                         <div className="flex items-center gap-3">
                           <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-sky-50 to-violet-100 text-xs font-extrabold text-violet-700 ring-1 ring-violet-100">
-                            {initials(customer)}
+                            {privacyMode ? "CU" : initials(customer)}
                           </span>
                           <div>
                             <Link
                               to={detailPath}
                               className="text-sm font-bold text-slate-900 hover:text-aqua-700"
                             >
-                              {customerName(customer)}
+                              {privacyMode ? maskName(customerName(customer)) : customerName(customer)}
                             </Link>
                             <div className="mt-0.5 text-xs font-semibold text-aqua-700">
                               {customer.customerNumber}
@@ -876,9 +878,9 @@ export default function Customers() {
                         </div>
                       </td>
                       <td className="px-4 py-3.5 text-sm text-slate-600">
-                        <div>{customer.phoneNumber}</div>
+                        <div>{privacyMode ? maskPhone(customer.phoneNumber) : customer.phoneNumber}</div>
                         <div className="max-w-[240px] truncate text-xs text-slate-400">
-                          {customer.emailAddress || "No email address"}
+                          {privacyMode ? maskEmail(customer.emailAddress) : customer.emailAddress || "No email address"}
                         </div>
                       </td>
                       <td className="px-4 py-3.5">
