@@ -99,7 +99,7 @@ function Page({
   children: ReactNode;
 }) {
   return (
-    <div className="mx-auto max-w-[1600px] p-4 lg:px-6 lg:py-5">
+    <div className="mx-auto w-full max-w-[1680px] p-4 lg:px-5 lg:py-5">
       <div className="page-screen-header mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-slate-900 lg:text-[26px]">
@@ -2786,10 +2786,14 @@ export function ReadingWorklist() {
           </Button>
           <Button
             tone="green"
+            className="inline-flex items-center gap-2"
             disabled={!cycleId || Boolean(operation)}
             onClick={() => setShowBulkUpload((visible) => !visible)}
           >
-            {showBulkUpload ? "Close bulk upload" : "Bulk upload readings"}
+            <span>{showBulkUpload ? "Close bulk upload" : "Bulk upload readings"}</span>
+            <span className="rounded-full bg-white/20 px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wide">
+              Current cycle
+            </span>
           </Button>
           <LinkButton to="/readings/register">Reading register</LinkButton>
         </>
@@ -2827,9 +2831,14 @@ export function ReadingWorklist() {
       {showBulkUpload && (
         <section className="mb-4 overflow-hidden rounded-2xl border border-sky-200 bg-white shadow-[0_16px_42px_-30px_rgba(15,32,56,0.45)]">
           <div className="border-b border-slate-100 bg-sky-50/60 px-5 py-4">
-            <h2 className="font-bold text-slate-900">Bulk Excel reading upload</h2>
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="font-bold text-slate-900">Bulk Excel reading upload</h2>
+              <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wide text-emerald-800">
+                Operational
+              </span>
+            </div>
             <p className="mt-1 text-sm text-slate-500">
-              Export the worklist, fill in Current Reading, then validate and import the completed file. Readings are uploaded in safe batches of 100.
+              For routine readings in the selected active cycle. Export the worklist, fill in Current Reading, then validate and import the completed file. Uploaded readings are sent for approval in safe batches of 100.
             </p>
           </div>
           <div className="grid gap-5 p-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
@@ -4800,11 +4809,22 @@ export function BulkCurrentReadingImport() {
   }
 
   return (
-    <Page title="Import current readings" subtitle="Load the approved MajiWare reading baseline">
+    <Page title="Import current readings" subtitle="Migration/setup tool for loading an approved MajiWare reading baseline">
       <section className="mx-auto max-w-5xl rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div><h2 className="font-bold text-slate-900">Current-reading workbook</h2><p className="mt-1 text-sm text-slate-500">Meters, customer accounts and assignments must be imported first.</p></div>
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="font-bold text-slate-900">Current-reading workbook</h2>
+              <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-wide text-amber-800">Migration only</span>
+              <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-wide text-slate-700">Auto-approved baseline</span>
+            </div>
+            <p className="mt-1 text-sm text-slate-500">Meters, customer accounts and assignments must be imported first.</p>
+          </div>
           <button type="button" className="rounded-lg bg-aqua-700 px-4 py-2 text-sm font-bold text-white" onClick={() => exportExcel("current-reading-import-template.xlsx", "Current Readings", [{ meterNumber: "MTR-2026-00001", accountNumber: "ACC-00001", cycleCode: "RC-2026-07", cycleStartDate: "2026-07-01", cycleEndDate: "2026-08-04", previousReading: 100, currentReading: 110, readingDate: "2026-07-31" }])}>Download template</button>
+        </div>
+        <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+          <p className="font-bold">Do not use this page for routine monthly meter reading.</p>
+          <p className="mt-1">This import creates or repairs historical baseline readings and marks them approved. For an active reading cycle, use <strong>Reading Worklist → Bulk upload readings</strong>.</p>
         </div>
         <label className="mt-5 block rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 p-8 text-center">
           <span className="block font-bold text-slate-800">{fileName || "Choose current-reading Excel or CSV file"}</span>

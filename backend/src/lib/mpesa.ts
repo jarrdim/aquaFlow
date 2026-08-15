@@ -44,7 +44,24 @@ function timestamp(now = new Date()) {
 }
 
 async function darajaJson(url: string, options: RequestInit): Promise<DarajaJson> {
-  const response = await fetch(url, { ...options, signal: AbortSignal.timeout(30_000) });
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...options,
+      signal: AbortSignal.timeout(30_000),
+    });
+  } catch (error: any) {
+    const timedOut =
+      error?.name === "TimeoutError" || error?.cause?.code === "ETIMEDOUT";
+    throw Object.assign(
+      new Error(
+        timedOut
+          ? "Safaricom Daraja did not respond in time. Please try again."
+          : "Unable to connect to Safaricom Daraja. Please try again.",
+      ),
+      { status: 502 },
+    );
+  }
   const body = await response.json().catch(() => ({})) as DarajaJson;
   if (!response.ok) {
     const message = body.errorMessage || body.error_description || body.ResponseDescription || `Daraja request failed (${response.status})`;

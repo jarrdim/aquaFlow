@@ -102,6 +102,7 @@ export default function WorkOrderManagement() {
   const [assignment, setAssignment] = useState({ fieldOfficerId: "", scheduledDate: "", dueDate: "" });
   const [material, setMaterial] = useState({ materialName: "", quantity: "1", unit: "item", unitCost: "" });
   const [evidence, setEvidence] = useState({ evidenceType: "AFTER_PHOTO", filePath: "", description: "" });
+  const [completionSignatureUrl, setCompletionSignatureUrl] = useState("");
   const typeFieldRef = useRef<HTMLDivElement>(null);
   const targetFieldRef = useRef<HTMLDivElement>(null);
   const descriptionFieldRef = useRef<HTMLTextAreaElement>(null);
@@ -218,6 +219,23 @@ export default function WorkOrderManagement() {
     const detail = await api.getWorkOrder(selected.work_order_id || selected.workOrderId);
     setSelected(detail);
   };
+
+  useEffect(() => {
+    const path = selected?.completionEvidence?.signature?.contentUrl;
+    if (!path) { setCompletionSignatureUrl(""); return; }
+    let active = true;
+    let objectUrl = "";
+    api.getProtectedBlobUrl(path).then((url: string) => {
+      objectUrl = url;
+      if (active) setCompletionSignatureUrl(url);
+    }).catch((error: any) => {
+      if (active) showToast(error.message, "error");
+    });
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [selected?.completionEvidence?.signature?.contentUrl]);
 
   const perform = async (action: string, operation: () => Promise<any>, success: string) => {
     setBusyAction(action);
@@ -512,6 +530,52 @@ export default function WorkOrderManagement() {
                   <button disabled={notes.trim().length < 2 || saving} onClick={() => perform("verify", () => api.verifyWorkOrder(detailId, { decision: "VERIFY", notes }), "Work order verified.")} className="rounded-lg bg-emerald-600 px-3 py-2.5 font-bold text-white disabled:opacity-40">{busyAction === "verify" ? <InlineLoader label="Verifying…" /> : "Verify"}</button>
                 </div>}
                 {currentStatus === "VERIFIED" && <button disabled={notes.trim().length < 2 || saving} onClick={() => perform("close", () => api.closeWorkOrder(detailId, notes), "Work order closed.")} className="w-full rounded-lg bg-emerald-700 px-4 py-2.5 font-bold text-white disabled:opacity-40">{busyAction === "close" ? <InlineLoader label="Closing…" /> : "Close work order"}</button>}
+                {selected.disconnectionEvidence && <section className="rounded-lg border border-slate-200 p-3">
+                  <h3 className="font-bold">Disconnection evidence</h3>
+                  <dl className="mt-2 grid grid-cols-2 gap-2 text-xs">
+                    <div><dt className="text-slate-500">Officer</dt><dd>{selected.disconnectionEvidence.officer_first_name} {selected.disconnectionEvidence.officer_last_name}</dd></div>
+                    <div><dt className="text-slate-500">Status</dt><dd>{label(selected.disconnectionEvidence.status)}</dd></div>
+                    <div><dt className="text-slate-500">Disconnected at</dt><dd>{date(selected.disconnectionEvidence.disconnection_datetime)}</dd></div>
+                    <div><dt className="text-slate-500">Acknowledgement</dt><dd>{label(selected.disconnectionEvidence.customer_acknowledgement)}</dd></div>
+                    <div><dt className="text-slate-500">GPS</dt><dd>{selected.disconnectionEvidence.gps_latitude}, {selected.disconnectionEvidence.gps_longitude}</dd></div>
+                    <div><dt className="text-slate-500">GPS captured</dt><dd>{date(selected.disconnectionEvidence.gps_captured_at)}</dd></div>
+                  </dl>
+                  <p className="mt-2 text-xs text-slate-600">{selected.disconnectionEvidence.remarks}</p>
+                  <div className="mt-2 flex gap-2 overflow-x-auto">{selected.evidence?.filter((item: any) => item.evidence_type === "AFTER_PHOTO").map((item: any) => <img key={item.evidence_id} src={item.file_path} alt="Disconnection evidence" className="h-24 w-24 rounded object-cover" />)}</div>
+                </section>}
+                {selected.reconnectionEvidence && <section className="rounded-lg border border-slate-200 p-3">
+                  <h3 className="font-bold">Reconnection evidence</h3>
+                  <dl className="mt-2 grid grid-cols-2 gap-2 text-xs">
+                    <div><dt className="text-slate-500">Customer account</dt><dd>{selected.account_number}</dd></div>
+                    <div><dt className="text-slate-500">Officer</dt><dd>{selected.reconnectionEvidence.officer_first_name} {selected.reconnectionEvidence.officer_last_name}</dd></div>
+                    <div><dt className="text-slate-500">Reconnection</dt><dd>{selected.reconnectionEvidence.reconnection_reference}</dd></div>
+                    <div><dt className="text-slate-500">Disconnection</dt><dd>{selected.reconnectionEvidence.disconnection_reference || "Not linked"}</dd></div>
+                    <div><dt className="text-slate-500">Payment</dt><dd>{selected.reconnectionEvidence.fee_payment_status} / {selected.reconnectionEvidence.payment_status}</dd></div>
+                    <div><dt className="text-slate-500">Reconnected at</dt><dd>{date(selected.reconnectionEvidence.reconnection_datetime)}</dd></div>
+                    <div><dt className="text-slate-500">GPS</dt><dd>{selected.reconnectionEvidence.gps_latitude}, {selected.reconnectionEvidence.gps_longitude}</dd></div>
+                    <div><dt className="text-slate-500">Status</dt><dd>{label(selected.reconnectionEvidence.status)}</dd></div>
+                  </dl>
+                  <p className="mt-2 text-xs text-slate-600">{selected.reconnectionEvidence.remarks}</p>
+                  <div className="mt-2 flex gap-2 overflow-x-auto">{selected.evidence?.filter((item: any) => item.evidence_type === "AFTER_PHOTO").map((item: any) => <img key={item.evidence_id} src={item.file_path} alt="Reconnection evidence" className="h-24 w-24 rounded object-cover" />)}</div>
+                </section>}
+                {selected.completionEvidence && <section className="rounded-lg border border-slate-200 p-3">
+                  <h3 className="font-bold">Materials and customer signature</h3>
+                  <dl className="mt-2 grid grid-cols-2 gap-2 text-xs">
+                    <div><dt className="text-slate-500">Officer</dt><dd>{selected.completionEvidence.officer_first_name} {selected.completionEvidence.officer_last_name}</dd></div>
+                    <div><dt className="text-slate-500">Status</dt><dd>{label(selected.completionEvidence.status)}</dd></div>
+                    <div><dt className="text-slate-500">Customer name confirmed</dt><dd>{selected.completionEvidence.customer_name_confirmed ? "Yes" : "No"}</dd></div>
+                    <div><dt className="text-slate-500">Customer identity confirmed</dt><dd>{selected.completionEvidence.customer_identity_confirmed ? "Yes" : "No"}</dd></div>
+                    <div><dt className="text-slate-500">Submitted</dt><dd>{date(selected.completionEvidence.submitted_at)}</dd></div>
+                    <div><dt className="text-slate-500">Materials</dt><dd>{selected.completionEvidence.no_materials_used ? "No materials used" : `${selected.completionEvidence.materials?.length || 0} item(s)`}</dd></div>
+                  </dl>
+                  <p className="mt-2 text-xs text-slate-600">{selected.completionEvidence.completion_notes}</p>
+                  {!!selected.completionEvidence.materials?.length && <div className="mt-2 overflow-x-auto">
+                    <table className="w-full text-left text-xs"><thead><tr className="text-slate-500"><th className="py-1">Item</th><th>Quantity</th><th>Unit</th></tr></thead>
+                      <tbody>{selected.completionEvidence.materials.map((item: any) => <tr key={item.usage_id} className="border-t"><td className="py-1">{item.item_code} · {item.item_name}</td><td>{item.quantity_used}</td><td>{item.unit_of_measure}</td></tr>)}</tbody>
+                    </table>
+                  </div>}
+                  {completionSignatureUrl && <div className="mt-3"><p className="mb-1 text-xs font-semibold text-slate-500">Customer signature</p><img src={completionSignatureUrl} alt="Customer job-completion signature" className="max-h-36 rounded border bg-white object-contain" /></div>}
+                </section>}
                 {["ACCEPTED", "IN_PROGRESS", "REOPENED"].includes(currentStatus) && <details className="rounded-lg border border-slate-200 p-3"><summary className="cursor-pointer text-sm font-bold">Evidence and materials</summary>
                   <div className="mt-3 space-y-3">
                     <SearchableSelect className={input} value={evidence.evidenceType} onChange={(e) => setEvidence({ ...evidence, evidenceType: e.target.value })}>{["BEFORE_PHOTO", "AFTER_PHOTO", "METER_PHOTO", "SIGNATURE", "CHECKLIST", "DOCUMENT"].map((item) => <option key={item} value={item}>{label(item)}</option>)}</SearchableSelect>

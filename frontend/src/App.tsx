@@ -333,7 +333,7 @@ const READING_MENU = [
   ["Reader Assignments", "/readings/assignments"],
   ["Reading Worklist", "/readings/worklist"],
   ["All Readings", "/readings/register"],
-  ["Import Current Readings", "/readings/import-current"],
+  ["Import Baseline", "/readings/import-current"],
   ["Approval Queue", "/readings/approvals"],
   ["Exception Queue", "/readings/exceptions"],
   ["Route Tracking", "/readings/progress"],
@@ -522,6 +522,7 @@ function AppBreadcrumbs() {
   const moduleKey = segments[0];
   const moduleLabel = MODULE_LABELS[moduleKey];
   const modulePath = moduleKey ? `/${moduleKey}` : "/";
+  const useWideReadingLayout = moduleKey === "readings";
 
   if (
     !moduleLabel ||
@@ -553,7 +554,9 @@ function AppBreadcrumbs() {
   return (
     <nav
       aria-label="Breadcrumb"
-      className="app-breadcrumbs mx-auto flex w-full max-w-[1600px] flex-wrap items-center gap-2 px-5 pt-3 text-xs font-medium text-slate-500 lg:px-8"
+      className={`app-breadcrumbs mx-auto flex w-full flex-wrap items-center gap-2 px-5 pt-3 text-xs font-medium text-slate-500 ${
+        useWideReadingLayout ? "max-w-[1680px] lg:px-5" : "max-w-[1600px] lg:px-8"
+      }`}
     >
       {pathname === modulePath ? (
         <h1
@@ -824,7 +827,7 @@ function Shell({ children }: { children: React.ReactNode }) {
       {/* ── Sidebar ── */}
       <aside
         className={`app-sidebar flex h-screen flex-shrink-0 flex-col overflow-hidden bg-navy-900 text-white ${
-          sidebarCollapsed ? "app-sidebar-collapsed w-20" : "w-60"
+          sidebarCollapsed ? "app-sidebar-collapsed w-20" : "w-64"
         }`}
       >
         {/* Utility logo */}
@@ -1020,13 +1023,21 @@ function Shell({ children }: { children: React.ReactNode }) {
                         <Link
                           key={itemPath}
                           to={itemPath}
+                          title={itemPath === "/readings/import-current" ? "Migration/setup tool for approved legacy reading baselines" : undefined}
                           className={`block rounded px-2 py-1.5 text-xs font-medium transition-colors ${
                             itemActive
                               ? "bg-white/10 text-white"
                               : "text-blue-100/50 hover:bg-white/5 hover:text-white"
                           }`}
                         >
-                          {itemLabel}
+                          <span className="flex items-center justify-between gap-2">
+                            <span>{itemLabel}</span>
+                            {itemPath === "/readings/import-current" && (
+                              <span className="shrink-0 rounded-full border border-amber-300/40 bg-amber-400/15 px-1.5 py-0.5 text-[9px] font-extrabold uppercase tracking-wide text-amber-200">
+                                Migration
+                              </span>
+                            )}
+                          </span>
                         </Link>
                       );
                     })}
@@ -1175,6 +1186,7 @@ function Shell({ children }: { children: React.ReactNode }) {
                     key={itemPath}
                     to={itemPath}
                     role="menuitem"
+                    title={itemPath === "/readings/import-current" ? "Migration/setup tool for approved legacy reading baselines" : undefined}
                     className={`block rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
                       itemActive
                         ? "bg-sky-50 text-aqua-700"
@@ -1182,7 +1194,14 @@ function Shell({ children }: { children: React.ReactNode }) {
                     }`}
                     onClick={() => setSidebarFlyout(null)}
                   >
-                    {itemLabel}
+                    <span className="flex items-center justify-between gap-2">
+                      <span>{itemLabel}</span>
+                      {itemPath === "/readings/import-current" && (
+                        <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wide text-amber-800">
+                          Migration
+                        </span>
+                      )}
+                    </span>
                   </Link>
                 );
               })}

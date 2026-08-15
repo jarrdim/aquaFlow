@@ -116,14 +116,20 @@ reconnectionsRouter.post("/:id/work-order", canCreateWorkOrder, async (req, res,
   if (!parsedId.success || !parsed.success) return res.status(400).json({ error: "Invalid work-order request" });
   try {
     const requests = await prisma.$queryRaw<any[]>`
-      SELECT r.status, r.account_id, r.request_number, a.property_id, p.zone_id
+      SELECT r.status, r.fee_payment_status, r.fee_payment_id, r.reconnection_fee,
+        pay.payment_status, pay.payment_type, pay.amount AS paid_amount,
+        r.account_id, r.request_number, a.property_id, p.zone_id
       FROM aquaflow.reconnection_requests r
       JOIN aquaflow.customer_accounts a ON a.account_id = r.account_id
       JOIN aquaflow.properties p ON p.property_id = a.property_id
+      LEFT JOIN aquaflow.payments pay ON pay.payment_id=r.fee_payment_id
       WHERE r.reconnection_request_id = ${parsedId.data}`;
     const request = requests[0];
     if (!request) return res.status(404).json({ error: "Reconnection request not found" });
     if (request.status !== "APPROVED") return res.status(409).json({ error: "Approve the request before creating a work order" });
+    if (request.fee_payment_status !== "PAID" || request.payment_status !== "POSTED" || request.payment_type !== "RECONNECTION_FEE" || Number(request.paid_amount) < Number(request.reconnection_fee)) {
+      return res.status(409).json({ error: "A posted reconnection-fee payment is required before dispatch" });
+    }
     const types = await prisma.$queryRaw<any[]>`
       SELECT work_order_type_id FROM aquaflow.work_order_types
       WHERE type_code = 'RECONNECTION' AND status = 'ACTIVE'`;
@@ -146,7 +152,14 @@ reconnectionsRouter.post("/:id/work-order", canCreateWorkOrder, async (req, res,
           ${`Created from reconnection request ${request.request_number}`})`;
       await tx.$executeRaw`
         UPDATE aquaflow.reconnection_requests
-        SET status='WORK_ORDER_CREATED', work_order_id=${created[0].workOrderId}, updated_at=NOW()
+        SET status='WORK_ORDER_CREATED', work_order_id=${created[0].workOrderId},
+          disconnection_work_order_id=COALESCE(disconnection_work_order_id,(
+            SELECT wo.work_order_id FROM aquaflow.work_orders wo
+            JOIN aquaflow.work_order_types wt ON wt.work_order_type_id=wo.work_order_type_id
+            WHERE wo.account_id=${request.account_id} AND wt.type_code='DISCONNECTION'
+              AND wo.status IN ('COMPLETED','VERIFIED','CLOSED')
+            ORDER BY wo.completed_at DESC NULLS LAST,wo.created_at DESC LIMIT 1
+          )), updated_at=NOW()
         WHERE reconnection_request_id=${parsedId.data}`;
       return created[0];
     });

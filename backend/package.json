@@ -27,6 +27,10 @@
     "db:customer-workflow-upgrade": "prisma db execute --file prisma/migrations/20260730150000_customer_submission_workflows/migration.sql --schema prisma/schema.prisma",
     "db:reconnection-payment-upgrade": "prisma db execute --file prisma/migrations/20260801120000_reconnection_fee_payments/migration.sql --schema prisma/schema.prisma",
     "db:inspection-upgrade": "prisma db execute --file prisma/migrations/20260813090000_field_inspection_contract/migration.sql --schema prisma/schema.prisma",
+    "db:disconnection-upgrade": "prisma db execute --file prisma/migrations/20260814100000_field_disconnection_contract/migration.sql --schema prisma/schema.prisma",
+    "db:reconnection-field-upgrade": "prisma db execute --file prisma/migrations/20260814170000_field_reconnection_contract/migration.sql --schema prisma/schema.prisma",
+    "db:work-order-completion-upgrade": "prisma db execute --file prisma/migrations/20260815090000_field_work_order_completion_contract/migration.sql --schema prisma/schema.prisma",
+    "verify:work-order-completion": "node scripts/verify-work-order-completion-contract.js",
     "seed": "ts-node prisma/seed.ts"
   },
   "dependencies": {

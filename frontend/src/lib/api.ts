@@ -142,6 +142,16 @@ async function request(path: string, options: RequestInit = {}) {
   return res.json();
 }
 
+async function protectedBlobUrl(path: string) {
+  const token = getToken();
+  const normalized = path.startsWith("/api/") ? path.slice(4) : path;
+  const response = await fetchWithReadRetry(normalized, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!response.ok) throw new Error("Protected content could not be loaded");
+  return URL.createObjectURL(await response.blob());
+}
+
 export const api = {
   login: (username: string, password: string) =>
     request("/auth/login", {
@@ -869,6 +879,7 @@ export const api = {
     return request(`/work-orders${query ? `?${query}` : ""}`);
   },
   getWorkOrder: (id: string) => request(`/work-orders/${id}`),
+  getProtectedBlobUrl: (path: string) => protectedBlobUrl(path),
   createWorkOrder: (data: Record<string, unknown>) => request("/work-orders", { method: "POST", body: JSON.stringify(data) }),
   assignWorkOrder: (id: string, data: Record<string, unknown>) => request(`/work-orders/${id}/assign`, { method: "PATCH", body: JSON.stringify(data) }),
   updateWorkOrderStatus: (id: string, data: Record<string, unknown>) => request(`/work-orders/${id}/status`, { method: "PATCH", body: JSON.stringify(data) }),

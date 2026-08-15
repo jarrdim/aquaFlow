@@ -200,7 +200,8 @@ workOrdersRouter.get("/:id", canView, async (req, res) => {
     LEFT JOIN aquaflow.service_requests sr ON sr.service_request_id = wo.service_request_id
     WHERE wo.work_order_id = ${parsed.data}`;
   if (!rows[0]) return res.status(404).json({ error: "Work order not found" });
-  const [assignments, updates, evidence, consumables] = await Promise.all([
+  const [assignments, updates, evidence, consumables, disconnectionReports, reconnectionReports,
+    completionReports, completionMaterials] = await Promise.all([
     prisma.$queryRaw<any[]>`
       SELECT a.*, u.first_name, u.last_name, u.username
       FROM aquaflow.work_order_assignments a
@@ -221,8 +222,72 @@ workOrdersRouter.get("/:id", canView, async (req, res) => {
       FROM aquaflow.work_order_consumables wc
       JOIN aquaflow.users u ON u.user_id = wc.recorded_by
       WHERE wc.work_order_id = ${parsed.data} ORDER BY wc.recorded_at DESC`,
+    prisma.$queryRaw<any[]>`
+      SELECT r.*, u.first_name AS officer_first_name, u.last_name AS officer_last_name
+      FROM aquaflow.field_disconnection_reports r
+      JOIN aquaflow.field_officers fo ON fo.field_officer_id=r.field_officer_id
+      JOIN aquaflow.users u ON u.user_id=fo.user_id
+      WHERE r.work_order_id=${parsed.data}`,
+    prisma.$queryRaw<any[]>`
+      SELECT r.*, rr.request_number AS reconnection_reference, rr.fee_payment_status,
+        pay.payment_status, pay.transaction_reference AS payment_reference,
+        COALESCE(dwo.source_reference,dwo.work_order_number) AS disconnection_reference,
+        u.first_name AS officer_first_name,u.last_name AS officer_last_name
+      FROM aquaflow.field_reconnection_reports r
+      JOIN aquaflow.reconnection_requests rr ON rr.reconnection_request_id=r.reconnection_request_id
+      LEFT JOIN aquaflow.payments pay ON pay.payment_id=rr.fee_payment_id
+      LEFT JOIN aquaflow.work_orders dwo ON dwo.work_order_id=rr.disconnection_work_order_id
+      JOIN aquaflow.field_officers fo ON fo.field_officer_id=r.field_officer_id
+      JOIN aquaflow.users u ON u.user_id=fo.user_id WHERE r.work_order_id=${parsed.data}`,
+    prisma.$queryRaw<any[]>`
+      SELECT r.*,u.first_name AS officer_first_name,u.last_name AS officer_last_name,
+        e.evidence_id,e.captured_at AS signature_captured_at,e.file_path
+      FROM aquaflow.field_work_order_completion_reports r
+      JOIN aquaflow.field_officers fo ON fo.field_officer_id=r.field_officer_id
+      JOIN aquaflow.users u ON u.user_id=fo.user_id
+      LEFT JOIN aquaflow.work_order_evidence e ON e.evidence_id=r.signature_evidence_id
+      WHERE r.work_order_id=${parsed.data}`,
+    prisma.$queryRaw<any[]>`
+      SELECT wom.usage_id,ii.inventory_item_id,ii.item_code,ii.item_name,
+        wom.quantity_used,ii.unit_of_measure,wom.unit_cost
+      FROM aquaflow.work_order_materials wom
+      JOIN aquaflow.inventory_items ii ON ii.inventory_item_id=wom.inventory_item_id
+      JOIN aquaflow.field_work_order_completion_reports r
+        ON r.completion_report_id=wom.completion_report_id
+      WHERE r.work_order_id=${parsed.data} ORDER BY ii.item_name`,
   ]);
-  res.json({ ...rows[0], assignments, updates, evidence, consumables });
+  const completion = completionReports[0];
+  const completionSignatureId = completion?.signature_evidence_id;
+  const visibleEvidence = completionSignatureId
+    ? evidence.filter((item) => item.evidence_id !== completionSignatureId)
+    : evidence;
+  res.json({ ...rows[0], assignments, updates, evidence: visibleEvidence, consumables,
+    disconnectionEvidence: disconnectionReports[0] ?? null,
+    reconnectionEvidence: reconnectionReports[0] ?? null,
+    completionEvidence: completion ? {
+      ...completion,
+      file_path: undefined,
+      materials: completionMaterials,
+      signature: completionSignatureId ? {
+        evidenceId: completionSignatureId,
+        mimeType: String(completion.file_path ?? "").match(/^data:([^;,]+)/)?.[1] ?? "image/png",
+        capturedAt: completion.signature_captured_at,
+        contentUrl: `/api/work-orders/${parsed.data}/completion/signature/content`,
+      } : null,
+    } : null });
+});
+
+workOrdersRouter.get("/:id/completion/signature/content", canView, async (req, res) => {
+  const parsed = id.safeParse(req.params.id);
+  if (!parsed.success) return res.status(400).json({ error: "Invalid work order id" });
+  const rows = await prisma.$queryRaw<any[]>`
+    SELECT e.file_path FROM aquaflow.field_work_order_completion_reports r
+    JOIN aquaflow.work_order_evidence e ON e.evidence_id=r.signature_evidence_id
+    WHERE r.work_order_id=${parsed.data} AND e.work_order_id=${parsed.data}`;
+  if (!rows[0]) return res.status(404).json({ error: "Customer signature not found" });
+  const match = String(rows[0].file_path).match(/^data:(image\/png);base64,(.+)$/s);
+  if (!match) return res.status(422).json({ error: "Customer signature content is unavailable" });
+  res.type(match[1]).send(Buffer.from(match[2], "base64"));
 });
 
 const createInput = z.object({
@@ -422,6 +487,14 @@ workOrdersRouter.patch("/:id/status", canExecute, async (req, res) => {
   if (!current[0]) return res.status(404).json({ error: "Work order not found" });
   if (!(transitions[current[0].status] ?? []).includes(parsed.data.status)) {
     return res.status(409).json({ error: `Cannot change a ${current[0].status} work order to ${parsed.data.status}` });
+  }
+  if (parsed.data.status === "COMPLETED") {
+    const types = await prisma.$queryRaw<any[]>`
+      SELECT wt.type_code,wt.requires_signature FROM aquaflow.work_orders wo
+      JOIN aquaflow.work_order_types wt ON wt.work_order_type_id=wo.work_order_type_id
+      WHERE wo.work_order_id=${workOrderId.data}`;
+    if (types[0]?.requires_signature === true && !["DISCONNECTION", "RECONNECTION"].includes(types[0].type_code))
+      return res.status(409).json({ error: "Submit the materials and customer-signature completion report to complete this job" });
   }
   const officerId = ownership.officerId;
   await prisma.$transaction(async (tx) => {
