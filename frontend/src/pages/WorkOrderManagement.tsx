@@ -171,6 +171,7 @@ export default function WorkOrderManagement() {
   const [form, setForm] = useState({
     workOrderTypeId: "",
     accountId: "",
+    customerId: "",
     zoneId: "",
     fieldOfficerIds: [] as string[],
     sourceType: "MANUAL",
@@ -238,6 +239,7 @@ export default function WorkOrderManagement() {
           setForm((current) => ({
             ...current,
             accountId: request.account?.accountId || "",
+            customerId: request.customer?.customerId || "",
             sourceType:
               request.requestType === "COMPLAINT"
                 ? "COMPLAINT"
@@ -270,8 +272,9 @@ export default function WorkOrderManagement() {
             accountId: connection.accountId
               ? String(connection.accountId)
               : linkedAccounts.length === 1
-                ? String(linkedAccounts[0].accountId)
+                ? String(linkedAccounts[0].accountId || "")
                 : "",
+            customerId: connection.customerId ? String(connection.customerId) : "",
             zoneId: connection.zoneId
               ? String(connection.zoneId)
               : current.zoneId,
@@ -300,11 +303,15 @@ export default function WorkOrderManagement() {
         const rows = await api.listWorkOrderTargets(query.trim());
         setTargets((current) => {
           const selectedTarget = current.find(
-            (target) => String(target.accountId) === form.accountId,
+            (target) => form.accountId
+              ? String(target.accountId) === form.accountId
+              : String(target.customerId) === form.customerId,
           );
           return selectedTarget &&
             !rows.some(
-              (target: any) => String(target.accountId) === form.accountId,
+              (target: any) => form.accountId
+                ? String(target.accountId) === form.accountId
+                : String(target.customerId) === form.customerId,
             )
             ? [selectedTarget, ...rows]
             : rows;
@@ -403,7 +410,7 @@ export default function WorkOrderManagement() {
       });
       return showToast("Select a work order type.", "warning");
     }
-    if (!form.accountId && !form.zoneId) {
+    if (!form.accountId && !form.customerId && !form.zoneId) {
       targetFieldRef.current?.scrollIntoView({
         behavior: "smooth",
         block: "center",
@@ -426,6 +433,7 @@ export default function WorkOrderManagement() {
       const created = await api.createWorkOrder({
         ...form,
         accountId: form.accountId || null,
+        customerId: form.customerId || null,
         zoneId: form.zoneId || null,
         serviceRequestId: sourceRequestId || null,
         connectionApplicationId: connectionApplicationId || null,
@@ -445,6 +453,7 @@ export default function WorkOrderManagement() {
       setForm({
         workOrderTypeId: "",
         accountId: "",
+        customerId: "",
         zoneId: "",
         fieldOfficerIds: [],
         sourceType: "MANUAL",
@@ -502,7 +511,9 @@ export default function WorkOrderManagement() {
   const createPanel = creating
     ? (() => {
         const selectedTarget = targets.find(
-          (target) => String(target.accountId) === form.accountId,
+          (target) => form.accountId
+            ? String(target.accountId) === form.accountId
+            : String(target.customerId) === form.customerId,
         );
         const selectedOfficers = lookups.officers.filter((officer) =>
           form.fieldOfficerIds.includes(String(officer.fieldOfficerId)),
@@ -595,46 +606,53 @@ export default function WorkOrderManagement() {
                           ))}
                         </SearchableSelect>
                       </label>
-                      <label className={form.accountId ? "md:col-span-2" : ""}>
+                      <label className={form.accountId || form.customerId ? "md:col-span-2" : ""}>
                         <span className="mb-1 block text-sm font-medium">
-                          Customer account
+                          Customer / account
                         </span>
                         <div ref={targetFieldRef}>
                           <SearchableSelect
                             className={input}
-                            value={form.accountId}
+                            value={form.accountId ? `account:${form.accountId}` : form.customerId ? `customer:${form.customerId}` : ""}
                             onSearchQuery={searchTargets}
-                            onChange={(e) =>
+                            onChange={(e) => {
+                              const [kind, selectedId = ""] = e.target.value.split(":");
+                              const target = targets.find((item) =>
+                                kind === "account"
+                                  ? String(item.accountId) === selectedId
+                                  : String(item.customerId) === selectedId,
+                              );
                               setForm({
                                 ...form,
-                                accountId: e.target.value,
-                                zoneId: "",
-                              })
-                            }
+                                accountId: kind === "account" ? selectedId : "",
+                                customerId: target?.customerId ? String(target.customerId) : "",
+                                zoneId: target?.zoneId ? String(target.zoneId) : form.zoneId,
+                              });
+                            }}
                           >
                             <option value="">
                               {targetsLoading
-                                ? "Loading customer accounts…"
-                                : "No customer account"}
+                                ? "Loading latest customers…"
+                                : "Select customer or use zone only"}
                             </option>
                             {targets.map((item) => (
                               <option
-                                key={item.accountId}
-                                value={item.accountId}
+                                key={item.accountId ? `account:${item.accountId}` : `customer:${item.customerId}`}
+                                value={item.accountId ? `account:${item.accountId}` : `customer:${item.customerId}`}
                               >
                                 {item.customerName} · {item.customerNumber} ·
-                                Account {item.accountNumber} · {item.zoneName}
+                                {item.accountNumber ? ` Account ${item.accountNumber}` : " Latest customer (no account)"} · {item.zoneName || "No zone"}
                               </option>
                             ))}
                           </SearchableSelect>
                         </div>
                         {targetsLoading && (
                           <span className="mt-2 block text-xs text-slate-500">
-                            <InlineLoader label="Loading customer accounts…" />
+                            <InlineLoader label="Loading latest customers…" />
                           </span>
                         )}
                       </label>
-                      {!form.accountId && (
+                      {!form.accountId && !form.customerId && (
                         <label>
                           <span className="mb-1 block text-sm font-medium">
                             Zone *

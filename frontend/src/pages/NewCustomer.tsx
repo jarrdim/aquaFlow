@@ -108,6 +108,7 @@ export default function NewCustomer() {
     physicalAddress: "",
     plotNumber:    "",
     buildingName:  "",
+    categoryId:    "",
   });
   const [stepError, setStepError] = useState<string | null>(null);
   const [saving, setSaving]       = useState(false);
@@ -119,6 +120,7 @@ export default function NewCustomer() {
   const [zones, setZones]             = useState<Lookup[]>([]);
   const [serviceAreas, setServiceAreas] = useState<Lookup[]>([]);
   const [routes, setRoutes]           = useState<Lookup[]>([]);
+  const [categories, setCategories]   = useState<Lookup[]>([]);
 
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -196,7 +198,12 @@ export default function NewCustomer() {
   // Load zones when entering step 2
   useEffect(() => {
     if (step === 2 && zones.length === 0) {
-      api.listZones().then(setZones).catch(() => {});
+      Promise.all([api.listZones(), api.listCategories()])
+        .then(([zoneRows, categoryRows]) => {
+          setZones(zoneRows);
+          setCategories(categoryRows);
+        })
+        .catch(() => {});
     }
   }, [step]);
 
@@ -219,7 +226,11 @@ export default function NewCustomer() {
       }
     }
     if (n === 2) {
-      if (form.physicalAddress.trim() && !form.zoneId) return "Please select a zone for the property.";
+      if (!form.zoneId) return "Zone is required.";
+      if (!form.serviceAreaId) return "Service area is required.";
+      if (!form.routeId) return "Route is required.";
+      if (!form.categoryId) return "Customer category is required.";
+      if (!form.physicalAddress.trim()) return "Physical address is required.";
     }
     if (n === 3) {
       for (const document of documents) {
@@ -247,6 +258,8 @@ export default function NewCustomer() {
   async function handleSave() {
     const err = validateStep(1);
     if (err) { setStepError(err); setStep(1); return; }
+    const propertyError = validateStep(2);
+    if (propertyError) { setStepError(propertyError); setStep(2); return; }
     const documentError = validateStep(3);
     if (documentError) { setStepError(documentError); setStep(3); return; }
     setStepError(null);
@@ -291,7 +304,7 @@ export default function NewCustomer() {
 
       // If property address provided on step 2, create it now
       if (form.physicalAddress.trim() && form.zoneId) {
-        await api.createProperty({
+        const property = await api.createProperty({
           ownerCustomerId: String(customer.customerId),
           zoneId:          form.zoneId,
           serviceAreaId:   form.serviceAreaId || undefined,
@@ -299,6 +312,13 @@ export default function NewCustomer() {
           physicalAddress: form.physicalAddress,
           plotNumber:      form.plotNumber    || undefined,
           buildingName:    form.buildingName  || undefined,
+        });
+        await api.createAccount({
+          customerId: String(customer.customerId),
+          propertyId: String(property.propertyId),
+          categoryId: form.categoryId,
+          routeId: form.routeId,
+          openingBalance: 0,
         });
       }
 
@@ -309,7 +329,7 @@ export default function NewCustomer() {
       }
     } catch (err: any) {
       setStepError(createdCustomer
-        ? `Customer ${createdCustomer.customerNumber} was created, but the remaining property/link step failed: ${err.message ?? "request failed"}. Do not create the customer again; search for this customer number and link it.`
+        ? `Customer ${createdCustomer.customerNumber} was created, but the remaining property/account/link step failed: ${err.message ?? "request failed"}. Do not create the customer again; open that customer profile to complete the missing record.`
         : (err.message ?? "Failed to save customer. Search by ID or phone before trying again, in case the request reached the server."));
     } finally {
       setSaving(false);
@@ -486,29 +506,40 @@ export default function NewCustomer() {
             <p className="text-xs text-slate-400 mb-4">Optional — you can also add properties from the customer profile after saving.</p>
 
             <div className="mb-3">
-              <Field label="Zone">
+              <Field label="Zone" required>
                 <SearchableSelect
                   className={FIELD_CLS}
                   value={form.zoneId}
                   onChange={(e) => { upd("zoneId", e.target.value); upd("serviceAreaId", ""); upd("routeId", ""); }}
                 >
-                  <option value="">Select zone (optional)</option>
+                  <option value="">Select zone</option>
                   {zones.map((z) => <option key={z.zoneId} value={z.zoneId}>{z.zoneName}</option>)}
                 </SearchableSelect>
               </Field>
             </div>
 
             <div className="mb-3 grid gap-3 md:grid-cols-2">
-              <Field label="Service Area">
+              <Field label="Service Area" required>
                 <SearchableSelect className={FIELD_CLS} value={form.serviceAreaId} onChange={(e) => upd("serviceAreaId", e.target.value)} disabled={!form.zoneId}>
-                  <option value="">None</option>
+                  <option value="">Select service area</option>
                   {serviceAreas.map((s) => <option key={s.serviceAreaId} value={s.serviceAreaId}>{s.areaName}</option>)}
                 </SearchableSelect>
               </Field>
-              <Field label="Route">
+              <Field label="Route" required>
                 <SearchableSelect className={FIELD_CLS} value={form.routeId} onChange={(e) => upd("routeId", e.target.value)} disabled={!form.zoneId}>
-                  <option value="">None</option>
+                  <option value="">Select route</option>
                   {routes.map((r) => <option key={r.routeId} value={r.routeId}>{r.routeName}</option>)}
+                </SearchableSelect>
+              </Field>
+            </div>
+
+            <div className="mb-3">
+              <Field label="Customer Category" required>
+                <SearchableSelect className={FIELD_CLS} value={form.categoryId} onChange={(e) => upd("categoryId", e.target.value)}>
+                  <option value="">Select customer category</option>
+                  {categories.map((category) => (
+                    <option key={category.categoryId} value={category.categoryId}>{category.categoryName}</option>
+                  ))}
                 </SearchableSelect>
               </Field>
             </div>
@@ -599,6 +630,7 @@ export default function NewCustomer() {
                   <ReviewRow label="Physical Address" value={form.physicalAddress} />
                   <ReviewRow label="Plot Number"      value={form.plotNumber} />
                   <ReviewRow label="Building Name"    value={form.buildingName} />
+                  <ReviewRow label="Customer Category" value={categories.find((category) => String(category.categoryId) === form.categoryId)?.categoryName} />
                 </div>
               </div>
             )}
@@ -640,7 +672,7 @@ export default function NewCustomer() {
         <div className="flex items-center gap-2">
           {step < 4 ? (
             <>
-              {(step === 2 || step === 3) && (
+              {step === 3 && (
                 <button
                   type="button"
                   onClick={() => { setStepError(null); setStep((s) => s + 1); }}

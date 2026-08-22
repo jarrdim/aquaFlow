@@ -105,17 +105,27 @@ workOrdersRouter.get("/targets", canCreate, async (req, res) => {
            ca.property_id AS "propertyId", p.zone_id AS "zoneId", z.zone_name AS "zoneName",
            c.customer_id AS "customerId", c.customer_number AS "customerNumber",
            COALESCE(NULLIF(TRIM(CONCAT_WS(' ', c.first_name, c.middle_name, c.last_name)), ''), c.organization_name, c.customer_number) AS "customerName",
-           ca.current_balance AS "currentBalance"
-    FROM aquaflow.customer_accounts ca
-    JOIN aquaflow.customers c ON c.customer_id = ca.customer_id
-    JOIN aquaflow.properties p ON p.property_id = ca.property_id
-    JOIN aquaflow.zones z ON z.zone_id = p.zone_id
-    WHERE (${q} = '' OR ca.account_number ILIKE ${pattern} OR c.customer_number ILIKE ${pattern}
+           ca.current_balance AS "currentBalance", c.created_at AS "customerCreatedAt"
+    FROM aquaflow.customers c
+    LEFT JOIN LATERAL (
+      SELECT account_id, account_number, property_id, current_balance
+      FROM aquaflow.customer_accounts
+      WHERE customer_id = c.customer_id
+      ORDER BY created_at DESC, account_id DESC LIMIT 1
+    ) ca ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT property_id, zone_id FROM aquaflow.properties
+      WHERE owner_customer_id = c.customer_id
+      ORDER BY created_at DESC, property_id DESC LIMIT 1
+    ) latest_property ON TRUE
+    LEFT JOIN aquaflow.properties p ON p.property_id = COALESCE(ca.property_id, latest_property.property_id)
+    LEFT JOIN aquaflow.zones z ON z.zone_id = p.zone_id
+    WHERE (${q} = '' OR COALESCE(ca.account_number, '') ILIKE ${pattern}
+      OR c.customer_number ILIKE ${pattern} OR c.phone_number ILIKE ${pattern}
+      OR COALESCE(c.national_id, '') ILIKE ${pattern}
       OR c.first_name ILIKE ${pattern} OR c.middle_name ILIKE ${pattern}
       OR c.last_name ILIKE ${pattern} OR c.organization_name ILIKE ${pattern})
-    ORDER BY
-      CASE WHEN ca.account_number ILIKE ${q} OR c.customer_number ILIKE ${q} THEN 0 ELSE 1 END,
-      ca.account_number
+    ORDER BY c.created_at DESC, ca.account_id DESC NULLS LAST
     LIMIT 50`;
   res.json(rows);
 });
@@ -154,7 +164,8 @@ workOrdersRouter.get("/", canView, async (req, res) => {
     JOIN aquaflow.work_order_types wt ON wt.work_order_type_id = wo.work_order_type_id
     JOIN aquaflow.zones z ON z.zone_id = wo.zone_id
     LEFT JOIN aquaflow.customer_accounts ca ON ca.account_id = wo.account_id
-    LEFT JOIN aquaflow.customers c ON c.customer_id = ca.customer_id
+    LEFT JOIN aquaflow.properties p ON p.property_id = wo.property_id
+    LEFT JOIN aquaflow.customers c ON c.customer_id = COALESCE(ca.customer_id, p.owner_customer_id)
     LEFT JOIN LATERAL (
       SELECT a.assignment_id, a.field_officer_id, a.status AS assignment_status,
              u.first_name, u.last_name, u.username
@@ -200,7 +211,8 @@ workOrdersRouter.get("/:id", canView, async (req, res) => {
     JOIN aquaflow.work_order_types wt ON wt.work_order_type_id = wo.work_order_type_id
     JOIN aquaflow.zones z ON z.zone_id = wo.zone_id
     LEFT JOIN aquaflow.customer_accounts ca ON ca.account_id = wo.account_id
-    LEFT JOIN aquaflow.customers c ON c.customer_id = ca.customer_id
+    LEFT JOIN aquaflow.properties p ON p.property_id = wo.property_id
+    LEFT JOIN aquaflow.customers c ON c.customer_id = COALESCE(ca.customer_id, p.owner_customer_id)
     LEFT JOIN aquaflow.service_requests sr ON sr.service_request_id = wo.service_request_id
     WHERE wo.work_order_id = ${parsed.data}`;
   if (!rows[0]) return res.status(404).json({ error: "Work order not found" });
@@ -302,6 +314,7 @@ const optionalId = z.preprocess(
 const createInput = z.object({
   workOrderTypeId: id,
   accountId: optionalId,
+  customerId: optionalId,
   zoneId: optionalId,
   fieldOfficerId: optionalId,
   fieldOfficerIds: z.array(id).max(25).optional().default([]),
@@ -324,6 +337,7 @@ workOrdersRouter.post("/", canCreate, async (req, res) => {
   const parsed = createInput.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message });
   let accountId = parsed.data.accountId ?? null;
+  let customerId = parsed.data.customerId ?? null;
   let serviceRequest: any = null;
   let connectionApplication: any = null;
   if (parsed.data.serviceRequestId) {
@@ -342,6 +356,7 @@ workOrdersRouter.post("/", canCreate, async (req, res) => {
       return res.status(409).json({ error: "The connection must have a linked customer before its installation work order is created" });
     }
     accountId ??= connectionApplication.account_id;
+    customerId ??= connectionApplication.customer_id;
     if (!accountId && connectionApplication.customer_id) {
       const accounts = await prisma.$queryRaw<{ account_id: bigint }[]>`
         SELECT account_id FROM aquaflow.customer_accounts
@@ -367,6 +382,20 @@ workOrdersRouter.post("/", canCreate, async (req, res) => {
     }
     propertyId = targets[0].property_id;
     zoneId ??= targets[0].zone_id;
+    customerId = targets[0].customer_id;
+  } else if (customerId) {
+    const customers = await prisma.$queryRaw<{ property_id: bigint | null; zone_id: bigint | null }[]>`
+      SELECT p.property_id, p.zone_id
+      FROM aquaflow.customers c
+      LEFT JOIN LATERAL (
+        SELECT property_id, zone_id FROM aquaflow.properties
+        WHERE owner_customer_id = c.customer_id
+        ORDER BY created_at DESC, property_id DESC LIMIT 1
+      ) p ON TRUE
+      WHERE c.customer_id = ${customerId}`;
+    if (!customers[0]) return res.status(404).json({ error: "Customer not found" });
+    propertyId = customers[0].property_id;
+    zoneId ??= customers[0].zone_id;
   }
   if (!zoneId) return res.status(400).json({ error: "Select a zone or customer account" });
   const type = await prisma.$queryRaw<any[]>`

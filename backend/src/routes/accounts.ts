@@ -339,20 +339,6 @@ accountsRouter.post("/bulk-import", async (req, res) => {
   res.status(201).json({ imported: result.count, skipped: rows.length - newRows.length });
 });
 
-async function nextAccountNumber() {
-  const year = new Date().getFullYear();
-  const prefix = `ACC-${year}-`;
-  const accounts = await prisma.customerAccount.findMany({
-    where: { accountNumber: { startsWith: prefix } },
-    select: { accountNumber: true },
-  });
-  const highest = accounts.reduce((max, account) => {
-    const sequence = Number(account.accountNumber.slice(prefix.length));
-    return Number.isInteger(sequence) ? Math.max(max, sequence) : max;
-  }, 0);
-  return `${prefix}${String(highest + 1).padStart(5, "0")}`;
-}
-
 accountsRouter.get("/", async (req, res, next) => {
   try {
     const search = String(req.query.search ?? "").trim();
@@ -413,21 +399,43 @@ accountsRouter.post("/", async (req, res) => {
 
   // FRS business rule: an account shall not be activated without a valid
   // customer, property and customer category — enforced by the required FKs below.
-  const account = await prisma.customerAccount.create({
-    data: {
-      accountNumber: await nextAccountNumber(),
-      customerId: BigInt(data.customerId),
-      propertyId: BigInt(data.propertyId),
-      categoryId: BigInt(data.categoryId),
-      routeId: data.routeId ? BigInt(data.routeId) : undefined,
-      openingBalance: data.openingBalance ?? 0,
-      currentBalance: data.openingBalance ?? 0,
-      accountStatus: "ACTIVE",
-      connectionDate: new Date(),
-    },
-  });
+  try {
+    const account = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('aquaflow-account-number'))`;
+      const year = new Date().getFullYear();
+      const pattern = `ACC-${year}-%`;
+      const [sequence] = await tx.$queryRaw<Array<{ maxSequence: number }>>`
+        SELECT COALESCE(
+          MAX(CAST(substring(account_number FROM '[0-9]+$') AS INTEGER)),
+          0
+        )::INTEGER AS "maxSequence"
+        FROM aquaflow.customer_accounts
+        WHERE account_number LIKE ${pattern}`;
+      const accountNumber = `ACC-${year}-${String(sequence.maxSequence + 1).padStart(5, "0")}`;
 
-  res.status(201).json(account);
+      return tx.customerAccount.create({
+        data: {
+          accountNumber,
+          customerId: BigInt(data.customerId),
+          propertyId: BigInt(data.propertyId),
+          categoryId: BigInt(data.categoryId),
+          routeId: data.routeId ? BigInt(data.routeId) : undefined,
+          openingBalance: data.openingBalance ?? 0,
+          currentBalance: data.openingBalance ?? 0,
+          accountStatus: "ACTIVE",
+          connectionDate: new Date(),
+        },
+      });
+    });
+
+    res.status(201).json(account);
+  } catch (error: any) {
+    if (error?.code === "P2002") {
+      return res.status(409).json({ error: "An account already exists with the generated account number. Please retry." });
+    }
+    console.error("Account creation failed", error);
+    return res.status(500).json({ error: "Account creation failed. The customer and property were saved." });
+  }
 });
 
 accountsRouter.patch(
