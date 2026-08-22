@@ -412,7 +412,7 @@ workOrdersRouter.post("/", canCreate, asyncRoute(async (req, res) => {
       SELECT p.property_id, p.zone_id, p.route_id
       FROM aquaflow.customers c
       LEFT JOIN LATERAL (
-        SELECT property_id, zone_id FROM aquaflow.properties
+        SELECT property_id, zone_id, route_id FROM aquaflow.properties
         WHERE owner_customer_id = c.customer_id
         ORDER BY created_at DESC, property_id DESC LIMIT 1
       ) p ON TRUE
