@@ -452,7 +452,7 @@ function parseCsvLine(line: string) {
 
 export async function parseMeterWorkbook(
   file: File,
-  requiredHeaders: string[] = ["Account Number", "Meter Reading"],
+  requiredHeaders: string[] = [],
 ): Promise<Record<string, unknown>[]> {
   if (file.name.toLowerCase().endsWith(".csv")) {
     const text = (await file.text()).replace(/^\uFEFF/, "");
@@ -472,17 +472,35 @@ export async function parseMeterWorkbook(
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(await file.arrayBuffer());
   const records: Record<string, unknown>[] = [];
+  const normalizeHeader = (value: unknown) =>
+    String(value ?? "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "");
+  const supportedHeaderSets = [
+    ["Account Number", "Meter Reading"],
+    ["meterNumber", "meterType"],
+    ["meterNumber", "accountNumber", "assignmentDate"],
+    ["propertyCode", "customerNumber", "serviceAreaCode"],
+    ["accountNumber", "customerNumber", "propertyCode"],
+    ["accountNumber", "openingBalance", "currentBalance"],
+  ];
+  const acceptedHeaderSets = (requiredHeaders.length
+    ? [requiredHeaders]
+    : supportedHeaderSets
+  ).map((headers) => headers.map(normalizeHeader));
   workbook.worksheets.forEach((sheet) => {
     if (sheet.rowCount < 2) return;
     let headerRowNumber = 0;
-    const normalizedRequiredHeaders = requiredHeaders.map((header) =>
-      header.trim().toLowerCase(),
-    );
     for (let rowNumber = 1; rowNumber <= Math.min(sheet.rowCount, 20); rowNumber++) {
       const candidate = (sheet.getRow(rowNumber).values as unknown[])
         .slice(1)
-        .map((value) => String(value ?? "").trim().toLowerCase());
-      if (normalizedRequiredHeaders.every((header) => candidate.includes(header))) {
+        .map(normalizeHeader);
+      if (
+        acceptedHeaderSets.some((headers) =>
+          headers.every((header) => candidate.includes(header)),
+        )
+      ) {
         headerRowNumber = rowNumber;
         break;
       }

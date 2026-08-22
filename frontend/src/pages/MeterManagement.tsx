@@ -3681,7 +3681,10 @@ export function BulkMeterImport() {
     setError("");
     setValidation(null);
     try {
-      const rows = await parseMeterWorkbook(file);
+      const rows = await parseMeterWorkbook(file, [
+        "meterNumber",
+        "meterType",
+      ]);
       setRecords(
         rows.map((row) => ({
           ...row,

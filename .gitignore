@@ -30,3 +30,6 @@ ngrok.exe
 .ngrok.exe
 .tmp/fix-accounts-workbook.cjs
 .tmp/fix-customers-workbook.cjs
+.tmp/build-compatible-property-account-files.cjs
+.tmp/build-meters-workbook.cjs
+.tmp/build-properties-workbook.cjs
