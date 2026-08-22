@@ -28,3 +28,5 @@ frontend/tsconfig.tsbuildinfo
 *.old
 ngrok.exe
 .ngrok.exe
+.tmp/fix-accounts-workbook.cjs
+.tmp/fix-customers-workbook.cjs

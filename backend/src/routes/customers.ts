@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { requireAuth } from "../middleware/auth";
@@ -226,7 +227,8 @@ const bulkCustomerImportSchema = z.object({
   customers: z.array(bulkCustomerRowSchema).min(1).max(1000),
 });
 
-customersRouter.post("/bulk-import", async (req, res) => {
+customersRouter.post("/bulk-import", async (req, res, next) => {
+  try {
   const parsed = bulkCustomerImportSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: parsed.error.flatten() });
@@ -279,8 +281,13 @@ customersRouter.post("/bulk-import", async (req, res) => {
     return res.status(409).json({ error: duplicateErrors.slice(0, 100).join("\n") });
   }
 
-  const result = await prisma.customer.createMany({
-    data: rows.map((row) => ({
+  const result = await prisma.$transaction(async (tx) => {
+    // Fail before the reverse proxy timeout if another session is holding a
+    // lock (for example, an uncommitted operational reset transaction).
+    await tx.$executeRawUnsafe("SET LOCAL lock_timeout = '10s'");
+    await tx.$executeRawUnsafe("SET LOCAL statement_timeout = '45s'");
+    return tx.customer.createMany({
+      data: rows.map((row) => ({
       customerNumber: row.customerNumber,
       customerType: row.customerType,
       firstName: row.firstName || null,
@@ -298,10 +305,38 @@ customersRouter.post("/bulk-import", async (req, res) => {
         ? new Date(`${row.registrationDate}T00:00:00.000Z`)
         : new Date(),
       createdBy: req.user ? BigInt(req.user.userId) : null,
-    })),
+      })),
+    });
   });
 
   res.status(201).json({ imported: result.count });
+  } catch (error) {
+    console.error("Customer bulk import failed", error);
+    if (error instanceof Prisma.PrismaClientKnownRequestError) {
+      const target = Array.isArray(error.meta?.target)
+        ? error.meta.target.join(", ")
+        : String(error.meta?.target ?? "customer data");
+      if (error.code === "P2002") {
+        return res.status(409).json({
+          error: `Customer import conflicts with an existing unique value (${target}).`,
+        });
+      }
+      if (error.code === "P2003") {
+        return res.status(409).json({
+          error: "Customer import references a related record that does not exist.",
+        });
+      }
+      if (error.code === "P2024") {
+        return res.status(503).json({
+          error: "The database connection pool timed out while importing customers.",
+        });
+      }
+      return res.status(500).json({
+        error: `Customer import database error (${error.code}). Check the backend log for details.`,
+      });
+    }
+    next(error);
+  }
 });
 
 customersRouter.patch("/bulk-status", async (req, res) => {
