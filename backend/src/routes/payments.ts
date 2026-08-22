@@ -976,7 +976,22 @@ paymentsRouter.get("/", async (req, res, next) => {
       accountId = req.query.accountId
         ? BigInt(String(req.query.accountId))
         : undefined,
-      q = String(req.query.search ?? "");
+      q = String(req.query.search ?? ""),
+      from = String(req.query.from ?? ""),
+      to = String(req.query.to ?? "");
+    const validDate = /^\d{4}-\d{2}-\d{2}$/;
+    if ((from && !validDate.test(from)) || (to && !validDate.test(to)))
+      return res.status(400).json({ error: "Valid from and to dates are required" });
+    if (from && to && from > to)
+      return res.status(400).json({ error: "From date cannot be after to date" });
+    const toExclusive = to ? new Date(`${to}T00:00:00.000Z`) : undefined;
+    toExclusive?.setUTCDate(toExclusive.getUTCDate() + 1);
+    const valueDate: Prisma.DateTimeFilter | undefined = from || to
+      ? {
+          ...(from ? { gte: new Date(`${from}T00:00:00.000Z`) } : {}),
+          ...(toExclusive ? { lt: toExclusive } : {}),
+        }
+      : undefined;
     const paginated = req.query.page !== undefined;
     const page = Math.max(1, Number(req.query.page) || 1);
     const pageSize = Math.min(200, Math.max(10, Number(req.query.pageSize) || 50));
@@ -984,6 +999,7 @@ paymentsRouter.get("/", async (req, res, next) => {
       ...(status ? { paymentStatus: status } : {}),
       ...(channelId ? { channelId } : {}),
       ...(accountId ? { accountId } : {}),
+      ...(valueDate ? { valueDate } : {}),
       ...(q
         ? {
             OR: [

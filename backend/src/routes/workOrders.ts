@@ -51,9 +51,10 @@ async function enforceOfficerOwnership(req: Request, res: Response, workOrderId:
   }
   const rows = await prisma.$queryRaw<{ field_officer_id: bigint; status: string }[]>`
     SELECT field_officer_id, status FROM aquaflow.work_order_assignments
-    WHERE work_order_id = ${workOrderId}
+    WHERE work_order_id = ${workOrderId} AND field_officer_id = ${officerId}
+      AND status IN ('ASSIGNED', 'ACCEPTED')
     ORDER BY assigned_at DESC, assignment_id DESC LIMIT 1`;
-  if (!rows[0] || rows[0].field_officer_id !== officerId || !["ASSIGNED", "ACCEPTED"].includes(rows[0].status)) {
+  if (!rows[0]) {
     res.status(403).json({ error: "This work order is not assigned to you" });
     return { officerId, allowed: false };
   }
@@ -112,7 +113,10 @@ workOrdersRouter.get("/targets", canCreate, async (req, res) => {
     WHERE (${q} = '' OR ca.account_number ILIKE ${pattern} OR c.customer_number ILIKE ${pattern}
       OR c.first_name ILIKE ${pattern} OR c.middle_name ILIKE ${pattern}
       OR c.last_name ILIKE ${pattern} OR c.organization_name ILIKE ${pattern})
-    ORDER BY ca.account_number`;
+    ORDER BY
+      CASE WHEN ca.account_number ILIKE ${q} OR c.customer_number ILIKE ${q} THEN 0 ELSE 1 END,
+      ca.account_number
+    LIMIT 50`;
   res.json(rows);
 });
 
@@ -290,13 +294,19 @@ workOrdersRouter.get("/:id/completion/signature/content", canView, async (req, r
   res.type(match[1]).send(Buffer.from(match[2], "base64"));
 });
 
+const optionalId = z.preprocess(
+  (value) => value === "" ? undefined : value,
+  id.optional().nullable(),
+);
+
 const createInput = z.object({
   workOrderTypeId: id,
-  accountId: id.optional().nullable(),
-  zoneId: id.optional().nullable(),
-  fieldOfficerId: id.optional().nullable(),
-  serviceRequestId: id.optional().nullable(),
-  connectionApplicationId: id.optional().nullable(),
+  accountId: optionalId,
+  zoneId: optionalId,
+  fieldOfficerId: optionalId,
+  fieldOfficerIds: z.array(id).max(25).optional().default([]),
+  serviceRequestId: optionalId,
+  connectionApplicationId: optionalId,
   sourceType: z.preprocess(
     (value) => typeof value === "string" ? value.toUpperCase() : value,
     z.enum(sourceTypes, { errorMap: () => ({ message: "Select a valid work order source" }) }),
@@ -363,8 +373,11 @@ workOrdersRouter.post("/", canCreate, async (req, res) => {
     SELECT work_order_type_id FROM aquaflow.work_order_types
     WHERE work_order_type_id = ${parsed.data.workOrderTypeId} AND status = 'ACTIVE'`;
   if (!type[0]) return res.status(404).json({ error: "Work order type not found" });
-  const fieldOfficerId = parsed.data.fieldOfficerId ?? null;
-  if (fieldOfficerId) {
+  const fieldOfficerIds = [...new Set([
+    ...parsed.data.fieldOfficerIds,
+    ...(parsed.data.fieldOfficerId ? [parsed.data.fieldOfficerId] : []),
+  ])];
+  if (fieldOfficerIds.length) {
     const mayAssign = isSystemAdmin(req) || Boolean(await prisma.rolePermission.count({
       where: {
         permission: { permissionCode: "WORK_ORDER_ASSIGN" },
@@ -375,14 +388,15 @@ workOrdersRouter.post("/", canCreate, async (req, res) => {
       },
     }));
     if (!mayAssign) return res.status(403).json({ error: "You do not have permission to assign work orders" });
-    const officer = await prisma.$queryRaw<any[]>`
+    const officers = await prisma.$queryRaw<any[]>`
       SELECT field_officer_id FROM aquaflow.field_officers
-      WHERE field_officer_id = ${fieldOfficerId} AND status = 'ACTIVE'`;
-    if (!officer[0]) return res.status(404).json({ error: "Field officer not found or inactive" });
+      WHERE field_officer_id IN (${Prisma.join(fieldOfficerIds)}) AND status = 'ACTIVE'`;
+    if (officers.length !== fieldOfficerIds.length)
+      return res.status(404).json({ error: "One or more selected field officers were not found or are inactive" });
   }
   const number = `WO-${new Date().getFullYear()}-${Date.now().toString().slice(-9)}`;
   const created = await prisma.$transaction(async (tx) => {
-    const initialStatus = fieldOfficerId ? "ASSIGNED" : "CREATED";
+    const initialStatus = fieldOfficerIds.length ? "ASSIGNED" : "CREATED";
     const rows = await tx.$queryRaw<any[]>`
       INSERT INTO aquaflow.work_orders
         (work_order_number, work_order_type_id, account_id, property_id, zone_id,
@@ -394,7 +408,7 @@ workOrdersRouter.post("/", canCreate, async (req, res) => {
          ${serviceRequest?.requestNumber ?? null}, ${parsed.data.priority}, ${parsed.data.description},
          ${parsed.data.scheduledDate ?? null}, ${parsed.data.dueDate ?? null}, ${initialStatus}, ${userId(req)})
       RETURNING *`;
-    if (fieldOfficerId) {
+    for (const fieldOfficerId of fieldOfficerIds) {
       await tx.$executeRaw`
         INSERT INTO aquaflow.work_order_assignments
           (work_order_id, field_officer_id, assigned_by, status)
@@ -404,7 +418,7 @@ workOrdersRouter.post("/", canCreate, async (req, res) => {
       INSERT INTO aquaflow.work_order_updates (work_order_id, previous_status, new_status, notes)
       VALUES (
         ${rows[0].work_order_id}, NULL, ${initialStatus},
-        ${fieldOfficerId ? `${parsed.data.description}\n\nCreated and assigned from the work order form.` : parsed.data.description}
+        ${fieldOfficerIds.length ? `${parsed.data.description}\n\nCreated and assigned to ${fieldOfficerIds.length} field officer(s) from the work order form.` : parsed.data.description}
       )`;
     if (parsed.data.serviceRequestId) {
       await tx.serviceRequestEvent.create({ data: {

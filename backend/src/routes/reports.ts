@@ -15,7 +15,11 @@ const nextDay = (value: string) => {
 };
 
 reportsRouter.get("/daily-income", async (req, res, next) => {
-  const parsed = z.object({ from: dateSchema, to: dateSchema }).safeParse(req.query);
+  const parsed = z.object({
+    from: dateSchema,
+    to: dateSchema,
+    channelId: z.coerce.bigint().positive().optional(),
+  }).safeParse(req.query);
   if (!parsed.success) return res.status(400).json({ error: "Valid from and to dates are required" });
   if (parsed.data.from > parsed.data.to) return res.status(400).json({ error: "From date cannot be after to date" });
 
@@ -23,17 +27,18 @@ reportsRouter.get("/daily-income", async (req, res, next) => {
     const payments = await prisma.payment.findMany({
       where: {
         paymentStatus: "POSTED",
+        ...(parsed.data.channelId ? { channelId: parsed.data.channelId } : {}),
         valueDate: { gte: startOfDay(parsed.data.from), lt: nextDay(parsed.data.to) },
       },
       include: { channel: true },
       orderBy: [{ valueDate: "asc" }, { paymentDate: "asc" }],
     });
-    const grouped = new Map<string, { date: string; channel: string; transactions: number; amount: number }>();
+    const grouped = new Map<string, { date: string; channelId: string; channel: string; transactions: number; amount: number }>();
     for (const payment of payments) {
       const date = payment.valueDate.toISOString().slice(0, 10);
       const channel = payment.channel.channelName;
       const key = `${date}|${payment.channelId}`;
-      const row = grouped.get(key) ?? { date, channel, transactions: 0, amount: 0 };
+      const row = grouped.get(key) ?? { date, channelId: payment.channelId.toString(), channel, transactions: 0, amount: 0 };
       row.transactions += 1;
       row.amount += Number(payment.amount);
       grouped.set(key, row);

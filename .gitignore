@@ -27,3 +27,4 @@ frontend/tsconfig.tsbuildinfo
 
 *.old
 ngrok.exe
+.ngrok.exe

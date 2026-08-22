@@ -404,8 +404,12 @@ export const api = {
     request(
       `/readings/reports/progress?cycleId=${encodeURIComponent(cycleId)}`,
     ),
-  dailyIncomeReport: (from: string, to: string) =>
-    request(`/reports/daily-income?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
+  dailyIncomeReport: (from: string, to: string, channelId = "") => {
+    const query = new URLSearchParams(
+      Object.entries({ from, to, channelId }).filter(([, value]) => value),
+    ).toString();
+    return request(`/reports/daily-income?${query}`);
+  },
   meterReadingCoverageReport: (cycleId: string) =>
     request(`/reports/meter-reading-coverage?cycleId=${encodeURIComponent(cycleId)}`),
   tariffDashboard: (filters: Record<string, string> = {}) => {

@@ -1,5 +1,5 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { exportExcel, parseMeterWorkbook } from "../lib/meterFiles";
 import { SearchableSelect } from "../components/SearchableSelect";
@@ -1221,9 +1221,14 @@ export function MpesaStkPush() {
 }
 
 export function PaymentRegister() {
+  const [searchParams] = useSearchParams();
   const [rows, setRows] = useState<Row[]>([]),
     [search, setSearch] = useState(""),
-    [status, setStatus] = useState(""),
+    [status, setStatus] = useState(searchParams.get("status") ?? ""),
+    [channelId, setChannelId] = useState(searchParams.get("channelId") ?? ""),
+    [from, setFrom] = useState(searchParams.get("from") ?? ""),
+    [to, setTo] = useState(searchParams.get("to") ?? ""),
+    [channels, setChannels] = useState<Row[]>([]),
     [page, setPage] = useState(1),
     [total, setTotal] = useState(0),
     [showImport, setShowImport] = useState(false),
@@ -1237,6 +1242,9 @@ export function PaymentRegister() {
       .listPayments({
         search,
         status,
+        channelId,
+        from,
+        to,
         page: String(page),
         pageSize: String(pageSize),
       })
@@ -1244,7 +1252,10 @@ export function PaymentRegister() {
         setRows(result.items);
         setTotal(Number(result.total));
       });
-  }, [search, status, page]);
+  }, [search, status, channelId, from, to, page]);
+  useEffect(() => {
+    api.listPaymentChannels().then(setChannels);
+  }, []);
   const pages = Math.max(1, Math.ceil(total / pageSize));
   async function selectReceiptFile(file?: File) {
     if (!file) return;
@@ -1339,7 +1350,7 @@ export function PaymentRegister() {
         {importMessage && <p className="mt-3 rounded-lg bg-emerald-50 p-3 text-sm font-semibold text-emerald-700">{importMessage}</p>}
       </Card>}
       <Card className="mb-4">
-        <div className="grid gap-3 md:grid-cols-2">
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
           <Field label="Status">
             <SearchableSelect
               className={INPUT}
@@ -1354,6 +1365,18 @@ export function PaymentRegister() {
               <option>POSTED</option>
               <option>REVERSED</option>
             </SearchableSelect>
+          </Field>
+          <Field label="Payment channel">
+            <SearchableSelect className={INPUT} value={channelId} onChange={(e) => { setPage(1); setChannelId(e.target.value); }}>
+              <option value="">All channels</option>
+              {channels.map((channel) => <option key={channel.channelId} value={channel.channelId}>{channel.channelName}</option>)}
+            </SearchableSelect>
+          </Field>
+          <Field label="From">
+            <input type="date" className={INPUT} value={from} onChange={(e) => { setPage(1); setFrom(e.target.value); }} />
+          </Field>
+          <Field label="To">
+            <input type="date" className={INPUT} value={to} onChange={(e) => { setPage(1); setTo(e.target.value); }} />
           </Field>
           <Field label="Search">
             <input
