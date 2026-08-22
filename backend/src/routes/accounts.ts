@@ -401,7 +401,7 @@ accountsRouter.post("/", async (req, res) => {
   // customer, property and customer category — enforced by the required FKs below.
   try {
     const account = await prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('aquaflow-account-number'))`;
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext('aquaflow-account-number'))::text AS lock`;
       const year = new Date().getFullYear();
       const pattern = `ACC-${year}-%`;
       const [sequence] = await tx.$queryRaw<Array<{ maxSequence: number }>>`

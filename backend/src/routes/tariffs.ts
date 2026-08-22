@@ -201,7 +201,7 @@ async function activateTariff(
           new Error("A successful simulation is required before activation"),
           { status: 409 },
         );
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${tariff.categoryId})`;
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(${tariff.categoryId})::text AS lock`;
       const active = await tx.tariff.findFirst({
         where: {
           categoryId: tariff.categoryId,

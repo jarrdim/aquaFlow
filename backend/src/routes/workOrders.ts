@@ -456,7 +456,7 @@ workOrdersRouter.post("/", canCreate, asyncRoute(async (req, res) => {
     let resolvedAccountId = accountId;
     if (!resolvedAccountId && customerId) {
       if (!propertyId) throw new Error("The selected customer needs a property before an account can be created");
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('aquaflow-account-number'))`;
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext('aquaflow-account-number'))::text AS lock`;
       const year = new Date().getFullYear();
       const pattern = `ACC-${year}-%`;
       const [sequence] = await tx.$queryRaw<Array<{ maxSequence: number }>>`
