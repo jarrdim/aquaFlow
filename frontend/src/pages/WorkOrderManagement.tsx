@@ -591,7 +591,7 @@ export default function WorkOrderManagement() {
                     <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">{selected.updates?.length || 0}</span>
                   </summary>
                   <div className="max-h-40 space-y-2 overflow-y-auto border-t border-slate-100 p-2">
-                    {selected.updates?.map((item: any) => <div key={item.update_id} className="border-l-2 border-sky-200 pl-3 text-xs"><strong>{label(item.previous_status || "Created")} → {label(item.new_status)}</strong><div className="text-slate-500">{new Date(item.updated_at).toLocaleString()} · {item.first_name ? `${item.first_name} ${item.last_name}` : "System"}</div><p className="text-slate-600">{item.notes}</p></div>)}
+                    {selected.updates?.map((item: any) => <div key={item.update_id} className="border-l-2 border-sky-200 pl-3 text-xs"><strong>{label(item.previous_status || "Created")} → {label(item.new_status)}</strong><div className="text-slate-500">{new Date(item.updated_at).toLocaleString()} · {item.first_name ? `${item.first_name} ${item.last_name}` : "System"}</div>{item.reason_code && <p className="font-medium text-slate-700">Reason: {label(item.reason_code)}</p>}{item.notes && <p className="text-slate-600">{item.notes}</p>}</div>)}
                     {!selected.updates?.length && <p className="text-xs text-slate-400">No activity recorded.</p>}
                   </div>
                 </details>

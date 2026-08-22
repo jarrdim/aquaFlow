@@ -26,7 +26,7 @@ export default function Login() {
       const requestedPath = searchParams.get("next");
       const next = requestedPath?.startsWith("/") && !requestedPath.startsWith("//")
         ? requestedPath
-        : "/customers";
+        : "/dashboard";
       navigate(next, { replace: true });
     } catch (err: any) {
       setError(err.message ?? "Login failed");

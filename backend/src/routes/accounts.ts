@@ -6,6 +6,47 @@ import { requireAuth, requireRole } from "../middleware/auth";
 export const accountsRouter = Router();
 accountsRouter.use(requireAuth);
 
+const ledgerBillStatuses = ["POSTED", "PARTIALLY_PAID", "PAID"];
+const nonLedgerPaymentTypes = ["RECONNECTION_FEE", "NEW_CONNECTION_FEE"];
+const roundMoney = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
+
+async function accountLedgerBalance(client: any, accountId: bigint, openingBalance: number) {
+  const [bills, payments] = await Promise.all([
+    client.bill.aggregate({
+      where: { accountId, status: { in: ledgerBillStatuses } },
+      _sum: { totalCurrentCharges: true },
+    }),
+    client.payment.aggregate({
+      where: {
+        accountId,
+        paymentStatus: "POSTED",
+        paymentType: { notIn: nonLedgerPaymentTypes },
+      },
+      _sum: { amount: true },
+    }),
+  ]);
+  const postedBillTotal = roundMoney(Number(bills._sum.totalCurrentCharges ?? 0));
+  const postedPaymentTotal = roundMoney(Number(payments._sum.amount ?? 0));
+  return {
+    openingBalance: roundMoney(openingBalance),
+    postedBillTotal,
+    postedPaymentTotal,
+    calculatedBalance: roundMoney(openingBalance + postedBillTotal - postedPaymentTotal),
+  };
+}
+
+function accountCustomerName(customer: {
+  customerType: string;
+  organizationName: string | null;
+  firstName: string | null;
+  middleName: string | null;
+  lastName: string | null;
+}) {
+  return customer.customerType === "ORGANIZATION"
+    ? customer.organizationName || "Unnamed organization"
+    : [customer.firstName, customer.middleName, customer.lastName].filter(Boolean).join(" ");
+}
+
 const createAccountSchema = z.object({
   customerId: z.string().min(1),
   propertyId: z.string().min(1),
@@ -61,7 +102,7 @@ accountsRouter.post(
 
       const existing = await prisma.customerAccount.findMany({
         where: { accountNumber: { in: rows.map((row) => row.accountNumber) } },
-        select: { accountNumber: true },
+        select: { accountId: true, accountNumber: true, openingBalance: true, currentBalance: true },
       });
       const existingNumbers = new Set(existing.map((row) => row.accountNumber));
       const missing = rows
@@ -73,17 +114,167 @@ accountsRouter.post(
         });
       }
 
-      await prisma.$transaction(
-        rows.map((row) => prisma.customerAccount.update({
+      const accountIds = existing.map((row) => row.accountId);
+      const [billTotals, paymentTotals] = await Promise.all([
+        prisma.bill.groupBy({
+          by: ["accountId"],
+          where: { accountId: { in: accountIds }, status: { in: ledgerBillStatuses } },
+          _sum: { totalCurrentCharges: true },
+        }),
+        prisma.payment.groupBy({
+          by: ["accountId"],
+          where: {
+            accountId: { in: accountIds },
+            paymentStatus: "POSTED",
+            paymentType: { notIn: nonLedgerPaymentTypes },
+          },
+          _sum: { amount: true },
+        }),
+      ]);
+      const accountsByNumber = new Map(existing.map((row) => [row.accountNumber, row]));
+      const billsByAccount = new Map(billTotals.map((row) => [row.accountId, Number(row._sum.totalCurrentCharges ?? 0)]));
+      const paymentsByAccount = new Map(paymentTotals.map((row) => [row.accountId, Number(row._sum.amount ?? 0)]));
+      const inconsistent = rows.flatMap((row) => {
+        const account = accountsByNumber.get(row.accountNumber)!;
+        const calculated = roundMoney(
+          row.openingBalance +
+          (billsByAccount.get(account.accountId) ?? 0) -
+          (paymentsByAccount.get(account.accountId) ?? 0),
+        );
+        return calculated === roundMoney(row.currentBalance)
+          ? []
+          : [`${row.accountNumber}: imported current balance ${row.currentBalance.toFixed(2)} does not match ledger balance ${calculated.toFixed(2)}`];
+      });
+      if (inconsistent.length) {
+        return res.status(409).json({
+          error: `Balance import rejected. Current balances must equal opening balance + posted bills - posted bill payments. ${inconsistent.slice(0, 25).join("; ")}${inconsistent.length > 25 ? "..." : ""}`,
+        });
+      }
+
+      const changed = rows.filter((row) => {
+        const account = accountsByNumber.get(row.accountNumber)!;
+        return roundMoney(Number(account.openingBalance)) !== roundMoney(row.openingBalance) ||
+          roundMoney(Number(account.currentBalance)) !== roundMoney(row.currentBalance);
+      });
+      await prisma.$transaction([
+        ...rows.map((row) => prisma.customerAccount.update({
           where: { accountNumber: row.accountNumber },
           data: {
             openingBalance: row.openingBalance,
             currentBalance: row.currentBalance,
           },
         })),
-      );
+        ...(changed.length ? [prisma.accountBalanceReconciliation.createMany({
+          data: changed.map((row) => {
+            const account = accountsByNumber.get(row.accountNumber)!;
+            const postedBillTotal = roundMoney(billsByAccount.get(account.accountId) ?? 0);
+            const postedPaymentTotal = roundMoney(paymentsByAccount.get(account.accountId) ?? 0);
+            return {
+              accountId: account.accountId,
+              storedBalance: account.currentBalance,
+              calculatedBalance: row.currentBalance,
+              variance: roundMoney(row.currentBalance - Number(account.currentBalance)),
+              openingBalance: row.openingBalance,
+              postedBillTotal,
+              postedPaymentTotal,
+              reason: "Validated bulk balance import",
+              source: "BALANCE_IMPORT",
+              reconciledBy: BigInt(req.user!.userId),
+            };
+          }),
+        })] : []),
+      ]);
 
       res.json({ updated: rows.length });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+accountsRouter.get(
+  "/:accountNumber/balance-reconciliation",
+  requireRole("SYSTEM_ADMIN", "FINANCE_MANAGER"),
+  async (req, res, next) => {
+    try {
+      const account = await prisma.customerAccount.findUnique({
+        where: { accountNumber: req.params.accountNumber.trim() },
+        include: {
+          customer: true,
+          balanceReconciliations: {
+            include: { reconciler: { select: { username: true, firstName: true, lastName: true } } },
+            orderBy: { createdAt: "desc" },
+            take: 10,
+          },
+        },
+      });
+      if (!account) return res.status(404).json({ error: "Account was not found" });
+
+      const ledger = await accountLedgerBalance(prisma, account.accountId, Number(account.openingBalance));
+      const storedBalance = roundMoney(Number(account.currentBalance));
+      res.json({
+        accountId: account.accountId,
+        accountNumber: account.accountNumber,
+        customerName: accountCustomerName(account.customer),
+        storedBalance,
+        ...ledger,
+        variance: roundMoney(ledger.calculatedBalance - storedBalance),
+        balanced: ledger.calculatedBalance === storedBalance,
+        history: account.balanceReconciliations,
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+accountsRouter.post(
+  "/:accountNumber/balance-reconciliation",
+  requireRole("SYSTEM_ADMIN", "FINANCE_MANAGER"),
+  async (req, res, next) => {
+    const parsed = z.object({ reason: z.string().trim().min(10).max(1000) }).safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+    try {
+      const result = await prisma.$transaction(async (tx) => {
+        const rows = await tx.$queryRaw<Array<{
+          account_id: bigint;
+          opening_balance: unknown;
+          current_balance: unknown;
+        }>>`
+          SELECT account_id, opening_balance, current_balance
+          FROM aquaflow.customer_accounts
+          WHERE account_number = ${req.params.accountNumber.trim()}
+          FOR UPDATE
+        `;
+        const account = rows[0];
+        if (!account) return null;
+
+        const ledger = await accountLedgerBalance(tx, account.account_id, Number(account.opening_balance));
+        const storedBalance = roundMoney(Number(account.current_balance));
+        const variance = roundMoney(ledger.calculatedBalance - storedBalance);
+        if (variance === 0) return { changed: false, storedBalance, ...ledger, variance };
+
+        await tx.customerAccount.update({
+          where: { accountId: account.account_id },
+          data: { currentBalance: ledger.calculatedBalance, updatedAt: new Date() },
+        });
+        const audit = await tx.accountBalanceReconciliation.create({
+          data: {
+            accountId: account.account_id,
+            storedBalance,
+            calculatedBalance: ledger.calculatedBalance,
+            variance,
+            openingBalance: ledger.openingBalance,
+            postedBillTotal: ledger.postedBillTotal,
+            postedPaymentTotal: ledger.postedPaymentTotal,
+            reason: parsed.data.reason,
+            reconciledBy: BigInt(req.user!.userId),
+          },
+        });
+        return { changed: true, storedBalance, ...ledger, variance, audit };
+      });
+      if (!result) return res.status(404).json({ error: "Account was not found" });
+      res.json(result);
     } catch (error) {
       next(error);
     }
@@ -150,8 +341,16 @@ accountsRouter.post("/bulk-import", async (req, res) => {
 
 async function nextAccountNumber() {
   const year = new Date().getFullYear();
-  const count = await prisma.customerAccount.count();
-  return `ACC-${year}-${String(count + 1).padStart(5, "0")}`;
+  const prefix = `ACC-${year}-`;
+  const accounts = await prisma.customerAccount.findMany({
+    where: { accountNumber: { startsWith: prefix } },
+    select: { accountNumber: true },
+  });
+  const highest = accounts.reduce((max, account) => {
+    const sequence = Number(account.accountNumber.slice(prefix.length));
+    return Number.isInteger(sequence) ? Math.max(max, sequence) : max;
+  }, 0);
+  return `${prefix}${String(highest + 1).padStart(5, "0")}`;
 }
 
 accountsRouter.get("/", async (req, res, next) => {
@@ -223,9 +422,31 @@ accountsRouter.post("/", async (req, res) => {
       routeId: data.routeId ? BigInt(data.routeId) : undefined,
       openingBalance: data.openingBalance ?? 0,
       currentBalance: data.openingBalance ?? 0,
-      accountStatus: "PENDING",
+      accountStatus: "ACTIVE",
+      connectionDate: new Date(),
     },
   });
 
   res.status(201).json(account);
 });
+
+accountsRouter.patch(
+  "/:id/activate",
+  requireRole("SYSTEM_ADMIN", "FINANCE_MANAGER"),
+  async (req, res) => {
+    const accountId = z.coerce.bigint().positive().safeParse(req.params.id);
+    if (!accountId.success) return res.status(400).json({ error: "Invalid account ID" });
+
+    const existing = await prisma.customerAccount.findUnique({ where: { accountId: accountId.data } });
+    if (!existing) return res.status(404).json({ error: "Account was not found" });
+    if (existing.accountStatus !== "PENDING") {
+      return res.status(409).json({ error: `Only pending accounts can be activated. This account is ${existing.accountStatus.toLowerCase()}.` });
+    }
+
+    const account = await prisma.customerAccount.update({
+      where: { accountId: accountId.data },
+      data: { accountStatus: "ACTIVE", connectionDate: existing.connectionDate ?? new Date() },
+    });
+    res.json(account);
+  },
+);

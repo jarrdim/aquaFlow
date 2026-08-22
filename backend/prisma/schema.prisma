@@ -185,8 +185,32 @@ model CustomerAccount {
   debtWriteOffs        DebtWriteOff[]
   arrearsActions       ArrearsAction[]
   serviceRequests      ServiceRequest[]
+  portalAccess         CustomerAccountAccess[]
+  balanceReconciliations AccountBalanceReconciliation[]
 
   @@map("customer_accounts")
+  @@schema("aquaflow")
+}
+
+model AccountBalanceReconciliation {
+  reconciliationId  BigInt   @id @default(autoincrement()) @map("reconciliation_id")
+  accountId          BigInt   @map("account_id")
+  storedBalance      Decimal  @map("stored_balance") @db.Decimal(18, 2)
+  calculatedBalance  Decimal  @map("calculated_balance") @db.Decimal(18, 2)
+  variance           Decimal  @db.Decimal(18, 2)
+  openingBalance     Decimal  @map("opening_balance") @db.Decimal(18, 2)
+  postedBillTotal    Decimal  @map("posted_bill_total") @db.Decimal(18, 2)
+  postedPaymentTotal Decimal  @map("posted_payment_total") @db.Decimal(18, 2)
+  reason             String   @db.VarChar(1000)
+  source             String   @default("MANUAL_RECONCILIATION") @db.VarChar(40)
+  reconciledBy       BigInt   @map("reconciled_by")
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  account    CustomerAccount @relation(fields: [accountId], references: [accountId])
+  reconciler User            @relation("AccountBalanceReconciler", fields: [reconciledBy], references: [userId])
+
+  @@index([accountId, createdAt(sort: Desc)])
+  @@map("account_balance_reconciliations")
   @@schema("aquaflow")
 }
 
@@ -207,6 +231,8 @@ model User {
   updatedAt        DateTime  @default(now()) @map("updated_at")
 
   customer                       Customer?                    @relation(fields: [customerId], references: [customerId])
+  customerAccountAccess          CustomerAccountAccess[]
+  accountBalanceReconciliations  AccountBalanceReconciliation[] @relation("AccountBalanceReconciler")
   userRoles                      UserRole[]
   meterEvents                    MeterEvent[]                 @relation("MeterEventUser")
   fieldOfficer                   FieldOfficer?
@@ -258,6 +284,26 @@ model User {
   serviceRequestEvents           ServiceRequestEvent[]        @relation("ServiceRequestEventUser")
 
   @@map("users")
+  @@schema("aquaflow")
+}
+
+model CustomerAccountAccess {
+  accessId   BigInt    @id @default(autoincrement()) @map("access_id")
+  userId     BigInt    @map("user_id")
+  accountId  BigInt    @map("account_id")
+  accessRole String    @default("OWNER") @map("access_role")
+  status     String    @default("ACTIVE")
+  verifiedAt DateTime? @map("verified_at")
+  isDefault  Boolean   @default(false) @map("is_default")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @default(now()) @map("updated_at")
+
+  user    User            @relation(fields: [userId], references: [userId], onDelete: Cascade)
+  account CustomerAccount @relation(fields: [accountId], references: [accountId], onDelete: Cascade)
+
+  @@unique([userId, accountId])
+  @@index([accountId, status])
+  @@map("customer_account_access")
   @@schema("aquaflow")
 }
 
@@ -1036,6 +1082,7 @@ model Notification {
   scheduledAt       DateTime? @map("scheduled_at")
   sentAt            DateTime? @map("sent_at")
   deliveredAt       DateTime? @map("delivered_at")
+  readAt            DateTime? @map("read_at")
   lastAttemptAt     DateTime? @map("last_attempt_at")
   deliveryStatus    String    @default("QUEUED") @map("delivery_status")
   externalReference String?   @map("external_reference")
@@ -1057,6 +1104,7 @@ model Notification {
 
   @@index([deliveryStatus, scheduledAt])
   @@index([accountId, createdAt])
+  @@index([customerId, readAt])
   @@index([billId])
   @@map("notifications")
   @@schema("aquaflow")

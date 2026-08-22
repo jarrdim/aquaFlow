@@ -24,3 +24,6 @@ samdamte-customer-import.xlsx*.xlsx
 *.tsbuildinfo
 system-data/*
 frontend/tsconfig.tsbuildinfo
+
+*.old
+ngrok.exe

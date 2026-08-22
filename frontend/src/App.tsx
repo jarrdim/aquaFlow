@@ -18,6 +18,7 @@ import Login from "./pages/Login";
 import LandingPage from "./pages/LandingPage";
 import PublicPaymentPage from "./pages/PublicPaymentPage";
 import OperationalDashboard from "./pages/OperationalDashboard";
+import Reports from "./pages/Reports";
 import WorkOrderManagement from "./pages/WorkOrderManagement";
 import Customers from "./pages/Customers";
 import NewCustomer from "./pages/NewCustomer";
@@ -75,6 +76,7 @@ import {
   BillingAudit,
   BillingDashboard,
   BillingHistory,
+  BillNotifications,
   BillingPeriods,
   BillingSecurityAlerts,
   CustomerStatements,
@@ -299,7 +301,7 @@ const NAV_ITEMS = [
   { label: "Service Requests", Icon: IcoService, path: "/service-requests", iconClass: "bg-rose-400/10 text-rose-300" },
   { label: "Work Orders", Icon: IcoWorkOrders, path: "/work-orders", iconClass: "bg-yellow-400/10 text-yellow-300" },
   { label: "Assets", Icon: IcoAssets, path: null, iconClass: "bg-teal-400/10 text-teal-300" },
-  { label: "Reports", Icon: IcoReports, path: null, iconClass: "bg-purple-400/10 text-purple-300" },
+  { label: "Reports", Icon: IcoReports, path: "/reports", iconClass: "bg-purple-400/10 text-purple-300" },
   { label: "Admin", Icon: IcoAdmin, path: "/admin", iconClass: "bg-red-400/10 text-red-300" },
   { label: "Settings", Icon: IcoSettings, path: "/settings", iconClass: "bg-slate-400/10 text-slate-300" },
 ];
@@ -359,6 +361,7 @@ const BILLING_MENU = [
   ["Generate Bills", "/billing/generate"],
   ["Bill Approval", "/billing/approvals"],
   ["Invoices", "/billing/invoices"],
+  ["Send Bills", "/billing/notifications"],
   ["Customer Statements", "/billing/statements"],
   ["Adjustment Requests", "/billing/adjustments"],
   ["Adjustment Approval", "/billing/adjustments/approvals"],
@@ -1497,6 +1500,16 @@ export default function App() {
         }
       />
       <Route
+        path="/reports"
+        element={
+          <Protected>
+            <Shell>
+              <Reports />
+            </Shell>
+          </Protected>
+        }
+      />
+      <Route
         path="/customers"
         element={
           <Protected>
@@ -1628,7 +1641,13 @@ export default function App() {
       />
       <Route
         path="/billing/notifications"
-        element={<Navigate to="/notifications/send" replace />}
+        element={
+          <Protected>
+            <Shell>
+              <BillNotifications />
+            </Shell>
+          </Protected>
+        }
       />
       <Route
         path="/billing/adjustments"
@@ -2500,7 +2519,7 @@ export default function App() {
           </Protected>
         }
       />
-      <Route path="*" element={<Navigate to="/customers" replace />} />
+      <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
   );
 }

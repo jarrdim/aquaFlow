@@ -11,11 +11,31 @@ export type MpesaConfig = {
   callbackToken: string;
 };
 
-export function getMpesaConfig(): MpesaConfig {
+export type MpesaC2bConfig = {
+  environment: "sandbox" | "production";
+  baseUrl: string;
+  consumerKey: string;
+  consumerSecret: string;
+  shortCode: string;
+  validationUrl: string;
+  confirmationUrl: string;
+  validationToken: string;
+  confirmationToken: string;
+  responseType: "Completed" | "Cancelled";
+};
+
+function environmentConfig() {
   const environment = process.env.MPESA_ENVIRONMENT === "production" ? "production" : "sandbox";
-  const config = {
+  return {
     environment,
     baseUrl: environment === "production" ? "https://api.safaricom.co.ke" : "https://sandbox.safaricom.co.ke",
+  } as const;
+}
+
+export function getMpesaConfig(): MpesaConfig {
+  const environment = environmentConfig();
+  const config = {
+    ...environment,
     consumerKey: process.env.MPESA_CONSUMER_KEY?.trim() ?? "",
     consumerSecret: process.env.MPESA_CONSUMER_SECRET?.trim() ?? "",
     shortCode: (process.env.MPESA_SHORTCODE ?? process.env.MPESA_SHORT_CODE)?.trim() ?? "",
@@ -27,6 +47,35 @@ export function getMpesaConfig(): MpesaConfig {
   if (missing.length) throw Object.assign(new Error(`M-Pesa is not configured. Missing: ${missing.join(", ")}`), { status: 503 });
   if (!/^https:\/\//i.test(config.callbackUrl)) throw Object.assign(new Error("MPESA_CALLBACK_URL must be a public HTTPS URL"), { status: 503 });
   if (new URL(config.callbackUrl).searchParams.get("token") !== config.callbackToken) throw Object.assign(new Error("MPESA_CALLBACK_URL must include the configured callback token"), { status: 503 });
+  return config;
+}
+
+export function getMpesaC2bConfig(): MpesaC2bConfig {
+  const config = {
+    ...environmentConfig(),
+    consumerKey: (process.env.MPESA_C2B_CONSUMER_KEY ?? process.env.MPESA_CONSUMER_KEY)?.trim() ?? "",
+    consumerSecret: (process.env.MPESA_C2B_CONSUMER_SECRET ?? process.env.MPESA_CONSUMER_SECRET)?.trim() ?? "",
+    shortCode: (process.env.MPESA_C2B_SHORTCODE ?? process.env.MPESA_SHORTCODE ?? process.env.MPESA_SHORT_CODE)?.trim() ?? "",
+    validationUrl: process.env.MPESA_C2B_VALIDATION_URL?.trim() ?? "",
+    confirmationUrl: process.env.MPESA_C2B_CONFIRMATION_URL?.trim() ?? "",
+    validationToken: (process.env.MPESA_C2B_VALIDATION_TOKEN ?? process.env.MPESA_C2B_CALLBACK_TOKEN ?? process.env.MPESA_CALLBACK_TOKEN)?.trim() ?? "",
+    confirmationToken: (process.env.MPESA_C2B_CONFIRMATION_TOKEN ?? process.env.MPESA_C2B_CALLBACK_TOKEN ?? process.env.MPESA_CALLBACK_TOKEN)?.trim() ?? "",
+    responseType: process.env.MPESA_C2B_RESPONSE_TYPE === "Cancelled" ? "Cancelled" : "Completed",
+  } as MpesaC2bConfig;
+  const missing = Object.entries(config)
+    .filter(([key, value]) => !["environment", "baseUrl", "responseType"].includes(key) && !value)
+    .map(([key]) => key);
+  if (missing.length)
+    throw Object.assign(new Error(`M-Pesa C2B is not configured. Missing: ${missing.join(", ")}`), { status: 503 });
+  for (const [name, url, token] of [
+    ["MPESA_C2B_VALIDATION_URL", config.validationUrl, config.validationToken],
+    ["MPESA_C2B_CONFIRMATION_URL", config.confirmationUrl, config.confirmationToken],
+  ] as const) {
+    if (!/^https:\/\//i.test(url))
+      throw Object.assign(new Error(`${name} must be a public HTTPS URL`), { status: 503 });
+    if (new URL(url).searchParams.get("token") !== token)
+      throw Object.assign(new Error(`${name} must include its configured C2B callback token`), { status: 503 });
+  }
   return config;
 }
 
@@ -70,7 +119,7 @@ async function darajaJson(url: string, options: RequestInit): Promise<DarajaJson
   return body;
 }
 
-async function accessToken(config: MpesaConfig) {
+async function accessToken(config: Pick<MpesaConfig, "baseUrl" | "consumerKey" | "consumerSecret">) {
   const basic = Buffer.from(`${config.consumerKey}:${config.consumerSecret}`).toString("base64");
   const body = await darajaJson(`${config.baseUrl}/oauth/v1/generate?grant_type=client_credentials`, { headers: { Authorization: `Basic ${basic}` } });
   if (!body.access_token) throw Object.assign(new Error("Daraja did not return an access token"), { status: 502 });
@@ -97,6 +146,21 @@ export async function requestStkPush(input: { phoneNumber: string; amount: numbe
       CallBackURL: config.callbackUrl,
       AccountReference: input.accountReference.slice(0, 12),
       TransactionDesc: input.description.slice(0, 20),
+    }),
+  });
+}
+
+export async function registerC2bUrls() {
+  const config = getMpesaC2bConfig();
+  const token = await accessToken(config);
+  return darajaJson(`${config.baseUrl}/mpesa/c2b/v2/registerurl`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ShortCode: config.shortCode,
+      ResponseType: config.responseType,
+      ConfirmationURL: config.confirmationUrl,
+      ValidationURL: config.validationUrl,
     }),
   });
 }

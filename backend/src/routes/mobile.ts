@@ -1,7 +1,6 @@
 import { Request, Response, Router } from "express";
 import { Prisma } from "@prisma/client";
 import { existsSync } from "fs";
-import jwt from "jsonwebtoken";
 import path from "path";
 import PDFDocument from "pdfkit";
 import { z } from "zod";
@@ -58,58 +57,241 @@ mobileRouter.get("/bootstrap", async (_req, res, next) => {
   }
 });
 
-function normalizedPhone(value: string) {
-  const digits = value.replace(/\D/g, "");
-  return digits.length >= 9 ? digits.slice(-9) : digits;
-}
-
 function isLegacyImportReference(value: string) {
   return /^ReceiptsData(?:Current|History):/i.test(value);
 }
 
 mobileRouter.post("/customer/login", async (req, res, next) => {
-  try {
-    const parsed = z.object({ phoneNumber: z.string().trim().min(7).max(30) }).safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: "Enter your registered phone number" });
-    const requested = normalizedPhone(parsed.data.phoneNumber);
-    const candidates = await prisma.customer.findMany({
-      where: { status: "ACTIVE", phoneNumber: { not: "" } },
-    });
-    const matches = candidates.filter((customer) => normalizedPhone(customer.phoneNumber) === requested);
-    if (matches.length !== 1) {
-      return res.status(401).json({
-        error: matches.length ? "This phone number belongs to more than one customer record" : "No active customer was found with this phone number",
-      });
-    }
-    const customer = matches[0];
-    const customerName = customer.organizationName ||
-      [customer.firstName, customer.middleName, customer.lastName].filter(Boolean).join(" ");
-    const identity = {
-      userId: customer.customerId.toString(),
-      username: customer.phoneNumber,
-      userType: "CUSTOMER",
-      roles: ["CUSTOMER"],
-    };
-    const secret = process.env.JWT_SECRET as string;
-    res.json({
-      token: jwt.sign({ ...identity, tokenType: "access" }, secret, { expiresIn: "8h" }),
-      refreshToken: jwt.sign({ ...identity, tokenType: "refresh" }, secret, { expiresIn: "30d" }),
-      expiresIn: 8 * 60 * 60,
-      user: {
-        userId: customer.customerId,
-        username: customer.phoneNumber,
-        firstName: customerName,
-        lastName: "",
-        userType: "CUSTOMER",
-        roles: ["CUSTOMER"],
+  void req;
+  void next;
+  return res.status(410).json({
+    error: "Phone-only login has been retired. Use the shared Login ID and password screen.",
+  });
+});
+
+mobileRouter.use(requireAuth);
+
+function credentialUserId(req: Request) {
+  return BigInt(req.user!.authUserId ?? req.user!.userId);
+}
+
+async function accessibleAccountIds(req: Request) {
+  if (req.user?.userType !== "CUSTOMER") return [] as bigint[];
+  const access = await prisma.customerAccountAccess.findMany({
+    where: { userId: credentialUserId(req), status: "ACTIVE" },
+    select: { accountId: true },
+  });
+  return access.map((item) => item.accountId);
+}
+
+async function canAccessAccount(req: Request, accountId: bigint) {
+  if (req.user?.userType !== "CUSTOMER") return false;
+  return Boolean(await prisma.customerAccountAccess.findFirst({
+    where: { userId: credentialUserId(req), accountId, status: "ACTIVE" },
+    select: { accessId: true },
+  }));
+}
+
+const customerReadingSubmissionSchema = z.object({
+  accountId: z.coerce.bigint().positive(),
+  meterId: z.coerce.bigint().positive(),
+  currentReading: z.coerce.number().finite().min(0).max(999_999_999),
+  photoEvidence: z.string().trim().min(100).max(6_000_000).refine(
+    (value) => /^data:image\/(jpeg|jpg|png|webp);base64,/i.test(value),
+    "A JPEG, PNG or WebP meter photo is required",
+  ),
+  photoName: z.string().trim().min(1).max(255).default("customer-meter-reading.jpg"),
+  gpsLatitude: z.coerce.number().min(-90).max(90).optional(),
+  gpsLongitude: z.coerce.number().min(-180).max(180).optional(),
+  notes: z.string().trim().max(1000).optional(),
+  submissionId: z.string().trim().min(8).max(100),
+}).superRefine((value, ctx) => {
+  if ((value.gpsLatitude == null) !== (value.gpsLongitude == null)) {
+    ctx.addIssue({ code: "custom", path: ["gpsLatitude"], message: "Both GPS coordinates are required together" });
+  }
+});
+
+async function customerReadingContext(req: Request, accountId: bigint) {
+  if (!(await canAccessAccount(req, accountId))) {
+    throw Object.assign(new Error("This account does not belong to the authenticated customer"), { status: 403 });
+  }
+  const [account, cycle] = await Promise.all([
+    prisma.customerAccount.findUnique({
+      where: { accountId },
+      include: {
+        meterAssignments: {
+          where: { assignmentStatus: "ACTIVE", removalDate: null },
+          include: { meter: true },
+          orderBy: { assignmentDate: "desc" },
+          take: 1,
+        },
       },
+    }),
+    prisma.readingCycle.findFirst({ where: { status: "OPEN" }, orderBy: { startDate: "desc" } }),
+  ]);
+  if (!account) throw Object.assign(new Error("Customer account not found"), { status: 404 });
+  const assignment = account.meterAssignments[0];
+  const meter = assignment?.meter;
+  if (!meter) {
+    return { account, assignment: null, meter: null, cycle, activeReading: null, history: [], previousReading: null };
+  }
+  const [activeReading, history, latestApproved] = await Promise.all([
+    cycle ? prisma.meterReading.findFirst({
+      where: { meterId: meter.meterId, readingCycleId: cycle.readingCycleId, approvalStatus: { not: "REJECTED" } },
+      include: { fieldOfficer: true, evidence: true, events: true, bills: { select: { billId: true, billNumber: true, status: true } } },
+      orderBy: { createdAt: "desc" },
+    }) : null,
+    prisma.meterReading.findMany({
+      where: { meterId: meter.meterId },
+      include: { cycle: true, fieldOfficer: true, events: { select: { eventType: true } }, evidence: { select: { evidenceId: true, evidenceType: true, mimeType: true } }, bills: { select: { billNumber: true, status: true } } },
+      orderBy: [{ readingDate: "desc" }, { readingId: "desc" }],
+      take: 24,
+    }),
+    prisma.meterReading.findFirst({
+      where: { meterId: meter.meterId, approvalStatus: "APPROVED" },
+      orderBy: [{ readingDate: "desc" }, { readingId: "desc" }],
+    }),
+  ]);
+  return { account, assignment, meter, cycle, activeReading, history, previousReading: activeReading ? Number(activeReading.previousReading) : Number(latestApproved?.currentReading ?? meter.openingReading) };
+}
+
+mobileRouter.get("/customer/meter-readings", requireRole("CUSTOMER"), async (req, res, next) => {
+  try {
+    const accountId = z.coerce.bigint().positive().parse(req.query.accountId);
+    const context = await customerReadingContext(req, accountId);
+    const active = context.activeReading;
+    const customerEvidenceSubmitted = Boolean(active?.events.some((event) => event.eventType === "CUSTOMER_EVIDENCE_SUBMITTED"));
+    const state = !context.meter
+      ? "NO_ACTIVE_METER"
+      : !context.cycle
+        ? "NO_OPEN_CYCLE"
+        : active?.bills.length
+          ? "BILLED"
+          : active?.approvalStatus === "APPROVED"
+            ? "APPROVED"
+            : active?.fieldOfficerId
+              ? "STAFF_READING_PENDING"
+              : active
+                ? "CUSTOMER_READING_PENDING"
+                : "OPEN_FOR_SUBMISSION";
+    res.json({
+      account: { accountId: context.account.accountId, accountNumber: context.account.accountNumber },
+      meter: context.meter ? { meterId: context.meter.meterId, meterNumber: context.meter.meterNumber, serialNumber: context.meter.serialNumber } : null,
+      cycle: context.cycle,
+      previousReading: context.previousReading,
+      state,
+      canSubmit: state === "OPEN_FOR_SUBMISSION",
+      canAttachEvidence: state === "STAFF_READING_PENDING" && !customerEvidenceSubmitted,
+      activeReading: active ? {
+        readingId: active.readingId,
+        cycleName: context.cycle?.cycleName ?? context.cycle?.cycleCode ?? "Current reading",
+        readingDate: active.readingDate,
+        currentReading: Number(active.currentReading),
+        previousReading: Number(active.previousReading),
+        consumption: Number(active.consumption),
+        approvalStatus: active.approvalStatus,
+        source: active.events.some((event) => event.eventType === "CUSTOMER_SUBMITTED") ? "CUSTOMER" : active.fieldOfficerId ? "FIELD_STAFF" : "SYSTEM",
+        hasEvidence: active.evidence.length > 0,
+        billed: active.bills.length > 0,
+      } : null,
+      history: context.history.map((reading) => ({
+        readingId: reading.readingId,
+        cycleName: reading.cycle?.cycleName ?? reading.cycle?.cycleCode ?? "Reading",
+        readingDate: reading.readingDate,
+        previousReading: Number(reading.previousReading),
+        currentReading: Number(reading.currentReading),
+        consumption: Number(reading.consumption),
+        approvalStatus: reading.approvalStatus,
+        source: reading.events.some((event) => event.eventType === "CUSTOMER_SUBMITTED") ? "CUSTOMER" : reading.fieldOfficerId ? "FIELD_STAFF" : "SYSTEM",
+        hasEvidence: reading.evidence.length > 0,
+        billed: reading.bills.length > 0,
+      })),
     });
-  } catch (error) {
+  } catch (error: any) {
+    if (error instanceof z.ZodError) return res.status(400).json({ error: "A valid account is required" });
+    if (error.status) return res.status(error.status).json({ error: error.message });
     next(error);
   }
 });
 
-mobileRouter.use(requireAuth);
+mobileRouter.post("/customer/meter-readings", requireRole("CUSTOMER"), async (req, res, next) => {
+  const parsed = customerReadingSubmissionSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  try {
+    const data = parsed.data;
+    const context = await customerReadingContext(req, data.accountId);
+    const meter: any = context.meter;
+    const assignment: any = context.assignment;
+    const cycle: any = context.cycle;
+    if (!meter || !assignment) return res.status(409).json({ error: "This account has no active meter" });
+    if (meter.meterId !== data.meterId) return res.status(403).json({ error: "The selected meter is not assigned to this account" });
+    if (!cycle) return res.status(409).json({ error: "There is no open meter-reading period" });
+    const previousReading = Number(context.previousReading ?? meter.openingReading);
+    if (data.currentReading < previousReading) {
+      return res.status(409).json({ error: `Current reading cannot be below the verified previous reading of ${previousReading}` });
+    }
+    const existing = context.activeReading;
+    if (existing?.bills.length || existing?.approvalStatus === "APPROVED") {
+      return res.status(409).json({ error: existing.bills.length ? "This period has already been billed. Report a discrepancy instead." : "A reading has already been approved for this period." });
+    }
+    const mimeType = data.photoEvidence.slice(5, data.photoEvidence.indexOf(";"));
+    const credentialId = credentialUserId(req);
+    if (existing?.fieldOfficerId) {
+      if (existing.events.some((event) => event.eventType === "CUSTOMER_EVIDENCE_SUBMITTED")) {
+        return res.status(409).json({ error: "Supporting evidence has already been submitted for this staff reading" });
+      }
+      await prisma.$transaction(async (tx) => {
+        await tx.meterReadingEvidence.create({ data: {
+          readingId: existing.readingId,
+          evidenceType: "SUPPORTING_DOCUMENT",
+          fileName: data.photoName,
+          mimeType,
+          content: data.photoEvidence,
+        } });
+        await tx.meterReadingEvent.create({ data: {
+          readingId: existing.readingId,
+          eventType: "CUSTOMER_EVIDENCE_SUBMITTED",
+          remarks: data.notes,
+          performedBy: credentialId,
+          metadata: { source: "CUSTOMER_APP", proposedReading: data.currentReading, previousReading, gpsLatitude: data.gpsLatitude, gpsLongitude: data.gpsLongitude },
+        } });
+      });
+      return res.status(201).json({ status: "SUPPORTING_EVIDENCE_SUBMITTED", readingId: existing.readingId });
+    }
+    if (existing) return res.status(409).json({ error: "You already have a reading awaiting verification for this period" });
+
+    const consumption = data.currentReading - previousReading;
+    const exceptionType = consumption === 0 ? "ZERO" : consumption > 100 ? "HIGH" : "NONE";
+    const syncId = `CUSTOMER:${credentialId}:${data.submissionId}`;
+    const reading = await prisma.$transaction(async (tx) => {
+      const created = await tx.meterReading.create({ data: {
+        meterId: meter.meterId,
+        accountId: context.account.accountId,
+        readingCycleId: cycle.readingCycleId,
+        previousReading,
+        currentReading: data.currentReading,
+        readingType: "ACTUAL",
+        readingDate: new Date(),
+        photoPath: data.photoName,
+        gpsLatitude: data.gpsLatitude,
+        gpsLongitude: data.gpsLongitude,
+        abnormalFlag: exceptionType !== "NONE",
+        exceptionType,
+        approvalStatus: "PENDING",
+        syncId,
+        evidence: { create: { evidenceType: "METER_PHOTO", fileName: data.photoName, mimeType, content: data.photoEvidence } },
+        events: { create: { eventType: "CUSTOMER_SUBMITTED", remarks: data.notes, performedBy: credentialId, metadata: { source: "CUSTOMER_APP" } } },
+      } });
+      await tx.meterEvent.create({ data: { meterId: meter.meterId, assignmentId: assignment.assignmentId, eventType: "CUSTOMER_READING_SUBMITTED", reading: data.currentReading, remarks: data.notes, gpsLatitude: data.gpsLatitude, gpsLongitude: data.gpsLongitude, performedBy: credentialId, metadata: { readingId: created.readingId.toString(), cycleId: cycle.readingCycleId.toString() } } });
+      return created;
+    });
+    res.status(201).json({ status: "PENDING", readingId: reading.readingId });
+  } catch (error: any) {
+    if (error.code === "P2002") return res.status(409).json({ error: "A reading already exists for this meter and period" });
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    next(error);
+  }
+});
 
 mobileRouter.post("/customer/pay", requireRole("CUSTOMER"), async (req, res, next) => {
   const parsed = z.object({
@@ -121,7 +303,6 @@ mobileRouter.post("/customer/pay", requireRole("CUSTOMER"), async (req, res, nex
   }
 
   try {
-    const customerId = BigInt(req.user!.userId);
     const account = await prisma.customerAccount.findUnique({
       where: { accountId: parsed.data.accountId },
       include: { customer: true },
@@ -129,7 +310,7 @@ mobileRouter.post("/customer/pay", requireRole("CUSTOMER"), async (req, res, nex
     if (!account) {
       return res.status(404).json({ error: "Customer account not found" });
     }
-    if (account.customer.customerId !== customerId) {
+    if (!(await canAccessAccount(req, account.accountId))) {
       return res.status(403).json({ error: "This account does not belong to the authenticated customer" });
     }
     if (account.accountStatus !== "ACTIVE") {
@@ -175,7 +356,6 @@ mobileRouter.get("/customer/pay/:id", requireRole("CUSTOMER"), async (req, res, 
   }
 
   try {
-    const customerId = BigInt(req.user!.userId);
     const row = await prisma.mpesaStkRequest.findUnique({
       where: { stkRequestId: parsed.data },
       include: {
@@ -184,7 +364,7 @@ mobileRouter.get("/customer/pay/:id", requireRole("CUSTOMER"), async (req, res, 
       },
     });
     if (!row) return res.status(404).json({ error: "STK request not found" });
-    if (row.account.customer.customerId !== customerId) {
+    if (!(await canAccessAccount(req, row.accountId))) {
       return res.status(403).json({ error: "This payment request does not belong to the authenticated customer" });
     }
     res.json(row);
@@ -202,7 +382,7 @@ const customerServiceRequestInput = z.object({
   severity: z.enum(["LOW", "MEDIUM", "HIGH", "CRITICAL"]).optional(),
 });
 
-async function ownedCustomerAccount(customerId: bigint, accountId: bigint) {
+async function ownedCustomerAccount(req: Request, accountId: bigint) {
   const account = await prisma.customerAccount.findUnique({
     where: { accountId },
     include: { customer: true },
@@ -212,7 +392,7 @@ async function ownedCustomerAccount(customerId: bigint, accountId: bigint) {
     error.status = 404;
     throw error;
   }
-  if (account.customerId !== customerId) {
+  if (!(await canAccessAccount(req, accountId))) {
     const error = new Error("This account does not belong to the authenticated customer") as Error & { status: number };
     error.status = 403;
     throw error;
@@ -221,12 +401,12 @@ async function ownedCustomerAccount(customerId: bigint, accountId: bigint) {
 }
 
 async function createCustomerServiceRequest(
-  customerId: bigint,
+  req: Request,
   data: z.infer<typeof customerServiceRequestInput>,
   category: string,
   requestType: "COMPLAINT" | "SERVICE_REQUEST",
 ) {
-  const account = await ownedCustomerAccount(customerId, data.accountId);
+  const account = await ownedCustomerAccount(req, data.accountId);
   const hours = category === "LEAKAGE" ? 4 : 72;
   const dueAt = new Date(Date.now() + hours * 60 * 60 * 1000);
   const requestNumber = `SR-${Date.now()}-${account.accountNumber}`.slice(0, 60);
@@ -237,7 +417,7 @@ async function createCustomerServiceRequest(
          subject, description, contact_channel, priority, status, due_at,
          location_details, photo_evidence, created_by)
       VALUES
-        (${requestNumber}, ${requestType}, ${customerId}, ${account.accountId}, ${category},
+        (${requestNumber}, ${requestType}, ${account.customerId}, ${account.accountId}, ${category},
          ${data.subject}, ${data.description}, 'OTHER',
          ${category === "LEAKAGE" ? (data.severity === "CRITICAL" ? "URGENT" : data.severity || "MEDIUM") : "MEDIUM"}, 'OPEN', ${dueAt},
          ${data.location || null}, ${data.photoEvidence || null}, NULL)
@@ -259,7 +439,7 @@ mobileRouter.post("/customer/complaint", requireRole("CUSTOMER"), async (req, re
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message });
   try {
     const row = await createCustomerServiceRequest(
-      BigInt(req.user!.userId),
+      req,
       parsed.data,
       parsed.data.category,
       "COMPLAINT",
@@ -290,9 +470,10 @@ const customerComplaintSelect = {
 
 mobileRouter.get("/customer/complaints", requireRole("CUSTOMER"), async (req, res, next) => {
   try {
+    const accountIds = await accessibleAccountIds(req);
     const complaints = await prisma.serviceRequest.findMany({
       where: {
-        customerId: BigInt(req.user!.userId),
+        accountId: { in: accountIds },
         OR: [{ requestType: "COMPLAINT" }, { category: "LEAKAGE" }],
       },
       select: customerComplaintSelect,
@@ -308,10 +489,11 @@ mobileRouter.get("/customer/complaints/:id", requireRole("CUSTOMER"), async (req
   const requestId = z.coerce.bigint().positive().safeParse(req.params.id);
   if (!requestId.success) return res.status(400).json({ error: "Invalid complaint id" });
   try {
+    const accountIds = await accessibleAccountIds(req);
     const complaint = await prisma.serviceRequest.findFirst({
       where: {
         serviceRequestId: requestId.data,
-        customerId: BigInt(req.user!.userId),
+        accountId: { in: accountIds },
         OR: [{ requestType: "COMPLAINT" }, { category: "LEAKAGE" }],
       },
       select: customerComplaintSelect,
@@ -328,7 +510,7 @@ mobileRouter.post("/customer/leak-report", requireRole("CUSTOMER"), async (req, 
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message });
   try {
     const row = await createCustomerServiceRequest(
-      BigInt(req.user!.userId),
+      req,
       parsed.data,
       "LEAKAGE",
       "SERVICE_REQUEST",
@@ -348,14 +530,13 @@ mobileRouter.post("/customer/reconnection", requireRole("CUSTOMER"), async (req,
   }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message });
   try {
-    const customerId = BigInt(req.user!.userId);
-    const account = await ownedCustomerAccount(customerId, parsed.data.accountId);
+    const account = await ownedCustomerAccount(req, parsed.data.accountId);
     const settings = await prisma.systemSetting.findUnique({ where: { settingId: 1n } });
     const number = `RC-${new Date().getFullYear()}-${Date.now().toString().slice(-9)}`;
     const rows = await prisma.$queryRaw<any[]>`
       INSERT INTO aquaflow.reconnection_requests
         (request_number, customer_id, account_id, reason, contact_phone, reconnection_fee, disconnection_work_order_id)
-      VALUES (${number}, ${customerId}, ${account.accountId}, ${parsed.data.reason},
+      VALUES (${number}, ${account.customerId}, ${account.accountId}, ${parsed.data.reason},
         ${parsed.data.contactPhone || account.customer.phoneNumber},
         ${Number(settings?.reconnectionFee ?? 0)},
         (SELECT wo.work_order_id FROM aquaflow.work_orders wo
@@ -376,7 +557,6 @@ mobileRouter.post("/customer/reconnection/:reconnectionId/pay", requireRole("CUS
   const parsedId = z.coerce.bigint().positive().safeParse(req.params.reconnectionId);
   if (!parsedId.success) return res.status(400).json({ error: "Invalid reconnection request" });
   try {
-    const customerId = BigInt(req.user!.userId);
     const rows = await prisma.$queryRaw<any[]>`
       SELECT r.reconnection_request_id AS "reconnectionRequestId",
         r.request_number AS "requestNumber", r.customer_id AS "customerId",
@@ -390,7 +570,7 @@ mobileRouter.post("/customer/reconnection/:reconnectionId/pay", requireRole("CUS
       WHERE r.reconnection_request_id=${parsedId.data}`;
     const request = rows[0];
     if (!request) return res.status(404).json({ error: "Reconnection request not found" });
-    if (BigInt(request.customerId) !== customerId) {
+    if (!(await canAccessAccount(req, BigInt(request.accountId)))) {
       return res.status(403).json({ error: "This reconnection request does not belong to the authenticated customer" });
     }
     if (["REJECTED", "CANCELLED", "COMPLETED"].includes(request.status)) {
@@ -443,15 +623,14 @@ mobileRouter.get("/customer/reconnection/:reconnectionId/pay/:stkRequestId", req
     return res.status(400).json({ error: "Invalid reconnection payment request" });
   }
   try {
-    const customerId = BigInt(req.user!.userId);
     const requests = await prisma.$queryRaw<any[]>`
-      SELECT reconnection_request_id AS "reconnectionRequestId", request_number AS "requestNumber",
-        customer_id AS "customerId", fee_payment_status AS "feePaymentStatus"
-      FROM aquaflow.reconnection_requests
+      SELECT r.reconnection_request_id AS "reconnectionRequestId", r.request_number AS "requestNumber",
+        r.customer_id AS "customerId", r.account_id AS "accountId", r.fee_payment_status AS "feePaymentStatus"
+      FROM aquaflow.reconnection_requests r
       WHERE reconnection_request_id=${parsedReconnectionId.data}`;
     const reconnection = requests[0];
     if (!reconnection) return res.status(404).json({ error: "Reconnection request not found" });
-    if (BigInt(reconnection.customerId) !== customerId) {
+    if (!(await canAccessAccount(req, BigInt(reconnection.accountId)))) {
       return res.status(403).json({ error: "This reconnection request does not belong to the authenticated customer" });
     }
     const row = await prisma.mpesaStkRequest.findUnique({
@@ -1004,17 +1183,19 @@ function statementHttpError(status: number, message: string) {
 
 async function loadCustomerStatement(
   customerId: bigint,
+  accountId: bigint | null,
   from: Date,
   to: Date,
   fromText: string,
   toText: string,
 ): Promise<CustomerStatementData> {
-  // Ownership is resolved from the authenticated customer ID only. No client
-  // supplied account or customer ID is trusted by either statement endpoint.
+  // The route verifies any supplied account against portal access before this
+  // loader is called. The customer relation remains the billing identity.
   const customer = await prisma.customer.findUnique({
     where: { customerId },
     include: {
       accounts: {
+        where: accountId ? { accountId } : undefined,
         include: {
           category: true,
           route: { include: { zone: true } },
@@ -1199,8 +1380,14 @@ function sendStatementError(error: unknown, res: any, next: (error: unknown) => 
 mobileRouter.get("/customer/statement/summary", requireRole("CUSTOMER"), async (req, res, next) => {
   try {
     const range = parseStatementRange(req.query);
+    const requestedAccount = req.query.accountId
+      ? z.coerce.bigint().positive().safeParse(req.query.accountId)
+      : null;
+    if (requestedAccount && !requestedAccount.success) throw statementHttpError(400, "Invalid account selection.");
+    const account = requestedAccount?.success ? await ownedCustomerAccount(req, requestedAccount.data) : null;
     const statement = await loadCustomerStatement(
-      BigInt(req.user!.userId),
+      account?.customerId ?? BigInt(req.user!.userId),
+      account?.accountId ?? null,
       range.fromDate,
       range.toDate,
       range.from,
@@ -1225,8 +1412,14 @@ mobileRouter.get("/customer/statement", requireRole("CUSTOMER"), async (req, res
   if (!format.success) return res.status(400).json({ error: "Only format=pdf is supported." });
   try {
     const range = parseStatementRange(req.query);
+    const requestedAccount = req.query.accountId
+      ? z.coerce.bigint().positive().safeParse(req.query.accountId)
+      : null;
+    if (requestedAccount && !requestedAccount.success) throw statementHttpError(400, "Invalid account selection.");
+    const account = requestedAccount?.success ? await ownedCustomerAccount(req, requestedAccount.data) : null;
     const statement = await loadCustomerStatement(
-      BigInt(req.user!.userId),
+      account?.customerId ?? BigInt(req.user!.userId),
+      account?.accountId ?? null,
       range.fromDate,
       range.toDate,
       range.from,
@@ -1245,44 +1438,67 @@ mobileRouter.get("/customer/statement", requireRole("CUSTOMER"), async (req, res
 
 mobileRouter.get("/customer/overview", requireRole("CUSTOMER"), async (req, res, next) => {
   try {
-    const customerId = BigInt(req.user!.userId);
+    const accessRows = await prisma.customerAccountAccess.findMany({
+      where: { userId: credentialUserId(req), status: "ACTIVE" },
+      orderBy: [{ isDefault: "desc" }, { account: { accountNumber: "asc" } }],
+      include: { account: { select: { accountId: true, customerId: true } } },
+    });
+    if (!accessRows.length) {
+      return res.status(404).json({ error: "No verified water account is linked to this login" });
+    }
+    const accountIds = accessRows.map((access) => access.accountId);
+    const customerIds = [...new Set(accessRows.map((access) => access.account.customerId))];
+    const tokenCustomerId = BigInt(req.user!.customerId ?? req.user!.userId);
+    const customerId = customerIds.some((id) => id === tokenCustomerId) ? tokenCustomerId : customerIds[0];
     const customer = await prisma.customer.findUnique({
       where: { customerId },
-      include: {
-        accounts: {
-          include: {
-            property: { include: { zone: true } },
-            bills: { orderBy: { issueDate: "desc" }, take: 24 },
-            payments: {
-              include: { channel: true, receipt: true },
-              orderBy: { paymentDate: "desc" },
-              take: 24,
-            },
-          },
-          orderBy: { accountNumber: "asc" },
-        },
-        serviceRequests: { orderBy: { createdAt: "desc" }, take: 20 },
-        notifications: {
-          where: { deliveryStatus: { in: ["SENT", "DELIVERED"] } },
-          orderBy: { createdAt: "desc" },
-          take: 30,
-        },
-      },
     });
     if (!customer || customer.status !== "ACTIVE") {
       return res.status(404).json({ error: "Active customer profile not found" });
     }
     const name = customer.organizationName ||
       [customer.firstName, customer.middleName, customer.lastName].filter(Boolean).join(" ");
-    const connections = await prisma.newConnectionApplication.findMany({
-      where: { customerId },
+    const [accessibleAccounts, serviceRequests, notifications, connections] = await Promise.all([
+      prisma.customerAccount.findMany({
+        where: { accountId: { in: accountIds } },
+        include: {
+          customer: true,
+          property: { include: { zone: true } },
+          meterAssignments: {
+            where: { assignmentStatus: "ACTIVE" },
+            include: { meter: true },
+            orderBy: { assignmentDate: "desc" },
+          },
+          bills: { orderBy: { issueDate: "desc" }, take: 24 },
+          payments: {
+            include: { channel: true, receipt: true },
+            orderBy: { paymentDate: "desc" },
+            take: 24,
+          },
+        },
+        orderBy: { accountNumber: "asc" },
+      }),
+      prisma.serviceRequest.findMany({ where: { accountId: { in: accountIds } }, orderBy: { createdAt: "desc" }, take: 20 }),
+      prisma.notification.findMany({
+        where: {
+          deliveryStatus: { in: ["SENT", "DELIVERED"] },
+          OR: [{ accountId: { in: accountIds } }, { customerId: { in: customerIds } }],
+        },
+        orderBy: { createdAt: "desc" },
+        take: 30,
+      }),
+      prisma.newConnectionApplication.findMany({
+      where: { customerId: { in: customerIds } },
       orderBy: { createdAt: "desc" },
       take: 20,
-    });
+      }),
+    ]);
     const settings = await prisma.systemSetting.findUnique({ where: { settingId: 1n } });
-    const accounts = customer.accounts.map((account) => ({
+    const accounts = accessibleAccounts.map((account) => ({
       accountId: account.accountId,
       accountNumber: account.accountNumber,
+      customerNumber: account.customer.customerNumber,
+      customerName: customerDisplayName(account.customer),
       status: account.accountStatus,
       currentBalance: account.currentBalance,
       connectionDate: account.connectionDate,
@@ -1291,6 +1507,12 @@ mobileRouter.get("/customer/overview", requireRole("CUSTOMER"), async (req, res,
         address: account.property.physicalAddress,
         zoneName: account.property.zone?.zoneName,
       },
+      meters: account.meterAssignments.map((assignment) => ({
+        meterId: assignment.meter.meterId,
+        meterNumber: assignment.meter.meterNumber,
+        serialNumber: assignment.meter.serialNumber,
+        status: assignment.meter.status,
+      })),
       bills: account.bills.map((bill) => ({
         billId: bill.billId,
         billNumber: bill.billNumber,
@@ -1346,14 +1568,14 @@ mobileRouter.get("/customer/overview", requireRole("CUSTOMER"), async (req, res,
       summary: {
         accounts: accounts.length,
         balance: accounts.reduce((sum, account) => sum + Number(account.currentBalance), 0),
-        openRequests: customer.serviceRequests.filter((item) => !["RESOLVED", "CLOSED", "CANCELLED"].includes(item.status)).length,
-        unreadNotifications: customer.notifications.filter((item) => item.deliveryStatus !== "DELIVERED").length,
+        openRequests: serviceRequests.filter((item) => !["RESOLVED", "CLOSED", "CANCELLED"].includes(item.status)).length,
+        unreadNotifications: notifications.filter((item) => !item.readAt).length,
       },
       reconnectionFee: Number(settings?.reconnectionFee ?? 0),
       accounts,
-      serviceRequests: customer.serviceRequests,
+      serviceRequests,
       connections,
-      notifications: customer.notifications,
+      notifications,
     });
   } catch (error) {
     next(error);
@@ -1362,18 +1584,19 @@ mobileRouter.get("/customer/overview", requireRole("CUSTOMER"), async (req, res,
 
 mobileRouter.get("/customer/notifications", requireRole("CUSTOMER"), async (req, res, next) => {
   try {
-    const customerId = BigInt(req.user!.userId);
-    const customer = await prisma.customer.findUnique({
-      where: { customerId },
-      select: { status: true },
+    const accessRows = await prisma.customerAccountAccess.findMany({
+      where: { userId: credentialUserId(req), status: "ACTIVE" },
+      select: { accountId: true, account: { select: { customerId: true } } },
     });
-    if (!customer || customer.status !== "ACTIVE") {
-      return res.status(404).json({ error: "Active customer profile not found" });
+    if (!accessRows.length) {
+      return res.status(404).json({ error: "No verified water account is linked to this login" });
     }
+    const accountIds = accessRows.map((access) => access.accountId);
+    const customerIds = [...new Set(accessRows.map((access) => access.account.customerId))];
     const rows = await prisma.notification.findMany({
       where: {
-        customerId,
         deliveryStatus: { in: ["SENT", "DELIVERED"] },
+        OR: [{ accountId: { in: accountIds } }, { customerId: { in: customerIds } }],
       },
       select: {
         notificationId: true,
@@ -1383,12 +1606,38 @@ mobileRouter.get("/customer/notifications", requireRole("CUSTOMER"), async (req,
         deliveryStatus: true,
         sentAt: true,
         deliveredAt: true,
+        readAt: true,
         createdAt: true,
       },
       orderBy: { createdAt: "desc" },
       take: 100,
     });
     res.json({ rows, total: rows.length });
+  } catch (error) {
+    next(error);
+  }
+});
+
+mobileRouter.patch("/customer/notifications/read", requireRole("CUSTOMER"), async (req, res, next) => {
+  try {
+    const accessRows = await prisma.customerAccountAccess.findMany({
+      where: { userId: credentialUserId(req), status: "ACTIVE" },
+      select: { accountId: true, account: { select: { customerId: true } } },
+    });
+    if (!accessRows.length) {
+      return res.status(404).json({ error: "No verified water account is linked to this login" });
+    }
+    const accountIds = accessRows.map((access) => access.accountId);
+    const customerIds = [...new Set(accessRows.map((access) => access.account.customerId))];
+    const result = await prisma.notification.updateMany({
+      where: {
+        readAt: null,
+        deliveryStatus: { in: ["SENT", "DELIVERED"] },
+        OR: [{ accountId: { in: accountIds } }, { customerId: { in: customerIds } }],
+      },
+      data: { readAt: new Date(), updatedAt: new Date() },
+    });
+    res.json({ updated: result.count, unreadNotifications: 0 });
   } catch (error) {
     next(error);
   }
@@ -1615,6 +1864,16 @@ const fieldWorkOrderRoles = requireRole("METER_READER", "FIELD_OFFICER", "METER_
 const workOrderIdSchema = z.coerce.bigint().positive();
 const mobileWorkOrderStatuses = ["ASSIGNED", "ACCEPTED", "IN_PROGRESS", "COMPLETED", "ESCALATED"] as const;
 const activeWorkOrderAssignmentStatuses = ["ASSIGNED", "ACCEPTED", "COMPLETED"];
+const escalationReasons = [
+  { code: "CUSTOMER_UNAVAILABLE", label: "Customer unavailable" },
+  { code: "SITE_INACCESSIBLE", label: "Site inaccessible" },
+  { code: "SAFETY_RISK", label: "Safety risk" },
+  { code: "METER_OR_EQUIPMENT_ISSUE", label: "Meter or equipment issue" },
+  { code: "INCORRECT_TASK_DETAILS", label: "Incorrect task details" },
+  { code: "REQUIRES_SUPERVISOR", label: "Requires supervisor" },
+  { code: "OTHER", label: "Other" },
+] as const;
+const escalationReasonCodes: readonly string[] = escalationReasons.map((reason) => reason.code);
 
 async function activeFieldOfficer(req: Request, res: Response) {
   const officer = await prisma.fieldOfficer.findUnique({
@@ -1731,6 +1990,13 @@ mobileRouter.get("/field/work-orders/materials/catalogue", fieldWorkOrderRoles, 
   } catch (error) { next(error); }
 });
 
+mobileRouter.get("/field/work-orders/escalation-reasons", fieldWorkOrderRoles, async (req, res, next) => {
+  try {
+    if (!(await activeFieldOfficer(req, res))) return;
+    res.json({ items: escalationReasons });
+  } catch (error) { next(error); }
+});
+
 mobileRouter.get("/field/work-orders", fieldWorkOrderRoles, async (req, res, next) => {
   try {
     const officer = await activeFieldOfficer(req, res);
@@ -1790,7 +2056,7 @@ mobileRouter.get("/field/work-orders/:id", fieldWorkOrderRoles, async (req, res,
         WHERE wo.work_order_id = ${parsed.data}`,
       prisma.$queryRaw<any[]>`
         SELECT update_id AS "updateId", previous_status AS "previousStatus", new_status AS "newStatus",
-               notes, updated_at AS "updatedAt" FROM aquaflow.work_order_updates
+               reason_code AS "reasonCode", notes, updated_at AS "updatedAt" FROM aquaflow.work_order_updates
         WHERE work_order_id = ${parsed.data} ORDER BY updated_at DESC`,
       prisma.$queryRaw<any[]>`SELECT * FROM aquaflow.work_order_evidence WHERE work_order_id = ${parsed.data} ORDER BY captured_at DESC`,
     ]);
@@ -1804,7 +2070,33 @@ mobileRouter.get("/field/work-orders/:id", fieldWorkOrderRoles, async (req, res,
 
 const mobileTransitionSchema = z.object({
   status: z.enum(mobileWorkOrderStatuses),
-  notes: z.string().trim().min(2).max(5000),
+  reasonCode: z.string().trim().optional(),
+  notes: z.string().optional(),
+}).strict().superRefine((value, context) => {
+  const notes = value.notes?.trim();
+  if (value.status === "ESCALATED") {
+    if (!value.reasonCode || !escalationReasonCodes.includes(value.reasonCode)) {
+      context.addIssue({ code: "custom", path: ["reasonCode"], message: "Select a valid escalation reason" });
+    }
+    if (value.notes != null && notes!.length < 2) {
+      context.addIssue({ code: "custom", path: ["notes"], message: "Notes must contain at least 2 characters when supplied" });
+    }
+    if ((notes?.length ?? 0) > 250) {
+      context.addIssue({ code: "custom", path: ["notes"], message: "Notes must contain at most 250 characters" });
+    }
+    if (value.reasonCode === "OTHER" && (notes?.length ?? 0) < 2) {
+      context.addIssue({ code: "custom", path: ["notes"], message: "Notes of at least 2 characters are required for Other" });
+    }
+  } else {
+    if (!notes || notes.length < 2) {
+      context.addIssue({ code: "custom", path: ["notes"], message: "Notes must contain at least 2 characters" });
+    } else if (notes.length > 5000) {
+      context.addIssue({ code: "custom", path: ["notes"], message: "Notes must contain at most 5000 characters" });
+    }
+    if (value.reasonCode != null) {
+      context.addIssue({ code: "custom", path: ["reasonCode"], message: "reasonCode is only valid for escalation" });
+    }
+  }
 });
 const mobileTransitions: Record<string, string[]> = {
   ASSIGNED: ["ACCEPTED", "ESCALATED"],
@@ -1833,21 +2125,31 @@ mobileRouter.patch("/field/work-orders/:id/status", fieldWorkOrderRoles, async (
     if (!(mobileTransitions[owned.status] ?? []).includes(input.data.status)) {
       return res.status(409).json({ error: `Cannot change a ${owned.status} work order to ${input.data.status}` });
     }
-    if (input.data.status === "ESCALATED" && input.data.notes.trim().length < 5) {
-      return res.status(400).json({ error: "An escalation reason of at least 5 characters is required" });
-    }
-    await prisma.$transaction(async (tx) => {
+    const notes = input.data.notes?.trim() || null;
+    const reasonCode = input.data.status === "ESCALATED" ? input.data.reasonCode! : null;
+    const update = await prisma.$transaction(async (tx) => {
       await tx.$executeRaw`UPDATE aquaflow.work_orders SET status=${input.data.status},
         started_at=CASE WHEN ${input.data.status}='IN_PROGRESS' THEN CURRENT_TIMESTAMP ELSE started_at END,
         completed_at=CASE WHEN ${input.data.status}='COMPLETED' THEN CURRENT_TIMESTAMP ELSE completed_at END,
-        completion_notes=CASE WHEN ${input.data.status}='COMPLETED' THEN ${input.data.notes} ELSE completion_notes END,
+        completion_notes=CASE WHEN ${input.data.status}='COMPLETED' THEN ${notes} ELSE completion_notes END,
         updated_at=CURRENT_TIMESTAMP WHERE work_order_id=${workOrderId.data}`;
-      await tx.$executeRaw`INSERT INTO aquaflow.work_order_updates
-        (work_order_id, field_officer_id, previous_status, new_status, notes)
-        VALUES (${workOrderId.data}, ${owned.fieldOfficerId}, ${owned.status}, ${input.data.status}, ${input.data.notes})`;
+      const updates = await tx.$queryRaw<any[]>`INSERT INTO aquaflow.work_order_updates
+        (work_order_id, field_officer_id, previous_status, new_status, reason_code, notes)
+        VALUES (${workOrderId.data}, ${owned.fieldOfficerId}, ${owned.status}, ${input.data.status}, ${reasonCode}, ${notes})
+        RETURNING updated_at AS "updatedAt"`;
       if (input.data.status === "ACCEPTED") await tx.$executeRaw`UPDATE aquaflow.work_order_assignments SET status='ACCEPTED', accepted_at=CURRENT_TIMESTAMP WHERE assignment_id=${owned.assignment_id}`;
+      return updates[0];
     });
-    res.json({ workOrderId: workOrderId.data, previousStatus: owned.status, status: input.data.status });
+    res.json({
+      workOrderId: workOrderId.data,
+      previousStatus: owned.status,
+      status: input.data.status,
+      ...(input.data.status === "ESCALATED" ? {
+        reasonCode,
+        notes,
+        escalatedAt: update.updatedAt,
+      } : {}),
+    });
   } catch (error) { next(error); }
 });
 

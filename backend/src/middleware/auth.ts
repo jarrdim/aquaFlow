@@ -4,6 +4,8 @@ import { prisma } from "../lib/prisma";
 
 export interface AuthPayload {
   userId: string;
+  authUserId?: string;
+  customerId?: string;
   username: string;
   userType: string;
   roles: string[];

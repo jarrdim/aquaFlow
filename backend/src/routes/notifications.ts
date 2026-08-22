@@ -524,7 +524,7 @@ export async function processOne(notificationId: bigint) {
           },
         },
       });
-      return prisma.notification.update({
+      const delivered = await prisma.notification.update({
         where: { notificationId },
         data: {
           providerId: provider.providerId,
@@ -538,6 +538,8 @@ export async function processOne(notificationId: bigint) {
         },
         include,
       });
+      if (delivered.billId) await prisma.bill.update({ where: { billId: delivered.billId }, data: { notificationStatus: "SENT", updatedAt: now } });
+      return delivered;
     } catch (error) {
       const reason =
         error instanceof Error ? error.message : "SMTP delivery failed.";
@@ -567,7 +569,7 @@ export async function processOne(notificationId: bigint) {
           responsePayload: accepted.result,
         },
       });
-      return prisma.notification.update({
+      const delivered = await prisma.notification.update({
         where: { notificationId },
         data: {
           providerId: provider.providerId,
@@ -581,6 +583,8 @@ export async function processOne(notificationId: bigint) {
         },
         include,
       });
+      if (delivered.billId) await prisma.bill.update({ where: { billId: delivered.billId }, data: { notificationStatus: "SENT", updatedAt: now } });
+      return delivered;
     } catch (error) {
       const reason = error instanceof Error ? error.message : "Onfon SMS delivery failed.";
       return failAttempt(notification, provider, attemptNumber, reason);
@@ -628,7 +632,7 @@ export async function processOne(notificationId: bigint) {
       responsePayload: { accepted: true, simulated: true },
     },
   });
-  return prisma.notification.update({
+  const delivered = await prisma.notification.update({
     where: { notificationId },
     data: {
       providerId: provider.providerId,
@@ -643,6 +647,8 @@ export async function processOne(notificationId: bigint) {
     },
     include,
   });
+  if (delivered.billId) await prisma.bill.update({ where: { billId: delivered.billId }, data: { notificationStatus: "SENT", updatedAt: now } });
+  return delivered;
 }
 
 notificationsRouter.get("/dashboard", async (_req, res, next) => {
@@ -1250,6 +1256,70 @@ notificationsRouter.get("/audience", managers, async (req, res, next) => {
   }
 });
 
+notificationsRouter.get("/broadcast-audience", managers, async (_req, res, next) => {
+  try {
+    const where = { status: "ACTIVE", phoneNumber: { not: "" } };
+    const [totalCustomers, smsReady, missingPhone] = await Promise.all([
+      prisma.customer.count({ where: { status: "ACTIVE" } }),
+      prisma.customer.count({ where }),
+      prisma.customer.count({ where: { status: "ACTIVE", phoneNumber: "" } }),
+    ]);
+    res.json({ totalCustomers, smsReady, missingPhone });
+  } catch (error) {
+    next(error);
+  }
+});
+
+notificationsRouter.post("/send-general-broadcast", managers, async (req, res, next) => {
+  const parsed = z.object({
+    message: z.string().trim().min(1).max(1000),
+    scheduledAt: z.coerce.date().optional().nullable(),
+  }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+  try {
+    const customers = await prisma.customer.findMany({
+      where: { status: "ACTIVE", phoneNumber: { not: "" } },
+      select: { customerId: true, customerNumber: true, customerType: true, organizationName: true, firstName: true, middleName: true, lastName: true, phoneNumber: true },
+      orderBy: { customerNumber: "asc" },
+    });
+    const queued = customers.length ? await prisma.notification.findMany({
+      where: {
+        customerId: { in: customers.map((customer) => customer.customerId) },
+        notificationType: "GENERAL",
+        channel: "SMS",
+        deliveryStatus: "QUEUED",
+      },
+      select: { customerId: true },
+    }) : [];
+    const queuedIds = new Set(queued.map((notification) => String(notification.customerId)));
+    const data = customers.flatMap((customer) => {
+      if (queuedIds.has(String(customer.customerId))) return [];
+      const values = { customer_name: customerName(customer), customer_number: customer.customerNumber };
+      return [{
+        customerId: customer.customerId,
+        notificationType: "GENERAL",
+        channel: "SMS",
+        recipient: customer.phoneNumber,
+        messageBody: render(parsed.data.message, values),
+        scheduledAt: parsed.data.scheduledAt,
+        requestedBy: uid(req),
+        metadata: { targetType: "ALL_ACTIVE_CUSTOMERS", campaignType: "GENERAL_SMS_BROADCAST" },
+      }];
+    });
+    if (!data.length) return res.status(409).json({ error: "No SMS messages were queued. Equivalent messages may already be waiting in the delivery queue." });
+    const created = await prisma.notification.createMany({ data });
+    res.status(201).json({
+      audience: customers.length,
+      created: created.count,
+      skippedDuplicate: customers.length - data.length,
+      queued: true,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 notificationsRouter.post("/send-bulk", managers, async (req, res, next) => {
   const audienceFilters = z.object({
     search: z.string().trim().max(100).default(""),
@@ -1686,6 +1756,12 @@ notificationsRouter.post("/process", managers, async (req, res, next) => {
           batch.map((row) => processOne(row.notificationId)),
         )),
       );
+    }
+    const deliveredBillIds = [...new Set(processed
+      .filter((notification) => notification?.billId && ["SENT", "DELIVERED"].includes(notification.deliveryStatus))
+      .map((notification) => notification.billId as bigint))];
+    if (deliveredBillIds.length) {
+      await prisma.bill.updateMany({ where: { billId: { in: deliveredBillIds } }, data: { notificationStatus: "SENT", updatedAt: new Date() } });
     }
     res.json({ processed });
   } catch (error) {

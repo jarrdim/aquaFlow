@@ -2898,6 +2898,9 @@ export function BillNotifications() {
   const [bills, setBills] = useState<Row[]>([]);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [search, setSearch] = useState("");
+  const [billStatus, setBillStatus] = useState("");
+  const [notificationStatus, setNotificationStatus] = useState("");
   useEffect(() => {
     api.listBillingCycles().then((rows) => {
       setCycles(rows);
@@ -2911,11 +2914,17 @@ export function BillNotifications() {
     try {
       const result = await api.sendBillNotifications({
         billingCycleId: cycleId,
+        billIds: filteredBills.map((bill) => bill.billId),
         channels,
       });
+      const delivery = await api.processNotifications((result.notificationIds ?? []).map(String), 1000);
+      const processed = delivery.processed ?? [];
+      const successful = processed.filter((item: Row) => ["SENT", "DELIVERED"].includes(item?.deliveryStatus)).length;
+      const failed = processed.filter((item: Row) => item?.deliveryStatus === "FAILED").length;
       setMessage(
-        `${result.notifications} notification(s) sent for ${result.bills} bill(s).`,
+        `${successful} notification(s) delivered or accepted for ${result.bills} bill(s).${failed ? ` ${failed} failed; review the delivery queue.` : ""}`,
       );
+      setBills(await api.listBills({ billingCycleId: cycleId }));
     } catch (e: any) {
       setError(e.message);
     }
@@ -2923,6 +2932,22 @@ export function BillNotifications() {
   const selected = bills.filter((b) =>
     ["APPROVED", "POSTED", "PARTIALLY_PAID", "PAID"].includes(b.status),
   );
+  const filteredBills = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    return selected.filter((bill) => {
+      const matchesSearch = !query || [
+        bill.billNumber,
+        bill.customerName,
+        bill.account?.accountNumber,
+      ].some((value) => String(value ?? "").toLowerCase().includes(query));
+      return matchesSearch &&
+        (!billStatus || bill.status === billStatus) &&
+        (!notificationStatus || bill.notificationStatus === notificationStatus);
+    });
+  }, [selected, search, billStatus, notificationStatus]);
+  const selectedCycle = cycles.find((cycle) => String(cycle.billingCycleId) === cycleId);
+  const readingCycle = selectedCycle?.readingCycles?.[0];
+  const readingCycleClosed = readingCycle?.status === "CLOSED";
   return (
     <Page
       title="Bill notifications"
@@ -2942,10 +2967,12 @@ export function BillNotifications() {
             </Field>
             <Field label="Notification channels">
               <div className="grid grid-cols-2 gap-2 rounded-lg border p-3">
-                {["SMS", "APP", "EMAIL", "WHATSAPP"].map((channel) => (
-                  <label key={channel} className="flex gap-2">
+                {["SMS", "APP", "EMAIL", "WHATSAPP"].map((channel) => {
+                  const disabled = channel === "EMAIL" || channel === "WHATSAPP";
+                  return <label key={channel} className={`flex gap-2 ${disabled ? "text-slate-400" : ""}`}>
                     <input
                       type="checkbox"
+                      disabled={disabled}
                       checked={channels.includes(channel)}
                       onChange={(e) =>
                         setChannels(
@@ -2955,29 +2982,61 @@ export function BillNotifications() {
                         )
                       }
                     />
-                    {channel}
-                  </label>
-                ))}
+                    {channel}{disabled ? " (disabled)" : ""}
+                  </label>;
+                })}
               </div>
             </Field>
             <div className="rounded-lg bg-blue-50 p-3 text-sm text-blue-700">
-              {selected.length} approved or posted customer bill(s) selected.
+              {filteredBills.length} matching bill(s) will be sent from {selected.length} eligible bill(s).
+            </div>
+            <div className={`rounded-lg p-3 text-sm ${readingCycleClosed ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-800"}`}>
+              {readingCycle
+                ? `Reading cycle: ${readingCycle.cycleName} · ${readingCycle.status}`
+                : "No reading cycle is linked to this billing period."}
             </div>
             <Button
               className="w-full"
-              disabled={!cycleId || !channels.length || !selected.length}
+              disabled={!cycleId || !channels.length || !filteredBills.length || !readingCycleClosed}
               onClick={send}
             >
-              Send notifications
+              {readingCycleClosed ? "Send bill notifications" : "Close reading cycle first"}
             </Button>
           </div>
         </Card>
         <Card title="Message preview">
           <div className="rounded-xl bg-slate-50 p-5 text-slate-700">
-            Dear <strong>[Customer Name]</strong>, your water bill for{" "}
-            <strong>[Billing Period]</strong> is <strong>KSh [Amount]</strong>.
-            Please pay by <strong>[Due Date]</strong>. Account:{" "}
-            <strong>[Account Number]</strong>.
+            Dear <strong>[Customer Name]</strong>, water bill for <strong>[Billing Period]</strong>.
+            Acc: <strong>[Account Number]</strong>. Reading cycle: <strong>[Closed Reading Cycle]</strong>.
+            Prev: <strong>[Previous Reading]</strong>, Curr: <strong>[Current Reading]</strong>,
+            Units: <strong>[Total Units]</strong>. Amount due: <strong>KSh [Amount]</strong>.
+            Pay by <strong>[Due Date]</strong>.
+          </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-3">
+            <Field label="Search bill, customer or account">
+              <input className={INPUT} value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search records" />
+            </Field>
+            <Field label="Bill status">
+              <SearchableSelect className={INPUT} value={billStatus} onChange={(e) => setBillStatus(e.target.value)}>
+                <option value="">All eligible statuses</option>
+                <option value="APPROVED">Approved</option>
+                <option value="POSTED">Posted</option>
+                <option value="PARTIALLY_PAID">Partially paid</option>
+                <option value="PAID">Paid</option>
+              </SearchableSelect>
+            </Field>
+            <Field label="Notification status">
+              <SearchableSelect className={INPUT} value={notificationStatus} onChange={(e) => setNotificationStatus(e.target.value)}>
+                <option value="">All notification statuses</option>
+                <option value="PENDING">Pending</option>
+                <option value="SENT">Sent</option>
+                <option value="FAILED">Failed</option>
+              </SearchableSelect>
+            </Field>
+          </div>
+          <div className="mt-3 flex items-center justify-between text-sm text-slate-500">
+            <span>Showing {filteredBills.length} of {selected.length} eligible bills</span>
+            {(search || billStatus || notificationStatus) && <button type="button" className="font-semibold text-aqua-700 hover:text-aqua-600" onClick={() => { setSearch(""); setBillStatus(""); setNotificationStatus(""); }}>Clear filters</button>}
           </div>
           <div className="mt-4 overflow-x-auto">
             <table className="w-full">
@@ -2990,7 +3049,7 @@ export function BillNotifications() {
                 </tr>
               </thead>
               <tbody>
-                {selected.map((bill) => (
+                {filteredBills.map((bill) => (
                   <tr key={bill.billId} className="border-t">
                     <td className={TD}>{bill.billNumber}</td>
                     <td className={TD}>{bill.customerName}</td>
@@ -3000,6 +3059,7 @@ export function BillNotifications() {
                     </td>
                   </tr>
                 ))}
+                {!filteredBills.length && <tr><td colSpan={4} className="px-4 py-12 text-center text-sm text-slate-400">No eligible bills match these filters.</td></tr>}
               </tbody>
             </table>
           </div>

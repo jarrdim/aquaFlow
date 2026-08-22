@@ -529,7 +529,6 @@ export function MeterDashboard() {
 }
 
 const emptyMeter = {
-  meterNumber: "",
   meterType: "CUSTOMER",
   technology: "MANUAL",
   brand: "",
@@ -582,16 +581,10 @@ export function RegisterMeter() {
       <Card title="Meter information">
         <form onSubmit={(e) => submit(e)}>
           {error && <Notice>{error}</Notice>}
+          <div className="mb-4 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800">
+            The meter number will be generated automatically when this meter is saved.
+          </div>
           <div className="grid gap-x-4 gap-y-3 md:grid-cols-2 xl:grid-cols-3">
-            <Field label="Meter number" required>
-              <input
-                required
-                className={INPUT}
-                value={form.meterNumber}
-                onChange={(e) => update("meterNumber", e.target.value)}
-                placeholder="MTR-2027-0001"
-              />
-            </Field>
             <Field label="Meter type" required>
               <SearchableSelect
                 className={INPUT}

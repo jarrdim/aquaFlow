@@ -45,6 +45,25 @@ const meterSchema = z.object({
   path: ["warrantyExpiryDate"], message: "Warranty expiry must be on or after the purchase date",
 });
 
+const registerMeterSchema = meterSchema.innerType().omit({ meterNumber: true }).refine(
+  (data) => !data.purchaseDate || !data.warrantyExpiryDate || data.warrantyExpiryDate >= data.purchaseDate,
+  { path: ["warrantyExpiryDate"], message: "Warranty expiry must be on or after the purchase date" },
+);
+
+async function nextMeterNumber() {
+  const year = new Date().getFullYear();
+  const prefix = `MTR-${year}-`;
+  const meters = await prisma.meter.findMany({
+    where: { meterNumber: { startsWith: prefix } },
+    select: { meterNumber: true },
+  });
+  const highest = meters.reduce((max, meter) => {
+    const sequence = Number(meter.meterNumber.slice(prefix.length));
+    return Number.isInteger(sequence) ? Math.max(max, sequence) : max;
+  }, 0);
+  return `${prefix}${String(highest + 1).padStart(5, "0")}`;
+}
+
 const meterProfileSchema = z.object({
   meterNumber: z.string().trim().min(1),
   meterType: z.enum(meterTypes),
@@ -314,13 +333,13 @@ metersRouter.get("/", async (req, res) => {
 });
 
 metersRouter.post("/", async (req, res) => {
-  const parsed = meterSchema.safeParse(req.body);
+  const parsed = registerMeterSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const data = parsed.data;
   try {
     const meter = await prisma.$transaction(async (tx) => {
       const created = await tx.meter.create({ data: {
-        ...data, brand: data.brand, model: data.model, serialNumber: data.serialNumber,
+        ...data, meterNumber: await nextMeterNumber(), brand: data.brand, model: data.model, serialNumber: data.serialNumber,
         installationDate: data.installationDate ? new Date(data.installationDate) : null,
         purchaseDate: data.purchaseDate ? new Date(data.purchaseDate) : null,
         warrantyExpiryDate: data.warrantyExpiryDate ? new Date(data.warrantyExpiryDate) : null,

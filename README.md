@@ -204,6 +204,33 @@ replace the placeholders with newly generated credentials from one Daraja app.
 testing, expose backend port 4000 through a secure tunnel. Never commit Consumer
 Secrets, passkeys or callback tokens.
 
+### M-Pesa PayBill (C2B)
+
+PayBill payments made directly from a customer's phone are received through
+Daraja C2B validation and confirmation callbacks. Copy the `MPESA_C2B_*`
+variables from `backend/.env.example`, set both callback URLs to the public
+HTTPS API address, and use separate long random validation and confirmation
+tokens. The optional dedicated
+`MPESA_C2B_CONSUMER_KEY` and `MPESA_C2B_CONSUMER_SECRET` let C2B use a separate
+Daraja app while the existing `MPESA_CONSUMER_*` credentials continue serving
+STK Push. After deployment, an
+authenticated System Administrator or Finance Manager must register the URLs
+once by sending `POST /api/payments/mpesa/c2b/register`.
+
+Daraja rejects callback URLs containing the word `mpesa`, so the public C2B
+callbacks use `/api/payments/c2b/validation` and
+`/api/payments/c2b/confirmation`.
+The current Daraja C2B integration uses the v2 register and callback contract.
+Use the predefined C2B shortcode shown by the Daraja sandbox simulator rather
+than copying a shortcode from a documentation example.
+
+The customer's PayBill account number (`BillRefNumber`) is matched
+case-insensitively to an AquaFlow customer account. A match posts the payment,
+allocates it to the oldest open bills, updates the account balance, creates a
+receipt, and records an audit event. Confirmed payments with unknown account
+numbers are retained in suspense for manual allocation. Repeated callbacks are
+safe because the M-Pesa transaction ID is unique.
+
 ### Notification management test
 
 Open **Notifications** from the main sidebar. The database upgrade creates safe

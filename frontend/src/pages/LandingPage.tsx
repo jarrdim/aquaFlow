@@ -66,7 +66,7 @@ const modules = [
 export default function LandingPage() {
   const { enabled: privacyMode } = usePrivacyMode();
   const authenticated = Boolean(getToken());
-  const primaryPath = authenticated ? "/customers" : "/login";
+  const primaryPath = authenticated ? "/dashboard" : "/login";
   const primaryLabel = authenticated ? "Open workspace" : "Sign in securely";
 
   return (

@@ -445,7 +445,7 @@ function NotificationTable({
 }
 
 export function NotificationSend() {
-  const [mode, setMode] = useState<"SINGLE" | "BULK">("BULK");
+  const [mode, setMode] = useState<"SINGLE" | "BULK" | "BROADCAST">("BROADCAST");
   const modeSwitch = (
     <div className="inline-flex rounded-xl border border-slate-200 bg-white p-1 shadow-sm">
       <button
@@ -462,13 +462,87 @@ export function NotificationSend() {
       >
         Bulk balance campaign
       </button>
+      <button
+        type="button"
+        className={`rounded-lg px-4 py-2 text-sm font-semibold ${mode === "BROADCAST" ? "bg-aqua-700 text-white shadow-sm" : "text-slate-600 hover:bg-slate-50"}`}
+        onClick={() => setMode("BROADCAST")}
+      >
+        General SMS broadcast
+      </button>
     </div>
   );
   return (
     mode === "SINGLE"
       ? <NotificationSendLegacy modeSwitch={modeSwitch} />
-      : <BulkNotificationSend modeSwitch={modeSwitch} />
+      : mode === "BULK"
+        ? <BulkNotificationSend modeSwitch={modeSwitch} />
+        : <GeneralSmsBroadcast modeSwitch={modeSwitch} />
   );
+}
+
+function GeneralSmsBroadcast({ modeSwitch }: { modeSwitch: ReactNode }) {
+  const [audience, setAudience] = useState<Row>({ totalCustomers: 0, smsReady: 0, missingPhone: 0 });
+  const [message, setMessage] = useState("");
+  const [scheduledAt, setScheduledAt] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+
+  useEffect(() => {
+    api.notificationBroadcastAudience()
+      .then(setAudience)
+      .catch((e) => setError(errorText(e)))
+      .finally(() => setLoading(false));
+  }, []);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!window.confirm(`Queue this SMS for ${Number(audience.smsReady).toLocaleString()} active customers?`)) return;
+    setBusy(true); setError(""); setSuccess("");
+    try {
+      const result = await api.sendGeneralSmsBroadcast({
+        message,
+        scheduledAt: scheduledAt ? new Date(scheduledAt).toISOString() : undefined,
+      });
+      setSuccess(`${Number(result.created).toLocaleString()} SMS notification(s) queued successfully.${Number(result.skippedDuplicate) ? ` ${Number(result.skippedDuplicate).toLocaleString()} existing queued notification(s) were skipped.` : ""}`);
+      setMessage("");
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const smsSegments = message ? Math.max(1, Math.ceil(message.length / (/[^\x00-\x7F]/.test(message) ? 70 : 160))) : 0;
+  return <Page
+    title="General customer SMS broadcast"
+    subtitle="Compose one service announcement and queue it for every active customer with a mobile number"
+    actions={<>{modeSwitch}<Link to="/notifications/queue" className="rounded-lg bg-aqua-700 px-4 py-2 text-sm font-semibold text-white hover:bg-aqua-600">Open delivery queue</Link></>}
+  >
+    <Notice error={error} success={success} />
+    <div className="mb-5 overflow-hidden rounded-2xl border border-navy-700 bg-navy-800 p-6 text-white shadow-sm">
+      <div className="flex flex-col justify-between gap-5 lg:flex-row lg:items-center">
+        <div><div className="text-xs font-bold uppercase tracking-[0.2em] text-aqua-100">Utility-wide communication</div><h2 className="mt-2 text-2xl font-extrabold text-white">Reach all active customers in one controlled campaign</h2><p className="mt-2 max-w-2xl text-sm leading-6 text-blue-100">Messages are queued for audit and provider processing. Customers without a mobile number are excluded automatically.</p></div>
+        <div className="rounded-2xl border border-aqua-500/40 bg-aqua-700 px-5 py-4 shadow-sm"><div className="text-xs uppercase tracking-wider text-aqua-100">SMS-ready audience</div><div className="mt-1 text-3xl font-extrabold text-white">{loading ? "Loading..." : Number(audience.smsReady).toLocaleString()}</div></div>
+      </div>
+    </div>
+    <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
+      <Card title="Compose announcement">
+        <form onSubmit={submit} className="space-y-5">
+          <label className="block text-sm font-semibold text-slate-700">SMS message<textarea required maxLength={1000} className={`${INPUT} mt-2 min-h-52 resize-y leading-6`} value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Type the announcement customers should receive..." /></label>
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500"><span>{message.length.toLocaleString()} / 1,000 characters</span><span>{smsSegments || 0} estimated SMS segment{smsSegments === 1 ? "" : "s"} per customer</span></div>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4"><div className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">Personalisation available</div><p className="text-sm text-slate-600">Use <code className="rounded bg-white px-1.5 py-1 text-aqua-700">{"{{customer_name}}"}</code> or <code className="rounded bg-white px-1.5 py-1 text-aqua-700">{"{{customer_number}}"}</code> in the message.</p></div>
+          <label className="block text-sm font-semibold text-slate-700">Schedule delivery (optional)<input type="datetime-local" className={`${INPUT} mt-2`} value={scheduledAt} onChange={(e) => setScheduledAt(e.target.value)} /><span className="mt-1 block text-xs font-normal text-slate-500">Leave blank to place the campaign in the queue immediately.</span></label>
+          <Button tone="green" className="w-full py-3" disabled={busy || loading || !message.trim() || !Number(audience.smsReady)}>{busy ? "Queueing broadcast..." : `Review and queue for ${Number(audience.smsReady).toLocaleString()} customers`}</Button>
+        </form>
+      </Card>
+      <div className="space-y-5">
+        <Card title="Audience readiness"><div className="space-y-3"><div className="flex items-center justify-between rounded-xl bg-sky-50 p-4"><span className="text-sm font-semibold text-sky-800">Active customers</span><strong className="text-xl">{Number(audience.totalCustomers).toLocaleString()}</strong></div><div className="flex items-center justify-between rounded-xl bg-emerald-50 p-4"><span className="text-sm font-semibold text-emerald-800">Mobile number available</span><strong className="text-xl text-emerald-700">{Number(audience.smsReady).toLocaleString()}</strong></div><div className="flex items-center justify-between rounded-xl bg-amber-50 p-4"><span className="text-sm font-semibold text-amber-800">Missing mobile number</span><strong className="text-xl text-amber-700">{Number(audience.missingPhone).toLocaleString()}</strong></div></div></Card>
+        <Card title="Delivery workflow"><ol className="space-y-4 text-sm text-slate-600"><li className="flex gap-3"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-sky-100 font-bold text-sky-700">1</span><span>Review the audience and compose the announcement.</span></li><li className="flex gap-3"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-sky-100 font-bold text-sky-700">2</span><span>Confirm once to create auditable queued notifications.</span></li><li className="flex gap-3"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-sky-100 font-bold text-sky-700">3</span><span>Open the delivery queue to process messages in safe provider batches.</span></li></ol></Card>
+      </div>
+    </div>
+  </Page>;
 }
 
 function BulkNotificationSend({ modeSwitch }: { modeSwitch: ReactNode }) {

@@ -31,6 +31,8 @@
     "db:reconnection-field-upgrade": "prisma db execute --file prisma/migrations/20260814170000_field_reconnection_contract/migration.sql --schema prisma/schema.prisma",
     "db:work-order-completion-upgrade": "prisma db execute --file prisma/migrations/20260815090000_field_work_order_completion_contract/migration.sql --schema prisma/schema.prisma",
     "verify:work-order-completion": "node scripts/verify-work-order-completion-contract.js",
+    "verify:escalation": "node scripts/verify-escalation-contract.js",
+    "customer:provision": "ts-node scripts/provision-customer-portal.ts",
     "seed": "ts-node prisma/seed.ts"
   },
   "dependencies": {

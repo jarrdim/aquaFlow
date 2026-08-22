@@ -160,6 +160,7 @@ export default function CustomerDetail() {
 
   const [showAccountForm, setShowAccountForm] = useState(false);
   const [accountForm, setAccountForm] = useState({ propertyId: "", categoryId: "" });
+  const [activatingAccountId, setActivatingAccountId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!propertyForm.zoneId) { setServiceAreas([]); setRoutes([]); return; }
@@ -278,6 +279,19 @@ export default function CustomerDetail() {
       loadAll();
     } catch (err: any) {
       setError(err.message);
+    }
+  }
+
+  async function activateAccount(accountId: string) {
+    setActivatingAccountId(accountId);
+    setError(null);
+    try {
+      await api.activateAccount(accountId);
+      await loadAll();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setActivatingAccountId(null);
     }
   }
 
@@ -693,7 +707,7 @@ export default function CustomerDetail() {
                       <th className="px-4 py-2 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Property Code</th>
                       <th className="px-4 py-2 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Address</th>
                       <th className="px-4 py-2 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Zone</th>
-                      <th className="px-4 py-2 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Status</th>
+                      <th className="px-4 py-2 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Status / Action</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -772,11 +786,23 @@ export default function CustomerDetail() {
                           {Number(a.currentBalance).toLocaleString(undefined, { minimumFractionDigits: 2 })}
                         </td>
                         <td className="px-4 py-2">
+                          <div className="flex items-center gap-2">
                           <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
                             a.accountStatus === "ACTIVE" || a.accountStatus === "OPEN" ? "bg-green-100 text-green-700" : "bg-slate-100 text-slate-500"
                           }`}>
                             {(a.accountStatus ?? "").charAt(0) + (a.accountStatus ?? "").slice(1).toLowerCase()}
                           </span>
+                          {a.accountStatus === "PENDING" && (
+                            <button
+                              type="button"
+                              disabled={activatingAccountId === String(a.accountId)}
+                              onClick={() => void activateAccount(String(a.accountId))}
+                              className="rounded-lg bg-aqua-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-aqua-600 disabled:opacity-50"
+                            >
+                              {activatingAccountId === String(a.accountId) ? "Activating..." : "Activate"}
+                            </button>
+                          )}
+                          </div>
                         </td>
                       </tr>
                     ))}

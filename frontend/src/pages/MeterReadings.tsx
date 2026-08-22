@@ -1,7 +1,12 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../lib/api";
-import { exportExcel, openEvidence, parseMeterWorkbook } from "../lib/meterFiles";
+import {
+  exportExcel,
+  exportMeterReadingZoneWorkbook,
+  openEvidence,
+  parseMeterWorkbook,
+} from "../lib/meterFiles";
 import { CheckboxMultiSelect } from "../components/CheckboxMultiSelect";
 import { SearchableSelect } from "../components/SearchableSelect";
 import { SweetAlertToast } from "../components/SweetAlertToast";
@@ -16,10 +21,20 @@ function evidenceImageSource(item?: Row) {
   return `data:${item?.mimeType || "image/jpeg"};base64,${content}`;
 }
 
+function readingSource(reading: Row) {
+  if ((reading.events ?? []).some((event: Row) => event.eventType === "CUSTOMER_SUBMITTED")) return "Customer submitted";
+  if (reading.fieldOfficer) return "Field staff";
+  return "System / imported";
+}
+
 function ReadingEvidenceModal({ reading, onClose }: { reading: Row; onClose: () => void }) {
   const photos = (reading.evidence ?? []).filter((item: Row) =>
     String(item.mimeType ?? "image/jpeg").startsWith("image/"),
   );
+  const customerEvidence = (reading.events ?? []).find(
+    (event: Row) => event.eventType === "CUSTOMER_EVIDENCE_SUBMITTED",
+  );
+  const customerProposedReading = customerEvidence?.metadata?.proposedReading;
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => event.key === "Escape" && onClose();
     window.addEventListener("keydown", closeOnEscape);
@@ -64,6 +79,15 @@ function ReadingEvidenceModal({ reading, onClose }: { reading: Row; onClose: () 
             )}
           </div>
           <div className="space-y-4">
+            {customerEvidence && (
+              <div className="rounded-2xl border border-violet-200 bg-violet-50 p-4">
+                <div className="text-xs font-extrabold uppercase tracking-wider text-violet-700">Customer supporting evidence</div>
+                <div className="mt-2 text-sm text-violet-950">
+                  Customer-proposed reading: <strong>{number(customerProposedReading)}</strong>
+                </div>
+                {customerEvidence.remarks && <p className="mt-1 text-sm text-violet-800">{customerEvidence.remarks}</p>}
+              </div>
+            )}
             <div>
               <h3 className="mb-3 font-bold text-slate-900">GPS location</h3>
               <GpsMap latitude={reading.gpsLatitude} longitude={reading.gpsLongitude} label="Meter reading location" empty />
@@ -2339,6 +2363,7 @@ export function ReadingWorklist() {
   const [params, setParams] = useSearchParams();
   const [cycles, setCycles] = useState<Row[]>([]);
   const [routes, setRoutes] = useState<Row[]>([]);
+  const [routeAssignments, setRouteAssignments] = useState<Row[]>([]);
   const [items, setItems] = useState<Row[]>([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -2385,6 +2410,16 @@ export function ReadingWorklist() {
       })
       .catch((e) => setError(e.message));
   }, []);
+  useEffect(() => {
+    if (!cycleId) {
+      setRouteAssignments([]);
+      return;
+    }
+    api
+      .listRouteAssignments(cycleId)
+      .then(setRouteAssignments)
+      .catch((e) => setError(e.message));
+  }, [cycleId]);
   useEffect(() => {
     if (!cycleId) return;
     let cancelled = false;
@@ -2469,12 +2504,99 @@ export function ReadingWorklist() {
         Remarks: "",
         Status: item.cycleReading?.approvalStatus ?? "UNREAD",
       }));
+      const activeAssignmentByRoute = new Map<string, Row>(
+        routeAssignments
+          .filter((assignment: Row) =>
+            ["ASSIGNED", "ACCEPTED", "COMPLETED"].includes(assignment.status),
+          )
+          .map((assignment: Row): [string, Row] => [
+            String(assignment.routeId),
+            assignment,
+          ]),
+      );
+      const groupedByZone = new Map<string, Row[]>();
+      filteredItems.forEach((item) => {
+        const zoneName = String(
+          item.zone?.zoneName ?? item.route?.zone?.zoneName ?? "Unassigned zone",
+        );
+        groupedByZone.set(zoneName, [...(groupedByZone.get(zoneName) ?? []), item]);
+      });
+      const zoneSheets = Array.from(groupedByZone.entries())
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([zoneName, zoneItems]) => {
+          const areaNames = Array.from(
+            new Set(
+              zoneItems
+                .map((item) => item.account?.property?.serviceArea?.areaName)
+                .filter(Boolean),
+            ),
+          ).map(String);
+          const assignments = Array.from(
+            new Map<string, Row>(
+              zoneItems
+                .map((item) => activeAssignmentByRoute.get(String(item.route?.routeId)))
+                .filter((assignment): assignment is Row => Boolean(assignment))
+                .map((assignment): [string, Row] => [
+                  String(assignment.routeId),
+                  assignment,
+                ]),
+            ).values(),
+          );
+          const readerNames = Array.from(
+            new Set(assignments.map((assignment) => assignment.officerName).filter(Boolean)),
+          ).map(String);
+          const assignedDates = Array.from(
+            new Set(
+              assignments
+                .map((assignment) => String(assignment.assignedDate ?? "").slice(0, 10))
+                .filter(Boolean),
+            ),
+          );
+          return {
+            zoneName,
+            areaNames,
+            readingCycle: String(
+              selectedCycle?.cycleName ?? selectedCycle?.cycleCode ?? "",
+            ),
+            readingDate:
+              assignedDates.join(", ") ||
+              String(selectedCycle?.endDate ?? new Date().toISOString()).slice(0, 10),
+            readerNames,
+            rows: zoneItems.map((item) => {
+              const assignment = activeAssignmentByRoute.get(String(item.route?.routeId));
+              return {
+                "Meter ID": String(item.meterId),
+                "Meter Number": item.meter?.meterNumber ?? "",
+                "Account Number": item.account?.accountNumber ?? "",
+                "Customer Number": item.account?.customer?.customerNumber ?? "",
+                "Customer Name": item.customerName ?? "",
+                Area: item.account?.property?.serviceArea?.areaName ?? "",
+                Route: item.route?.routeName ?? "",
+                "Previous Reading": Number(
+                  item.cycleReading?.previousReading ??
+                    item.meter?.readings?.[0]?.currentReading ??
+                    item.meter?.openingReading ??
+                    0,
+                ),
+                "Current Reading": item.cycleReading
+                  ? Number(item.cycleReading.currentReading)
+                  : "",
+                "Reading Date": item.cycleReading?.readingDate
+                  ? String(item.cycleReading.readingDate).slice(0, 10)
+                  : "",
+                "Person Reading": assignment?.officerName ?? "Not assigned",
+                Remarks: "",
+                Status: item.cycleReading?.approvalStatus ?? "UNREAD",
+              };
+            }),
+          };
+        });
       setOperationProgress(55);
       const cycleCode = selectedCycle?.cycleCode ?? `cycle-${cycleId}`;
-      await exportExcel(
+      await exportMeterReadingZoneWorkbook(
         `meter-reading-worklist-${cycleCode}.xlsx`,
-        "Reading Worklist",
         rows,
+        zoneSheets,
       );
       setOperationProgress(100);
     } catch (e: any) {
@@ -2782,7 +2904,7 @@ export function ReadingWorklist() {
             disabled={!cycleId || !filteredItems.length || Boolean(operation)}
             onClick={exportWorklist}
           >
-            Export Excel
+            Export zone sheets
           </Button>
           <Button
             tone="green"
@@ -3720,7 +3842,10 @@ function ReadingTable({
                 </span>
               </td>
               <td className="px-4 py-3.5 text-sm font-medium text-slate-600">
-                {pretty(r.readingType)}
+                <div>{pretty(r.readingType)}</div>
+                <div className={`mt-1 text-[10px] font-bold uppercase tracking-wide ${readingSource(r) === "Customer submitted" ? "text-violet-700" : "text-sky-600"}`}>
+                  {readingSource(r)}
+                </div>
               </td>
               <td className="px-4 py-3.5">
                 <Badge value={r.exceptionType} />

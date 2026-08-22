@@ -4,13 +4,181 @@ import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { isSystemAdmin, requireAuth, requireRole } from "../middleware/auth";
 import {
+  getMpesaC2bConfig,
   getMpesaConfig,
   parseMpesaDate,
+  registerC2bUrls,
 } from "../lib/mpesa";
 import { initiateMpesaStk } from "../lib/mpesaStk";
 import { readPaymentLinkToken } from "../lib/paymentLink";
 
 export const paymentsRouter = Router();
+
+const c2bCallbackSchema = z.object({
+  TransactionType: z.string().optional(),
+  TransID: z.string().trim().min(1).max(100),
+  TransTime: z.union([z.string(), z.number()]),
+  TransAmount: z.coerce.number().positive().max(999_999_999),
+  BusinessShortCode: z.union([z.string(), z.number()]),
+  BillRefNumber: z.string().trim().min(1).max(100),
+  InvoiceNumber: z.string().optional(),
+  OrgAccountBalance: z.union([z.string(), z.number()]).optional(),
+  ThirdPartyTransID: z.string().optional(),
+  MSISDN: z.union([z.string(), z.number()]).optional(),
+  FirstName: z.string().optional(),
+  MiddleName: z.string().optional(),
+  LastName: z.string().optional(),
+});
+
+function c2bCallbackAuthorized(req: any, kind: "validation" | "confirmation") {
+  const dedicated = kind === "validation"
+    ? process.env.MPESA_C2B_VALIDATION_TOKEN
+    : process.env.MPESA_C2B_CONFIRMATION_TOKEN;
+  const expected = (dedicated ?? process.env.MPESA_C2B_CALLBACK_TOKEN ?? process.env.MPESA_CALLBACK_TOKEN)?.trim();
+  return Boolean(expected && req.query.token === expected);
+}
+
+function c2bShortCodeMatches(value: string | number) {
+  const expected = (process.env.MPESA_C2B_SHORTCODE ?? process.env.MPESA_SHORTCODE ?? process.env.MPESA_SHORT_CODE)?.trim();
+  return Boolean(expected && String(value).trim() === expected);
+}
+
+function c2bPayerName(body: z.infer<typeof c2bCallbackSchema>) {
+  return [body.FirstName, body.MiddleName, body.LastName]
+    .map((part) => part?.trim())
+    .filter(Boolean)
+    .join(" ") || undefined;
+}
+
+// PayBill validation is deliberately read-only. Confirmation is the source of
+// truth and remains capable of preserving an unmatched payment in suspense.
+paymentsRouter.post(["/c2b/validation", "/mpesa/c2b/validation"], async (req, res, next) => {
+  if (!c2bCallbackAuthorized(req, "validation")) {
+    console.warn("Rejected unauthorized C2B validation callback", {
+      shortCode: req.body?.BusinessShortCode,
+      transactionId: req.body?.TransID,
+    });
+    return res.status(401).json({ ResultCode: "C2B00012", ResultDesc: "Unauthorized callback" });
+  }
+  const parsed = c2bCallbackSchema.safeParse(req.body);
+  if (!parsed.success || !c2bShortCodeMatches(parsed.data.BusinessShortCode))
+    return res.json({ ResultCode: "C2B00012", ResultDesc: "Invalid transaction details" });
+  try {
+    const account = await prisma.customerAccount.findFirst({
+      where: { accountNumber: { equals: parsed.data.BillRefNumber, mode: "insensitive" } },
+      select: { accountId: true },
+    });
+    return res.json(account
+      ? { ResultCode: 0, ResultDesc: "Accepted" }
+      : { ResultCode: "C2B00011", ResultDesc: "Invalid account number" });
+  } catch (error) {
+    next(error);
+  }
+});
+
+paymentsRouter.post(["/c2b/confirmation", "/mpesa/c2b/confirmation"], async (req, res, next) => {
+  if (!c2bCallbackAuthorized(req, "confirmation")) {
+    console.warn("Rejected unauthorized C2B confirmation callback", {
+      shortCode: req.body?.BusinessShortCode,
+      transactionId: req.body?.TransID,
+    });
+    return res.status(401).json({ ResultCode: "C2B00012", ResultDesc: "Unauthorized callback" });
+  }
+  const parsed = c2bCallbackSchema.safeParse(req.body);
+  if (!parsed.success || !c2bShortCodeMatches(parsed.data.BusinessShortCode))
+    return res.status(400).json({ ResultCode: "C2B00012", ResultDesc: "Invalid transaction details" });
+  const body = parsed.data;
+  const transactionReference = body.TransID.trim();
+  const customerReference = body.BillRefNumber.trim();
+  const paymentDate = parseMpesaDate(body.TransTime);
+  try {
+    const existing = await prisma.payment.findUnique({ where: { transactionReference } });
+    if (existing) return res.json({ ResultCode: 0, ResultDesc: "Accepted" });
+
+    await prisma.$transaction(async (tx) => {
+      const channel = await tx.paymentChannel.findFirst({
+        where: {
+          status: "ACTIVE",
+          OR: [
+            { channelCode: "MPESA" },
+            { channelName: { equals: "MPESA", mode: "insensitive" } },
+          ],
+        },
+      });
+      if (!channel)
+        throw Object.assign(new Error("Active M-Pesa payment channel is not configured"), { status: 503 });
+      const account = await tx.customerAccount.findFirst({
+        where: { accountNumber: { equals: customerReference, mode: "insensitive" } },
+      });
+      const payment = await tx.payment.create({
+        data: {
+          transactionReference,
+          accountId: account?.accountId,
+          channelId: channel.channelId,
+          payerName: c2bPayerName(body),
+          payerPhone: body.MSISDN == null ? undefined : String(body.MSISDN),
+          amount: body.TransAmount,
+          paymentDate,
+          valueDate: new Date(Date.UTC(paymentDate.getUTCFullYear(), paymentDate.getUTCMonth(), paymentDate.getUTCDate())),
+          customerReference,
+          paymentType: "BILL_PAYMENT",
+          remarks: "M-Pesa PayBill C2B payment",
+          matchingStatus: "UNMATCHED",
+          paymentStatus: "RECEIVED",
+          unallocatedAmount: body.TransAmount,
+          externalPayload: req.body,
+        },
+      });
+
+      if (account) {
+        const allocation = await allocate(tx, payment, account.accountId, null);
+        const receipt = await tx.receipt.create({
+          data: {
+            receiptNumber: `RCT-${new Date().getFullYear()}-${String(payment.paymentId).padStart(6, "0")}`,
+            paymentId: payment.paymentId,
+            accountId: account.accountId,
+            amount: body.TransAmount,
+          },
+        });
+        await tx.paymentEvent.create({
+          data: {
+            paymentId: payment.paymentId,
+            eventType: "MPESA_C2B_PAYMENT_POSTED",
+            previousStatus: "RECEIVED",
+            newStatus: "POSTED",
+            details: `PayBill ${transactionReference}; KSh ${allocation.allocated.toFixed(2)} allocated`,
+            metadata: { receiptId: String(receipt.receiptId), customerReference },
+          },
+        });
+      } else {
+        await tx.suspensePayment.create({
+          data: {
+            paymentId: payment.paymentId,
+            suspenseReason: "PayBill account number did not match a customer account",
+            receivedReference: customerReference,
+          },
+        });
+        await tx.paymentEvent.create({
+          data: {
+            paymentId: payment.paymentId,
+            eventType: "MPESA_C2B_PAYMENT_UNMATCHED",
+            newStatus: "UNMATCHED",
+            details: `Unmatched PayBill account number ${customerReference}`,
+          },
+        });
+      }
+    });
+    return res.json({ ResultCode: 0, ResultDesc: "Accepted" });
+  } catch (error: any) {
+    // Daraja retries callbacks. Treat a concurrent retry as successful only
+    // after verifying that the transaction reference now exists.
+    if (error?.code === "P2002") {
+      const duplicate = await prisma.payment.findUnique({ where: { transactionReference } });
+      if (duplicate) return res.json({ ResultCode: 0, ResultDesc: "Accepted" });
+    }
+    next(error);
+  }
+});
 
 // Daraja calls this endpoint directly, so it must remain outside JWT authentication.
 // The CheckoutRequestID and unique M-Pesa receipt protect the financial posting path
@@ -681,6 +849,38 @@ paymentsRouter.get("/mpesa/config", (_req, res) => {
     });
   }
 });
+
+paymentsRouter.get("/mpesa/c2b/config", (_req, res) => {
+  try {
+    const config = getMpesaC2bConfig();
+    res.json({
+      configured: true,
+      environment: config.environment,
+      shortCode: config.shortCode,
+      responseType: config.responseType,
+      callbackSecured: Boolean(config.validationToken && config.confirmationToken),
+    });
+  } catch (e: any) {
+    res.json({
+      configured: false,
+      environment: process.env.MPESA_ENVIRONMENT ?? "sandbox",
+      error: e.message,
+    });
+  }
+});
+
+paymentsRouter.post(
+  "/mpesa/c2b/register",
+  requireRole("SYSTEM_ADMIN", "FINANCE_MANAGER"),
+  async (_req, res, next) => {
+    try {
+      res.json(await registerC2bUrls());
+    } catch (error: any) {
+      if (error.status) return res.status(error.status).json({ error: error.message });
+      next(error);
+    }
+  },
+);
 
 paymentsRouter.get("/mpesa/stk", async (req, res, next) => {
   try {

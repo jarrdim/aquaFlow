@@ -23,6 +23,31 @@ interface Customer {
   activeMeters: Array<{ meterId: string; meterNumber: string }>;
 }
 
+interface BalanceReconciliationPreview {
+  accountNumber: string;
+  customerName: string;
+  storedBalance: number;
+  calculatedBalance: number;
+  variance: number;
+  openingBalance: number;
+  postedBillTotal: number;
+  postedPaymentTotal: number;
+  balanced: boolean;
+  history: Array<{
+    reconciliationId: string;
+    storedBalance: number;
+    calculatedBalance: number;
+    reason: string;
+    source: string;
+    createdAt: string;
+    reconciler: { username: string; firstName: string; lastName: string };
+  }>;
+}
+
+function balanceMoney(value: number) {
+  return `KSh ${Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
 const PAGE_SIZE = 20;
 const STATUS_COLORS: Record<string, string> = {
   ACTIVE: "border-emerald-200 bg-emerald-50 text-emerald-700",
@@ -161,6 +186,12 @@ export default function Customers() {
   const [balanceRows, setBalanceRows] = useState<Record<string, unknown>[]>([]);
   const [balanceErrors, setBalanceErrors] = useState<string[]>([]);
   const [importingBalances, setImportingBalances] = useState(false);
+  const [showReconciliation, setShowReconciliation] = useState(false);
+  const [reconciliationAccount, setReconciliationAccount] = useState("");
+  const [reconciliationReason, setReconciliationReason] = useState("");
+  const [reconciliationPreview, setReconciliationPreview] = useState<BalanceReconciliationPreview | null>(null);
+  const [checkingReconciliation, setCheckingReconciliation] = useState(false);
+  const [reconcilingBalance, setReconcilingBalance] = useState(false);
 
   async function load(
     q = search,
@@ -494,6 +525,39 @@ export default function Customers() {
     }
   }
 
+  async function checkBalanceReconciliation() {
+    const accountNumber = reconciliationAccount.trim().toUpperCase();
+    if (!accountNumber) return;
+    setCheckingReconciliation(true);
+    setError("");
+    setReconciliationPreview(null);
+    try {
+      const result = await api.previewAccountBalanceReconciliation(accountNumber);
+      setReconciliationAccount(accountNumber);
+      setReconciliationPreview(result);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "The account balance could not be checked.");
+    } finally {
+      setCheckingReconciliation(false);
+    }
+  }
+
+  async function reconcileBalance() {
+    if (!reconciliationPreview || reconciliationPreview.balanced || reconciliationReason.trim().length < 10) return;
+    setReconcilingBalance(true);
+    setError("");
+    try {
+      await api.reconcileAccountBalance(reconciliationPreview.accountNumber, reconciliationReason.trim());
+      setSuccess(`${reconciliationPreview.accountNumber} was reconciled to ${balanceMoney(reconciliationPreview.calculatedBalance)}. An audit record was created.`);
+      setReconciliationReason("");
+      await checkBalanceReconciliation();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "The account balance could not be reconciled.");
+    } finally {
+      setReconcilingBalance(false);
+    }
+  }
+
   return (
     <div className="mx-auto max-w-[1600px] px-5 py-6 lg:px-8">
       <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
@@ -511,6 +575,9 @@ export default function Customers() {
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
+        <button type="button" onClick={() => setShowReconciliation((value) => !value)} className="inline-flex items-center rounded-xl border border-sky-300 bg-white px-5 py-3 text-sm font-bold text-sky-700">
+          {showReconciliation ? "Close reconciliation" : "Reconcile balance"}
+        </button>
         <button type="button" onClick={() => setShowBalanceImport((value) => !value)} className="inline-flex items-center rounded-xl border border-emerald-300 bg-white px-5 py-3 text-sm font-bold text-emerald-700">
           {showBalanceImport ? "Close balances" : "Import balances"}
         </button>
@@ -539,10 +606,47 @@ export default function Customers() {
         </div>
       </div>
 
+      {showReconciliation && (
+        <section className="mb-5 rounded-2xl border border-sky-200 bg-white p-5 shadow-sm">
+          <div>
+            <h2 className="font-bold text-slate-900">Account ledger reconciliation</h2>
+            <p className="mt-1 text-sm text-slate-500">Compare the stored balance with opening balance + posted water bills − posted bill payments. Reconciliation is locked, reasoned and audited.</p>
+          </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-[1fr_auto]">
+            <label className="block">
+              <span className="mb-1 block text-sm font-semibold text-slate-700">Account number</span>
+              <input value={reconciliationAccount} onChange={(event) => { setReconciliationAccount(event.target.value); setReconciliationPreview(null); }} onKeyDown={(event) => { if (event.key === "Enter") void checkBalanceReconciliation(); }} placeholder="ACC-10022" className="h-11 w-full rounded-xl border border-slate-200 px-3.5 text-sm uppercase outline-none focus:border-sky-500 focus:ring-4 focus:ring-sky-500/10" />
+            </label>
+            <button type="button" disabled={!reconciliationAccount.trim() || checkingReconciliation} onClick={() => void checkBalanceReconciliation()} className="h-11 self-end rounded-xl bg-sky-700 px-6 text-sm font-bold text-white disabled:opacity-40">{checkingReconciliation ? "Checking..." : "Check ledger"}</button>
+          </div>
+          {reconciliationPreview && (
+            <div className="mt-5 space-y-4">
+              <div className={`rounded-xl border p-4 ${reconciliationPreview.balanced ? "border-emerald-200 bg-emerald-50" : "border-amber-200 bg-amber-50"}`}>
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div><p className="font-bold text-slate-900">{reconciliationPreview.accountNumber}</p><p className="text-sm text-slate-600">{reconciliationPreview.customerName}</p></div>
+                  <span className={`rounded-full px-3 py-1 text-xs font-bold ${reconciliationPreview.balanced ? "bg-emerald-700 text-white" : "bg-amber-600 text-white"}`}>{reconciliationPreview.balanced ? "Balanced" : "Mismatch found"}</span>
+                </div>
+                <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-5">
+                  {[ ["Opening balance", reconciliationPreview.openingBalance], ["Posted bills", reconciliationPreview.postedBillTotal], ["Posted payments", reconciliationPreview.postedPaymentTotal], ["Stored balance", reconciliationPreview.storedBalance], ["Correct ledger balance", reconciliationPreview.calculatedBalance] ].map(([label, value]) => <div key={String(label)} className="rounded-lg bg-white/80 p-3"><dt className="text-slate-500">{label}</dt><dd className="mt-1 font-extrabold text-slate-900">{balanceMoney(Number(value))}</dd></div>)}
+                </dl>
+                {!reconciliationPreview.balanced && <p className="mt-3 text-sm font-semibold text-amber-900">Required adjustment: {balanceMoney(reconciliationPreview.variance)}</p>}
+              </div>
+              {!reconciliationPreview.balanced && (
+                <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-end">
+                  <label className="block"><span className="mb-1 block text-sm font-semibold text-slate-700">Reconciliation reason</span><textarea value={reconciliationReason} onChange={(event) => setReconciliationReason(event.target.value)} rows={2} placeholder="Explain why the stored balance is being corrected (minimum 10 characters)" className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm outline-none focus:border-sky-500 focus:ring-4 focus:ring-sky-500/10" /></label>
+                  <button type="button" disabled={reconciliationReason.trim().length < 10 || reconcilingBalance} onClick={() => void reconcileBalance()} className="h-11 rounded-xl bg-emerald-700 px-6 text-sm font-bold text-white disabled:opacity-40">{reconcilingBalance ? "Reconciling..." : "Apply correct balance"}</button>
+                </div>
+              )}
+              {reconciliationPreview.history.length > 0 && <div><h3 className="text-sm font-bold text-slate-800">Recent reconciliation history</h3><div className="mt-2 overflow-x-auto"><table className="min-w-full text-left text-sm"><thead className="text-xs uppercase text-slate-500"><tr><th className="px-3 py-2">Date</th><th className="px-3 py-2">Before</th><th className="px-3 py-2">After</th><th className="px-3 py-2">Reason</th><th className="px-3 py-2">By</th></tr></thead><tbody>{reconciliationPreview.history.map((row) => <tr key={row.reconciliationId} className="border-t border-slate-100"><td className="px-3 py-2">{new Date(row.createdAt).toLocaleString()}</td><td className="px-3 py-2">{balanceMoney(row.storedBalance)}</td><td className="px-3 py-2">{balanceMoney(row.calculatedBalance)}</td><td className="px-3 py-2">{row.reason}</td><td className="px-3 py-2">{row.reconciler.firstName} {row.reconciler.lastName}</td></tr>)}</tbody></table></div></div>}
+            </div>
+          )}
+        </section>
+      )}
+
       {showBalanceImport && (
         <section className="mb-5 rounded-2xl border border-emerald-200 bg-white p-5 shadow-sm">
           <div className="flex flex-wrap items-start justify-between gap-3">
-            <div><h2 className="font-bold text-slate-900">Import existing account balances</h2><p className="mt-1 text-sm text-slate-500">Match existing accounts by account number and replace their opening and current balances. Unknown or duplicate accounts reject the batch.</p></div>
+            <div><h2 className="font-bold text-slate-900">Import existing account balances</h2><p className="mt-1 text-sm text-slate-500">Match existing accounts by account number. Every current balance must agree with its opening balance and posted ledger activity; mismatches reject the batch.</p></div>
             <button type="button" className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700" onClick={() => exportExcel("account-balance-import-template.xlsx", "Balances", [{ accountNumber: "ACC-00001", openingBalance: 0, currentBalance: 0 }])}>Download template</button>
           </div>
           <div className="mt-4 grid gap-4 md:grid-cols-[1fr_auto] md:items-end">

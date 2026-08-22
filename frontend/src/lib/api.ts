@@ -200,6 +200,8 @@ export const api = {
 
   createAccount: (data: Record<string, unknown>) =>
     request("/accounts", { method: "POST", body: JSON.stringify(data) }),
+  activateAccount: (id: string) =>
+    request(`/accounts/${id}/activate`, { method: "PATCH" }),
   bulkImportAccounts: (accounts: Record<string, unknown>[]) =>
     request("/accounts/bulk-import", {
       method: "POST",
@@ -209,6 +211,13 @@ export const api = {
     request("/accounts/bulk-balance-import", {
       method: "POST",
       body: JSON.stringify({ balances }),
+    }),
+  previewAccountBalanceReconciliation: (accountNumber: string) =>
+    request(`/accounts/${encodeURIComponent(accountNumber)}/balance-reconciliation`),
+  reconcileAccountBalance: (accountNumber: string, reason: string) =>
+    request(`/accounts/${encodeURIComponent(accountNumber)}/balance-reconciliation`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
     }),
   listAccounts: (search = "", take = 8) =>
     request(
@@ -395,6 +404,10 @@ export const api = {
     request(
       `/readings/reports/progress?cycleId=${encodeURIComponent(cycleId)}`,
     ),
+  dailyIncomeReport: (from: string, to: string) =>
+    request(`/reports/daily-income?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
+  meterReadingCoverageReport: (cycleId: string) =>
+    request(`/reports/meter-reading-coverage?cycleId=${encodeURIComponent(cycleId)}`),
   tariffDashboard: (filters: Record<string, string> = {}) => {
     const query = new URLSearchParams(
       Object.entries(filters).filter(([, value]) => value),
@@ -640,6 +653,12 @@ export const api = {
     ).toString();
     return request(`/notifications/audience?${query}`);
   },
+  notificationBroadcastAudience: () => request("/notifications/broadcast-audience"),
+  sendGeneralSmsBroadcast: (data: Record<string, unknown>) =>
+    request("/notifications/send-general-broadcast", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
   listNotifications: (filters: Record<string, string> = {}) => {
     const query = new URLSearchParams(
       Object.entries(filters).filter(([, value]) => value),

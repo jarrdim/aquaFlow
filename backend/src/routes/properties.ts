@@ -83,8 +83,16 @@ propertiesRouter.post("/bulk-import", async (req, res) => {
 });
 
 async function nextPropertyCode() {
-  const count = await prisma.property.count();
-  return `PROP-${String(count + 1).padStart(6, "0")}`;
+  const prefix = "PROP-";
+  const properties = await prisma.property.findMany({
+    where: { propertyCode: { startsWith: prefix } },
+    select: { propertyCode: true },
+  });
+  const highest = properties.reduce((max, property) => {
+    const sequence = Number(property.propertyCode.slice(prefix.length));
+    return Number.isInteger(sequence) ? Math.max(max, sequence) : max;
+  }, 0);
+  return `${prefix}${String(highest + 1).padStart(6, "0")}`;
 }
 
 propertiesRouter.get("/", async (req, res) => {
@@ -102,19 +110,26 @@ propertiesRouter.post("/", async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const data = parsed.data;
 
-  const property = await prisma.property.create({
-    data: {
-      propertyCode: await nextPropertyCode(),
-      ownerCustomerId: BigInt(data.ownerCustomerId),
-      zoneId: BigInt(data.zoneId),
-      serviceAreaId: data.serviceAreaId ? BigInt(data.serviceAreaId) : undefined,
-      routeId: data.routeId ? BigInt(data.routeId) : undefined,
-      plotNumber: data.plotNumber,
-      buildingName: data.buildingName,
-      physicalAddress: data.physicalAddress,
-      occupancyStatus: data.occupancyStatus,
-    },
-  });
+  try {
+    const property = await prisma.property.create({
+      data: {
+        propertyCode: await nextPropertyCode(),
+        ownerCustomerId: BigInt(data.ownerCustomerId),
+        zoneId: BigInt(data.zoneId),
+        serviceAreaId: data.serviceAreaId ? BigInt(data.serviceAreaId) : undefined,
+        routeId: data.routeId ? BigInt(data.routeId) : undefined,
+        plotNumber: data.plotNumber,
+        buildingName: data.buildingName,
+        physicalAddress: data.physicalAddress,
+        occupancyStatus: data.occupancyStatus,
+      },
+    });
 
-  res.status(201).json(property);
+    res.status(201).json(property);
+  } catch (error: any) {
+    if (error?.code === "P2002") {
+      return res.status(409).json({ error: "The generated property code already exists. Please try again." });
+    }
+    throw error;
+  }
 });

@@ -142,7 +142,19 @@ async function getEligibleAssignments(
     where: searchWhere ? { AND: [baseWhere, searchWhere] } : baseWhere,
     include: {
       meter: { include: { readings: { orderBy: { readingDate: "desc" }, take: 1 } } },
-      account: { include: { customer: true, route: true, property: { include: { route: true, zone: true } } } },
+      account: {
+        include: {
+          customer: true,
+          route: { include: { zone: true } },
+          property: {
+            include: {
+              route: { include: { zone: true } },
+              zone: true,
+              serviceArea: true,
+            },
+          },
+        },
+      },
     },
     orderBy: { assignmentDate: "asc" },
   });
@@ -579,7 +591,16 @@ readingsRouter.post(
   try {
     for (let index = 0; index < body.readings.length; index++) {
       try { results.push({ index, ok: true, ...(await capture(body.readings[index], req)) }); }
-      catch (error: any) { results.push({ index, ok: false, error: error.code === "P2002" ? "Reading already exists for this cycle" : error.message }); }
+      catch (error: any) {
+        const statusCode = error.code === "P2002" ? 409 : Number(error.status) || 500;
+        results.push({
+          index,
+          ok: false,
+          statusCode,
+          retryable: statusCode === 429 || statusCode >= 500,
+          error: error.code === "P2002" ? "Reading already exists for this cycle" : error.message,
+        });
+      }
     }
     res.json({ total: results.length, succeeded: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok).length, results });
   } catch (error) { next(error); }

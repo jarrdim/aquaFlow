@@ -427,25 +427,48 @@ billingRouter.post("/cycles/:id/post", requireRole("FINANCE_MANAGER", "SYSTEM_AD
 });
 
 billingRouter.post("/notifications", requireRole("SYSTEM_ADMIN", "BILLING_OFFICER", "BILLING_SUPERVISOR"), async (req, res, next) => {
-  const data = parse(z.object({ billingCycleId: id, channels: z.array(z.enum(["SMS", "APP", "EMAIL", "WHATSAPP"])).min(1), billIds: z.array(id).optional() }), req.body, res);
+  const data = parse(z.object({ billingCycleId: id, channels: z.array(z.enum(["SMS", "APP"])).min(1), billIds: z.array(id).optional() }), req.body, res);
   if (!data) return;
   try {
-    const bills = await prisma.bill.findMany({ where: { billingCycleId: data.billingCycleId, status: { in: ["APPROVED", "POSTED", "PARTIALLY_PAID", "PAID"] }, ...(data.billIds ? { billId: { in: data.billIds } } : {}) }, include: { account: { include: { customer: true } }, billingCycle: true } });
-    let sent = 0;
+    const billingCycle = await prisma.billingCycle.findUnique({
+      where: { billingCycleId: data.billingCycleId },
+      include: { readingCycles: true },
+    });
+    if (!billingCycle) return res.status(404).json({ error: "Billing period was not found" });
+    const readingCycle = billingCycle.readingCycles[0];
+    if (!readingCycle) return res.status(409).json({ error: "This billing period has no linked reading cycle" });
+    if (readingCycle.status !== "CLOSED") return res.status(409).json({ error: "Close the linked reading cycle before sending bill notifications" });
+
+    const bills = await prisma.bill.findMany({ where: { billingCycleId: data.billingCycleId, status: { in: ["APPROVED", "POSTED", "PARTIALLY_PAID", "PAID"] }, ...(data.billIds ? { billId: { in: data.billIds } } : {}) }, include: { account: { include: { customer: true } }, billingCycle: true, reading: true } });
+    const notificationIds: bigint[] = [];
+    let queued = 0;
     await prisma.$transaction(async (tx) => {
       for (const bill of bills) {
         const name = customerName(bill.account.customer);
-        const message = `Dear ${name}, your water bill for ${bill.billingCycle.cycleName} is KSh ${Number(bill.totalAmountDue).toFixed(2)}. Pay by ${bill.dueDate.toISOString().slice(0, 10)}. Account: ${bill.account.accountNumber}.`;
+        const previousReading = bill.reading ? Number(bill.reading.previousReading).toFixed(3) : "N/A";
+        const currentReading = bill.reading ? Number(bill.reading.currentReading).toFixed(3) : "N/A";
+        const units = Number(bill.consumptionUnits).toFixed(3);
+        const message = `Dear ${name}, water bill for ${bill.billingCycle.cycleName}. Acc: ${bill.account.accountNumber}. Reading cycle: ${readingCycle.cycleName} (closed). Prev: ${previousReading}, Curr: ${currentReading}, Units: ${units}. Amount due: KSh ${Number(bill.totalAmountDue).toFixed(2)}. Pay by ${bill.dueDate.toISOString().slice(0, 10)}.`;
         for (const channel of data.channels) {
-          const recipient = channel === "EMAIL" ? bill.account.customer.emailAddress : bill.account.customer.phoneNumber;
-          await tx.billNotification.create({ data: { billId: bill.billId, channel, recipient, message, status: "SENT", sentBy: uid(req) } });
-          sent += 1;
+          const deliveryChannel = channel === "APP" ? "PUSH" : "SMS";
+          const recipient = channel === "SMS" ? bill.account.customer.phoneNumber : bill.account.customer.customerNumber;
+          if (!recipient) continue;
+          const notification = await tx.notification.create({ data: {
+            customerId: bill.account.customerId, accountId: bill.accountId, billId: bill.billId,
+            notificationType: "BILL_ISSUED", channel: deliveryChannel, recipient,
+            subject: `Water bill - ${bill.billingCycle.cycleName}`, messageBody: message,
+            requestedBy: uid(req),
+            metadata: { source: "BILLING", billingCycleId: bill.billingCycleId.toString(), requestedChannel: channel },
+          } });
+          notificationIds.push(notification.notificationId);
+          await tx.billNotification.create({ data: { billId: bill.billId, channel, recipient, message, status: "QUEUED", sentBy: uid(req) } });
+          queued += 1;
         }
-        await tx.bill.update({ where: { billId: bill.billId }, data: { notificationStatus: "SENT", updatedAt: new Date() } });
-        await tx.billingEvent.create({ data: { billingCycleId: bill.billingCycleId, billId: bill.billId, eventType: "NOTIFICATION_SENT", details: data.channels.join(", "), performedBy: uid(req) } });
+        await tx.bill.update({ where: { billId: bill.billId }, data: { notificationStatus: "QUEUED", updatedAt: new Date() } });
+        await tx.billingEvent.create({ data: { billingCycleId: bill.billingCycleId, billId: bill.billId, eventType: "NOTIFICATION_QUEUED", details: data.channels.join(", "), performedBy: uid(req) } });
       }
     });
-    res.json({ bills: bills.length, notifications: sent });
+    res.json({ bills: bills.length, notifications: queued, notificationIds });
   } catch (error) { next(error); }
 });
 
