@@ -111,6 +111,7 @@ export default function NewCustomer() {
   });
   const [stepError, setStepError] = useState<string | null>(null);
   const [saving, setSaving]       = useState(false);
+  const [prefillLoading, setPrefillLoading] = useState(false);
   const [documents, setDocuments] = useState<CustomerDocumentDraft[]>([
     { key: crypto.randomUUID(), documentReference: "", title: "" },
   ]);
@@ -149,6 +150,48 @@ export default function NewCustomer() {
     setStepError(null);
     updateDocument(key, { file, data });
   }
+
+  // Reuse applicant and proposed-property details captured by the connection
+  // application. All copied values remain editable in this wizard.
+  useEffect(() => {
+    if (!connectionId) return;
+    let active = true;
+    setPrefillLoading(true);
+    api.getConnection(connectionId)
+      .then((application: any) => {
+        if (!active) return;
+        const applicantType: CustomerType = application.applicantType === "ORGANIZATION"
+          ? "ORGANIZATION"
+          : "INDIVIDUAL";
+        const parts = String(application.applicantName || "").trim().split(/\s+/).filter(Boolean);
+        const firstName = parts[0] || "";
+        const lastName = parts.length > 1 ? parts[parts.length - 1] : "";
+        const middleName = parts.length > 2 ? parts.slice(1, -1).join(" ") : "";
+
+        setCustomerType(applicantType);
+        setForm((current) => ({
+          ...current,
+          firstName: applicantType === "INDIVIDUAL" ? firstName : "",
+          middleName: applicantType === "INDIVIDUAL" ? middleName : "",
+          lastName: applicantType === "INDIVIDUAL" ? lastName : "",
+          organizationName: applicantType === "ORGANIZATION" ? String(application.applicantName || "") : "",
+          nationalId: applicantType === "INDIVIDUAL" ? String(application.identificationNumber || "") : "",
+          registrationNumber: applicantType === "ORGANIZATION" ? String(application.identificationNumber || "") : "",
+          phoneNumber: String(application.phoneNumber || ""),
+          emailAddress: String(application.emailAddress || ""),
+          zoneId: application.zoneId == null ? "" : String(application.zoneId),
+          physicalAddress: String(application.physicalAddress || ""),
+          plotNumber: String(application.plotNumber || ""),
+        }));
+      })
+      .catch((error: Error) => {
+        if (active) setStepError(`Could not load application details: ${error.message}`);
+      })
+      .finally(() => {
+        if (active) setPrefillLoading(false);
+      });
+    return () => { active = false; };
+  }, [connectionId]);
 
   // Load zones when entering step 2
   useEffect(() => {
@@ -293,7 +336,7 @@ export default function NewCustomer() {
           </h1>
           <p className="mt-1 text-[15px] text-slate-500">
             {connectionId
-              ? "This is the existing customer wizard. Saving links the new customer to the approved connection."
+              ? "Application details are prefilled below and remain editable. Saving links the new customer to the approved connection."
               : "Create the customer identity, property and account-ready record."}
           </p>
         </div>
@@ -307,6 +350,14 @@ export default function NewCustomer() {
 
       {/* ── Stepper ── */}
       <Stepper current={step} />
+
+      {connectionId && (
+        <div className="mb-4 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+          {prefillLoading
+            ? "Loading applicant and property details from the connection application…"
+            : "Applicant and proposed-property details were copied from the connection application. Review and edit them before saving."}
+        </div>
+      )}
 
       {/* ── Step card ── */}
       <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm lg:p-6">
