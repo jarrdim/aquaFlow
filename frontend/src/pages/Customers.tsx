@@ -314,20 +314,27 @@ export default function Customers() {
       const normalized = sourceRows.map((row, index) => {
         const customerType = cell(row, "Customer Type").toUpperCase();
         const firstName = cell(row, "First Name");
-        const lastName = cell(row, "Last Name");
+        let middleName = cell(row, "Middle Name");
+        let lastName = cell(row, "Last Name");
         const organizationName = cell(row, "Organization Name");
         const emailAddress = cell(row, "Email Address");
         const registrationDate = cell(row, "Registration Date");
         if (!cell(row, "Customer Number")) errors.push(`Row ${index + 2}: Customer Number is required.`);
         if (!cell(row, "Phone Number")) errors.push(`Row ${index + 2}: Phone Number is required.`);
         if (!["INDIVIDUAL", "ORGANIZATION"].includes(customerType)) errors.push(`Row ${index + 2}: Customer Type must be INDIVIDUAL or ORGANIZATION.`);
-        if (customerType === "INDIVIDUAL" && (!firstName || !lastName)) errors.push(`Row ${index + 2}: First Name and Last Name are required.`);
+        // Some legacy exports place a two-part name in First Name + Middle Name.
+        // Preserve three-part names, but normalize two-part names to First + Last.
+        if (customerType === "INDIVIDUAL" && !lastName && middleName) {
+          lastName = middleName;
+          middleName = "";
+        }
+        if (customerType === "INDIVIDUAL" && !firstName) errors.push(`Row ${index + 2}: First Name is required.`);
         if (customerType === "ORGANIZATION" && !organizationName) errors.push(`Row ${index + 2}: Organization Name is required.`);
         if (emailAddress && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailAddress)) errors.push(`Row ${index + 2}: Email Address is invalid.`);
         if (registrationDate && !/^\d{4}-\d{2}-\d{2}$/.test(registrationDate)) errors.push(`Row ${index + 2}: Registration Date must be YYYY-MM-DD.`);
         return {
           customerNumber: cell(row, "Customer Number"), customerType,
-          firstName, middleName: cell(row, "Middle Name"), lastName, organizationName,
+          firstName, middleName, lastName, organizationName,
           nationalId: cell(row, "National ID"), registrationNumber: cell(row, "Registration Number"),
           phoneNumber: cell(row, "Phone Number"), alternativePhone: cell(row, "Alternative Phone"),
           emailAddress, preferredLanguage: cell(row, "Preferred Language").toUpperCase() || "EN",

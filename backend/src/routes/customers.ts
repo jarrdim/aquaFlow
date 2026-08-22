@@ -217,9 +217,9 @@ const bulkCustomerRowSchema = z
   .refine(
     (row) =>
       row.customerType === "INDIVIDUAL"
-        ? Boolean(row.firstName && row.lastName)
+        ? Boolean(row.firstName)
         : Boolean(row.organizationName),
-    { message: "Individual customers require first and last names; organizations require an organization name" },
+    { message: "Individual customers require a first name; organizations require an organization name" },
   );
 
 const bulkCustomerImportSchema = z.object({
