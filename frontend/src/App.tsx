@@ -651,6 +651,7 @@ function Shell({ children }: { children: React.ReactNode }) {
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [notificationOpen, setNotificationOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
   const [notificationData, setNotificationData] = useState<any>({
     queued: 0,
     failed: 0,
@@ -660,6 +661,7 @@ function Shell({ children }: { children: React.ReactNode }) {
   const [sidebarFlyoutTop, setSidebarFlyoutTop] = useState(72);
   const searchRef = useRef<HTMLDivElement>(null);
   const notificationRef = useRef<HTMLDivElement>(null);
+  const profileRef = useRef<HTMLDivElement>(null);
   const sidebarFlyoutTimer = useRef<number | null>(null);
   const sessionUser = getSessionUser();
   const displayName =
@@ -777,6 +779,7 @@ function Shell({ children }: { children: React.ReactNode }) {
       if (!searchRef.current?.contains(target)) setSearchOpen(false);
       if (!notificationRef.current?.contains(target))
         setNotificationOpen(false);
+      if (!profileRef.current?.contains(target)) setProfileOpen(false);
     }
     document.addEventListener("mousedown", closePopovers);
     return () => document.removeEventListener("mousedown", closePopovers);
@@ -785,6 +788,7 @@ function Shell({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     setSearchOpen(false);
     setNotificationOpen(false);
+    setProfileOpen(false);
     setSidebarFlyout(null);
   }, [location.pathname]);
 
@@ -794,6 +798,12 @@ function Shell({ children }: { children: React.ReactNode }) {
 
   const actionNotificationCount =
     Number(notificationData.queued ?? 0) + Number(notificationData.failed ?? 0);
+
+  function signOut() {
+    clearToken();
+    setProfileOpen(false);
+    navigate("/login");
+  }
 
   function cancelSidebarFlyoutClose() {
     if (sidebarFlyoutTimer.current !== null) {
@@ -1150,12 +1160,14 @@ function Shell({ children }: { children: React.ReactNode }) {
           </div>
           <button
             title={sidebarCollapsed ? "Sign out" : undefined}
-            onClick={() => {
-              clearToken();
-              navigate("/login");
-            }}
-            className={`text-[11px] text-blue-100/50 transition-colors hover:text-white ${sidebarCollapsed ? "sr-only" : ""}`}
+            onClick={signOut}
+            className={`flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-semibold text-blue-100/80 transition-colors hover:bg-white/10 hover:text-white ${sidebarCollapsed ? "sr-only" : ""}`}
           >
+            <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
+              <path d="M10 17l5-5-5-5" />
+              <path d="M15 12H3" />
+              <path d="M14 3h5a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-5" />
+            </svg>
             Sign out
           </button>
         </div>
@@ -1451,12 +1463,49 @@ function Shell({ children }: { children: React.ReactNode }) {
             >
               <IcoMail />
             </button>
+            <div ref={profileRef} className="relative ml-1">
             <button
+              type="button"
               title={`${displayName} · ${displayRole}`}
-              className="ml-1 w-8 h-8 rounded-full bg-aqua-600 flex items-center justify-center text-xs font-bold text-white"
+              aria-label="Open profile menu"
+              aria-expanded={profileOpen}
+              onClick={() => {
+                setProfileOpen((open) => !open);
+                setNotificationOpen(false);
+                setSearchOpen(false);
+              }}
+              className="flex h-9 w-9 items-center justify-center rounded-full bg-aqua-600 text-xs font-bold text-white ring-2 ring-transparent transition hover:bg-aqua-700 hover:ring-sky-100"
             >
               {initials}
             </button>
+            {profileOpen && (
+              <div className="absolute right-0 top-[calc(100%+0.65rem)] z-50 w-64 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl">
+                <div className="flex items-center gap-3 border-b border-slate-100 px-4 py-4">
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-aqua-600 text-sm font-bold text-white">
+                    {initials}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-bold text-slate-900">{displayName}</div>
+                    <div className="truncate text-xs text-slate-500">{displayRole}</div>
+                  </div>
+                </div>
+                <div className="p-2">
+                  <button
+                    type="button"
+                    onClick={signOut}
+                    className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-semibold text-red-600 transition hover:bg-red-50"
+                  >
+                    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5">
+                      <path d="M10 17l5-5-5-5" />
+                      <path d="M15 12H3" />
+                      <path d="M14 3h5a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-5" />
+                    </svg>
+                    Sign out
+                  </button>
+                </div>
+              </div>
+            )}
+            </div>
           </div>
         </header>
 

@@ -509,7 +509,7 @@ export default function WorkOrderManagement() {
         );
         const creatingOrder = busyAction === "create";
         return (
-          <div className="fixed inset-0 z-[90]">
+          <div className="fixed inset-x-0 bottom-0 top-14 z-[90]">
             <button
               type="button"
               aria-label="Close create work order"

@@ -1,8 +1,9 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { api } from "../lib/api";
+import { api, getSessionUser } from "../lib/api";
 import {
   exportExcel,
+  exportMeterReadingZonePdf,
   exportMeterReadingZoneWorkbook,
   openEvidence,
   parseMeterWorkbook,
@@ -2473,36 +2474,34 @@ export function ReadingWorklist() {
     [items, readingStatus],
   );
 
-  async function exportWorklist() {
+  async function exportWorklist(format: "excel" | "pdf") {
     if (!filteredItems.length || operation) return;
     setError("");
-    setOperation("Preparing Excel worklist");
+    setOperation(`Preparing ${format === "pdf" ? "PDF" : "Excel"} reading sheets`);
     setOperationProgress(10);
     try {
       await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
-      const rows = filteredItems.map((item) => ({
-        "Meter ID": String(item.meterId),
-        "Meter Number": item.meter?.meterNumber ?? "",
+      const exportItems = [...filteredItems].sort((left, right) =>
+        String(left.meter?.meterNumber ?? "").localeCompare(
+          String(right.meter?.meterNumber ?? ""),
+          undefined,
+          { numeric: true, sensitivity: "base" },
+        ),
+      );
+      const rows = exportItems.map((item, index) => ({
+        "Serial Number": index + 1,
         "Account Number": item.account?.accountNumber ?? "",
-        "Customer Number": item.account?.customer?.customerNumber ?? "",
-        "Customer Name": item.customerName ?? "",
-        Route: item.route?.routeName ?? "",
+        "Customer Names": item.customerName ?? "",
         "Previous Reading": Number(
           item.cycleReading?.previousReading ??
             item.meter?.readings?.[0]?.currentReading ??
             item.meter?.openingReading ??
             0,
         ),
-        "Current Reading": item.cycleReading
+        "Meter Reading": item.cycleReading
           ? Number(item.cycleReading.currentReading)
           : "",
-        "Reading Date": item.cycleReading?.readingDate
-          ? String(item.cycleReading.readingDate).slice(0, 10)
-          : new Date().toISOString().slice(0, 10),
-        "Reading Type": item.cycleReading?.readingType ?? "ACTUAL",
-        "Estimation Reason": item.cycleReading?.estimationReason ?? "",
-        Remarks: "",
-        Status: item.cycleReading?.approvalStatus ?? "UNREAD",
+        Comment: "",
       }));
       const activeAssignmentByRoute = new Map<string, Row>(
         routeAssignments
@@ -2515,7 +2514,7 @@ export function ReadingWorklist() {
           ]),
       );
       const groupedByZone = new Map<string, Row[]>();
-      filteredItems.forEach((item) => {
+      exportItems.forEach((item) => {
         const zoneName = String(
           item.zone?.zoneName ?? item.route?.zone?.zoneName ?? "Unassigned zone",
         );
@@ -2563,41 +2562,46 @@ export function ReadingWorklist() {
               String(selectedCycle?.endDate ?? new Date().toISOString()).slice(0, 10),
             readerNames,
             rows: zoneItems.map((item) => {
-              const assignment = activeAssignmentByRoute.get(String(item.route?.routeId));
               return {
-                "Meter ID": String(item.meterId),
-                "Meter Number": item.meter?.meterNumber ?? "",
                 "Account Number": item.account?.accountNumber ?? "",
-                "Customer Number": item.account?.customer?.customerNumber ?? "",
-                "Customer Name": item.customerName ?? "",
-                Area: item.account?.property?.serviceArea?.areaName ?? "",
-                Route: item.route?.routeName ?? "",
+                "Customer Names": item.customerName ?? "",
                 "Previous Reading": Number(
                   item.cycleReading?.previousReading ??
                     item.meter?.readings?.[0]?.currentReading ??
                     item.meter?.openingReading ??
                     0,
                 ),
-                "Current Reading": item.cycleReading
+                "Meter Reading": item.cycleReading
                   ? Number(item.cycleReading.currentReading)
                   : "",
-                "Reading Date": item.cycleReading?.readingDate
-                  ? String(item.cycleReading.readingDate).slice(0, 10)
-                  : "",
-                "Person Reading": assignment?.officerName ?? "Not assigned",
-                Remarks: "",
-                Status: item.cycleReading?.approvalStatus ?? "UNREAD",
+                Comment: "",
               };
             }),
           };
         });
       setOperationProgress(55);
       const cycleCode = selectedCycle?.cycleCode ?? `cycle-${cycleId}`;
-      await exportMeterReadingZoneWorkbook(
-        `meter-reading-worklist-${cycleCode}.xlsx`,
-        rows,
-        zoneSheets,
-      );
+      if (format === "pdf") {
+        const sessionUser = getSessionUser();
+        const printedBy =
+          [sessionUser?.firstName, sessionUser?.lastName]
+            .filter(Boolean)
+            .join(" ") ||
+          sessionUser?.username ||
+          "Signed-in user";
+        await exportMeterReadingZonePdf(
+          `meter-reading-sheets-${cycleCode}.pdf`,
+          zoneSheets,
+          "/samdamte-water-logo-print.png",
+          printedBy,
+        );
+      } else {
+        await exportMeterReadingZoneWorkbook(
+          `meter-reading-sheets-${cycleCode}.xlsx`,
+          rows,
+          zoneSheets,
+        );
+      }
       setOperationProgress(100);
     } catch (e: any) {
       setError(`Could not export the worklist: ${e.message}`);
@@ -2644,6 +2648,12 @@ export function ReadingWorklist() {
           item,
         ]),
       );
+      const byAccount = new Map<string, Row>(
+        eligibleRows.map((item: Row) => [
+          String(item.account?.accountNumber ?? "").trim().toLowerCase(),
+          item,
+        ]),
+      );
       const seen = new Set<string>();
       const valid: { row: number; payload: Record<string, unknown> }[] = [];
       const invalid: Record<string, unknown>[] = [];
@@ -2655,10 +2665,19 @@ export function ReadingWorklist() {
         const meterNumber = String(
           cell(record, "Meter Number", "meterNumber") ?? "",
         ).trim();
+        const accountNumber = String(
+          cell(record, "Account Number", "accountNumber") ?? "",
+        ).trim();
         const item =
           (meterIdValue ? byId.get(meterIdValue) : undefined) ??
-          (meterNumber ? byNumber.get(meterNumber.toLowerCase()) : undefined);
-        const currentValue = cell(record, "Current Reading", "currentReading");
+          (meterNumber ? byNumber.get(meterNumber.toLowerCase()) : undefined) ??
+          (accountNumber ? byAccount.get(accountNumber.toLowerCase()) : undefined);
+        const currentValue = cell(
+          record,
+          "Meter Reading",
+          "Current Reading",
+          "currentReading",
+        );
         const currentIsBlank =
           currentValue === "" ||
           currentValue === null ||
@@ -2689,11 +2708,13 @@ export function ReadingWorklist() {
           cell(record, "Reading Date", "readingDate") ?? "",
         ).trim();
         const parsedDate = readingDateValue ? new Date(readingDateValue) : new Date();
-        const key = item ? String(item.meterId) : meterNumber.toLowerCase();
+        const key = item
+          ? String(item.meterId)
+          : meterNumber.toLowerCase() || accountNumber.toLowerCase();
         const errors: string[] = [];
 
-        if (!meterIdValue && !meterNumber)
-          errors.push("Meter ID or meter number is required");
+        if (!meterIdValue && !meterNumber && !accountNumber)
+          errors.push("Account number or meter number is required");
         else if (!item)
           errors.push("Meter is not eligible for the selected reading cycle");
         if (key && seen.has(key)) errors.push("Duplicate meter in spreadsheet");
@@ -2737,7 +2758,9 @@ export function ReadingWorklist() {
             readingType,
             ...(estimationReason ? { estimationReason } : {}),
             readingDate: parsedDate.toISOString(),
-            remarks: String(cell(record, "Remarks", "remarks") ?? "").trim(),
+            remarks: String(
+              cell(record, "Comment", "Remarks", "remarks") ?? "",
+            ).trim(),
             exceptionType: "NONE",
             syncId: `excel-${cycleId}-${String(item.meterId)}`,
             evidence: [],
@@ -2902,9 +2925,16 @@ export function ReadingWorklist() {
           <Button
             tone="slate"
             disabled={!cycleId || !filteredItems.length || Boolean(operation)}
-            onClick={exportWorklist}
+            onClick={() => exportWorklist("excel")}
           >
-            Export zone sheets
+            Export Excel
+          </Button>
+          <Button
+            tone="blue"
+            disabled={!cycleId || !filteredItems.length || Boolean(operation)}
+            onClick={() => exportWorklist("pdf")}
+          >
+            Export PDF
           </Button>
           <Button
             tone="green"
