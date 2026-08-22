@@ -47,7 +47,13 @@ function c2bPayerName(body: z.infer<typeof c2bCallbackSchema>) {
   return [body.FirstName, body.MiddleName, body.LastName]
     .map((part) => part?.trim())
     .filter(Boolean)
-    .join(" ") || undefined;
+    .join(" ")
+    .slice(0, 200) || undefined;
+}
+
+function boundedC2bText(value: string | number | undefined, maximum: number) {
+  const text = value == null ? "" : String(value).trim();
+  return text ? text.slice(0, maximum) : undefined;
 }
 
 // PayBill validation is deliberately read-only. Confirmation is the source of
@@ -88,8 +94,8 @@ paymentsRouter.post(["/c2b/confirmation", "/mpesa/c2b/confirmation"], async (req
   if (!parsed.success || !c2bShortCodeMatches(parsed.data.BusinessShortCode))
     return res.status(400).json({ ResultCode: "C2B00012", ResultDesc: "Invalid transaction details" });
   const body = parsed.data;
-  const transactionReference = body.TransID.trim();
-  const customerReference = body.BillRefNumber.trim();
+  const transactionReference = body.TransID.trim().slice(0, 100);
+  const customerReference = body.BillRefNumber.trim().slice(0, 100);
   const paymentDate = parseMpesaDate(body.TransTime);
   try {
     const existing = await prisma.payment.findUnique({ where: { transactionReference } });
@@ -116,7 +122,7 @@ paymentsRouter.post(["/c2b/confirmation", "/mpesa/c2b/confirmation"], async (req
           accountId: account?.accountId,
           channelId: channel.channelId,
           payerName: c2bPayerName(body),
-          payerPhone: body.MSISDN == null ? undefined : String(body.MSISDN),
+          payerPhone: boundedC2bText(body.MSISDN, 30),
           amount: body.TransAmount,
           paymentDate,
           valueDate: new Date(Date.UTC(paymentDate.getUTCFullYear(), paymentDate.getUTCMonth(), paymentDate.getUTCDate())),
@@ -175,6 +181,14 @@ paymentsRouter.post(["/c2b/confirmation", "/mpesa/c2b/confirmation"], async (req
     if (error?.code === "P2002") {
       const duplicate = await prisma.payment.findUnique({ where: { transactionReference } });
       if (duplicate) return res.json({ ResultCode: 0, ResultDesc: "Accepted" });
+    }
+    if (error?.code === "P2000") {
+      console.error("C2B payment text exceeded the production database column", {
+        transactionReferenceLength: transactionReference.length,
+        customerReferenceLength: customerReference.length,
+        payerNameLength: c2bPayerName(body)?.length ?? 0,
+        payerPhoneLength: boundedC2bText(body.MSISDN, 30)?.length ?? 0,
+      });
     }
     next(error);
   }
