@@ -452,6 +452,7 @@ function parseCsvLine(line: string) {
 
 export async function parseMeterWorkbook(
   file: File,
+  requiredHeaders: string[] = ["Account Number", "Meter Reading"],
 ): Promise<Record<string, unknown>[]> {
   if (file.name.toLowerCase().endsWith(".csv")) {
     const text = (await file.text()).replace(/^\uFEFF/, "");
@@ -474,11 +475,14 @@ export async function parseMeterWorkbook(
   workbook.worksheets.forEach((sheet) => {
     if (sheet.rowCount < 2) return;
     let headerRowNumber = 0;
+    const normalizedRequiredHeaders = requiredHeaders.map((header) =>
+      header.trim().toLowerCase(),
+    );
     for (let rowNumber = 1; rowNumber <= Math.min(sheet.rowCount, 20); rowNumber++) {
       const candidate = (sheet.getRow(rowNumber).values as unknown[])
         .slice(1)
         .map((value) => String(value ?? "").trim().toLowerCase());
-      if (candidate.includes("account number") && candidate.includes("meter reading")) {
+      if (normalizedRequiredHeaders.every((header) => candidate.includes(header))) {
         headerRowNumber = rowNumber;
         break;
       }

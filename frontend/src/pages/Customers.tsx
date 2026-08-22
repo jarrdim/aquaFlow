@@ -306,7 +306,10 @@ export default function Customers() {
     if (!file) return;
     setError("");
     try {
-      const sourceRows = await parseMeterWorkbook(file);
+      const sourceRows = await parseMeterWorkbook(file, [
+        "Customer Number",
+        "Customer Type",
+      ]);
       const errors: string[] = [];
       const normalized = sourceRows.map((row, index) => {
         const customerType = cell(row, "Customer Type").toUpperCase();
