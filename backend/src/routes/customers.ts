@@ -39,12 +39,6 @@ const createCustomerSchema = z
     { message: "INDIVIDUAL customers need first/last name; ORGANIZATION customers need organizationName" }
   );
 
-async function nextCustomerNumber() {
-  const year = new Date().getFullYear();
-  const count = await prisma.customer.count();
-  return `CUST-${year}-${String(count + 1).padStart(5, "0")}`;
-}
-
 customersRouter.get("/", async (req, res) => {
   const search = (req.query.search as string) ?? "";
   const status = (req.query.status as string) ?? "";
@@ -343,33 +337,50 @@ customersRouter.post("/", async (req, res) => {
   const data = parsed.data;
 
   try {
-    const customer = await prisma.customer.create({
-      data: {
-        customerNumber: await nextCustomerNumber(),
-        customerType: data.customerType,
-        firstName: data.firstName,
-        middleName: data.middleName,
-        lastName: data.lastName,
-        organizationName: data.organizationName,
-        nationalId: data.nationalId,
-        registrationNumber: data.registrationNumber,
-        phoneNumber: data.phoneNumber,
-        alternativePhone: data.alternativePhone,
-        emailAddress: data.emailAddress,
-        preferredLanguage: data.preferredLanguage,
-        createdBy: req.user ? BigInt(req.user.userId) : null,
-        documents: data.documents.length ? {
-          create: data.documents.map((document) => ({
-            documentReference: document.documentReference,
-            title: document.title,
-            fileName: document.fileName,
-            mimeType: document.mimeType,
-            fileSize: document.fileSize,
-            fileData: document.data,
-            uploadedBy: req.user ? BigInt(req.user.userId) : null,
-          })),
-        } : undefined,
-      },
+    const customer = await prisma.$transaction(async (tx) => {
+      // Serialize number allocation and derive the next value from the highest
+      // number for this year. A row count is unsafe after imports/deletions and
+      // allows concurrent requests to select the same customer number.
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext('aquaflow-customer-number'))`;
+      const year = new Date().getFullYear();
+      const pattern = `CUST-${year}-%`;
+      const [sequence] = await tx.$queryRaw<Array<{ maxSequence: number }>>`
+        SELECT COALESCE(
+          MAX(CAST(substring(customer_number FROM '[0-9]+$') AS INTEGER)),
+          0
+        )::INTEGER AS "maxSequence"
+        FROM aquaflow.customers
+        WHERE customer_number LIKE ${pattern}`;
+      const customerNumber = `CUST-${year}-${String(sequence.maxSequence + 1).padStart(5, "0")}`;
+
+      return tx.customer.create({
+        data: {
+          customerNumber,
+          customerType: data.customerType,
+          firstName: data.firstName,
+          middleName: data.middleName,
+          lastName: data.lastName,
+          organizationName: data.organizationName,
+          nationalId: data.nationalId,
+          registrationNumber: data.registrationNumber,
+          phoneNumber: data.phoneNumber,
+          alternativePhone: data.alternativePhone,
+          emailAddress: data.emailAddress,
+          preferredLanguage: data.preferredLanguage,
+          createdBy: req.user ? BigInt(req.user.userId) : null,
+          documents: data.documents.length ? {
+            create: data.documents.map((document) => ({
+              documentReference: document.documentReference,
+              title: document.title,
+              fileName: document.fileName,
+              mimeType: document.mimeType,
+              fileSize: document.fileSize,
+              fileData: document.data,
+              uploadedBy: req.user ? BigInt(req.user.userId) : null,
+            })),
+          } : undefined,
+        },
+      });
     });
 
     res.status(201).json(customer);
