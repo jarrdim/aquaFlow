@@ -22,6 +22,14 @@ const createCustomerSchema = z
     alternativePhone: z.string().optional(),
     emailAddress: z.string().email().optional(),
     preferredLanguage: z.enum(["EN", "SW"]).default("EN"),
+    documents: z.array(z.object({
+      documentReference: z.string().trim().min(1).max(100),
+      title: z.string().trim().min(1).max(200),
+      fileName: z.string().trim().min(1).max(255),
+      mimeType: z.enum(["application/pdf", "image/jpeg", "image/png"]),
+      fileSize: z.number().int().positive().max(5 * 1024 * 1024),
+      data: z.string().startsWith("data:").max(7_000_000),
+    })).max(6).default([]),
   })
   .refine(
     (data) =>
@@ -54,6 +62,8 @@ customersRouter.get("/", async (req, res) => {
       { organizationName: { contains: search, mode: "insensitive" as const } },
       { customerNumber: { contains: search, mode: "insensitive" as const } },
       { phoneNumber: { contains: search } },
+      { nationalId: { contains: search, mode: "insensitive" as const } },
+      { registrationNumber: { contains: search, mode: "insensitive" as const } },
     ];
   }
 
@@ -124,7 +134,16 @@ customersRouter.get("/", async (req, res) => {
 customersRouter.get("/:id", async (req, res) => {
   const customer = await prisma.customer.findUnique({
     where: { customerId: BigInt(req.params.id) },
-    include: { accounts: { include: { property: true, category: true } } },
+    include: {
+      accounts: { include: { property: true, category: true } },
+      documents: {
+        select: {
+          customerDocumentId: true, documentReference: true, title: true,
+          fileName: true, mimeType: true, fileSize: true, createdAt: true,
+        },
+        orderBy: { createdAt: "desc" },
+      },
+    },
   });
   if (!customer) return res.status(404).json({ error: "Customer not found" });
   res.json(customer);
@@ -323,23 +342,47 @@ customersRouter.post("/", async (req, res) => {
   }
   const data = parsed.data;
 
-  const customer = await prisma.customer.create({
-    data: {
-      customerNumber: await nextCustomerNumber(),
-      customerType: data.customerType,
-      firstName: data.firstName,
-      middleName: data.middleName,
-      lastName: data.lastName,
-      organizationName: data.organizationName,
-      nationalId: data.nationalId,
-      registrationNumber: data.registrationNumber,
-      phoneNumber: data.phoneNumber,
-      alternativePhone: data.alternativePhone,
-      emailAddress: data.emailAddress,
-      preferredLanguage: data.preferredLanguage,
-      createdBy: req.user ? BigInt(req.user.userId) : null,
-    },
-  });
+  try {
+    const customer = await prisma.customer.create({
+      data: {
+        customerNumber: await nextCustomerNumber(),
+        customerType: data.customerType,
+        firstName: data.firstName,
+        middleName: data.middleName,
+        lastName: data.lastName,
+        organizationName: data.organizationName,
+        nationalId: data.nationalId,
+        registrationNumber: data.registrationNumber,
+        phoneNumber: data.phoneNumber,
+        alternativePhone: data.alternativePhone,
+        emailAddress: data.emailAddress,
+        preferredLanguage: data.preferredLanguage,
+        createdBy: req.user ? BigInt(req.user.userId) : null,
+        documents: data.documents.length ? {
+          create: data.documents.map((document) => ({
+            documentReference: document.documentReference,
+            title: document.title,
+            fileName: document.fileName,
+            mimeType: document.mimeType,
+            fileSize: document.fileSize,
+            fileData: document.data,
+            uploadedBy: req.user ? BigInt(req.user.userId) : null,
+          })),
+        } : undefined,
+      },
+    });
 
-  res.status(201).json(customer);
+    res.status(201).json(customer);
+  } catch (error: any) {
+    if (error?.code === "P2002") {
+      const fields = Array.isArray(error?.meta?.target)
+        ? error.meta.target.join(", ")
+        : "customer identity";
+      return res.status(409).json({
+        error: `A customer with the same ${fields.replace(/_/g, " ")} already exists. Search for and link that customer instead.`,
+      });
+    }
+    console.error("Customer creation failed", error);
+    return res.status(500).json({ error: "Customer creation failed. No customer was saved." });
+  }
 });

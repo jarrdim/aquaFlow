@@ -25,6 +25,7 @@
     "db:work-order-upgrade": "prisma db execute --file prisma/migrations/20260727143000_work_order_management/migration.sql --schema prisma/schema.prisma",
     "db:connection-upgrade": "prisma db execute --file prisma/migrations/20260727193000_new_connection_management/migration.sql --schema prisma/schema.prisma",
     "db:customer-workflow-upgrade": "prisma db execute --file prisma/migrations/20260730150000_customer_submission_workflows/migration.sql --schema prisma/schema.prisma",
+    "db:customer-documents-upgrade": "prisma db execute --file prisma/migrations/20260822190000_customer_documents/migration.sql --schema prisma/schema.prisma",
     "db:reconnection-payment-upgrade": "prisma db execute --file prisma/migrations/20260801120000_reconnection_fee_payments/migration.sql --schema prisma/schema.prisma",
     "db:inspection-upgrade": "prisma db execute --file prisma/migrations/20260813090000_field_inspection_contract/migration.sql --schema prisma/schema.prisma",
     "db:disconnection-upgrade": "prisma db execute --file prisma/migrations/20260814100000_field_disconnection_contract/migration.sql --schema prisma/schema.prisma",

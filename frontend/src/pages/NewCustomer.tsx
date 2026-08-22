@@ -8,6 +8,13 @@ import { SweetAlertToast } from "../components/SweetAlertToast";
 type CustomerType = "INDIVIDUAL" | "ORGANIZATION";
 type IdType = "NATIONAL_ID" | "PASSPORT" | "OTHER";
 interface Lookup { [key: string]: any; }
+type CustomerDocumentDraft = {
+  key: string;
+  documentReference: string;
+  title: string;
+  file?: File;
+  data?: string;
+};
 
 const FIELD_CLS = "w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-[15px] text-slate-700 outline-none transition focus:border-aqua-500 focus:ring-2 focus:ring-aqua-500/20 placeholder:text-slate-400";
 const LABEL_CLS = "mb-1.5 block text-[13px] font-semibold text-slate-600";
@@ -104,6 +111,9 @@ export default function NewCustomer() {
   });
   const [stepError, setStepError] = useState<string | null>(null);
   const [saving, setSaving]       = useState(false);
+  const [documents, setDocuments] = useState<CustomerDocumentDraft[]>([
+    { key: crypto.randomUUID(), documentReference: "", title: "" },
+  ]);
 
   const [zones, setZones]             = useState<Lookup[]>([]);
   const [serviceAreas, setServiceAreas] = useState<Lookup[]>([]);
@@ -115,6 +125,30 @@ export default function NewCustomer() {
   const returnTo = searchParams.get("returnTo");
 
   const upd = (field: string, value: string) => setForm((f) => ({ ...f, [field]: value }));
+  const updateDocument = (key: string, patch: Partial<CustomerDocumentDraft>) =>
+    setDocuments((current) => current.map((document) =>
+      document.key === key ? { ...document, ...patch } : document,
+    ));
+
+  async function chooseDocument(key: string, file?: File) {
+    if (!file) return updateDocument(key, { file: undefined, data: undefined });
+    if (!["application/pdf", "image/jpeg", "image/png"].includes(file.type)) {
+      setStepError("Documents must be PDF, JPG or PNG files.");
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setStepError("Each document must be 5 MB or smaller.");
+      return;
+    }
+    const data = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(new Error("The selected document could not be read."));
+      reader.readAsDataURL(file);
+    });
+    setStepError(null);
+    updateDocument(key, { file, data });
+  }
 
   // Load zones when entering step 2
   useEffect(() => {
@@ -144,6 +178,16 @@ export default function NewCustomer() {
     if (n === 2) {
       if (form.physicalAddress.trim() && !form.zoneId) return "Please select a zone for the property.";
     }
+    if (n === 3) {
+      for (const document of documents) {
+        const started = document.documentReference.trim() || document.title.trim() || document.file;
+        if (started && !document.documentReference.trim()) return "Enter the Document ID for every uploaded form.";
+        if (started && !document.title.trim()) return "Enter the title for every uploaded form.";
+        if (started && (!document.file || !document.data)) return "Choose a form/file for every document row.";
+      }
+      const references = documents.filter((item) => item.documentReference.trim()).map((item) => item.documentReference.trim().toLowerCase());
+      if (new Set(references).size !== references.length) return "Each Document ID must be unique.";
+    }
     return null;
   }
 
@@ -160,8 +204,11 @@ export default function NewCustomer() {
   async function handleSave() {
     const err = validateStep(1);
     if (err) { setStepError(err); setStep(1); return; }
+    const documentError = validateStep(3);
+    if (documentError) { setStepError(documentError); setStep(3); return; }
     setStepError(null);
     setSaving(true);
+    let createdCustomer: any = null;
     try {
       const payload: Record<string, unknown> = {
         customerType,
@@ -171,6 +218,14 @@ export default function NewCustomer() {
         preferredLanguage: form.preferredLanguage,
         nationalId:       customerType === "INDIVIDUAL" && form.nationalId ? form.nationalId : undefined,
         registrationNumber: customerType === "ORGANIZATION" && form.registrationNumber ? form.registrationNumber : undefined,
+        documents: documents.filter((document) => document.file && document.data).map((document) => ({
+          documentReference: document.documentReference.trim(),
+          title: document.title.trim(),
+          fileName: document.file!.name,
+          mimeType: document.file!.type,
+          fileSize: document.file!.size,
+          data: document.data!,
+        })),
       };
       if (customerType === "INDIVIDUAL") {
         payload.firstName  = form.firstName;
@@ -182,6 +237,14 @@ export default function NewCustomer() {
       }
 
       const customer = await api.createCustomer(payload);
+      createdCustomer = customer;
+
+      // Link first: this is the primary outcome of the connection conversion.
+      // Optional property creation must not leave a created customer invisible
+      // to the originating application when it fails independently.
+      if (connectionId) {
+        await api.linkConnectionCustomer(connectionId, String(customer.customerId));
+      }
 
       // If property address provided on step 2, create it now
       if (form.physicalAddress.trim() && form.zoneId) {
@@ -197,13 +260,14 @@ export default function NewCustomer() {
       }
 
       if (connectionId) {
-        await api.linkConnectionCustomer(connectionId, String(customer.customerId));
         navigate(returnTo || `/connections/${connectionId}`);
       } else {
         navigate(`/customers/${encodeId(customer.customerId)}`);
       }
     } catch (err: any) {
-      setStepError(err.message ?? "Failed to save customer");
+      setStepError(createdCustomer
+        ? `Customer ${createdCustomer.customerNumber} was created, but the remaining property/link step failed: ${err.message ?? "request failed"}. Do not create the customer again; search for this customer number and link it.`
+        : (err.message ?? "Failed to save customer. Search by ID or phone before trying again, in case the request reached the server."));
     } finally {
       setSaving(false);
     }
@@ -417,21 +481,34 @@ export default function NewCustomer() {
 
         {/* ════ STEP 3: Documents ════ */}
         {step === 3 && (
-          <div className="text-center py-8">
-            <div className="w-14 h-14 rounded-full bg-slate-100 flex items-center justify-center mx-auto mb-3">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-slate-400">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                <polyline points="14 2 14 8 20 8"/>
-                <line x1="16" y1="13" x2="8" y2="13"/>
-                <line x1="16" y1="17" x2="8" y2="17"/>
-                <polyline points="10 9 9 9 8 9"/>
-              </svg>
+          <div>
+            <div className="mb-5 border-b border-slate-100 pb-3">
+              <h2 className="text-base font-bold text-slate-900">Documents</h2>
+              <p className="mt-1 text-sm text-slate-500">Record the document ID and title, then attach the completed form or identity document.</p>
             </div>
-            <h2 className="text-sm font-semibold text-slate-700 mb-1">Documents</h2>
-            <p className="text-sm text-slate-400 max-w-sm mx-auto">
-              Document upload (ID copies, application forms) will be available in a future update.
-              You can continue and upload documents from the customer profile later.
-            </p>
+            <div className="space-y-3">
+              {documents.map((document, index) => (
+                <div key={document.key} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="mb-3 flex items-center justify-between">
+                    <h3 className="text-sm font-semibold text-slate-700">Document {index + 1}</h3>
+                    {documents.length > 1 && <button type="button" onClick={() => setDocuments((current) => current.filter((item) => item.key !== document.key))} className="text-xs font-semibold text-red-600 hover:text-red-700">Remove</button>}
+                  </div>
+                  <div className="grid gap-3 lg:grid-cols-3">
+                    <Field label="Document ID">
+                      <input className={FIELD_CLS} value={document.documentReference} onChange={(event) => updateDocument(document.key, { documentReference: event.target.value })} placeholder="e.g. NATIONAL-ID-12345678" />
+                    </Field>
+                    <Field label="Title">
+                      <input className={FIELD_CLS} value={document.title} onChange={(event) => updateDocument(document.key, { title: event.target.value })} placeholder="e.g. National ID copy" />
+                    </Field>
+                    <Field label="Form / File">
+                      <input type="file" accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png" className={FIELD_CLS} onChange={(event) => void chooseDocument(document.key, event.target.files?.[0])} />
+                    </Field>
+                  </div>
+                  {document.file && <p className="mt-2 text-xs text-slate-500">{document.file.name} · {(document.file.size / 1024).toFixed(0)} KB</p>}
+                </div>
+              ))}
+            </div>
+            <button type="button" onClick={() => setDocuments((current) => [...current, { key: crypto.randomUUID(), documentReference: "", title: "" }])} className="mt-4 rounded-lg border border-aqua-200 bg-aqua-50 px-4 py-2 text-sm font-semibold text-aqua-700 hover:bg-aqua-100">+ Add another document</button>
           </div>
         )}
 
@@ -471,6 +548,17 @@ export default function NewCustomer() {
                   <ReviewRow label="Physical Address" value={form.physicalAddress} />
                   <ReviewRow label="Plot Number"      value={form.plotNumber} />
                   <ReviewRow label="Building Name"    value={form.buildingName} />
+                </div>
+              </div>
+            )}
+
+            {documents.some((document) => document.file) && (
+              <div className="mb-5">
+                <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Documents</h3>
+                <div className="bg-slate-50 rounded-lg px-4 py-1">
+                  {documents.filter((document) => document.file).map((document) => (
+                    <ReviewRow key={document.key} label={document.documentReference} value={`${document.title} · ${document.file!.name}`} />
+                  ))}
                 </div>
               </div>
             )}

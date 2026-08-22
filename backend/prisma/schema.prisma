@@ -118,8 +118,29 @@ model Customer {
   users           User[]
   notifications   Notification[]
   serviceRequests ServiceRequest[]
+  documents       CustomerDocument[]
 
   @@map("customers")
+  @@schema("aquaflow")
+}
+
+model CustomerDocument {
+  customerDocumentId BigInt   @id @default(autoincrement()) @map("customer_document_id")
+  customerId         BigInt   @map("customer_id")
+  documentReference  String   @map("document_reference") @db.VarChar(100)
+  title              String   @db.VarChar(200)
+  fileName           String   @map("file_name") @db.VarChar(255)
+  mimeType           String   @map("mime_type") @db.VarChar(100)
+  fileSize           Int      @map("file_size")
+  fileData           String   @map("file_data") @db.Text
+  uploadedBy         BigInt?  @map("uploaded_by")
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  customer Customer @relation(fields: [customerId], references: [customerId], onDelete: Cascade)
+
+  @@unique([customerId, documentReference])
+  @@index([customerId, createdAt(sort: Desc)])
+  @@map("customer_documents")
   @@schema("aquaflow")
 }
 
