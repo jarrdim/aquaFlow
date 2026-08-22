@@ -125,20 +125,20 @@ model Customer {
 }
 
 model CustomerDocument {
-  customerDocumentId BigInt   @id @default(autoincrement()) @map("customer_document_id")
+  customerDocumentId BigInt   @id @default(autoincrement()) @map("document_id")
   customerId         BigInt   @map("customer_id")
-  documentReference  String   @map("document_reference") @db.VarChar(100)
-  title              String   @db.VarChar(200)
-  fileName           String   @map("file_name") @db.VarChar(255)
-  mimeType           String   @map("mime_type") @db.VarChar(100)
-  fileSize           Int      @map("file_size")
-  fileData           String   @map("file_data") @db.Text
+  documentReference  String?  @map("document_number") @db.VarChar(100)
+  title              String   @map("document_type") @db.VarChar(100)
+  fileName           String?  @map("file_name") @db.VarChar(255)
+  mimeType           String?  @map("mime_type") @db.VarChar(100)
+  fileSize           Int?     @map("file_size")
+  fileData           String   @map("file_path") @db.Text
   uploadedBy         BigInt?  @map("uploaded_by")
-  createdAt          DateTime @default(now()) @map("created_at")
+  createdAt          DateTime @default(now()) @map("uploaded_at") @db.Timestamptz(6)
 
   customer Customer @relation(fields: [customerId], references: [customerId], onDelete: Cascade)
 
-  @@unique([customerId, documentReference])
+  @@index([customerId, documentReference])
   @@index([customerId, createdAt(sort: Desc)])
   @@map("customer_documents")
   @@schema("aquaflow")
