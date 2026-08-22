@@ -91,7 +91,13 @@ async function request(path: string, options: RequestInit = {}) {
   };
   const res = await fetchWithReadRetry(path, requestOptions);
   if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
+    const responseText = await res.text().catch(() => "");
+    let body: any = {};
+    try {
+      body = responseText ? JSON.parse(responseText) : {};
+    } catch {
+      body = {};
+    }
 
     // A token can remain in localStorage after its JWT expiry. Treat a 401 from
     // an authenticated request as a session boundary, clear it once, and send
@@ -137,7 +143,26 @@ async function request(path: string, options: RequestInit = {}) {
           : JSON.stringify(body.error),
       );
     }
-    throw new Error(`Request failed (${res.status})`);
+    const plainResponse = responseText
+      .replace(/<script[\s\S]*?<\/script>/gi, " ")
+      .replace(/<style[\s\S]*?<\/style>/gi, " ")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 500);
+    const requestId =
+      res.headers.get("x-request-id") ?? res.headers.get("cf-ray") ?? "";
+    const details = plainResponse
+      ? `: ${plainResponse}`
+      : res.statusText
+        ? `: ${res.statusText}`
+        : "";
+    const requestError: any = new Error(
+      `HTTP ${res.status}${details}${requestId ? ` (request ${requestId})` : ""}`,
+    );
+    requestError.status = res.status;
+    requestError.requestId = requestId;
+    throw requestError;
   }
   return res.json();
 }

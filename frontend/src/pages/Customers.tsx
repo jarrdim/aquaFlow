@@ -175,6 +175,7 @@ export default function Customers() {
   const [importErrors, setImportErrors] = useState<string[]>([]);
   const [importing, setImporting] = useState(false);
   const [importProgress, setImportProgress] = useState(0);
+  const [importRequestError, setImportRequestError] = useState("");
   const [showPropertyImport, setShowPropertyImport] = useState(false);
   const [propertyRows, setPropertyRows] = useState<Record<string, unknown>[]>([]);
   const [propertyErrors, setPropertyErrors] = useState<string[]>([]);
@@ -306,6 +307,7 @@ export default function Customers() {
   async function selectImportFile(file?: File) {
     if (!file) return;
     setError("");
+    setImportRequestError("");
     try {
       const sourceRows = await parseMeterWorkbook(file, [
         "Customer Number",
@@ -356,11 +358,14 @@ export default function Customers() {
     setImporting(true);
     setImportProgress(0);
     setError("");
+    setImportRequestError("");
     let imported = 0;
+    let failedBatchStart = 0;
     try {
       // Keep each request comfortably below reverse-proxy timeout limits.
       const requestBatchSize = 250;
       for (let offset = 0; offset < importRows.length; offset += requestBatchSize) {
+        failedBatchStart = offset;
         const result = await api.bulkImportCustomers(
           importRows.slice(offset, offset + requestBatchSize),
         );
@@ -374,11 +379,13 @@ export default function Customers() {
       await load(search, statusFilter, meterAssignmentFilter, 1);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Customers could not be imported.";
-      setError(
-        imported > 0
-          ? `${imported} customers were imported before the request failed. ${message}`
-          : message,
+      const failedBatchEnd = Math.min(
+        failedBatchStart + 250,
+        importRows.length,
       );
+      const detail = `Batch ${Math.floor(failedBatchStart / 250) + 1} (customers ${failedBatchStart + 1}-${failedBatchEnd}) failed. ${imported} customers were confirmed imported. Server response: ${message}`;
+      setImportRequestError(detail);
+      setError(detail);
     } finally {
       setImporting(false);
     }
@@ -691,6 +698,7 @@ export default function Customers() {
             <button type="button" disabled={!importRows.length || importErrors.length > 0 || importing} onClick={() => void importCustomers()} className="h-11 rounded-xl bg-aqua-700 px-6 text-sm font-bold text-white disabled:opacity-40">{importing ? `Importing ${importProgress}/${importRows.length}...` : `Import ${importRows.length || ""} customers`}</button>
           </div>
           {importRows.length > 0 && !importErrors.length && <p className="mt-3 text-sm font-semibold text-emerald-700">{importRows.length} rows validated and ready to import.</p>}
+          {importRequestError && <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800"><strong>Import request error</strong><p className="mt-1 whitespace-pre-wrap break-words">{importRequestError}</p></div>}
           {importErrors.length > 0 && <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700"><strong>Fix these issues:</strong><ul className="mt-1 list-disc pl-5">{importErrors.slice(0, 20).map((message) => <li key={message}>{message}</li>)}</ul>{importErrors.length > 20 && <p className="mt-1">And {importErrors.length - 20} more.</p>}</div>}
         </section>
       )}
