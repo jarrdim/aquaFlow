@@ -341,7 +341,7 @@ customersRouter.post("/", async (req, res) => {
       // Serialize number allocation and derive the next value from the highest
       // number for this year. A row count is unsafe after imports/deletions and
       // allows concurrent requests to select the same customer number.
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext('aquaflow-customer-number'))`;
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('aquaflow-customer-number'))`;
       const year = new Date().getFullYear();
       const pattern = `CUST-${year}-%`;
       const [sequence] = await tx.$queryRaw<Array<{ maxSequence: number }>>`
