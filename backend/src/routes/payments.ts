@@ -853,12 +853,20 @@ paymentsRouter.get("/mpesa/config", (_req, res) => {
 paymentsRouter.get("/mpesa/c2b/config", (_req, res) => {
   try {
     const config = getMpesaC2bConfig();
+    const publicCallbackUrl = (value: string) => {
+      const url = new URL(value);
+      url.search = "";
+      url.hash = "";
+      return url.toString();
+    };
     res.json({
       configured: true,
       environment: config.environment,
       shortCode: config.shortCode,
       responseType: config.responseType,
       callbackSecured: Boolean(config.validationToken && config.confirmationToken),
+      validationUrl: publicCallbackUrl(config.validationUrl),
+      confirmationUrl: publicCallbackUrl(config.confirmationUrl),
     });
   } catch (e: any) {
     res.json({

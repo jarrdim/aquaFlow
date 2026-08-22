@@ -17,6 +17,7 @@ import {
 import Login from "./pages/Login";
 import LandingPage from "./pages/LandingPage";
 import PublicPaymentPage from "./pages/PublicPaymentPage";
+import C2bIntegration from "./pages/C2bIntegration";
 import OperationalDashboard from "./pages/OperationalDashboard";
 import Reports from "./pages/Reports";
 import WorkOrderManagement from "./pages/WorkOrderManagement";
@@ -373,6 +374,7 @@ const BILLING_MENU = [
 const PAYMENT_MENU = [
   ["Revenue Dashboard", "/payments"],
   ["M-Pesa Express", "/payments/mpesa"],
+  ["M-Pesa C2B Integration", "/payments/mpesa/c2b"],
   ["Record Payment", "/payments/record"],
   ["Payment Register", "/payments/register"],
   ["Payment Channels", "/payments/channels"],
@@ -1715,6 +1717,16 @@ export default function App() {
           <Protected>
             <Shell>
               <MpesaStkPush />
+            </Shell>
+          </Protected>
+        }
+      />
+      <Route
+        path="/payments/mpesa/c2b"
+        element={
+          <Protected>
+            <Shell>
+              <C2bIntegration />
             </Shell>
           </Protected>
         }

@@ -594,6 +594,9 @@ export const api = {
   ingestMpesaPayment: (data: Record<string, unknown>) =>
     request("/payments/mpesa", { method: "POST", body: JSON.stringify(data) }),
   getMpesaConfig: () => request("/payments/mpesa/config"),
+  getMpesaC2bConfig: () => request("/payments/mpesa/c2b/config"),
+  registerMpesaC2bUrls: () =>
+    request("/payments/mpesa/c2b/register", { method: "POST" }),
   getPublicPaymentLink: (token: string) =>
     request(`/payments/public-link/${encodeURIComponent(token)}`),
   initiatePublicPayment: (
