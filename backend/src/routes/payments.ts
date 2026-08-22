@@ -1,4 +1,5 @@
 import { Prisma } from "@prisma/client";
+import { createHash } from "crypto";
 import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
@@ -56,6 +57,48 @@ function boundedC2bText(value: string | number | undefined, maximum: number) {
   return text ? text.slice(0, maximum) : undefined;
 }
 
+function publicCallbackUrl(value: string) {
+  const url = new URL(value);
+  url.search = "";
+  url.hash = "";
+  return url.toString();
+}
+
+function c2bConfigurationFingerprint(config: ReturnType<typeof getMpesaC2bConfig>) {
+  return createHash("sha256")
+    .update(JSON.stringify({
+      environment: config.environment,
+      shortCode: config.shortCode,
+      validationUrl: config.validationUrl,
+      confirmationUrl: config.confirmationUrl,
+      responseType: config.responseType,
+    }))
+    .digest("hex");
+}
+
+function c2bAccountCandidates(reference: string) {
+  const raw = reference.trim();
+  const withoutPrefix = raw.replace(/^ACC[-\s]*/i, "").trim();
+  const candidates = [raw, withoutPrefix, `ACC-${withoutPrefix}`];
+  if (/^\d{1,4}$/.test(withoutPrefix)) {
+    candidates.push(`ACC-${withoutPrefix.padStart(5, "0")}`);
+  }
+  return [...new Set(candidates.filter(Boolean))];
+}
+
+function findC2bAccount(
+  database: Prisma.TransactionClient | typeof prisma,
+  reference: string,
+) {
+  return database.customerAccount.findFirst({
+    where: {
+      OR: c2bAccountCandidates(reference).map((accountNumber) => ({
+        accountNumber: { equals: accountNumber, mode: "insensitive" as const },
+      })),
+    },
+  });
+}
+
 // PayBill validation is deliberately read-only. Confirmation is the source of
 // truth and remains capable of preserving an unmatched payment in suspense.
 paymentsRouter.post(["/c2b/validation", "/mpesa/c2b/validation"], async (req, res, next) => {
@@ -70,10 +113,7 @@ paymentsRouter.post(["/c2b/validation", "/mpesa/c2b/validation"], async (req, re
   if (!parsed.success || !c2bShortCodeMatches(parsed.data.BusinessShortCode))
     return res.json({ ResultCode: "C2B00012", ResultDesc: "Invalid transaction details" });
   try {
-    const account = await prisma.customerAccount.findFirst({
-      where: { accountNumber: { equals: parsed.data.BillRefNumber, mode: "insensitive" } },
-      select: { accountId: true },
-    });
+    const account = await findC2bAccount(prisma, parsed.data.BillRefNumber);
     return res.json(account
       ? { ResultCode: 0, ResultDesc: "Accepted" }
       : { ResultCode: "C2B00011", ResultDesc: "Invalid account number" });
@@ -113,9 +153,7 @@ paymentsRouter.post(["/c2b/confirmation", "/mpesa/c2b/confirmation"], async (req
       });
       if (!channel)
         throw Object.assign(new Error("Active M-Pesa payment channel is not configured"), { status: 503 });
-      const account = await tx.customerAccount.findFirst({
-        where: { accountNumber: { equals: customerReference, mode: "insensitive" } },
-      });
+      const account = await findC2bAccount(tx, customerReference);
       const payment = await tx.payment.create({
         data: {
           transactionReference,
@@ -659,6 +697,50 @@ const paymentInclude = {
   },
 } as const;
 
+async function addSuggestedAccounts(payments: any[]) {
+  const candidatesByPayment = new Map<string, string[]>();
+  const candidateNumbers = new Set<string>();
+
+  for (const payment of payments) {
+    if (payment.accountId || !payment.customerReference) continue;
+    const candidates = c2bAccountCandidates(payment.customerReference);
+    candidatesByPayment.set(String(payment.paymentId), candidates);
+    candidates.forEach((candidate) => candidateNumbers.add(candidate.toUpperCase()));
+  }
+
+  if (!candidateNumbers.size) {
+    return payments.map((payment) => ({
+      ...payment,
+      customerName: name(payment.account?.customer),
+      suggestedAccount: null,
+    }));
+  }
+
+  const accounts = await prisma.customerAccount.findMany({
+    where: {
+      accountNumber: { in: [...candidateNumbers] },
+    },
+    include: { customer: true },
+  });
+  const accountsByNumber = new Map(
+    accounts.map((account) => [account.accountNumber.toUpperCase(), account]),
+  );
+
+  return payments.map((payment) => {
+    const candidates = candidatesByPayment.get(String(payment.paymentId)) ?? [];
+    const account = candidates
+      .map((candidate) => accountsByNumber.get(candidate.toUpperCase()))
+      .find(Boolean);
+    return {
+      ...payment,
+      customerName: name(payment.account?.customer),
+      suggestedAccount: account
+        ? { ...account, customerName: name(account.customer) }
+        : null,
+    };
+  });
+}
+
 async function allocate(
   tx: any,
   payment: any,
@@ -864,15 +946,12 @@ paymentsRouter.get("/mpesa/config", (_req, res) => {
   }
 });
 
-paymentsRouter.get("/mpesa/c2b/config", (_req, res) => {
+paymentsRouter.get("/mpesa/c2b/config", async (_req, res, next) => {
   try {
     const config = getMpesaC2bConfig();
-    const publicCallbackUrl = (value: string) => {
-      const url = new URL(value);
-      url.search = "";
-      url.hash = "";
-      return url.toString();
-    };
+    const registration = await prisma.mpesaC2bRegistration.findUnique({
+      where: { configurationFingerprint: c2bConfigurationFingerprint(config) },
+    });
     res.json({
       configured: true,
       environment: config.environment,
@@ -881,8 +960,12 @@ paymentsRouter.get("/mpesa/c2b/config", (_req, res) => {
       callbackSecured: Boolean(config.validationToken && config.confirmationToken),
       validationUrl: publicCallbackUrl(config.validationUrl),
       confirmationUrl: publicCallbackUrl(config.confirmationUrl),
+      registered: Boolean(registration),
+      registeredAt: registration?.registeredAt ?? null,
+      registrationResponseCode: registration?.responseCode ?? null,
     });
   } catch (e: any) {
+    if (!e?.status) return next(e);
     res.json({
       configured: false,
       environment: process.env.MPESA_ENVIRONMENT ?? "sandbox",
@@ -894,9 +977,37 @@ paymentsRouter.get("/mpesa/c2b/config", (_req, res) => {
 paymentsRouter.post(
   "/mpesa/c2b/register",
   requireRole("SYSTEM_ADMIN", "FINANCE_MANAGER"),
-  async (_req, res, next) => {
+  async (req, res, next) => {
     try {
-      res.json(await registerC2bUrls());
+      const config = getMpesaC2bConfig();
+      const response = await registerC2bUrls();
+      const responseCode = String(response.ResponseCode ?? "");
+      if (!["0", "00000000"].includes(responseCode)) {
+        throw Object.assign(
+          new Error(String(response.ResponseDescription ?? "Safaricom did not accept the C2B URLs")),
+          { status: 502 },
+        );
+      }
+      const registration = await prisma.mpesaC2bRegistration.upsert({
+        where: { configurationFingerprint: c2bConfigurationFingerprint(config) },
+        create: {
+          configurationFingerprint: c2bConfigurationFingerprint(config),
+          environment: config.environment,
+          shortCode: config.shortCode,
+          validationUrl: publicCallbackUrl(config.validationUrl),
+          confirmationUrl: publicCallbackUrl(config.confirmationUrl),
+          responseCode,
+          responseDescription: boundedC2bText(response.ResponseDescription, 255),
+          registeredBy: BigInt(req.user!.userId),
+        },
+        update: {
+          responseCode,
+          responseDescription: boundedC2bText(response.ResponseDescription, 255),
+          registeredBy: BigInt(req.user!.userId),
+          registeredAt: new Date(),
+        },
+      });
+      res.json({ ...response, registered: true, registeredAt: registration.registeredAt });
     } catch (error: any) {
       if (error.status) return res.status(error.status).json({ error: error.message });
       next(error);
@@ -1054,10 +1165,7 @@ paymentsRouter.get("/", async (req, res, next) => {
         prisma.payment.count({ where }),
       ]);
       return res.json({
-        items: rows.map((p: any) => ({
-          ...p,
-          customerName: name(p.account?.customer),
-        })),
+        items: await addSuggestedAccounts(rows),
         total,
         page,
         pageSize,
@@ -1070,9 +1178,7 @@ paymentsRouter.get("/", async (req, res, next) => {
       orderBy,
       take: 3000,
     });
-    res.json(
-      rows.map((p: any) => ({ ...p, customerName: name(p.account?.customer) })),
-    );
+    res.json(await addSuggestedAccounts(rows));
   } catch (e) {
     next(e);
   }

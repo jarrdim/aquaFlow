@@ -12,6 +12,9 @@ type C2bConfig = {
   callbackSecured?: boolean;
   validationUrl?: string;
   confirmationUrl?: string;
+  registered?: boolean;
+  registeredAt?: string | null;
+  registrationResponseCode?: string | null;
   error?: string;
 };
 
@@ -37,6 +40,15 @@ const Check = ({ ready }: { ready: boolean }) => (
     <span className={`h-2 w-2 rounded-full ${ready ? "bg-emerald-500" : "bg-amber-500"}`} />
     {ready ? "Ready" : "Needs attention"}
   </span>
+);
+
+const Spinner = ({ light = false }: { light?: boolean }) => (
+  <span
+    aria-hidden="true"
+    className={`inline-block h-4 w-4 animate-spin rounded-full border-2 ${
+      light ? "border-white/40 border-t-white" : "border-sky-200 border-t-aqua-700"
+    }`}
+  />
 );
 
 function safeMessage(error: unknown) {
@@ -87,6 +99,7 @@ export default function C2bIntegration() {
       const result = (await api.registerMpesaC2bUrls()) as RegistrationResult;
       setRegistration(result);
       showToast(result.ResponseDescription || "C2B URLs registered successfully.", "success");
+      await load();
     } catch (reason) {
       showToast(safeMessage(reason), "error");
     } finally {
@@ -96,6 +109,7 @@ export default function C2bIntegration() {
 
   const production = config?.environment === "production";
   const ready = Boolean(config?.configured && production && config.callbackSecured);
+  const registered = Boolean(config?.registered);
 
   return (
     <div className="mx-auto max-w-[1400px] p-4 lg:px-6 lg:py-5">
@@ -109,8 +123,9 @@ export default function C2bIntegration() {
           type="button"
           onClick={() => void load()}
           disabled={loading}
-          className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50"
+          className="inline-flex min-w-32 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50"
         >
+          {loading && <Spinner />}
           {loading ? "Checking…" : "Refresh status"}
         </button>
       </div>
@@ -129,8 +144,13 @@ export default function C2bIntegration() {
         </div>
 
         {loading ? (
-          <div className="grid gap-3 p-5 md:grid-cols-3">
-            {[1, 2, 3].map((item) => <div key={item} className="h-24 animate-pulse rounded-xl bg-slate-100" />)}
+          <div className="p-5" role="status" aria-live="polite">
+            <div className="mb-4 flex items-center justify-center gap-2 text-sm font-semibold text-slate-600">
+              <Spinner /> Checking C2B configuration…
+            </div>
+            <div className="grid gap-3 md:grid-cols-3">
+              {[1, 2, 3].map((item) => <div key={item} className="h-24 animate-pulse rounded-xl bg-slate-100" />)}
+            </div>
           </div>
         ) : (
           <div className="grid gap-4 p-5 md:grid-cols-3">
@@ -188,6 +208,16 @@ export default function C2bIntegration() {
             </div>
           </div>
 
+          {registered && (
+            <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+              <div className="font-semibold text-emerald-800">Callback URLs registered</div>
+              <div className="mt-1 text-xs text-emerald-700">
+                Safaricom accepted this exact PayBill and callback configuration
+                {config?.registeredAt ? ` on ${new Date(config.registeredAt).toLocaleString("en-KE")}` : ""}.
+              </div>
+            </div>
+          )}
+
           {!production && config && (
             <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">The backend is not in production mode. Registration is disabled.</div>
           )}
@@ -204,10 +234,11 @@ export default function C2bIntegration() {
           <button
             type="button"
             onClick={() => void register()}
-            disabled={!ready || !canRegister || registering}
-            className="mt-5 inline-flex min-h-11 items-center justify-center rounded-lg bg-aqua-700 px-5 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-aqua-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+            disabled={!ready || !canRegister || registering || registered}
+            className="mt-5 inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-aqua-700 px-5 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-aqua-800 disabled:cursor-not-allowed disabled:bg-slate-300"
           >
-            {registering ? "Registering…" : "Register URLs with Safaricom"}
+            {registering && <Spinner light />}
+            {registering ? "Registering…" : registered ? "URLs already registered" : "Register URLs with Safaricom"}
           </button>
         </section>
 

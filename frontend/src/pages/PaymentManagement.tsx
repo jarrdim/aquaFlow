@@ -31,6 +31,10 @@ const customerDisplayName = (customer: any) =>
   [customer?.firstName, customer?.middleName, customer?.lastName]
     .filter(Boolean)
     .join(" ");
+const usablePhone = (value: any) => {
+  const phone = String(value ?? "").trim();
+  return /^[+\d][\d\s()-]{6,19}$/.test(phone) ? phone : "";
+};
 function Page({
   title,
   subtitle,
@@ -319,18 +323,26 @@ function PaymentTable({ rows }: { rows: Row[] }) {
           </tr>
         </thead>
         <tbody>
-          {rows.map((p) => (
-            <tr key={p.paymentId} className="border-t transition hover:bg-emerald-50/30">
+          {rows.map((p) => {
+            const suggested = p.suggestedAccount;
+            const customer = p.account?.customer || suggested?.customer;
+            return <tr key={p.paymentId} className="border-t transition hover:bg-emerald-50/30">
               <td className={`${TD} font-semibold`}>
                 {p.transactionReference}
               </td>
               <td className={TD}>
-                {p.customerName ||
+                <div className="font-semibold text-slate-800">{p.customerName ||
+                  suggested?.customerName ||
                   p.payerName ||
-                  (p.account ? "Linked account" : "Unmatched")}
-                <div className="text-xs">
-                  {p.account?.accountNumber || p.customerReference}
+                  (p.account ? "Linked account" : "Unmatched")}</div>
+                <div className="mt-0.5 text-xs text-slate-500">
+                  {p.account?.accountNumber || suggested?.accountNumber || p.customerReference}
                 </div>
+                {suggested && !p.accountId && <div className="mt-1.5 space-y-0.5 text-xs text-slate-500">
+                  <span className="inline-flex rounded-full bg-amber-50 px-2 py-0.5 font-semibold text-amber-700">Suggested match</span>
+                  <div>Customer: {customer?.customerNumber || "—"}</div>
+                  <div>Phone: {customer?.phoneNumber || "—"}</div>
+                </div>}
               </td>
               <td className={TD}>{p.channel?.channelName}</td>
               <td className={TD}>{dateTime(p.paymentDate)}</td>
@@ -361,8 +373,8 @@ function PaymentTable({ rows }: { rows: Row[] }) {
                   "—"
                 )}
               </td>
-            </tr>
-          ))}
+            </tr>;
+          })}
           {!rows.length && (
             <tr>
               <td colSpan={8} className="p-14 text-center text-slate-400">
@@ -1448,7 +1460,9 @@ export function UnmatchedPayments() {
   const filteredRows = rows.filter((payment) => {
     const query = search.trim().toLowerCase();
     if (!query) return true;
-    return [payment.transactionReference, payment.payerName, payment.payerPhone, payment.customerReference, payment.channel?.channelName]
+    const suggested = payment.suggestedAccount;
+    return [payment.transactionReference, payment.payerName, payment.payerPhone, payment.customerReference, payment.channel?.channelName,
+      suggested?.accountNumber, suggested?.customerName, suggested?.customer?.customerNumber, suggested?.customer?.phoneNumber]
       .some((value) => String(value ?? "").toLowerCase().includes(query));
   });
   const unmatchedTotal = rows.reduce((sum, payment) => sum + Number(payment.amount ?? 0), 0);
@@ -1472,21 +1486,22 @@ export function UnmatchedPayments() {
             <div className="relative sm:w-72"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></svg><input className={`${allocationInput} pl-10`} placeholder="Search payments" value={search} onChange={(e) => setSearch(e.target.value)} /></div>
           </div>
           <div className="overflow-x-auto rounded-xl border border-slate-200">
-            <table className="w-full min-w-[800px]">
-              <thead><tr className="bg-slate-50/80"><th className={TH}>Reference</th><th className={TH}>Payer</th><th className={TH}>Channel</th><th className={TH}>Received</th><th className={TH}>Amount</th><th className={TH}>Action</th></tr></thead>
+            <table className="w-full min-w-[1100px]">
+              <thead><tr className="bg-slate-50/80"><th className={TH}>Reference</th><th className={TH}>Safaricom payer</th><th className={TH}>Suggested customer</th><th className={TH}>Channel</th><th className={TH}>Received</th><th className={TH}>Amount</th><th className={TH}>Action</th></tr></thead>
               <tbody>
                 {filteredRows.map((payment) => {
                   const selected = String(focus?.paymentId) === String(payment.paymentId);
                   return <tr key={payment.paymentId} className={`border-t transition ${selected ? "bg-emerald-50 ring-1 ring-inset ring-emerald-200" : "hover:bg-slate-50"}`}>
                     <td className={TD}><div className="font-bold text-slate-800">{payment.transactionReference}</div><div className="mt-0.5 text-xs text-slate-400">{payment.customerReference || "No customer reference"}</div></td>
-                    <td className={TD}><div className="font-semibold text-slate-700">{payment.payerName || "Unknown payer"}</div><div className="mt-0.5 text-xs text-slate-400">{payment.payerPhone || "No phone number"}</div></td>
+                    <td className={TD}><div className="font-semibold text-slate-700">{payment.payerName || "Unknown payer"}</div><div className="mt-0.5 text-xs text-slate-400">{usablePhone(payment.payerPhone) || "Phone not supplied"}</div></td>
+                    <td className={TD}>{payment.suggestedAccount ? <div className="min-w-[190px]"><div className="font-bold text-slate-800">{payment.suggestedAccount.customerName}</div><div className="mt-1 text-xs text-slate-500">Account: <strong>{payment.suggestedAccount.accountNumber}</strong></div><div className="text-xs text-slate-500">Customer: {payment.suggestedAccount.customer?.customerNumber || "—"}</div><div className="text-xs text-slate-500">Phone: {payment.suggestedAccount.customer?.phoneNumber || "—"}</div><span className="mt-1.5 inline-flex rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-bold text-amber-700">Verify before allocating</span></div> : <span className="text-sm text-slate-400">No account suggestion</span>}</td>
                     <td className={TD}><span className="inline-flex items-center gap-1.5 rounded-full bg-sky-50 px-2.5 py-1 text-xs font-semibold text-sky-700"><span className="h-1.5 w-1.5 rounded-full bg-sky-500" />{payment.channel?.channelName || "Unknown"}</span></td>
                     <td className={TD}>{dateTime(payment.paymentDate)}</td>
                     <td className={`${TD} font-bold text-slate-900`}>{money(payment.amount)}</td>
-                    <td className={TD}><button type="button" onClick={() => { setFocus(payment); setAccountId(""); setReason(""); }} className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-bold transition hover:-translate-y-0.5 ${selected ? "bg-emerald-600 text-white shadow-sm" : "bg-slate-100 text-slate-700 hover:bg-emerald-600 hover:text-white"}`}><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="M5 12h14M13 6l6 6-6 6" /></svg>{selected ? "Selected" : "Allocate"}</button></td>
+                    <td className={TD}><button type="button" onClick={() => { setFocus(payment); setAccountId(payment.suggestedAccount?.accountId ? String(payment.suggestedAccount.accountId) : ""); setReason(""); }} className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-bold transition hover:-translate-y-0.5 ${selected ? "bg-emerald-600 text-white shadow-sm" : "bg-slate-100 text-slate-700 hover:bg-emerald-600 hover:text-white"}`}><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="M5 12h14M13 6l6 6-6 6" /></svg>{selected ? "Selected" : "Allocate"}</button></td>
                   </tr>;
                 })}
-                {!filteredRows.length && <tr><td colSpan={6} className="px-4 py-16 text-center"><div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-emerald-50 text-emerald-600"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-7 w-7"><path d="M5 12l4 4L19 6" /></svg></div><div className="mt-4 font-bold text-slate-700">{rows.length ? "No payments match your search" : "All payments are reconciled"}</div><div className="mt-1 text-sm text-slate-400">{rows.length ? "Try a different reference, payer or phone number." : "There are no unmatched transactions requiring attention."}</div></td></tr>}
+                {!filteredRows.length && <tr><td colSpan={7} className="px-4 py-16 text-center"><div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-emerald-50 text-emerald-600"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-7 w-7"><path d="M5 12l4 4L19 6" /></svg></div><div className="mt-4 font-bold text-slate-700">{rows.length ? "No payments match your search" : "All payments are reconciled"}</div><div className="mt-1 text-sm text-slate-400">{rows.length ? "Try a different reference, payer or phone number." : "There are no unmatched transactions requiring attention."}</div></td></tr>}
               </tbody>
             </table>
           </div>
@@ -1498,9 +1513,19 @@ export function UnmatchedPayments() {
                 <div className="mb-2 text-xs font-bold uppercase tracking-wider text-emerald-400">Selected transaction</div>
                 <strong>{focus.transactionReference}</strong>
                 <div className="mt-1 text-xl font-extrabold">
-                  {money(focus.amount)} · {focus.payerPhone}
+                  {money(focus.amount)}{usablePhone(focus.payerPhone) ? ` · ${usablePhone(focus.payerPhone)}` : ""}
                 </div>
               </div>
+              {focus.suggestedAccount && <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+                <div className="text-xs font-bold uppercase tracking-wider text-amber-700">Suggested customer match</div>
+                <div className="mt-2 text-base font-extrabold text-slate-900">{focus.suggestedAccount.customerName}</div>
+                <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-2 text-xs text-slate-600">
+                  <div><span className="block text-slate-400">Account number</span><strong>{focus.suggestedAccount.accountNumber}</strong></div>
+                  <div><span className="block text-slate-400">Customer number</span><strong>{focus.suggestedAccount.customer?.customerNumber || "—"}</strong></div>
+                  <div className="col-span-2"><span className="block text-slate-400">Registered phone</span><strong>{focus.suggestedAccount.customer?.phoneNumber || "—"}</strong></div>
+                </div>
+                <p className="mt-3 text-xs leading-5 text-amber-800">Suggested from the payment account reference. Confirm these details before allocating.</p>
+              </div>}
               <div className="rounded-xl border border-sky-100 bg-sky-50 px-3.5 py-3 text-xs leading-5 text-sky-700">Confirm the payer details, choose the correct account and record why the manual match was made.</div>
               <Field label="Customer account">
                 <SearchableSelect
@@ -1511,7 +1536,7 @@ export function UnmatchedPayments() {
                   <option value="">Select account</option>
                   {accounts.map((a) => (
                     <option value={a.accountId} key={a.accountId}>
-                      {a.accountNumber} · {a.customerName}
+                      {a.accountNumber} · {a.customerName} · {a.customer?.customerNumber} · {a.customer?.phoneNumber}
                     </option>
                   ))}
                 </SearchableSelect>

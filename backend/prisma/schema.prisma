@@ -1354,6 +1354,22 @@ model PaymentChannel {
   @@schema("aquaflow")
 }
 
+model MpesaC2bRegistration {
+  registrationId          BigInt   @id @default(autoincrement()) @map("registration_id")
+  configurationFingerprint String   @unique @map("configuration_fingerprint")
+  environment             String
+  shortCode               String   @map("short_code")
+  validationUrl           String   @map("validation_url")
+  confirmationUrl         String   @map("confirmation_url")
+  responseCode            String?  @map("response_code")
+  responseDescription     String?  @map("response_description")
+  registeredBy            BigInt?  @map("registered_by")
+  registeredAt            DateTime @default(now()) @map("registered_at")
+
+  @@map("mpesa_c2b_registrations")
+  @@schema("aquaflow")
+}
+
 model Payment {
   paymentId            BigInt    @id @default(autoincrement()) @map("payment_id")
   transactionReference String    @unique @map("transaction_reference")
