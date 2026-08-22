@@ -711,7 +711,9 @@ export default function WorkOrderManagement() {
                         </span>
                         <CheckboxMultiSelect
                           className={input}
-                          placeholder="Leave unassigned"
+                          disabled={loading}
+                          emptyMessage="No active field officers are configured"
+                          placeholder={loading ? "Loading field officers…" : lookups.officers.length ? "Leave unassigned" : "No active field officers"}
                           value={form.fieldOfficerIds}
                           onChange={(fieldOfficerIds) =>
                             setForm({ ...form, fieldOfficerIds })
@@ -721,10 +723,17 @@ export default function WorkOrderManagement() {
                             label: `${item.firstName} ${item.lastName}${item.employeeNumber ? ` · ${item.employeeNumber}` : ""}`,
                           }))}
                         />
-                        <span className="mt-1 block text-[11px] leading-4 text-slate-500">
-                          Optional — select one or several officers, or leave the
-                          work in the unassigned queue.
-                        </span>
+                        {loading ? (
+                          <span className="mt-1 block text-[11px] text-slate-500"><InlineLoader label="Loading field officers…" /></span>
+                        ) : lookups.officers.length ? (
+                          <span className="mt-1 block text-[11px] leading-4 text-slate-500">
+                            Optional — select one or several officers, or leave the work in the unassigned queue.
+                          </span>
+                        ) : (
+                          <span className="mt-1 block rounded-lg bg-amber-50 px-2 py-1.5 text-[11px] leading-4 text-amber-800">
+                            No active field-officer profiles are configured. This work order will remain in the unassigned queue.
+                          </span>
+                        )}
                       </label>
                       <label>
                         <span className="mb-1 block text-sm font-medium">

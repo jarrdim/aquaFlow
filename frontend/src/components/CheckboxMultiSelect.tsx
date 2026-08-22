@@ -10,6 +10,7 @@ export type CheckboxMultiSelectOption = {
 type Props = {
   className?: string;
   disabled?: boolean;
+  emptyMessage?: string;
   maxSelected?: number;
   options: CheckboxMultiSelectOption[];
   placement?: "auto" | "top" | "bottom";
@@ -23,6 +24,7 @@ type Position = { bottom?: number; left: number; top?: number; width: number };
 export function CheckboxMultiSelect({
   className = "",
   disabled,
+  emptyMessage = "No options found",
   maxSelected,
   options,
   placement = "auto",
@@ -132,7 +134,7 @@ export function CheckboxMultiSelect({
                 <span className="min-w-0 flex-1 truncate">{option.label}</span>
               </label>
             ))}
-            {!filtered.length && <div className="px-3 py-6 text-center text-sm text-slate-400">No options found</div>}
+            {!filtered.length && <div className="px-3 py-6 text-center text-sm text-slate-400">{emptyMessage}</div>}
           </div>
           <div className="flex items-center justify-between border-t border-slate-100 p-2 text-sm">
             <button type="button" className="px-2 py-1 font-semibold text-slate-500" onClick={() => onChange([])}>Clear</button>

@@ -1,5 +1,5 @@
 import { Prisma } from "@prisma/client";
-import { Request, Response, Router } from "express";
+import { NextFunction, Request, Response, Router } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { isSystemAdmin, requireAuth, requirePermission } from "../middleware/auth";
@@ -17,6 +17,12 @@ const priorities = ["LOW", "NORMAL", "HIGH", "EMERGENCY"] as const;
 const statuses = ["CREATED", "ASSIGNED", "ACCEPTED", "IN_PROGRESS", "COMPLETED", "VERIFIED", "CLOSED", "REOPENED", "CANCELLED"] as const;
 const sourceTypes = ["MANUAL", "SERVICE_REQUEST", "COMPLAINT", "METER_ALERT", "DISCONNECTION"] as const;
 const openStatuses = ["CREATED", "ASSIGNED", "ACCEPTED", "IN_PROGRESS", "REOPENED"];
+
+const asyncRoute = (
+  handler: (req: Request, res: Response, next: NextFunction) => Promise<unknown>,
+) => (req: Request, res: Response, next: NextFunction) => {
+  Promise.resolve(handler(req, res, next)).catch(next);
+};
 
 function csv(value: unknown) {
   return String(value ?? "").split(",").map((part) => part.trim()).filter(Boolean);
@@ -349,7 +355,7 @@ const createInput = z.object({
   dueDate: z.coerce.date().optional().nullable(),
 });
 
-workOrdersRouter.post("/", canCreate, async (req, res) => {
+workOrdersRouter.post("/", canCreate, asyncRoute(async (req, res) => {
   const parsed = createInput.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message });
   let accountId = parsed.data.accountId ?? null;
@@ -518,7 +524,7 @@ workOrdersRouter.post("/", canCreate, async (req, res) => {
     return rows[0];
   });
   res.status(201).json(created);
-});
+}));
 
 const assignInput = z.object({
   fieldOfficerId: id,
