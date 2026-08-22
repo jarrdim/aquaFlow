@@ -1,4 +1,4 @@
-CREATE TABLE "aquaflow"."customer_documents" (
+CREATE TABLE IF NOT EXISTS "aquaflow"."customer_documents" (
   "customer_document_id" BIGSERIAL NOT NULL,
   "customer_id" BIGINT NOT NULL,
   "document_reference" VARCHAR(100) NOT NULL,
@@ -15,8 +15,8 @@ CREATE TABLE "aquaflow"."customer_documents" (
     ON DELETE CASCADE ON UPDATE CASCADE
 );
 
-CREATE UNIQUE INDEX "customer_documents_customer_id_document_reference_key"
+CREATE UNIQUE INDEX IF NOT EXISTS "customer_documents_customer_id_document_reference_key"
   ON "aquaflow"."customer_documents"("customer_id", "document_reference");
 
-CREATE INDEX "customer_documents_customer_id_created_at_idx"
+CREATE INDEX IF NOT EXISTS "customer_documents_customer_id_created_at_idx"
   ON "aquaflow"."customer_documents"("customer_id", "created_at" DESC);
