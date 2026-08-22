@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { SearchableSelect } from "../components/SearchableSelect";
 import { showToast } from "../components/SweetAlertToast";
 import { api } from "../lib/api";
+import { isKenyanPhone, normalizeKenyanPhone } from "../lib/phone";
 
 const input =
   "w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-800 outline-none focus:border-aqua-500 focus:ring-2 focus:ring-aqua-500/20 disabled:bg-slate-50";
@@ -792,6 +793,8 @@ export function NewConnectionApplication() {
   function next() {
     if (step === 1 && (!form.applicantName.trim() || !form.phoneNumber.trim()))
       return showToast("Enter the applicant name and phone number.", "warning");
+    if (step === 1 && !isKenyanPhone(form.phoneNumber))
+      return showToast("Phone number must use +254 followed by 9 digits.", "warning");
     if (step === 2 && !form.physicalAddress.trim())
       return showToast("Enter the proposed connection address.", "warning");
     if (step === 3 && !overrideFee && lookups?.defaultConnectionFee == null)
@@ -812,6 +815,11 @@ export function NewConnectionApplication() {
     setStep((current) => Math.min(4, current + 1));
   }
   async function submit() {
+    if (!isKenyanPhone(form.phoneNumber)) {
+      showToast("Phone number must use +254 followed by 9 digits.", "warning");
+      setStep(1);
+      return;
+    }
     if (!overrideFee && lookups?.defaultConnectionFee == null) {
       showToast(
         "Configure the default connection fee in System Settings, or enable an authorized override.",
@@ -830,6 +838,7 @@ export function NewConnectionApplication() {
     try {
       const payload: Record<string, unknown> = {
         ...form,
+        phoneNumber: normalizeKenyanPhone(form.phoneNumber),
         zoneId: form.zoneId || null,
       };
       if (!overrideFee) delete payload.connectionFee;
@@ -917,6 +926,8 @@ export function NewConnectionApplication() {
                 className={input}
                 value={form.phoneNumber}
                 onChange={(e) => set("phoneNumber", e.target.value)}
+                onBlur={(e) => set("phoneNumber", normalizeKenyanPhone(e.target.value))}
+                placeholder="+254 7XX XXX XXX"
               />
             </Field>
             <Field label="Email address">

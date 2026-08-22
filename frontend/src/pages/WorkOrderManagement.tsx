@@ -16,6 +16,7 @@ type Lookup = {
   types: any[];
   zones: any[];
   officers: any[];
+  categories: any[];
   priorities: string[];
   statuses: string[];
   sourceTypes: string[];
@@ -127,6 +128,7 @@ export default function WorkOrderManagement() {
     types: [],
     zones: [],
     officers: [],
+    categories: [],
     priorities: [],
     statuses: [],
     sourceTypes: [],
@@ -172,6 +174,7 @@ export default function WorkOrderManagement() {
     workOrderTypeId: "",
     accountId: "",
     customerId: "",
+    categoryId: "",
     zoneId: "",
     fieldOfficerIds: [] as string[],
     sourceType: "MANUAL",
@@ -420,6 +423,10 @@ export default function WorkOrderManagement() {
         "warning",
       );
     }
+    if (form.customerId && !form.accountId && !form.categoryId) {
+      targetFieldRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      return showToast("Select a customer category so the account can be created.", "warning");
+    }
     if (!form.description.trim()) {
       descriptionFieldRef.current?.focus();
       descriptionFieldRef.current?.scrollIntoView({
@@ -434,6 +441,7 @@ export default function WorkOrderManagement() {
         ...form,
         accountId: form.accountId || null,
         customerId: form.customerId || null,
+        categoryId: form.categoryId || null,
         zoneId: form.zoneId || null,
         serviceRequestId: sourceRequestId || null,
         connectionApplicationId: connectionApplicationId || null,
@@ -454,6 +462,7 @@ export default function WorkOrderManagement() {
         workOrderTypeId: "",
         accountId: "",
         customerId: "",
+        categoryId: "",
         zoneId: "",
         fieldOfficerIds: [],
         sourceType: "MANUAL",
@@ -626,6 +635,7 @@ export default function WorkOrderManagement() {
                                 ...form,
                                 accountId: kind === "account" ? selectedId : "",
                                 customerId: target?.customerId ? String(target.customerId) : "",
+                                categoryId: target?.accountId ? "" : form.categoryId,
                                 zoneId: target?.zoneId ? String(target.zoneId) : form.zoneId,
                               });
                             }}
@@ -671,6 +681,28 @@ export default function WorkOrderManagement() {
                               </option>
                             ))}
                           </SearchableSelect>
+                        </label>
+                      )}
+                      {form.customerId && !form.accountId && (
+                        <label>
+                          <span className="mb-1 block text-sm font-medium">
+                            Customer category *
+                          </span>
+                          <SearchableSelect
+                            className={input}
+                            value={form.categoryId}
+                            onChange={(e) => setForm({ ...form, categoryId: e.target.value })}
+                          >
+                            <option value="">Select category</option>
+                            {lookups.categories.map((category) => (
+                              <option key={category.categoryId} value={category.categoryId}>
+                                {category.categoryName}
+                              </option>
+                            ))}
+                          </SearchableSelect>
+                          <span className="mt-1 block text-[11px] text-slate-500">
+                            An active account will be created automatically with this work order.
+                          </span>
                         </label>
                       )}
                       <label className="md:col-span-2">

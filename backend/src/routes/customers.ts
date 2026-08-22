@@ -6,6 +6,14 @@ import { requireAuth } from "../middleware/auth";
 export const customersRouter = Router();
 customersRouter.use(requireAuth);
 
+function normalizeKenyanPhone(value: unknown) {
+  if (typeof value !== "string") return value;
+  const compact = value.trim().replace(/[\s()-]/g, "");
+  if (compact.startsWith("0")) return `+254${compact.slice(1)}`;
+  if (compact.startsWith("254")) return `+${compact}`;
+  return compact;
+}
+
 // Mirrors ck_customer_identity in the DDL: individuals need a name,
 // organizations need an org name. Enforced here too so we fail fast
 // with a clean error instead of a raw Postgres constraint violation.
@@ -18,7 +26,10 @@ const createCustomerSchema = z
     organizationName: z.string().min(1).optional(),
     nationalId: z.string().optional(),
     registrationNumber: z.string().optional(),
-    phoneNumber: z.string().min(1),
+    phoneNumber: z.preprocess(
+      normalizeKenyanPhone,
+      z.string().regex(/^\+254\d{9}$/, "Phone number must use +254 followed by 9 digits"),
+    ),
     alternativePhone: z.string().optional(),
     emailAddress: z.string().email().optional(),
     preferredLanguage: z.enum(["EN", "SW"]).default("EN"),
@@ -160,7 +171,10 @@ const updateCustomerSchema = z.object({
   organizationName:   optText,
   nationalId:         optText,
   registrationNumber: optText,
-  phoneNumber:        z.string().min(1).optional(),
+  phoneNumber:        z.preprocess(
+    (value) => value === undefined ? undefined : normalizeKenyanPhone(value),
+    z.string().regex(/^\+254\d{9}$/, "Phone number must use +254 followed by 9 digits").optional(),
+  ),
   alternativePhone:   optText,
   emailAddress:       z
     .string()

@@ -4,6 +4,7 @@ import { api } from "../lib/api";
 import { encodeId } from "../lib/hashids";
 import { SearchableSelect } from "../components/SearchableSelect";
 import { SweetAlertToast } from "../components/SweetAlertToast";
+import { isKenyanPhone, normalizeKenyanPhone } from "../lib/phone";
 
 type CustomerType = "INDIVIDUAL" | "ORGANIZATION";
 type IdType = "NATIONAL_ID" | "PASSPORT" | "OTHER";
@@ -218,6 +219,7 @@ export default function NewCustomer() {
   function validateStep(n: number): string | null {
     if (n === 1) {
       if (!form.phoneNumber.trim()) return "Phone number is required.";
+      if (!isKenyanPhone(form.phoneNumber)) return "Phone number must use +254 followed by 9 digits.";
       if (customerType === "INDIVIDUAL") {
         if (!form.firstName.trim()) return "First name is required.";
         if (!form.lastName.trim())  return "Last name is required.";
@@ -268,7 +270,7 @@ export default function NewCustomer() {
     try {
       const payload: Record<string, unknown> = {
         customerType,
-        phoneNumber:      form.phoneNumber,
+        phoneNumber:      normalizeKenyanPhone(form.phoneNumber),
         alternativePhone: form.alternativePhone  || undefined,
         emailAddress:     form.emailAddress      || undefined,
         preferredLanguage: form.preferredLanguage,
@@ -434,7 +436,7 @@ export default function NewCustomer() {
                     <input className={FIELD_CLS} value={form.nationalId} onChange={(e) => upd("nationalId", e.target.value)} placeholder="0712 345 678" />
                   </Field>
                   <Field label="Phone Number" required>
-                    <input className={FIELD_CLS} value={form.phoneNumber} onChange={(e) => upd("phoneNumber", e.target.value)} placeholder="+254 7XX XXX XXX" />
+                    <input className={FIELD_CLS} value={form.phoneNumber} onChange={(e) => upd("phoneNumber", e.target.value)} onBlur={(e) => upd("phoneNumber", normalizeKenyanPhone(e.target.value))} placeholder="+254 7XX XXX XXX" />
                   </Field>
                 </div>
 
@@ -472,7 +474,7 @@ export default function NewCustomer() {
                     <input className={FIELD_CLS} value={form.registrationNumber} onChange={(e) => upd("registrationNumber", e.target.value)} placeholder="CPR/2024/001234" />
                   </Field>
                   <Field label="Phone Number" required>
-                    <input className={FIELD_CLS} value={form.phoneNumber} onChange={(e) => upd("phoneNumber", e.target.value)} placeholder="+254 7XX XXX XXX" />
+                    <input className={FIELD_CLS} value={form.phoneNumber} onChange={(e) => upd("phoneNumber", e.target.value)} onBlur={(e) => upd("phoneNumber", normalizeKenyanPhone(e.target.value))} placeholder="+254 7XX XXX XXX" />
                   </Field>
                 </div>
                 <div className="mb-4 grid gap-3 md:grid-cols-2">

@@ -16,6 +16,14 @@ const statuses = [
   "INSTALLATION_ORDERED", "INSTALLATION_COMPLETED", "ACTIVE", "REJECTED",
 ] as const;
 
+function normalizeKenyanPhone(value: unknown) {
+  if (typeof value !== "string") return value;
+  const compact = value.trim().replace(/[\s()-]/g, "");
+  if (compact.startsWith("0")) return `+254${compact.slice(1)}`;
+  if (compact.startsWith("254")) return `+${compact}`;
+  return compact;
+}
+
 function currentUserId(req: Express.Request) {
   return BigInt(req.user!.userId);
 }
@@ -140,7 +148,10 @@ const createSchema = z.object({
   applicantType: z.enum(["INDIVIDUAL", "ORGANIZATION"]).default("INDIVIDUAL"),
   applicantName: z.string().trim().min(2).max(200),
   identificationNumber: z.string().trim().max(80).optional().nullable(),
-  phoneNumber: z.string().trim().min(5).max(40),
+  phoneNumber: z.preprocess(
+    normalizeKenyanPhone,
+    z.string().regex(/^\+254\d{9}$/, "Phone number must use +254 followed by 9 digits"),
+  ),
   emailAddress: z.union([z.string().trim().email(), z.literal("")]).optional().nullable(),
   physicalAddress: z.string().trim().min(3).max(300),
   plotNumber: z.string().trim().max(100).optional().nullable(),

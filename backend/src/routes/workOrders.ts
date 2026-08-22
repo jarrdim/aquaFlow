@@ -75,7 +75,7 @@ workOrdersRouter.get("/dashboard", canView, async (_req, res) => {
 });
 
 workOrdersRouter.get("/lookups", canView, async (_req, res) => {
-  const [types, zones, officers] = await Promise.all([
+  const [types, zones, officers, categories] = await Promise.all([
     prisma.$queryRaw<any[]>`
       SELECT work_order_type_id AS "workOrderTypeId", type_code AS "typeCode",
              type_name AS "typeName", requires_photo AS "requiresPhoto",
@@ -93,20 +93,40 @@ workOrdersRouter.get("/lookups", canView, async (_req, res) => {
       JOIN aquaflow.users u ON u.user_id = fo.user_id
       WHERE fo.status = 'ACTIVE' AND u.status = 'ACTIVE'
       ORDER BY u.first_name, u.last_name`,
+    prisma.$queryRaw<any[]>`
+      SELECT category_id AS "categoryId", category_name AS "categoryName"
+      FROM aquaflow.customer_categories
+      WHERE status = 'ACTIVE' ORDER BY category_name`,
   ]);
-  res.json({ types, zones, officers, priorities, statuses, sourceTypes });
+  res.json({ types, zones, officers, categories, priorities, statuses, sourceTypes });
 });
 
 workOrdersRouter.get("/targets", canCreate, async (req, res) => {
   const q = String(req.query.q ?? "").trim();
   const pattern = `%${q}%`;
   const rows = await prisma.$queryRaw<any[]>`
+    WITH candidates AS MATERIALIZED (
+      SELECT c.*
+      FROM aquaflow.customers c
+      WHERE (${q} = '' OR c.customer_number ILIKE ${pattern}
+        OR c.phone_number ILIKE ${pattern}
+        OR COALESCE(c.national_id, '') ILIKE ${pattern}
+        OR c.first_name ILIKE ${pattern} OR c.middle_name ILIKE ${pattern}
+        OR c.last_name ILIKE ${pattern} OR c.organization_name ILIKE ${pattern}
+        OR EXISTS (
+          SELECT 1 FROM aquaflow.customer_accounts search_account
+          WHERE search_account.customer_id = c.customer_id
+            AND search_account.account_number ILIKE ${pattern}
+        ))
+      ORDER BY c.created_at DESC, c.customer_id DESC
+      LIMIT 50
+    )
     SELECT ca.account_id AS "accountId", ca.account_number AS "accountNumber",
            ca.property_id AS "propertyId", p.zone_id AS "zoneId", z.zone_name AS "zoneName",
            c.customer_id AS "customerId", c.customer_number AS "customerNumber",
            COALESCE(NULLIF(TRIM(CONCAT_WS(' ', c.first_name, c.middle_name, c.last_name)), ''), c.organization_name, c.customer_number) AS "customerName",
            ca.current_balance AS "currentBalance", c.created_at AS "customerCreatedAt"
-    FROM aquaflow.customers c
+    FROM candidates c
     LEFT JOIN LATERAL (
       SELECT account_id, account_number, property_id, current_balance
       FROM aquaflow.customer_accounts
@@ -120,13 +140,8 @@ workOrdersRouter.get("/targets", canCreate, async (req, res) => {
     ) latest_property ON TRUE
     LEFT JOIN aquaflow.properties p ON p.property_id = COALESCE(ca.property_id, latest_property.property_id)
     LEFT JOIN aquaflow.zones z ON z.zone_id = p.zone_id
-    WHERE (${q} = '' OR COALESCE(ca.account_number, '') ILIKE ${pattern}
-      OR c.customer_number ILIKE ${pattern} OR c.phone_number ILIKE ${pattern}
-      OR COALESCE(c.national_id, '') ILIKE ${pattern}
-      OR c.first_name ILIKE ${pattern} OR c.middle_name ILIKE ${pattern}
-      OR c.last_name ILIKE ${pattern} OR c.organization_name ILIKE ${pattern})
     ORDER BY c.created_at DESC, ca.account_id DESC NULLS LAST
-    LIMIT 50`;
+    `;
   res.json(rows);
 });
 
@@ -315,6 +330,7 @@ const createInput = z.object({
   workOrderTypeId: id,
   accountId: optionalId,
   customerId: optionalId,
+  categoryId: optionalId,
   zoneId: optionalId,
   fieldOfficerId: optionalId,
   fieldOfficerIds: z.array(id).max(25).optional().default([]),
@@ -370,9 +386,10 @@ workOrdersRouter.post("/", canCreate, async (req, res) => {
   let zoneId = parsed.data.zoneId ?? null;
   zoneId ??= connectionApplication?.zone_id ?? null;
   let propertyId: bigint | null = null;
+  let propertyRouteId: bigint | null = null;
   if (accountId) {
-    const targets = await prisma.$queryRaw<{ property_id: bigint; zone_id: bigint; customer_id: bigint }[]>`
-      SELECT ca.property_id, p.zone_id, ca.customer_id
+    const targets = await prisma.$queryRaw<{ property_id: bigint; zone_id: bigint; customer_id: bigint; route_id: bigint | null }[]>`
+      SELECT ca.property_id, p.zone_id, ca.customer_id, p.route_id
       FROM aquaflow.customer_accounts ca
       JOIN aquaflow.properties p ON p.property_id = ca.property_id
       WHERE ca.account_id = ${accountId}`;
@@ -381,11 +398,12 @@ workOrdersRouter.post("/", canCreate, async (req, res) => {
       return res.status(400).json({ error: "Select an account belonging to the customer linked to this connection" });
     }
     propertyId = targets[0].property_id;
+    propertyRouteId = targets[0].route_id;
     zoneId ??= targets[0].zone_id;
     customerId = targets[0].customer_id;
   } else if (customerId) {
-    const customers = await prisma.$queryRaw<{ property_id: bigint | null; zone_id: bigint | null }[]>`
-      SELECT p.property_id, p.zone_id
+    const customers = await prisma.$queryRaw<{ property_id: bigint | null; zone_id: bigint | null; route_id: bigint | null }[]>`
+      SELECT p.property_id, p.zone_id, p.route_id
       FROM aquaflow.customers c
       LEFT JOIN LATERAL (
         SELECT property_id, zone_id FROM aquaflow.properties
@@ -395,9 +413,13 @@ workOrdersRouter.post("/", canCreate, async (req, res) => {
       WHERE c.customer_id = ${customerId}`;
     if (!customers[0]) return res.status(404).json({ error: "Customer not found" });
     propertyId = customers[0].property_id;
+    propertyRouteId = customers[0].route_id;
     zoneId ??= customers[0].zone_id;
   }
   if (!zoneId) return res.status(400).json({ error: "Select a zone or customer account" });
+  if (!accountId && customerId && !parsed.data.categoryId) {
+    return res.status(400).json({ error: "Select a customer category to create an account for this customer" });
+  }
   const type = await prisma.$queryRaw<any[]>`
     SELECT work_order_type_id FROM aquaflow.work_order_types
     WHERE work_order_type_id = ${parsed.data.workOrderTypeId} AND status = 'ACTIVE'`;
@@ -425,6 +447,31 @@ workOrdersRouter.post("/", canCreate, async (req, res) => {
   }
   const number = `WO-${new Date().getFullYear()}-${Date.now().toString().slice(-9)}`;
   const created = await prisma.$transaction(async (tx) => {
+    let resolvedAccountId = accountId;
+    if (!resolvedAccountId && customerId) {
+      if (!propertyId) throw new Error("The selected customer needs a property before an account can be created");
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('aquaflow-account-number'))`;
+      const year = new Date().getFullYear();
+      const pattern = `ACC-${year}-%`;
+      const [sequence] = await tx.$queryRaw<Array<{ maxSequence: number }>>`
+        SELECT COALESCE(MAX(CAST(substring(account_number FROM '[0-9]+$') AS INTEGER)), 0)::INTEGER AS "maxSequence"
+        FROM aquaflow.customer_accounts WHERE account_number LIKE ${pattern}`;
+      const accountNumber = `ACC-${year}-${String(sequence.maxSequence + 1).padStart(5, "0")}`;
+      const account = await tx.customerAccount.create({
+        data: {
+          accountNumber,
+          customerId,
+          propertyId,
+          categoryId: parsed.data.categoryId!,
+          routeId: propertyRouteId,
+          openingBalance: 0,
+          currentBalance: 0,
+          accountStatus: "ACTIVE",
+          connectionDate: new Date(),
+        },
+      });
+      resolvedAccountId = account.accountId;
+    }
     const initialStatus = fieldOfficerIds.length ? "ASSIGNED" : "CREATED";
     const rows = await tx.$queryRaw<any[]>`
       INSERT INTO aquaflow.work_orders
@@ -432,7 +479,7 @@ workOrdersRouter.post("/", canCreate, async (req, res) => {
          service_request_id, source_type, source_reference, priority, description,
          scheduled_date, due_date, status, created_by)
       VALUES
-        (${number}, ${parsed.data.workOrderTypeId}, ${accountId}, ${propertyId}, ${zoneId},
+        (${number}, ${parsed.data.workOrderTypeId}, ${resolvedAccountId}, ${propertyId}, ${zoneId},
          ${parsed.data.serviceRequestId ?? null}, ${parsed.data.serviceRequestId ? (serviceRequest?.requestType === "COMPLAINT" ? "COMPLAINT" : "SERVICE_REQUEST") : parsed.data.sourceType},
          ${serviceRequest?.requestNumber ?? null}, ${parsed.data.priority}, ${parsed.data.description},
          ${parsed.data.scheduledDate ?? null}, ${parsed.data.dueDate ?? null}, ${initialStatus}, ${userId(req)})
@@ -459,7 +506,7 @@ workOrdersRouter.post("/", canCreate, async (req, res) => {
     if (parsed.data.connectionApplicationId) {
       await tx.$executeRaw`
         UPDATE aquaflow.new_connection_applications
-        SET work_order_id = ${rows[0].work_order_id}, account_id = ${accountId},
+        SET work_order_id = ${rows[0].work_order_id}, account_id = ${resolvedAccountId},
             status = 'INSTALLATION_ORDERED', updated_at = CURRENT_TIMESTAMP
         WHERE connection_application_id = ${parsed.data.connectionApplicationId}`;
       await tx.$executeRaw`
