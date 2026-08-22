@@ -19,6 +19,7 @@ reportsRouter.get("/daily-income", async (req, res, next) => {
     from: dateSchema,
     to: dateSchema,
     channelId: z.coerce.bigint().positive().optional(),
+    zoneId: z.coerce.bigint().positive().optional(),
   }).safeParse(req.query);
   if (!parsed.success) return res.status(400).json({ error: "Valid from and to dates are required" });
   if (parsed.data.from > parsed.data.to) return res.status(400).json({ error: "From date cannot be after to date" });
@@ -28,6 +29,9 @@ reportsRouter.get("/daily-income", async (req, res, next) => {
       where: {
         paymentStatus: "POSTED",
         ...(parsed.data.channelId ? { channelId: parsed.data.channelId } : {}),
+        ...(parsed.data.zoneId
+          ? { account: { property: { zoneId: parsed.data.zoneId } } }
+          : {}),
         valueDate: { gte: startOfDay(parsed.data.from), lt: nextDay(parsed.data.to) },
       },
       include: { channel: true },
@@ -47,6 +51,7 @@ reportsRouter.get("/daily-income", async (req, res, next) => {
     res.json({
       from: parsed.data.from,
       to: parsed.data.to,
+      zoneId: parsed.data.zoneId?.toString() ?? null,
       transactions: payments.length,
       totalIncome: Math.round(payments.reduce((sum, payment) => sum + Number(payment.amount), 0) * 100) / 100,
       rows,

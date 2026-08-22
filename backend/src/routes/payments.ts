@@ -949,9 +949,30 @@ paymentsRouter.get("/mpesa/config", (_req, res) => {
 paymentsRouter.get("/mpesa/c2b/config", async (_req, res, next) => {
   try {
     const config = getMpesaC2bConfig();
-    const registration = await prisma.mpesaC2bRegistration.findUnique({
-      where: { configurationFingerprint: c2bConfigurationFingerprint(config) },
+    const confirmedCallback = await prisma.payment.findFirst({
+      where: {
+        channel: {
+          OR: [
+            { channelCode: "MPESA" },
+            { channelName: { equals: "MPESA", mode: "insensitive" } },
+          ],
+        },
+        remarks: "M-Pesa PayBill C2B payment",
+      },
+      orderBy: { createdAt: "desc" },
+      select: { createdAt: true },
     });
+    let registration = null;
+    try {
+      registration = await prisma.mpesaC2bRegistration.findUnique({
+        where: { configurationFingerprint: c2bConfigurationFingerprint(config) },
+      });
+    } catch (error: any) {
+      // Older deployments may have received working callbacks before the
+      // registration-state migration was installed. Do not hide live config.
+      if (error?.code !== "P2021") throw error;
+    }
+    const registered = Boolean(registration || confirmedCallback);
     res.json({
       configured: true,
       environment: config.environment,
@@ -960,8 +981,9 @@ paymentsRouter.get("/mpesa/c2b/config", async (_req, res, next) => {
       callbackSecured: Boolean(config.validationToken && config.confirmationToken),
       validationUrl: publicCallbackUrl(config.validationUrl),
       confirmationUrl: publicCallbackUrl(config.confirmationUrl),
-      registered: Boolean(registration),
-      registeredAt: registration?.registeredAt ?? null,
+      registered,
+      registeredAt: registration?.registeredAt ?? confirmedCallback?.createdAt ?? null,
+      registrationSource: registration ? "SAFARICOM_REGISTRATION" : confirmedCallback ? "CONFIRMED_CALLBACK" : null,
       registrationResponseCode: registration?.responseCode ?? null,
     });
   } catch (e: any) {
@@ -1109,6 +1131,9 @@ paymentsRouter.get("/", async (req, res, next) => {
       accountId = req.query.accountId
         ? BigInt(String(req.query.accountId))
         : undefined,
+      zoneId = req.query.zoneId
+        ? BigInt(String(req.query.zoneId))
+        : undefined,
       q = String(req.query.search ?? ""),
       from = String(req.query.from ?? ""),
       to = String(req.query.to ?? "");
@@ -1132,6 +1157,7 @@ paymentsRouter.get("/", async (req, res, next) => {
       ...(status ? { paymentStatus: status } : {}),
       ...(channelId ? { channelId } : {}),
       ...(accountId ? { accountId } : {}),
+      ...(zoneId ? { account: { property: { zoneId } } } : {}),
       ...(valueDate ? { valueDate } : {}),
       ...(q
         ? {

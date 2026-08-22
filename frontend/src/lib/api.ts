@@ -404,9 +404,9 @@ export const api = {
     request(
       `/readings/reports/progress?cycleId=${encodeURIComponent(cycleId)}`,
     ),
-  dailyIncomeReport: (from: string, to: string, channelId = "") => {
+  dailyIncomeReport: (from: string, to: string, channelId = "", zoneId = "") => {
     const query = new URLSearchParams(
-      Object.entries({ from, to, channelId }).filter(([, value]) => value),
+      Object.entries({ from, to, channelId, zoneId }).filter(([, value]) => value),
     ).toString();
     return request(`/reports/daily-income?${query}`);
   },

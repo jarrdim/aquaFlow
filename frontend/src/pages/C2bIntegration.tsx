@@ -14,6 +14,7 @@ type C2bConfig = {
   confirmationUrl?: string;
   registered?: boolean;
   registeredAt?: string | null;
+  registrationSource?: "SAFARICOM_REGISTRATION" | "CONFIRMED_CALLBACK" | null;
   registrationResponseCode?: string | null;
   error?: string;
 };
@@ -212,7 +213,9 @@ export default function C2bIntegration() {
             <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
               <div className="font-semibold text-emerald-800">Callback URLs registered</div>
               <div className="mt-1 text-xs text-emerald-700">
-                Safaricom accepted this exact PayBill and callback configuration
+                {config?.registrationSource === "CONFIRMED_CALLBACK"
+                  ? "Verified from a successfully received live Safaricom C2B callback"
+                  : "Safaricom accepted this exact PayBill and callback configuration"}
                 {config?.registeredAt ? ` on ${new Date(config.registeredAt).toLocaleString("en-KE")}` : ""}.
               </div>
             </div>

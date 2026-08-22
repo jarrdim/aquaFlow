@@ -306,7 +306,7 @@ export function RevenueDashboard() {
     </Page>
   );
 }
-function PaymentTable({ rows }: { rows: Row[] }) {
+function PaymentTable({ rows, loading = false }: { rows: Row[]; loading?: boolean }) {
   return (
     <div className="overflow-x-auto rounded-xl border border-slate-200">
       <table className="w-full min-w-[850px]">
@@ -323,7 +323,16 @@ function PaymentTable({ rows }: { rows: Row[] }) {
           </tr>
         </thead>
         <tbody>
-          {rows.map((p) => {
+          {loading && (
+            <tr>
+              <td colSpan={8} className="p-14 text-center">
+                <div className="mx-auto h-9 w-9 animate-spin rounded-full border-4 border-sky-100 border-t-aqua-700" />
+                <div className="mt-3 text-sm font-semibold text-slate-600">Loading payment register…</div>
+                <div className="mt-1 text-xs text-slate-400">Retrieving the latest transactions</div>
+              </td>
+            </tr>
+          )}
+          {!loading && rows.map((p) => {
             const suggested = p.suggestedAccount;
             const customer = p.account?.customer || suggested?.customer;
             return <tr key={p.paymentId} className="border-t transition hover:bg-emerald-50/30">
@@ -369,13 +378,20 @@ function PaymentTable({ rows }: { rows: Row[] }) {
                   >
                     View
                   </Link>
+                ) : p.matchingStatus === "UNMATCHED" && p.paymentStatus === "RECEIVED" ? (
+                  <Link
+                    className="inline-flex items-center gap-1 rounded-lg bg-amber-50 px-2.5 py-1.5 text-sm font-bold text-amber-700 transition hover:bg-amber-500 hover:text-white"
+                    to={`/payments/unmatched?paymentId=${encodeURIComponent(String(p.paymentId))}`}
+                  >
+                    Match
+                  </Link>
                 ) : (
                   "—"
                 )}
               </td>
             </tr>;
           })}
-          {!rows.length && (
+          {!loading && !rows.length && (
             <tr>
               <td colSpan={8} className="p-14 text-center text-slate-400">
                 <div className="mx-auto mb-3 grid h-12 w-12 place-items-center rounded-2xl bg-slate-100"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-6 w-6"><rect x="3" y="5" width="18" height="14" rx="2" /></svg></div><div className="font-semibold text-slate-600">No payment records found</div><div className="mt-1 text-sm">Transactions will appear here when available.</div>
@@ -1238,23 +1254,30 @@ export function PaymentRegister() {
     [search, setSearch] = useState(""),
     [status, setStatus] = useState(searchParams.get("status") ?? ""),
     [channelId, setChannelId] = useState(searchParams.get("channelId") ?? ""),
+    [zoneId, setZoneId] = useState(searchParams.get("zoneId") ?? ""),
     [from, setFrom] = useState(searchParams.get("from") ?? ""),
     [to, setTo] = useState(searchParams.get("to") ?? ""),
     [channels, setChannels] = useState<Row[]>([]),
+    [zones, setZones] = useState<Row[]>([]),
     [page, setPage] = useState(1),
     [total, setTotal] = useState(0),
     [showImport, setShowImport] = useState(false),
     [importRows, setImportRows] = useState<Record<string, unknown>[]>([]),
     [importErrors, setImportErrors] = useState<string[]>([]),
     [importing, setImporting] = useState(false),
-    [importMessage, setImportMessage] = useState("");
+    [importMessage, setImportMessage] = useState(""),
+    [loading, setLoading] = useState(true),
+    [loadError, setLoadError] = useState("");
   const pageSize = 50;
   useEffect(() => {
+    setLoading(true);
+    setLoadError("");
     api
       .listPayments({
         search,
         status,
         channelId,
+        zoneId,
         from,
         to,
         page: String(page),
@@ -1263,10 +1286,15 @@ export function PaymentRegister() {
       .then((result) => {
         setRows(result.items);
         setTotal(Number(result.total));
-      });
-  }, [search, status, channelId, from, to, page]);
+      })
+      .catch((error) => setLoadError(error instanceof Error ? error.message : "Unable to load payments."))
+      .finally(() => setLoading(false));
+  }, [search, status, channelId, zoneId, from, to, page]);
   useEffect(() => {
-    api.listPaymentChannels().then(setChannels);
+    Promise.all([api.listPaymentChannels(), api.listZones()]).then(([paymentChannels, zoneItems]) => {
+      setChannels(paymentChannels);
+      setZones(zoneItems);
+    });
   }, []);
   const pages = Math.max(1, Math.ceil(total / pageSize));
   async function selectReceiptFile(file?: File) {
@@ -1354,6 +1382,7 @@ export function PaymentRegister() {
       subtitle="Search all valid, unmatched and reversed payment transactions"
       actions={<div className="flex gap-2"><Button tone="blue" onClick={() => setShowImport((value) => !value)}>{showImport ? "Close import" : "Import receipts"}</Button><Button tone="green" onClick={() => exportExcel("payment-register.xlsx", "Payments", rows)}>Export register</Button></div>}
     >
+      {loadError && <Notice>{loadError}</Notice>}
       {showImport && <Card title="Import historical receipts" className="mb-4">
         <p className="mb-3 text-sm text-slate-500">Imports posted MajiWare receipts against existing accounts. Duplicate references are safely skipped and each new receipt reduces the account balance once.</p>
         <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-end"><Field label="Receipt Excel or CSV file"><input type="file" accept=".xlsx,.csv" className={INPUT} onChange={(event) => void selectReceiptFile(event.target.files?.[0])} /></Field><Button tone="green" disabled={!importRows.length || importErrors.length > 0 || importing} onClick={() => void importReceipts()}>{importing ? "Importing..." : `Import ${importRows.length || ""} receipts`}</Button></div>
@@ -1362,7 +1391,7 @@ export function PaymentRegister() {
         {importMessage && <p className="mt-3 rounded-lg bg-emerald-50 p-3 text-sm font-semibold text-emerald-700">{importMessage}</p>}
       </Card>}
       <Card className="mb-4">
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
           <Field label="Status">
             <SearchableSelect
               className={INPUT}
@@ -1382,6 +1411,12 @@ export function PaymentRegister() {
             <SearchableSelect className={INPUT} value={channelId} onChange={(e) => { setPage(1); setChannelId(e.target.value); }}>
               <option value="">All channels</option>
               {channels.map((channel) => <option key={channel.channelId} value={channel.channelId}>{channel.channelName}</option>)}
+            </SearchableSelect>
+          </Field>
+          <Field label="Zone">
+            <SearchableSelect className={INPUT} value={zoneId} onChange={(e) => { setPage(1); setZoneId(e.target.value); }}>
+              <option value="">All zones</option>
+              {zones.map((zone) => <option key={zone.zoneId} value={zone.zoneId}>{zone.zoneName}</option>)}
             </SearchableSelect>
           </Field>
           <Field label="From">
@@ -1405,7 +1440,7 @@ export function PaymentRegister() {
       </Card>
       <Card title={`${total.toLocaleString()} payment(s)`}>
         {pagination}
-        <PaymentTable rows={rows} />
+        <PaymentTable rows={rows} loading={loading} />
         {pages > 1 && pagination}
       </Card>
     </Page>
@@ -1413,6 +1448,7 @@ export function PaymentRegister() {
 }
 
 export function UnmatchedPayments() {
+  const [unmatchedSearchParams] = useSearchParams();
   const [rows, setRows] = useState<Row[]>([]),
     [accounts, setAccounts] = useState<Row[]>([]),
     [focus, setFocus] = useState<Row>(),
@@ -1421,9 +1457,11 @@ export function UnmatchedPayments() {
     [error, setError] = useState(""),
     [message, setMessage] = useState("");
   const [search, setSearch] = useState("");
+  const [loading, setLoading] = useState(true);
   const [allocating, setAllocating] = useState(false);
-  const load = () =>
-    Promise.all([api.listPayments(), api.listPaymentAccounts()]).then(
+  const load = () => {
+    setLoading(true);
+    return Promise.all([api.listPayments(), api.listPaymentAccounts()]).then(
       ([p, a]) => {
         setRows(
           p.filter(
@@ -1435,10 +1473,21 @@ export function UnmatchedPayments() {
         );
         setAccounts(a);
       },
-    );
+    ).catch((e) => setError(e.message)).finally(() => setLoading(false));
+  };
   useEffect(() => {
     load();
   }, []);
+  useEffect(() => {
+    if (loading || focus) return;
+    const requestedPaymentId = unmatchedSearchParams.get("paymentId");
+    if (!requestedPaymentId) return;
+    const payment = rows.find((row) => String(row.paymentId) === requestedPaymentId);
+    if (!payment) return;
+    setFocus(payment);
+    setAccountId(payment.suggestedAccount?.accountId ? String(payment.suggestedAccount.accountId) : "");
+    setReason("");
+  }, [focus, loading, rows, unmatchedSearchParams]);
   async function allocate() {
     if (!focus) return;
     setAllocating(true);
@@ -1485,23 +1534,23 @@ export function UnmatchedPayments() {
             <div><div className="font-semibold text-slate-800">Select a transaction to allocate</div><div className="mt-0.5 text-xs text-slate-500">Match unresolved deposits to the correct customer account.</div></div>
             <div className="relative sm:w-72"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></svg><input className={`${allocationInput} pl-10`} placeholder="Search payments" value={search} onChange={(e) => setSearch(e.target.value)} /></div>
           </div>
-          <div className="overflow-x-auto rounded-xl border border-slate-200">
-            <table className="w-full min-w-[1100px]">
-              <thead><tr className="bg-slate-50/80"><th className={TH}>Reference</th><th className={TH}>Safaricom payer</th><th className={TH}>Suggested customer</th><th className={TH}>Channel</th><th className={TH}>Received</th><th className={TH}>Amount</th><th className={TH}>Action</th></tr></thead>
+          <div className="overflow-hidden rounded-xl border border-slate-200">
+            <table className="w-full table-fixed">
+              <thead><tr className="bg-slate-50/80"><th className={`${TH} w-[14%]`}>Reference</th><th className={`${TH} w-[15%]`}>Safaricom payer</th><th className={`${TH} w-[29%]`}>Suggested customer</th><th className={`${TH} w-[19%]`}>Payment details</th><th className={`${TH} w-[12%]`}>Amount</th><th className={`${TH} w-[11%]`}>Action</th></tr></thead>
               <tbody>
-                {filteredRows.map((payment) => {
+                {loading && <tr><td colSpan={6} className="px-4 py-16 text-center"><div className="mx-auto h-9 w-9 animate-spin rounded-full border-4 border-sky-100 border-t-aqua-700" /><div className="mt-3 text-sm font-semibold text-slate-600">Loading unmatched payments…</div><div className="mt-1 text-xs text-slate-400">Checking transactions and customer accounts</div></td></tr>}
+                {!loading && filteredRows.map((payment) => {
                   const selected = String(focus?.paymentId) === String(payment.paymentId);
                   return <tr key={payment.paymentId} className={`border-t transition ${selected ? "bg-emerald-50 ring-1 ring-inset ring-emerald-200" : "hover:bg-slate-50"}`}>
                     <td className={TD}><div className="font-bold text-slate-800">{payment.transactionReference}</div><div className="mt-0.5 text-xs text-slate-400">{payment.customerReference || "No customer reference"}</div></td>
                     <td className={TD}><div className="font-semibold text-slate-700">{payment.payerName || "Unknown payer"}</div><div className="mt-0.5 text-xs text-slate-400">{usablePhone(payment.payerPhone) || "Phone not supplied"}</div></td>
                     <td className={TD}>{payment.suggestedAccount ? <div className="min-w-[190px]"><div className="font-bold text-slate-800">{payment.suggestedAccount.customerName}</div><div className="mt-1 text-xs text-slate-500">Account: <strong>{payment.suggestedAccount.accountNumber}</strong></div><div className="text-xs text-slate-500">Customer: {payment.suggestedAccount.customer?.customerNumber || "—"}</div><div className="text-xs text-slate-500">Phone: {payment.suggestedAccount.customer?.phoneNumber || "—"}</div><span className="mt-1.5 inline-flex rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-bold text-amber-700">Verify before allocating</span></div> : <span className="text-sm text-slate-400">No account suggestion</span>}</td>
-                    <td className={TD}><span className="inline-flex items-center gap-1.5 rounded-full bg-sky-50 px-2.5 py-1 text-xs font-semibold text-sky-700"><span className="h-1.5 w-1.5 rounded-full bg-sky-500" />{payment.channel?.channelName || "Unknown"}</span></td>
-                    <td className={TD}>{dateTime(payment.paymentDate)}</td>
+                    <td className={TD}><span className="inline-flex items-center gap-1.5 rounded-full bg-sky-50 px-2.5 py-1 text-xs font-semibold text-sky-700"><span className="h-1.5 w-1.5 shrink-0 rounded-full bg-sky-500" />{payment.channel?.channelName || "Unknown"}</span><div className="mt-2 break-words text-xs leading-5 text-slate-500">{dateTime(payment.paymentDate)}</div></td>
                     <td className={`${TD} font-bold text-slate-900`}>{money(payment.amount)}</td>
-                    <td className={TD}><button type="button" onClick={() => { setFocus(payment); setAccountId(payment.suggestedAccount?.accountId ? String(payment.suggestedAccount.accountId) : ""); setReason(""); }} className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-bold transition hover:-translate-y-0.5 ${selected ? "bg-emerald-600 text-white shadow-sm" : "bg-slate-100 text-slate-700 hover:bg-emerald-600 hover:text-white"}`}><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="M5 12h14M13 6l6 6-6 6" /></svg>{selected ? "Selected" : "Allocate"}</button></td>
+                    <td className={TD}><button type="button" onClick={() => { setFocus(payment); setAccountId(payment.suggestedAccount?.accountId ? String(payment.suggestedAccount.accountId) : ""); setReason(""); }} className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-2 text-xs font-bold transition hover:-translate-y-0.5 ${selected ? "bg-emerald-600 text-white shadow-sm" : "bg-slate-100 text-slate-700 hover:bg-emerald-600 hover:text-white"}`}><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-3.5 w-3.5 shrink-0"><path d="M5 12h14M13 6l6 6-6 6" /></svg>{selected ? "Selected" : "Allocate"}</button></td>
                   </tr>;
                 })}
-                {!filteredRows.length && <tr><td colSpan={7} className="px-4 py-16 text-center"><div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-emerald-50 text-emerald-600"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-7 w-7"><path d="M5 12l4 4L19 6" /></svg></div><div className="mt-4 font-bold text-slate-700">{rows.length ? "No payments match your search" : "All payments are reconciled"}</div><div className="mt-1 text-sm text-slate-400">{rows.length ? "Try a different reference, payer or phone number." : "There are no unmatched transactions requiring attention."}</div></td></tr>}
+                {!loading && !filteredRows.length && <tr><td colSpan={6} className="px-4 py-16 text-center"><div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-emerald-50 text-emerald-600"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-7 w-7"><path d="M5 12l4 4L19 6" /></svg></div><div className="mt-4 font-bold text-slate-700">{rows.length ? "No payments match your search" : "All payments are reconciled"}</div><div className="mt-1 text-sm text-slate-400">{rows.length ? "Try a different reference, payer or phone number." : "There are no unmatched transactions requiring attention."}</div></td></tr>}
               </tbody>
             </table>
           </div>

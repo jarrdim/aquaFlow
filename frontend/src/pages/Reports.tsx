@@ -52,6 +52,8 @@ export default function Reports() {
   const [weekday, setWeekday] = useState("");
   const [channels, setChannels] = useState<Row[]>([]);
   const [channelId, setChannelId] = useState("");
+  const [zones, setZones] = useState<Row[]>([]);
+  const [zoneId, setZoneId] = useState("");
   const [income, setIncome] = useState<Row | null>(null);
   const [cycles, setCycles] = useState<Row[]>([]);
   const [cycleId, setCycleId] = useState("");
@@ -65,10 +67,11 @@ export default function Reports() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    Promise.all([api.listReadingCycles(), api.listPaymentChannels()])
-      .then(([items, paymentChannels]) => {
+    Promise.all([api.listReadingCycles(), api.listPaymentChannels(), api.listZones()])
+      .then(([items, paymentChannels, zoneItems]) => {
         setCycles(items);
         setChannels(paymentChannels);
+        setZones(zoneItems);
         const preferred =
           items.find((item: Row) => item.status === "OPEN") ?? items[0];
         if (preferred) setCycleId(String(preferred.readingCycleId));
@@ -80,7 +83,7 @@ export default function Reports() {
     setIncomeLoading(true);
     setError("");
     try {
-      setIncome(await api.dailyIncomeReport(from, to, channelId));
+      setIncome(await api.dailyIncomeReport(from, to, channelId, zoneId));
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -200,7 +203,7 @@ export default function Reports() {
       {tab === "income" ? (
         <>
           <div className="mb-5 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[1fr_1fr_1fr_1fr_auto_auto]">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[repeat(5,minmax(0,1fr))_auto_auto]">
               <label className="text-xs font-semibold text-slate-600">
                 From
                 <input
@@ -247,6 +250,21 @@ export default function Reports() {
                   {channels.map((channel) => (
                     <option key={channel.channelId} value={channel.channelId}>
                       {channel.channelName}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-xs font-semibold text-slate-600">
+                Zone
+                <select
+                  className={`${input} mt-1`}
+                  value={zoneId}
+                  onChange={(e) => setZoneId(e.target.value)}
+                >
+                  <option value="">All zones</option>
+                  {zones.map((zone) => (
+                    <option key={zone.zoneId} value={zone.zoneId}>
+                      {zone.zoneName}
                     </option>
                   ))}
                 </select>
@@ -318,7 +336,7 @@ export default function Reports() {
                       <Link
                         className="inline-flex min-w-10 items-center justify-center rounded-lg bg-sky-50 px-3 py-1.5 font-bold text-sky-700 underline decoration-sky-300 underline-offset-2 transition hover:bg-sky-700 hover:text-white focus:outline-none focus:ring-2 focus:ring-sky-300"
                         title={`View ${row.transactions} transactions for ${row.date}`}
-                        to={`/payments/register?status=POSTED&from=${encodeURIComponent(row.date)}&to=${encodeURIComponent(row.date)}&channelId=${encodeURIComponent(row.channelId)}`}
+                        to={`/payments/register?status=POSTED&from=${encodeURIComponent(row.date)}&to=${encodeURIComponent(row.date)}&channelId=${encodeURIComponent(row.channelId)}${zoneId ? `&zoneId=${encodeURIComponent(zoneId)}` : ""}`}
                       >
                         {row.transactions}
                       </Link>
