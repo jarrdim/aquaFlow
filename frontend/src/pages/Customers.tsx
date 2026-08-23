@@ -477,13 +477,20 @@ export default function Customers() {
         if (!propertyCode) errors.push(`Row ${index + 2}: propertyCode is required.`);
         if (!categoryCode) errors.push(`Row ${index + 2}: categoryCode is required.`);
         if (!["PENDING", "ACTIVE", "SUSPENDED", "CLOSED"].includes(accountStatus)) errors.push(`Row ${index + 2}: accountStatus is invalid.`);
+        const openingBalance = Number(cell(row, "openingBalance") || 0);
+        const currentBalance = Number(cell(row, "currentBalance") || 0);
+        const connectionDate = cell(row, "connectionDate");
+        const closureDate = cell(row, "closureDate");
+        if (!Number.isFinite(openingBalance)) errors.push(`Row ${index + 2}: openingBalance must be a number.`);
+        if (!Number.isFinite(currentBalance)) errors.push(`Row ${index + 2}: currentBalance must be a number.`);
+        if (connectionDate && closureDate && closureDate < connectionDate) errors.push(`Row ${index + 2}: closureDate cannot be earlier than connectionDate.`);
         return {
           accountNumber, customerNumber, propertyCode, categoryCode,
-          openingBalance: Number(cell(row, "openingBalance") || 0),
-          currentBalance: Number(cell(row, "currentBalance") || 0),
-          connectionDate: cell(row, "connectionDate"),
+          openingBalance,
+          currentBalance,
+          connectionDate,
           accountStatus,
-          closureDate: cell(row, "closureDate"),
+          closureDate,
         };
       });
       if (!sourceRows.length) errors.push("The selected file has no account rows.");
