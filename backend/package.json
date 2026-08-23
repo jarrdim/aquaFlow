@@ -14,6 +14,7 @@
     "db:meter-event-upgrade": "prisma db execute --file prisma/migrations/20260714190000_expand_meter_event_types/migration.sql --schema prisma/schema.prisma",
     "db:billing-upgrade": "prisma db execute --file prisma/migrations/20260714210000_billing_management/migration.sql --schema prisma/schema.prisma",
     "db:payment-upgrade": "prisma db execute --file prisma/migrations/20260715100000_payment_revenue_management/migration.sql --schema prisma/schema.prisma",
+    "db:payment-admin-reversal-upgrade": "prisma db execute --file prisma/migrations/20260823150000_system_admin_payment_reversal_override/migration.sql --schema prisma/schema.prisma",
     "db:mpesa-upgrade": "prisma db execute --file prisma/migrations/20260715120000_mpesa_stk_push/migration.sql --schema prisma/schema.prisma",
     "db:notification-upgrade": "prisma db execute --file prisma/migrations/20260715150000_notification_management/migration.sql --schema prisma/schema.prisma",
     "db:arrears-upgrade": "prisma db execute --file prisma/migrations/20260717090000_arrears_debt_management/migration.sql --schema prisma/schema.prisma",
