@@ -1734,6 +1734,7 @@ export function PaymentReversals() {
     setMessage("");
     try {
       await api.requestPaymentReversal(form);
+      window.dispatchEvent(new Event("sidebar-counts:refresh"));
       setMessage("Reversal submitted for independent approval.");
       setForm({
         paymentId: "",
@@ -1894,6 +1895,7 @@ export function ReversalApprovals() {
         decision,
         comments,
       );
+      window.dispatchEvent(new Event("sidebar-counts:refresh"));
       setMessage(`Reversal ${decision.toLowerCase()}d.`);
       setComments("");
       await load();

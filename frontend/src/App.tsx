@@ -657,6 +657,7 @@ function Shell({ children }: { children: React.ReactNode }) {
     failed: 0,
     recent: [],
   });
+  const [sidebarCounts, setSidebarCounts] = useState<Record<string, number>>({});
   const [sidebarFlyout, setSidebarFlyout] = useState<string | null>(null);
   const [sidebarFlyoutTop, setSidebarFlyoutTop] = useState(72);
   const searchRef = useRef<HTMLDivElement>(null);
@@ -709,6 +710,33 @@ function Shell({ children }: { children: React.ReactNode }) {
       window.clearInterval(timer);
     };
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    async function refreshSidebarCounts() {
+      try {
+        const reversals = await api.listPaymentReversals("PENDING");
+        if (active) {
+          setSidebarCounts((current) => ({
+            ...current,
+            "/payments/reversals/approvals": Array.isArray(reversals)
+              ? reversals.length
+              : 0,
+          }));
+        }
+      } catch {
+        // Some roles cannot view approval queues. Hide the badge for those users.
+      }
+    }
+    void refreshSidebarCounts();
+    window.addEventListener("sidebar-counts:refresh", refreshSidebarCounts);
+    const timer = window.setInterval(refreshSidebarCounts, 60000);
+    return () => {
+      active = false;
+      window.removeEventListener("sidebar-counts:refresh", refreshSidebarCounts);
+      window.clearInterval(timer);
+    };
+  }, [location.pathname]);
 
   useEffect(() => {
     const query = searchQuery.trim();
@@ -954,9 +982,14 @@ function Shell({ children }: { children: React.ReactNode }) {
                         <Link
                           key={itemPath}
                           to={itemPath}
-                          className={`block rounded px-2 py-1.5 text-xs font-medium transition-colors ${itemActive ? "bg-white/10 text-white" : "text-blue-100/50 hover:bg-white/5 hover:text-white"}`}
+                          className={`flex items-center justify-between gap-2 rounded px-2 py-1.5 text-xs font-medium transition-colors ${itemActive ? "bg-white/10 text-white" : "text-blue-100/50 hover:bg-white/5 hover:text-white"}`}
                         >
-                          {itemLabel}
+                          <span>{itemLabel}</span>
+                          {(sidebarCounts[itemPath] ?? 0) > 0 && (
+                            <span className="min-w-5 shrink-0 rounded-full bg-amber-400 px-1.5 py-0.5 text-center text-[10px] font-extrabold leading-none text-amber-950">
+                              {sidebarCounts[itemPath] > 99 ? "99+" : sidebarCounts[itemPath]}
+                            </span>
+                          )}
                         </Link>
                       );
                     })}
@@ -1213,7 +1246,11 @@ function Shell({ children }: { children: React.ReactNode }) {
                   >
                     <span className="flex items-center justify-between gap-2">
                       <span>{itemLabel}</span>
-                      {itemPath === "/readings/import-current" && (
+                      {(sidebarCounts[itemPath] ?? 0) > 0 ? (
+                        <span className="min-w-5 shrink-0 rounded-full bg-amber-100 px-1.5 py-0.5 text-center text-[10px] font-extrabold leading-none text-amber-800">
+                          {sidebarCounts[itemPath] > 99 ? "99+" : sidebarCounts[itemPath]}
+                        </span>
+                      ) : itemPath === "/readings/import-current" && (
                         <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wide text-amber-800">
                           Migration
                         </span>
