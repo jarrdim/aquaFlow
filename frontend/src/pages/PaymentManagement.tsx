@@ -1301,7 +1301,12 @@ export function PaymentRegister() {
     if (!file) return;
     setImportMessage("");
     try {
-      const source = await parseMeterWorkbook(file);
+      const source = await parseMeterWorkbook(file, [
+        "accountNumber",
+        "transactionReference",
+        "amount",
+        "paymentDate",
+      ]);
       const errors: string[] = [];
       const references = new Set<string>();
       const normalized = source.map((row, index) => {

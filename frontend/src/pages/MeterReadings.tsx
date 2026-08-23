@@ -4903,7 +4903,12 @@ export function BulkCurrentReadingImport() {
     setFileName(file.name);
     setMessage("");
     try {
-      const rows = await parseMeterWorkbook(file);
+      const rows = await parseMeterWorkbook(file, [
+        "meterNumber",
+        "accountNumber",
+        "cycleCode",
+        "currentReading",
+      ]);
       const issues: string[] = [];
       const normalized = rows.map((row, index) => {
         const meterNumber = String(row.meterNumber ?? "").trim();

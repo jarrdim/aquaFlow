@@ -484,6 +484,8 @@ export async function parseMeterWorkbook(
     ["propertyCode", "customerNumber", "serviceAreaCode"],
     ["accountNumber", "customerNumber", "propertyCode"],
     ["accountNumber", "openingBalance", "currentBalance"],
+    ["meterNumber", "accountNumber", "cycleCode", "previousReading", "currentReading"],
+    ["accountNumber", "transactionReference", "amount", "paymentDate"],
   ];
   const acceptedHeaderSets = (requiredHeaders.length
     ? [requiredHeaders]

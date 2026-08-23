@@ -33,3 +33,5 @@ ngrok.exe
 .tmp/build-compatible-property-account-files.cjs
 .tmp/build-meters-workbook.cjs
 .tmp/build-properties-workbook.cjs
+*.tmp
+outputs/

@@ -3937,7 +3937,11 @@ export function BulkMeterAssignmentImport() {
     setFileName(file.name);
     setMessage("");
     try {
-      const rows = await parseMeterWorkbook(file);
+      const rows = await parseMeterWorkbook(file, [
+        "meterNumber",
+        "accountNumber",
+        "assignmentDate",
+      ]);
       const issues: string[] = [];
       const normalized = rows.map((row, index) => {
         const meterNumber = String(row.meterNumber ?? "").trim();
