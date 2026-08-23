@@ -184,6 +184,8 @@ export default function Customers() {
   const [accountRows, setAccountRows] = useState<Record<string, unknown>[]>([]);
   const [accountErrors, setAccountErrors] = useState<string[]>([]);
   const [importingAccounts, setImportingAccounts] = useState(false);
+  const [accountImportProgress, setAccountImportProgress] = useState(0);
+  const [accountImportRequestError, setAccountImportRequestError] = useState("");
   const [showBalanceImport, setShowBalanceImport] = useState(false);
   const [balanceRows, setBalanceRows] = useState<Record<string, unknown>[]>([]);
   const [balanceErrors, setBalanceErrors] = useState<string[]>([]);
@@ -455,6 +457,8 @@ export default function Customers() {
   async function selectAccountFile(file?: File) {
     if (!file) return;
     setError("");
+    setAccountImportProgress(0);
+    setAccountImportRequestError("");
     try {
       const sourceRows = await parseMeterWorkbook(file, [
         "accountNumber",
@@ -494,20 +498,35 @@ export default function Customers() {
   async function importAccounts() {
     if (!accountRows.length || accountErrors.length) return;
     setImportingAccounts(true);
+    setAccountImportProgress(0);
+    setAccountImportRequestError("");
     setError("");
+    let imported = 0;
+    let skipped = 0;
+    let confirmed = 0;
+    let failedBatchStart = 0;
     try {
-      let imported = 0;
-      let skipped = 0;
-      for (let offset = 0; offset < accountRows.length; offset += 1000) {
-        const result = await api.bulkImportAccounts(accountRows.slice(offset, offset + 1000));
+      // Account creation touches customers, properties and categories. Keep
+      // requests comfortably below reverse-proxy and database timeouts.
+      const requestBatchSize = 250;
+      for (let offset = 0; offset < accountRows.length; offset += requestBatchSize) {
+        failedBatchStart = offset;
+        const batch = accountRows.slice(offset, offset + requestBatchSize);
+        const result = await api.bulkImportAccounts(batch);
         imported += Number(result.imported ?? 0);
         skipped += Number(result.skipped ?? 0);
+        confirmed += batch.length;
+        setAccountImportProgress(confirmed);
       }
       setSuccess(`${imported} accounts imported successfully${skipped ? `; ${skipped} existing accounts skipped` : ""}.`);
       setAccountRows([]);
       setShowAccountImport(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Accounts could not be imported.");
+      const message = err instanceof Error ? err.message : "Accounts could not be imported.";
+      const failedBatchEnd = Math.min(failedBatchStart + 250, accountRows.length);
+      const detail = `Batch ${Math.floor(failedBatchStart / 250) + 1} (accounts ${failedBatchStart + 1}-${failedBatchEnd}) failed. ${confirmed} rows were confirmed processed (${imported} imported, ${skipped} already existed). Server response: ${message}`;
+      setAccountImportRequestError(detail);
+      setError(detail);
     } finally {
       setImportingAccounts(false);
     }
@@ -729,14 +748,15 @@ export default function Customers() {
       {showAccountImport && (
         <section className="mb-5 rounded-2xl border border-amber-200 bg-white p-5 shadow-sm">
           <div className="flex flex-wrap items-start justify-between gap-3">
-            <div><h2 className="font-bold text-slate-900">Bulk customer-account import</h2><p className="mt-1 text-sm text-slate-500">Import after customers and properties. Existing account numbers are safely skipped on retry.</p></div>
+            <div><h2 className="font-bold text-slate-900">Bulk customer-account import</h2><p className="mt-1 text-sm text-slate-500">Import after customers and properties. Large files use timeout-safe batches, and existing account numbers are skipped on retry.</p></div>
             <button type="button" className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700" onClick={() => exportExcel("customer-account-import-template.xlsx", "Accounts", [{ accountNumber: "ACC-00001", customerNumber: "CUST-2026-00001", propertyCode: "PROP-000001", categoryCode: "RESIDENTIAL", openingBalance: 0, currentBalance: 0, connectionDate: new Date().toISOString().slice(0, 10), accountStatus: "ACTIVE", closureDate: "" }])}>Download template</button>
           </div>
           <div className="mt-4 grid gap-4 md:grid-cols-[1fr_auto] md:items-end">
             <label className="block"><span className="mb-1 block text-sm font-semibold text-slate-700">Account Excel or CSV file</span><input type="file" accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" onChange={(event) => void selectAccountFile(event.target.files?.[0])} className="block w-full rounded-xl border border-slate-200 bg-slate-50 p-2 text-sm" /></label>
-            <button type="button" disabled={!accountRows.length || accountErrors.length > 0 || importingAccounts} onClick={() => void importAccounts()} className="h-11 rounded-xl bg-amber-600 px-6 text-sm font-bold text-white disabled:opacity-40">{importingAccounts ? "Importing..." : `Import ${accountRows.length || ""} accounts`}</button>
+            <button type="button" disabled={!accountRows.length || accountErrors.length > 0 || importingAccounts} onClick={() => void importAccounts()} className="h-11 rounded-xl bg-amber-600 px-6 text-sm font-bold text-white disabled:opacity-40">{importingAccounts ? `Importing ${accountImportProgress}/${accountRows.length}...` : `Import ${accountRows.length || ""} accounts`}</button>
           </div>
           {accountRows.length > 0 && !accountErrors.length && <p className="mt-3 text-sm font-semibold text-emerald-700">{accountRows.length} account rows validated and ready.</p>}
+          {accountImportRequestError && <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800"><strong>Import request error</strong><p className="mt-1 whitespace-pre-wrap break-words">{accountImportRequestError}</p></div>}
           {accountErrors.length > 0 && <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700"><strong>Fix these issues:</strong><ul className="mt-1 list-disc pl-5">{accountErrors.slice(0, 20).map((message) => <li key={message}>{message}</li>)}</ul>{accountErrors.length > 20 && <p className="mt-1">And {accountErrors.length - 20} more.</p>}</div>}
         </section>
       )}

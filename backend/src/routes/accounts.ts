@@ -282,7 +282,7 @@ accountsRouter.post(
   },
 );
 
-accountsRouter.post("/bulk-import", async (req, res) => {
+accountsRouter.post("/bulk-import", async (req, res, next) => {
   const parsed = bulkAccountSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const rows = parsed.data.accounts;
@@ -322,20 +322,30 @@ accountsRouter.post("/bulk-import", async (req, res) => {
   if (errors.length) return res.status(409).json({ error: errors.slice(0, 100).join("\n") });
 
   const newRows = rows.filter((row) => !existingNumbers.has(row.accountNumber));
-  const result = await prisma.customerAccount.createMany({
-    data: newRows.map((row) => ({
-      accountNumber: row.accountNumber,
-      customerId: customerIds.get(row.customerNumber)!,
-      propertyId: propertyByCode.get(row.propertyCode)!.propertyId,
-      categoryId: categoryIds.get(row.categoryCode)!,
-      openingBalance: row.openingBalance,
-      currentBalance: row.currentBalance,
-      connectionDate: row.connectionDate ? new Date(`${row.connectionDate}T00:00:00.000Z`) : null,
-      accountStatus: row.accountStatus,
-      closureDate: row.closureDate ? new Date(`${row.closureDate}T00:00:00.000Z`) : null,
-    })),
-  });
-  res.status(201).json({ imported: result.count, skipped: rows.length - newRows.length });
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      // Return a controlled API error before nginx times out if an operational
+      // reset or another import is holding a database lock.
+      await tx.$executeRawUnsafe("SET LOCAL lock_timeout = '10s'");
+      await tx.$executeRawUnsafe("SET LOCAL statement_timeout = '45s'");
+      return tx.customerAccount.createMany({
+        data: newRows.map((row) => ({
+          accountNumber: row.accountNumber,
+          customerId: customerIds.get(row.customerNumber)!,
+          propertyId: propertyByCode.get(row.propertyCode)!.propertyId,
+          categoryId: categoryIds.get(row.categoryCode)!,
+          openingBalance: row.openingBalance,
+          currentBalance: row.currentBalance,
+          connectionDate: row.connectionDate ? new Date(`${row.connectionDate}T00:00:00.000Z`) : null,
+          accountStatus: row.accountStatus,
+          closureDate: row.closureDate ? new Date(`${row.closureDate}T00:00:00.000Z`) : null,
+        })),
+      });
+    });
+    res.status(201).json({ imported: result.count, skipped: rows.length - newRows.length });
+  } catch (error) {
+    next(error);
+  }
 });
 
 accountsRouter.get("/", async (req, res, next) => {
