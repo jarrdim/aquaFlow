@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
+import { resolveCustomerReferences } from "../lib/customerReferences";
 import { requireAuth, requireRole } from "../middleware/auth";
 
 export const accountsRouter = Router();
@@ -285,11 +286,8 @@ accountsRouter.post("/bulk-import", async (req, res) => {
   const parsed = bulkAccountSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const rows = parsed.data.accounts;
-  const [customers, properties, categories, existing] = await Promise.all([
-    prisma.customer.findMany({
-      where: { customerNumber: { in: rows.map((row) => row.customerNumber) } },
-      select: { customerId: true, customerNumber: true },
-    }),
+  const [customerResolution, properties, categories, existing] = await Promise.all([
+    resolveCustomerReferences(rows.map((row) => row.customerNumber)),
     prisma.property.findMany({
       where: { propertyCode: { in: rows.map((row) => row.propertyCode) } },
       select: { propertyId: true, propertyCode: true, ownerCustomerId: true },
@@ -303,7 +301,7 @@ accountsRouter.post("/bulk-import", async (req, res) => {
       select: { accountNumber: true },
     }),
   ]);
-  const customerIds = new Map(customers.map((row) => [row.customerNumber, row.customerId]));
+  const { customerIds, ambiguousReferences } = customerResolution;
   const propertyByCode = new Map(properties.map((row) => [row.propertyCode, row]));
   const categoryIds = new Map(categories.map((row) => [row.categoryCode, row.categoryId]));
   const existingNumbers = new Set(existing.map((row) => row.accountNumber));
@@ -313,7 +311,8 @@ accountsRouter.post("/bulk-import", async (req, res) => {
     const line = index + 2;
     const customerId = customerIds.get(row.customerNumber);
     const property = propertyByCode.get(row.propertyCode);
-    if (!customerId) errors.push(`Row ${line}: customer ${row.customerNumber} was not found.`);
+    if (ambiguousReferences.has(row.customerNumber)) errors.push(`Row ${line}: customer ${row.customerNumber} matches more than one customer sequence.`);
+    else if (!customerId) errors.push(`Row ${line}: customer ${row.customerNumber} was not found.`);
     if (!property) errors.push(`Row ${line}: property ${row.propertyCode} was not found.`);
     if (customerId && property && property.ownerCustomerId !== customerId) errors.push(`Row ${line}: property ${row.propertyCode} does not belong to customer ${row.customerNumber}.`);
     if (!categoryIds.has(row.categoryCode)) errors.push(`Row ${line}: category ${row.categoryCode} was not found.`);
