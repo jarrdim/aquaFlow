@@ -2367,7 +2367,7 @@ export function ReadingWorklist() {
   const [routeAssignments, setRouteAssignments] = useState<Row[]>([]);
   const [items, setItems] = useState<Row[]>([]);
   const [error, setError] = useState("");
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [evidenceReading, setEvidenceReading] = useState<Row | null>(null);
   const [showBulkUpload, setShowBulkUpload] = useState(false);
   const [bulkFileName, setBulkFileName] = useState("");
@@ -2422,7 +2422,11 @@ export function ReadingWorklist() {
       .catch((e) => setError(e.message));
   }, [cycleId]);
   useEffect(() => {
-    if (!cycleId) return;
+    if (!cycleId) {
+      setItems([]);
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
     setLoading(true);
     const timer = window.setTimeout(() => {
@@ -3319,15 +3323,18 @@ export function ReadingWorklist() {
                 <tr>
                   <td colSpan={7} className="px-4 py-16 text-center">
                     <div className="font-semibold text-slate-700">
-                      {readingStatus === "UNREAD"
+                      {!cycleId
+                        ? "Select a reading cycle"
+                        : readingStatus === "UNREAD"
                         ? "No unread meters found"
                         : readingStatus === "CAPTURED"
                           ? "No captured meters found"
                           : "No eligible meters found"}
                     </div>
                     <p className="mt-1 text-sm text-slate-500">
-                      Change the status, cycle, route or search criteria and try
-                      again.
+                      {!cycleId
+                        ? "Choose a cycle above to load its route worklist."
+                        : "Change the status, cycle, route or search criteria and try again."}
                     </p>
                   </td>
                 </tr>
