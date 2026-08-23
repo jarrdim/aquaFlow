@@ -480,17 +480,17 @@ export default function Customers() {
         const openingBalance = Number(cell(row, "openingBalance") || 0);
         const currentBalance = Number(cell(row, "currentBalance") || 0);
         const connectionDate = cell(row, "connectionDate");
-        const closureDate = cell(row, "closureDate");
         if (!Number.isFinite(openingBalance)) errors.push(`Row ${index + 2}: openingBalance must be a number.`);
         if (!Number.isFinite(currentBalance)) errors.push(`Row ${index + 2}: currentBalance must be a number.`);
-        if (connectionDate && closureDate && closureDate < connectionDate) errors.push(`Row ${index + 2}: closureDate cannot be earlier than connectionDate.`);
         return {
           accountNumber, customerNumber, propertyCode, categoryCode,
           openingBalance,
           currentBalance,
           connectionDate,
           accountStatus,
-          closureDate,
+          // Initial imports never close accounts; use the Close accounts
+          // workflow later when a real closure is required.
+          closureDate: "",
         };
       });
       if (!sourceRows.length) errors.push("The selected file has no account rows.");

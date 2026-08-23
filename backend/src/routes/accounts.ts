@@ -316,9 +316,6 @@ accountsRouter.post("/bulk-import", async (req, res, next) => {
     if (!property) errors.push(`Row ${line}: property ${row.propertyCode} was not found.`);
     if (customerId && property && property.ownerCustomerId !== customerId) errors.push(`Row ${line}: property ${row.propertyCode} does not belong to customer ${row.customerNumber}.`);
     if (!categoryIds.has(row.categoryCode)) errors.push(`Row ${line}: category ${row.categoryCode} was not found.`);
-    if (row.connectionDate && row.closureDate && row.closureDate < row.connectionDate) {
-      errors.push(`Row ${line}: closure date ${row.closureDate} cannot be earlier than connection date ${row.connectionDate}.`);
-    }
     if (seen.has(row.accountNumber)) errors.push(`Row ${line}: account ${row.accountNumber} is duplicated in this file.`);
     seen.add(row.accountNumber);
   });
@@ -341,7 +338,9 @@ accountsRouter.post("/bulk-import", async (req, res, next) => {
           currentBalance: row.currentBalance,
           connectionDate: row.connectionDate ? new Date(`${row.connectionDate}T00:00:00.000Z`) : null,
           accountStatus: row.accountStatus,
-          closureDate: row.closureDate ? new Date(`${row.closureDate}T00:00:00.000Z`) : null,
+          // Accounts are closed only through the dedicated close-account
+          // workflow. Ignore legacy spreadsheet values during initial import.
+          closureDate: null,
         })),
         skipDuplicates: true,
       });
@@ -356,7 +355,7 @@ accountsRouter.post("/bulk-import", async (req, res, next) => {
       return res.status(409).json({ error: "An account references a customer, property, category or route that no longer exists. Refresh the source data and retry." });
     }
     if (error?.code === "P2004") {
-      return res.status(409).json({ error: "An account violates a database rule. Check that closure dates are not earlier than connection dates and that account statuses are valid." });
+      return res.status(409).json({ error: "An account violates a database rule. Check that its status and dates are valid." });
     }
     if (error?.code === "P2024" || error?.code === "P2028") {
       return res.status(503).json({ error: "The database was busy and the batch timed out. Wait a moment, then retry; existing accounts will be skipped." });
