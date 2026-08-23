@@ -274,7 +274,7 @@ export function RevenueDashboard() {
   return (
     <Page
       title="Payment and revenue dashboard"
-      subtitle="Collections, allocations, receipts, reversals and reconciliation"
+      subtitle="Collections, allocations, receipt cancellations and reconciliation"
       actions={
         <>
           <LinkButton to="/payments/mpesa" tone="green">
@@ -290,7 +290,7 @@ export function RevenueDashboard() {
         <Kpi label="Total collections" value={money(data?.total)} />
         <Kpi label="Payments" value={data?.payments ?? 0} />
         <Kpi label="Unmatched payments" value={data?.unmatched ?? 0} />
-        <Kpi label="Pending reversals" value={data?.pendingReversals ?? 0} />
+        <Kpi label="Pending receipt cancellations" value={data?.pendingReversals ?? 0} />
         {Object.entries(data?.channels ?? {}).map(([channel, total]) => (
           <Kpi key={channel} label={channel} value={money(total)} />
         ))}
@@ -1735,7 +1735,7 @@ export function PaymentReversals() {
     try {
       await api.requestPaymentReversal(form);
       window.dispatchEvent(new Event("sidebar-counts:refresh"));
-      setMessage("Reversal submitted for independent approval.");
+      setMessage("Receipt cancellation submitted for independent approval.");
       setForm({
         paymentId: "",
         reversalReason: "DUPLICATE_PAYMENT",
@@ -1760,11 +1760,11 @@ export function PaymentReversals() {
   const reversalInput = `${INPUT} rounded-xl border-slate-200 px-3.5 py-2.5 transition duration-200 hover:border-slate-300 focus:border-rose-500 focus:ring-4 focus:ring-rose-500/10`;
   return (
     <Page
-      title="Payment reversal requests"
-      subtitle="Request controlled reversal instead of deleting financial records"
+      title="Cancel receipts"
+      subtitle="Request controlled receipt cancellation without deleting financial records"
       actions={
         <LinkButton to="/payments/reversals/approvals">
-          Reversal approval
+          Cancellation approval
         </LinkButton>
       }
     >
@@ -1776,7 +1776,7 @@ export function PaymentReversals() {
         <div className="rounded-2xl border border-rose-100 bg-rose-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-rose-700">Rejected</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{rejectedCount}</div></div>
       </div>
       <div className="grid gap-6 lg:grid-cols-[400px_minmax(0,1fr)] lg:items-start">
-        <Card title="New reversal request" className="overflow-hidden shadow-md shadow-slate-200/50 lg:sticky lg:top-24">
+        <Card title="New receipt cancellation" className="overflow-hidden shadow-md shadow-slate-200/50 lg:sticky lg:top-24">
           <form className="space-y-4" onSubmit={submit}>
             <div className="flex items-start gap-3 rounded-xl border border-rose-100 bg-rose-50/70 p-3.5 text-rose-800">
               <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-rose-600 text-white shadow-sm"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5"><path d="M9 7H5v4M5 11a7 7 0 1 0 2-5" /></svg></span>
@@ -1828,14 +1828,14 @@ export function PaymentReversals() {
               />
             </Field>
             <Button disabled={submitting || form.detailedExplanation.trim().length < 10} className="flex w-full items-center justify-center gap-2 rounded-xl bg-rose-600 py-3 shadow-sm transition hover:-translate-y-0.5 hover:bg-rose-700 hover:shadow-md disabled:hover:translate-y-0">
-              {submitting ? <><span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />Submitting…</> : <><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="M12 5v14M5 12h14" /></svg>Submit reversal request</>}
+              {submitting ? <><span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />Submitting…</> : <><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="M12 5v14M5 12h14" /></svg>Submit cancellation request</>}
             </Button>
           </form>
         </Card>
-        <Card title="Reversal history" className="overflow-hidden shadow-md shadow-slate-200/50">
+        <Card title="Cancellation history" className="overflow-hidden shadow-md shadow-slate-200/50">
           <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div><div className="font-semibold text-slate-800">Audit trail</div><div className="mt-0.5 text-xs text-slate-500">Track every request through independent review.</div></div>
-            <div className="relative sm:w-72"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></svg><input className={`${reversalInput} pl-10 focus:border-emerald-500 focus:ring-emerald-500/10`} placeholder="Search reversal history" value={search} onChange={(e) => setSearch(e.target.value)} /></div>
+            <div className="relative sm:w-72"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></svg><input className={`${reversalInput} pl-10 focus:border-emerald-500 focus:ring-emerald-500/10`} placeholder="Search cancellation history" value={search} onChange={(e) => setSearch(e.target.value)} /></div>
           </div>
           <div className="overflow-x-auto rounded-xl border border-slate-200">
           <table className="w-full min-w-[760px]">
@@ -1860,7 +1860,7 @@ export function PaymentReversals() {
                   </td>
                 </tr>
               ))}
-              {!filteredRows.length && <tr><td colSpan={5} className="px-4 py-16 text-center"><div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-slate-100 text-slate-400"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-7 w-7"><path d="M9 7H5v4M5 11a7 7 0 1 0 2-5" /></svg></div><div className="mt-4 font-bold text-slate-700">{rows.length ? "No matching reversal requests" : "No reversal requests yet"}</div><div className="mt-1 text-sm text-slate-400">{rows.length ? "Try a different reference, requester or status." : "Submitted requests will appear here for tracking."}</div></td></tr>}
+              {!filteredRows.length && <tr><td colSpan={5} className="px-4 py-16 text-center"><div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-slate-100 text-slate-400"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-7 w-7"><path d="M9 7H5v4M5 11a7 7 0 1 0 2-5" /></svg></div><div className="mt-4 font-bold text-slate-700">{rows.length ? "No matching cancellation requests" : "No cancellation requests yet"}</div><div className="mt-1 text-sm text-slate-400">{rows.length ? "Try a different reference, requester or status." : "Submitted requests will appear here for tracking."}</div></td></tr>}
             </tbody>
           </table>
           </div>
@@ -1896,7 +1896,7 @@ export function ReversalApprovals() {
         comments,
       );
       window.dispatchEvent(new Event("sidebar-counts:refresh"));
-      setMessage(`Reversal ${decision.toLowerCase()}d.`);
+      setMessage(`Receipt cancellation ${decision.toLowerCase()}d.`);
       setComments("");
       await load();
     } catch (e: any) {
@@ -1908,14 +1908,14 @@ export function ReversalApprovals() {
   const approvalInput = `${INPUT} rounded-xl border-slate-200 px-3.5 py-2.5 transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10`;
   return (
     <Page
-      title="Payment reversal approval"
+      title="Receipt cancellation approval"
       subtitle="Finance maker-checker review before allocations and balances are rolled back"
     >
       {error && <Notice>{error}</Notice>}
       {message && <Notice green>{message}</Notice>}
       <div className="mb-5 rounded-2xl border border-amber-100 bg-amber-50/80 p-4 shadow-sm"><div className="flex items-center gap-3"><span className="grid h-11 w-11 place-items-center rounded-xl bg-amber-500 text-white"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5"><path d="M12 8v5M12 17h.01" /><path d="M10 3h4l7 16H3z" /></svg></span><div><div className="font-bold text-slate-900">{rows.length} request{rows.length === 1 ? "" : "s"} awaiting independent review</div><div className="mt-0.5 text-sm text-slate-600">Review the original payment, reason and explanation before making an irreversible decision.</div></div></div></div>
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_480px] lg:items-start">
-        <Card title="Pending reversal queue" className="overflow-hidden shadow-md shadow-slate-200/50">
+        <Card title="Pending cancellation queue" className="overflow-hidden shadow-md shadow-slate-200/50">
           {rows.map((x) => (
             <button
               key={x.reversalId}
@@ -1926,7 +1926,7 @@ export function ReversalApprovals() {
               <strong className="text-rose-700">{money(x.reversalAmount)}</strong>
             </button>
           ))}
-          {!rows.length && <div className="grid min-h-[280px] place-items-center rounded-xl border border-dashed border-slate-200 bg-slate-50 text-center"><div><div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-emerald-50 text-emerald-600"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-7 w-7"><path d="M5 12l4 4L19 6" /></svg></div><div className="mt-4 font-bold text-slate-700">Approval queue is clear</div><div className="mt-1 text-sm text-slate-400">There are no pending reversal requests.</div></div></div>}
+          {!rows.length && <div className="grid min-h-[280px] place-items-center rounded-xl border border-dashed border-slate-200 bg-slate-50 text-center"><div><div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-emerald-50 text-emerald-600"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-7 w-7"><path d="M5 12l4 4L19 6" /></svg></div><div className="mt-4 font-bold text-slate-700">Approval queue is clear</div><div className="mt-1 text-sm text-slate-400">There are no pending receipt cancellations.</div></div></div>}
         </Card>
         <Card title="Approval decision" className="overflow-hidden shadow-md shadow-slate-200/50 lg:sticky lg:top-24">
           {focus ? (
@@ -1957,7 +1957,7 @@ export function ReversalApprovals() {
                   Reject
                 </Button>
                 <Button disabled={deciding || comments.trim().length < 3} tone="green" className="flex-1 rounded-xl py-3 transition hover:-translate-y-0.5" onClick={() => decide("APPROVE")}>
-                  {deciding ? "Processing…" : "Approve reversal"}
+                  {deciding ? "Processing…" : "Approve cancellation"}
                 </Button>
               </div>
             </div>
@@ -2161,7 +2161,7 @@ export function PaymentAudit() {
   return (
     <Page
       title="Payment audit trail"
-      subtitle="Permanent payment, allocation, receipt and reversal events"
+      subtitle="Permanent payment, allocation, receipt and cancellation events"
       actions={
         <Button
           tone="green"

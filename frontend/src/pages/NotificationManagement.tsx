@@ -1266,7 +1266,7 @@ function NotificationSendLegacy({ modeSwitch }: { modeSwitch: ReactNode }) {
                   {targetType === "PAYMENT" && (
                     <>
                       <option value="PAYMENT_RECEIPT">Payment receipt</option>
-                      <option value="PAYMENT_REVERSAL">Payment reversal</option>
+                      <option value="PAYMENT_REVERSAL">Receipt cancellation</option>
                     </>
                   )}
                 </SearchableSelect>
