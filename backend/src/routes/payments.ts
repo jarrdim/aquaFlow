@@ -3,7 +3,7 @@ import { createHash } from "crypto";
 import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
-import { isSystemAdmin, requireAuth, requireRole } from "../middleware/auth";
+import { requireAuth, requireRole } from "../middleware/auth";
 import {
   getMpesaC2bConfig,
   getMpesaConfig,
@@ -1604,12 +1604,14 @@ paymentsRouter.patch(
         return res
           .status(409)
           .json({ error: "Only pending reversals can be decided" });
-      if (reversal.requestedBy === uid(req) && !isSystemAdmin(req))
+      // The database enforces this rule as well. Do not exempt system admins:
+      // the maker and checker must be different people for every decision.
+      if (reversal.requestedBy === uid(req))
         return res
           .status(403)
           .json({
             error:
-              "Maker-checker control: the requester cannot approve their own reversal",
+              "Maker-checker control: the requester cannot decide their own reversal. Sign in as a different authorized user.",
           });
       if (data.decision === "REJECT") {
         await prisma.paymentReversal.update({
