@@ -2001,6 +2001,7 @@ export function CollectionReport() {
   const [rows, setRows] = useState<Row[]>([]),
     [channels, setChannels] = useState<Row[]>([]),
     [channelId, setChannelId] = useState("");
+  const [loadError, setLoadError] = useState("");
   const [search, setSearch] = useState("");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
@@ -2021,26 +2022,46 @@ export function CollectionReport() {
   }, []);
   useEffect(() => {
     let cancelled = false;
+    if (fromDate && toDate && fromDate > toDate) {
+      setRows([]);
+      setLoadError("From date cannot be after To date.");
+      return () => {
+        cancelled = true;
+      };
+    }
+    setLoadError("");
     api
-      .listPayments(channelId ? { channelId } : {})
+      .listPayments({
+        ...(channelId ? { channelId } : {}),
+        ...(fromDate ? { from: fromDate } : {}),
+        ...(toDate ? { to: toDate } : {}),
+      })
       .then((payments) => {
         if (!cancelled) {
           setRows(
             payments.filter((payment: Row) => payment.paymentStatus === "POSTED"),
           );
         }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setRows([]);
+          setLoadError(error instanceof Error ? error.message : "Unable to load collections.");
+        }
       });
     return () => {
       cancelled = true;
     };
-  }, [channelId]);
+  }, [channelId, fromDate, toDate]);
   const filteredRows = useMemo(() => {
     const query = search.trim().toLowerCase();
     const minimum = minimumAmount === "" ? null : Number(minimumAmount);
     const maximum = maximumAmount === "" ? null : Number(maximumAmount);
     return rows
       .filter((payment) => {
-        const paymentDay = String(payment.paymentDate ?? payment.valueDate ?? "").slice(0, 10);
+        // valueDate is the accounting/business date used by the API range filter.
+        // Fall back to paymentDate for older records that do not have one.
+        const paymentDay = String(payment.valueDate ?? payment.paymentDate ?? "").slice(0, 10);
         const normalizedAllocation = payment.matchingStatus === "PARTIALLY_MATCHED"
           ? "MATCHED"
           : String(payment.matchingStatus ?? "");
@@ -2100,6 +2121,7 @@ export function CollectionReport() {
         </Button>
       }
     >
+      {loadError && <Notice>{loadError}</Notice>}
       <Card className="mb-5 overflow-hidden shadow-md shadow-slate-200/50">
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4"><Field label="Collection channel">
           <SearchableSelect
