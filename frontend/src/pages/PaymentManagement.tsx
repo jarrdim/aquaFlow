@@ -306,6 +306,26 @@ export function RevenueDashboard() {
     </Page>
   );
 }
+function paymentSource(payment: Row) {
+  const eventTypes = new Set<string>(
+    (payment.events ?? []).map((event: Row): string => String(event.eventType ?? "")),
+  );
+  const remarks = String(payment.remarks ?? "").toUpperCase();
+  const payloadSource = String(payment.externalPayload?.source ?? "").toUpperCase();
+
+  if ([...eventTypes].some((type) => type.startsWith("MPESA_C2B_")) || remarks.includes("C2B"))
+    return { label: "C2B", className: "bg-sky-50 text-sky-700" };
+  if (eventTypes.has("MPESA_STK_PAYMENT_POSTED") || remarks.includes("STK PUSH"))
+    return { label: "STK Push", className: "bg-violet-50 text-violet-700" };
+  if (eventTypes.has("HISTORICAL_RECEIPT_IMPORTED") || payloadSource === "MAJIWARE")
+    return { label: "Imported", className: "bg-amber-50 text-amber-700" };
+  if ([...eventTypes].some((type) => type.startsWith("MPESA_PAYMENT_")))
+    return { label: "M-Pesa entry", className: "bg-cyan-50 text-cyan-700" };
+  if (eventTypes.has("PAYMENT_POSTED") || payment.receivedBy || payment.receiver)
+    return { label: "Manual", className: "bg-slate-100 text-slate-700" };
+  return { label: "Other", className: "bg-slate-50 text-slate-500" };
+}
+
 function PaymentTable({ rows, loading = false }: { rows: Row[]; loading?: boolean }) {
   return (
     <div className="overflow-x-auto rounded-xl border border-slate-200">
@@ -315,6 +335,7 @@ function PaymentTable({ rows, loading = false }: { rows: Row[]; loading?: boolea
             <th className={TH}>Reference</th>
             <th className={TH}>Customer</th>
             <th className={TH}>Channel</th>
+            <th className={TH}>Source</th>
             <th className={TH}>Date</th>
             <th className={TH}>Amount</th>
             <th className={TH}>Allocation</th>
@@ -325,7 +346,7 @@ function PaymentTable({ rows, loading = false }: { rows: Row[]; loading?: boolea
         <tbody>
           {loading && (
             <tr>
-              <td colSpan={8} className="p-14 text-center">
+              <td colSpan={9} className="p-14 text-center">
                 <div className="mx-auto h-9 w-9 animate-spin rounded-full border-4 border-sky-100 border-t-aqua-700" />
                 <div className="mt-3 text-sm font-semibold text-slate-600">Loading payment register…</div>
                 <div className="mt-1 text-xs text-slate-400">Retrieving the latest transactions</div>
@@ -335,6 +356,7 @@ function PaymentTable({ rows, loading = false }: { rows: Row[]; loading?: boolea
           {!loading && rows.map((p) => {
             const suggested = p.suggestedAccount;
             const customer = p.account?.customer || suggested?.customer;
+            const source = paymentSource(p);
             return <tr key={p.paymentId} className="border-t transition hover:bg-emerald-50/30">
               <td className={`${TD} font-semibold`}>
                 {p.transactionReference}
@@ -354,6 +376,11 @@ function PaymentTable({ rows, loading = false }: { rows: Row[]; loading?: boolea
                 </div>}
               </td>
               <td className={TD}>{p.channel?.channelName}</td>
+              <td className={TD}>
+                <span className={`inline-flex whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-bold ${source.className}`}>
+                  {source.label}
+                </span>
+              </td>
               <td className={TD}>{dateTime(p.paymentDate)}</td>
               <td className={`${TD} font-semibold`}>{money(p.amount)}</td>
               <td className={TD}>
@@ -393,7 +420,7 @@ function PaymentTable({ rows, loading = false }: { rows: Row[]; loading?: boolea
           })}
           {!loading && !rows.length && (
             <tr>
-              <td colSpan={8} className="p-14 text-center text-slate-400">
+              <td colSpan={9} className="p-14 text-center text-slate-400">
                 <div className="mx-auto mb-3 grid h-12 w-12 place-items-center rounded-2xl bg-slate-100"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-6 w-6"><rect x="3" y="5" width="18" height="14" rx="2" /></svg></div><div className="font-semibold text-slate-600">No payment records found</div><div className="mt-1 text-sm">Transactions will appear here when available.</div>
               </td>
             </tr>
