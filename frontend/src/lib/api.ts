@@ -195,6 +195,11 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(data),
     }),
+  createCustomerPortalAccess: (id: string, data: { phoneNumber: string; password: string }) =>
+    request(`/customers/${id}/portal-access`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
   bulkUpdateCustomerStatus: (customerIds: string[], status: string) =>
     request("/customers/bulk-status", {
       method: "PATCH",

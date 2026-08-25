@@ -427,16 +427,14 @@ accountsRouter.post("/", async (req, res) => {
   try {
     const account = await prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext('aquaflow-account-number'))::text AS lock`;
-      const year = new Date().getFullYear();
-      const pattern = `ACC-${year}-%`;
       const [sequence] = await tx.$queryRaw<Array<{ maxSequence: number }>>`
         SELECT COALESCE(
           MAX(CAST(substring(account_number FROM '[0-9]+$') AS INTEGER)),
           0
         )::INTEGER AS "maxSequence"
         FROM aquaflow.customer_accounts
-        WHERE account_number LIKE ${pattern}`;
-      const accountNumber = `ACC-${year}-${String(sequence.maxSequence + 1).padStart(5, "0")}`;
+        WHERE account_number ~ '^ACC-[0-9]+$'`;
+      const accountNumber = `ACC-${String(sequence.maxSequence + 1).padStart(5, "0")}`;
 
       return tx.customerAccount.create({
         data: {

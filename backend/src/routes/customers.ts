@@ -1,8 +1,9 @@
 import { Router } from "express";
 import { Prisma } from "@prisma/client";
+import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
-import { requireAuth } from "../middleware/auth";
+import { requireAuth, requireRole } from "../middleware/auth";
 
 export const customersRouter = Router();
 customersRouter.use(requireAuth);
@@ -149,11 +150,125 @@ customersRouter.get("/:id", async (req, res) => {
         },
         orderBy: { createdAt: "desc" },
       },
+      users: {
+        where: { userType: "CUSTOMER" },
+        select: { username: true, phoneNumber: true, status: true, updatedAt: true },
+        take: 1,
+      },
     },
   });
   if (!customer) return res.status(404).json({ error: "Customer not found" });
-  res.json(customer);
+  const { users, ...details } = customer;
+  res.json({
+    ...details,
+    portalAccess: users[0] ? {
+      username: users[0].username,
+      phoneNumber: users[0].phoneNumber,
+      status: users[0].status,
+      updatedAt: users[0].updatedAt,
+    } : null,
+  });
 });
+
+const customerPortalAccessSchema = z.object({
+  password: z.string().min(8, "Password must contain at least 8 characters").max(200),
+  phoneNumber: z.preprocess(
+    normalizeKenyanPhone,
+    z.string().regex(/^\+254\d{9}$/, "Phone number must use +254 followed by 9 digits"),
+  ),
+});
+
+customersRouter.post(
+  "/:id/portal-access",
+  requireRole("CUSTOMER_CARE_OFFICER"),
+  async (req, res, next) => {
+    const customerId = z.string().regex(/^\d+$/).safeParse(req.params.id);
+    const parsed = customerPortalAccessSchema.safeParse(req.body);
+    if (!customerId.success || !parsed.success) {
+      return res.status(400).json({
+        error: parsed.success ? "Invalid customer ID" : parsed.error.flatten(),
+      });
+    }
+
+    const customer = await prisma.customer.findUnique({
+      where: { customerId: BigInt(customerId.data) },
+      include: { accounts: { orderBy: { accountNumber: "asc" } } },
+    });
+    if (!customer) return res.status(404).json({ error: "Customer not found" });
+    if (customer.status !== "ACTIVE") {
+      return res.status(409).json({ error: "Portal access can only be created for an active customer" });
+    }
+    if (!customer.accounts.length) {
+      return res.status(409).json({ error: "Add a water account before creating portal access" });
+    }
+
+    const displayName = customer.organizationName ||
+      [customer.firstName, customer.middleName, customer.lastName].filter(Boolean).join(" ") ||
+      customer.customerNumber;
+    const nameParts = displayName.trim().split(/\s+/);
+    const passwordHash = await bcrypt.hash(parsed.data.password, 12);
+
+    try {
+      const result = await prisma.$transaction(async (tx) => {
+        const existing = await tx.user.findFirst({
+          where: {
+            OR: [
+              { username: customer.customerNumber },
+              { customerId: customer.customerId },
+            ],
+          },
+        });
+        const common = {
+          username: customer.customerNumber,
+          firstName: nameParts[0] || "Customer",
+          lastName: nameParts.slice(1).join(" ") || "Account",
+          phoneNumber: parsed.data.phoneNumber,
+          passwordHash,
+          userType: "CUSTOMER" as const,
+          customerId: customer.customerId,
+          status: "ACTIVE" as const,
+        };
+        const user = existing
+          ? await tx.user.update({ where: { userId: existing.userId }, data: common })
+          : await tx.user.create({
+              data: {
+                ...common,
+                emailAddress: `${customer.customerNumber.toLowerCase()}@customer.samdamte.local`,
+              },
+            });
+
+        await Promise.all(customer.accounts.map((account, index) =>
+          tx.customerAccountAccess.upsert({
+            where: { userId_accountId: { userId: user.userId, accountId: account.accountId } },
+            update: { status: "ACTIVE", accessRole: "OWNER", verifiedAt: new Date(), isDefault: index === 0 },
+            create: {
+              userId: user.userId,
+              accountId: account.accountId,
+              status: "ACTIVE",
+              accessRole: "OWNER",
+              verifiedAt: new Date(),
+              isDefault: index === 0,
+            },
+          }),
+        ));
+        return { user, created: !existing };
+      });
+
+      res.json({
+        username: result.user.username,
+        phoneNumber: result.user.phoneNumber,
+        status: result.user.status,
+        created: result.created,
+        linkedAccounts: customer.accounts.map((account) => account.accountNumber),
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+        return res.status(409).json({ error: "That phone number or portal identity is already assigned to another user" });
+      }
+      next(error);
+    }
+  },
+);
 
 // Editable subset — customerType and customerNumber are intentionally not
 // editable here: changing type would violate ck_customer_identity retroactively,

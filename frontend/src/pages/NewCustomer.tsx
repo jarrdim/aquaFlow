@@ -547,7 +547,7 @@ export default function NewCustomer() {
             </div>
 
             <div className="mb-3">
-              <Field label="Physical Address">
+              <Field label="Physical Address" required>
                 <input className={FIELD_CLS} value={form.physicalAddress} onChange={(e) => upd("physicalAddress", e.target.value)} placeholder="e.g. Plot 5, Mwangi Road, Westlands" />
               </Field>
             </div>

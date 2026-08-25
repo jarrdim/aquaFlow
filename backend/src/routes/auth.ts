@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { Prisma } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { z } from "zod";
@@ -16,6 +17,15 @@ const loginSchema = z.object({
 const fieldLoginSchema = z.object({
   identifier: z.string().trim().min(1),
   password: z.string().min(1),
+});
+
+const customerRegistrationSchema = z.object({
+  fullName: z.string().trim().min(2).max(160),
+  phoneNumber: z.string().trim().min(9).max(30),
+  emailAddress: z.union([z.string().trim().email().max(200), z.literal("")]).optional(),
+  idNumber: z.string().trim().min(3).max(80),
+  accountNumber: z.string().trim().max(80).optional(),
+  password: z.string().min(8).max(128),
 });
 
 const FIELD_OFFICER_ROLES = new Set([
@@ -94,6 +104,117 @@ const loginLimiter = rateLimit({
   namespace: "login",
   maximum: 10,
   windowMs: 15 * 60 * 1000,
+});
+
+const customerRegistrationLimiter = rateLimit({
+  namespace: "customer-registration",
+  maximum: 5,
+  windowMs: 15 * 60 * 1000,
+});
+
+function normalizedIdentity(value: string | null | undefined) {
+  return String(value ?? "").trim().replace(/\s+/g, " ").toLocaleLowerCase();
+}
+
+authRouter.post("/customer/register", customerRegistrationLimiter, async (req, res, next) => {
+  const parsed = customerRegistrationSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({
+      error: "Enter valid customer details and a password containing at least 8 characters.",
+    });
+  }
+
+  const data = parsed.data;
+  const customer = await prisma.customer.findFirst({
+    where: {
+      status: "ACTIVE",
+      OR: [
+        { nationalId: { equals: data.idNumber, mode: "insensitive" } },
+        { registrationNumber: { equals: data.idNumber, mode: "insensitive" } },
+      ],
+    },
+    include: { accounts: { orderBy: { accountNumber: "asc" } } },
+  });
+
+  const suppliedPhone = normalizedPhone(data.phoneNumber);
+  const expectedNames = customer ? [
+    customer.organizationName,
+    [customer.firstName, customer.middleName, customer.lastName].filter(Boolean).join(" "),
+    [customer.firstName, customer.lastName].filter(Boolean).join(" "),
+  ].map(normalizedIdentity).filter(Boolean) : [];
+  const nameMatches = expectedNames.includes(normalizedIdentity(data.fullName));
+  const phoneMatches = customer != null && normalizedPhone(customer.phoneNumber) === suppliedPhone;
+  const requestedAccount = normalizedIdentity(data.accountNumber);
+  const accountMatches = customer != null && (
+    !requestedAccount || customer.accounts.some((account) => normalizedIdentity(account.accountNumber) === requestedAccount)
+  );
+
+  if (!customer || !nameMatches || !phoneMatches || !accountMatches || customer.accounts.length === 0) {
+    return res.status(400).json({
+      error: "We could not verify those details against an active Samdamte water account.",
+    });
+  }
+
+  const existingUser = await prisma.user.findFirst({
+    where: {
+      OR: [
+        { customerId: customer.customerId },
+        { username: customer.customerNumber },
+      ],
+    },
+  });
+  if (existingUser) {
+    return res.status(409).json({
+      error: "Online access is already registered for this customer. Use the Login screen or contact Samdamte support.",
+    });
+  }
+
+  const displayName = customer.organizationName ||
+    [customer.firstName, customer.middleName, customer.lastName].filter(Boolean).join(" ") ||
+    customer.customerNumber;
+  const nameParts = displayName.trim().split(/\s+/);
+  const emailAddress = data.emailAddress?.trim() || customer.emailAddress?.trim() ||
+    `${customer.customerNumber.toLowerCase()}@customer.samdamte.local`;
+
+  try {
+    const user = await prisma.$transaction(async (tx) => {
+      const created = await tx.user.create({
+        data: {
+          username: customer.customerNumber,
+          firstName: nameParts[0] || "Customer",
+          lastName: nameParts.slice(1).join(" ") || "Account",
+          emailAddress,
+          phoneNumber: `+254${suppliedPhone}`,
+          passwordHash: await bcrypt.hash(data.password, 12),
+          userType: "CUSTOMER",
+          customerId: customer.customerId,
+          status: "ACTIVE",
+        },
+      });
+      await Promise.all(customer.accounts.map((account, index) =>
+        tx.customerAccountAccess.create({
+          data: {
+            userId: created.userId,
+            accountId: account.accountId,
+            status: "ACTIVE",
+            accessRole: "OWNER",
+            verifiedAt: new Date(),
+            isDefault: index === 0,
+          },
+        }),
+      ));
+      return created;
+    });
+
+    return res.status(201).json(issueCustomerTokens({ ...user, userRoles: [] }, customer.customerId));
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      return res.status(409).json({
+        error: "That phone number or email address is already assigned to another online account.",
+      });
+    }
+    return next(error);
+  }
 });
 
 authRouter.post("/login", loginLimiter, async (req, res) => {
