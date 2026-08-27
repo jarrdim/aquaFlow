@@ -1844,7 +1844,11 @@ paymentsRouter.get("/dashboard/summary", async (req, res, next) => {
       }),
       dailyCollections: (() => {
         const rows = [];
-        for (const cursor = new Date(from); cursor <= finalDay; cursor.setUTCDate(cursor.getUTCDate() + 1)) {
+        const firstCollectionDate = [...dailyMap.keys()].sort()[0];
+        const chartStart = firstCollectionDate
+          ? day(firstCollectionDate)
+          : from;
+        for (const cursor = new Date(chartStart); cursor <= finalDay; cursor.setUTCDate(cursor.getUTCDate() + 1)) {
           const date = cursor.toISOString().slice(0, 10);
           rows.push({ date, ...(dailyMap.get(date) ?? { amount: 0, count: 0 }) });
         }

@@ -169,7 +169,7 @@ function Kpi({ label, value }: { label: string; value: ReactNode }) {
 
 function CollectionTrendChart({ rows }: { rows: Row[] }) {
   const points = rows;
-  const width = 700;
+  const width = Math.max(700, points.length * 90);
   const height = 210;
   const left = 16;
   const right = 16;
@@ -185,8 +185,6 @@ function CollectionTrendChart({ rows }: { rows: Row[] }) {
   const area = coordinates.length
     ? `M ${coordinates[0].x} ${height - bottom} L ${coordinates.map((point) => `${point.x} ${point.y}`).join(" L ")} L ${coordinates[coordinates.length - 1].x} ${height - bottom} Z`
     : "";
-  const labelInterval = Math.max(1, Math.ceil(coordinates.length / 7));
-
   return (
     <Card title="Collection trend">
       <div className="mb-3 flex items-start justify-between gap-3">
@@ -194,11 +192,11 @@ function CollectionTrendChart({ rows }: { rows: Row[] }) {
           <div className="text-sm text-slate-500">Daily posted revenue</div>
           <div className="mt-1 text-xl font-bold text-slate-900">{money(points.reduce((sum, row) => sum + Number(row.amount ?? 0), 0))}</div>
         </div>
-        <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">All days this month</span>
+        <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">Since first collection</span>
       </div>
       {coordinates.length ? (
-        <div className="overflow-hidden rounded-xl bg-gradient-to-b from-emerald-50/70 to-white px-2 pt-2">
-          <svg viewBox={`0 0 ${width} ${height}`} className="h-[220px] w-full" role="img" aria-label="Daily collection trend">
+        <div className="overflow-x-auto overflow-y-hidden rounded-xl bg-gradient-to-b from-emerald-50/70 to-white px-2 pt-2">
+          <svg viewBox={`0 0 ${width} ${height}`} className="h-[220px]" style={{ minWidth: `${width}px`, width: "100%" }} role="img" aria-label="Daily collection trend">
             <defs>
               <linearGradient id="payment-area" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor="#10b981" stopOpacity="0.3" />
@@ -213,16 +211,12 @@ function CollectionTrendChart({ rows }: { rows: Row[] }) {
             {coordinates.map((point, index) => (
               <g key={point.date} className="group">
                 <circle cx={point.x} cy={point.y} r="5" fill="white" stroke="#059669" strokeWidth="3" />
-                {(index === 0 || index === coordinates.length - 1 || index % labelInterval === 0) && (
-                  <text x={point.x} y={height - 13} textAnchor="middle" className="fill-slate-500 text-[11px]">
-                    {String(point.date).slice(5).replace("-", "/")}
-                  </text>
-                )}
-                {(coordinates.length <= 7 || index === coordinates.length - 1) && (
-                  <text x={point.x} y={Math.max(13, point.y - 11)} textAnchor="middle" className="fill-slate-700 text-[11px] font-bold">
-                    {Number(point.amount).toLocaleString("en-KE")}
-                  </text>
-                )}
+                <text x={point.x} y={height - 13} textAnchor="middle" className="fill-slate-500 text-[11px]">
+                  {String(point.date).slice(5).replace("-", "/")}
+                </text>
+                <text x={point.x} y={Math.max(13, point.y - 11)} textAnchor="middle" className="fill-slate-700 text-[11px] font-bold">
+                  {Number(point.amount).toLocaleString("en-KE")}
+                </text>
               </g>
             ))}
           </svg>
