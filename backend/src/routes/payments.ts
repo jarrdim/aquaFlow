@@ -1776,12 +1776,15 @@ paymentsRouter.post(
 
 paymentsRouter.get("/dashboard/summary", async (req, res, next) => {
   try {
+    const now = new Date();
     const from = req.query.from
-        ? day(String(req.query.from))
-        : new Date(new Date().getFullYear(), new Date().getMonth(), 1),
-      to = req.query.to
-        ? new Date(`${req.query.to}T23:59:59.999Z`)
-        : new Date("9999-12-31T23:59:59.999Z");
+      ? day(String(req.query.from))
+      : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+    const finalDay = req.query.to
+      ? day(String(req.query.to))
+      : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    const to = new Date(finalDay);
+    to.setUTCHours(23, 59, 59, 999);
     const payments = await prisma.payment.findMany({
       where: { paymentDate: { gte: from, lte: to } },
       include: paymentInclude,
@@ -1789,11 +1792,29 @@ paymentsRouter.get("/dashboard/summary", async (req, res, next) => {
     });
     const valid = payments.filter((p: any) => p.paymentStatus === "POSTED");
     const channels: Record<string, number> = {};
+    const channelBreakdowns: Record<string, Record<string, number>> = {};
     valid.forEach(
-      (p: any) =>
-        (channels[p.channel.channelName] = round(
+      (p: any) => {
+        const channelName = p.channel.channelName;
+        channels[channelName] = round(
           (channels[p.channel.channelName] ?? 0) + Number(p.amount),
-        )),
+        );
+        if (/m[\s-]?pesa/i.test(channelName)) {
+          const eventTypes = new Set<string>(
+            p.events.map((event: any) => String(event.eventType ?? "")),
+          );
+          const remarks = String(p.remarks ?? "").toUpperCase();
+          const source = [...eventTypes].some((type) => type.startsWith("MPESA_C2B_")) || remarks.includes("C2B")
+            ? "C2B"
+            : eventTypes.has("MPESA_STK_PAYMENT_POSTED") || remarks.includes("STK PUSH") || remarks.includes("M-PESA EXPRESS")
+              ? "STK Push"
+              : "Other M-Pesa";
+          channelBreakdowns[channelName] ??= {};
+          channelBreakdowns[channelName][source] = round(
+            (channelBreakdowns[channelName][source] ?? 0) + Number(p.amount),
+          );
+        }
+      },
     );
     const dailyMap = new Map<string, { amount: number; count: number }>();
     valid.forEach((p: any) => {
@@ -1809,6 +1830,7 @@ paymentsRouter.get("/dashboard/summary", async (req, res, next) => {
         valid.reduce((s: number, p: any) => s + Number(p.amount), 0),
       ),
       channels,
+      channelBreakdowns,
       payments: valid.length,
       unmatched: payments.filter(
         (p: any) =>
@@ -1820,10 +1842,14 @@ paymentsRouter.get("/dashboard/summary", async (req, res, next) => {
       receipts: await prisma.receipt.count({
         where: { issueDate: { gte: from, lte: to } },
       }),
-      dailyCollections: Array.from(dailyMap.entries())
-        .sort(([left], [right]) => left.localeCompare(right))
-        .slice(-14)
-        .map(([date, values]) => ({ date, ...values })),
+      dailyCollections: (() => {
+        const rows = [];
+        for (const cursor = new Date(from); cursor <= finalDay; cursor.setUTCDate(cursor.getUTCDate() + 1)) {
+          const date = cursor.toISOString().slice(0, 10);
+          rows.push({ date, ...(dailyMap.get(date) ?? { amount: 0, count: 0 }) });
+        }
+        return rows;
+      })(),
       recent: payments
         .slice(0, 10)
         .map((p: any) => ({

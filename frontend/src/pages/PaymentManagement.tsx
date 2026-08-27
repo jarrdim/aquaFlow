@@ -168,7 +168,7 @@ function Kpi({ label, value }: { label: string; value: ReactNode }) {
 }
 
 function CollectionTrendChart({ rows }: { rows: Row[] }) {
-  const points = rows.slice(-14);
+  const points = rows;
   const width = 700;
   const height = 210;
   const left = 16;
@@ -185,6 +185,7 @@ function CollectionTrendChart({ rows }: { rows: Row[] }) {
   const area = coordinates.length
     ? `M ${coordinates[0].x} ${height - bottom} L ${coordinates.map((point) => `${point.x} ${point.y}`).join(" L ")} L ${coordinates[coordinates.length - 1].x} ${height - bottom} Z`
     : "";
+  const labelInterval = Math.max(1, Math.ceil(coordinates.length / 7));
 
   return (
     <Card title="Collection trend">
@@ -193,7 +194,7 @@ function CollectionTrendChart({ rows }: { rows: Row[] }) {
           <div className="text-sm text-slate-500">Daily posted revenue</div>
           <div className="mt-1 text-xl font-bold text-slate-900">{money(points.reduce((sum, row) => sum + Number(row.amount ?? 0), 0))}</div>
         </div>
-        <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">Last 14 active days</span>
+        <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">All days this month</span>
       </div>
       {coordinates.length ? (
         <div className="overflow-hidden rounded-xl bg-gradient-to-b from-emerald-50/70 to-white px-2 pt-2">
@@ -212,9 +213,11 @@ function CollectionTrendChart({ rows }: { rows: Row[] }) {
             {coordinates.map((point, index) => (
               <g key={point.date} className="group">
                 <circle cx={point.x} cy={point.y} r="5" fill="white" stroke="#059669" strokeWidth="3" />
-                <text x={point.x} y={height - 13} textAnchor="middle" className="fill-slate-500 text-[11px]">
-                  {String(point.date).slice(5).replace("-", "/")}
-                </text>
+                {(index === 0 || index === coordinates.length - 1 || index % labelInterval === 0) && (
+                  <text x={point.x} y={height - 13} textAnchor="middle" className="fill-slate-500 text-[11px]">
+                    {String(point.date).slice(5).replace("-", "/")}
+                  </text>
+                )}
                 {(coordinates.length <= 7 || index === coordinates.length - 1) && (
                   <text x={point.x} y={Math.max(13, point.y - 11)} textAnchor="middle" className="fill-slate-700 text-[11px] font-bold">
                     {Number(point.amount).toLocaleString("en-KE")}
@@ -231,7 +234,7 @@ function CollectionTrendChart({ rows }: { rows: Row[] }) {
   );
 }
 
-function RevenueChannelChart({ channels }: { channels: Record<string, number> }) {
+function RevenueChannelChart({ channels, breakdowns }: { channels: Record<string, number>; breakdowns: Record<string, Record<string, number>> }) {
   const rows = Object.entries(channels).sort((a, b) => Number(b[1]) - Number(a[1]));
   const max = Math.max(1, ...rows.map(([, value]) => Number(value)));
   return (
@@ -252,6 +255,18 @@ function RevenueChannelChart({ channels }: { channels: Record<string, number> })
                 <div className={`h-full rounded-full transition-all duration-700 ${index % 2 ? "bg-gradient-to-r from-sky-600 to-cyan-400" : "bg-gradient-to-r from-emerald-600 to-teal-400"}`} style={{ width: `${Math.max(5, (Number(total) / max) * 100)}%` }} />
               </div>
               <div className="mt-1 text-right text-xs text-slate-400">{((Number(total) / Math.max(1, rows.reduce((sum, [, value]) => sum + Number(value), 0))) * 100).toFixed(1)}%</div>
+              {breakdowns[channel] && (
+                <div className="mt-2 space-y-1.5 border-l-2 border-emerald-100 pl-3">
+                  {Object.entries(breakdowns[channel])
+                    .sort((a, b) => Number(b[1]) - Number(a[1]))
+                    .map(([source, amount]) => (
+                      <div key={source} className="flex items-center justify-between gap-3 text-xs text-slate-500">
+                        <span>{source}</span>
+                        <span className="font-semibold text-slate-700">{money(amount)} · {((Number(amount) / Math.max(1, Number(total))) * 100).toFixed(1)}%</span>
+                      </div>
+                    ))}
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -298,7 +313,7 @@ export function RevenueDashboard() {
       </div>
       <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1.7fr)_minmax(320px,0.8fr)]">
         <CollectionTrendChart rows={data?.dailyCollections ?? []} />
-        <RevenueChannelChart channels={data?.channels ?? {}} />
+        <RevenueChannelChart channels={data?.channels ?? {}} breakdowns={data?.channelBreakdowns ?? {}} />
       </div>
       <Card title="Recent payments" className="mt-4">
         <PaymentTable rows={data?.recent ?? []} />
