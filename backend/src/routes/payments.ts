@@ -516,7 +516,9 @@ paymentsRouter.get("/public-link/:token", async (req, res, next) => {
       paymentDeadline: notice?.paymentDeadline,
       expiresAt: payload.expiresAt,
     });
-  } catch (error) {
+  } catch (error: any) {
+    if (error.status)
+      return res.status(error.status).json({ error: error.message });
     next(error);
   }
 });
@@ -587,7 +589,9 @@ paymentsRouter.get("/public-link/:token/stk/:id", async (req, res, next) => {
       mpesaReceiptNumber: row.mpesaReceiptNumber,
       receiptNumber: row.payment?.receipt?.receiptNumber,
     });
-  } catch (error) {
+  } catch (error: any) {
+    if (error.status)
+      return res.status(error.status).json({ error: error.message });
     next(error);
   }
 });

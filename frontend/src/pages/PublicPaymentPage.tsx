@@ -17,6 +17,28 @@ const money = (value: unknown) =>
     maximumFractionDigits: 2,
   })}`;
 
+type PaymentErrorStage = "load" | "pay" | "status";
+
+function customerSafeError(reason: unknown, stage: PaymentErrorStage) {
+  const message = reason instanceof Error ? reason.message : "";
+
+  if (/expired/i.test(message))
+    return "This payment link has expired. Please request a new payment link from Samdamte.";
+  if (/invalid payment link/i.test(message))
+    return "This payment link is invalid. Please use the latest link sent to you by Samdamte.";
+  if (/account has no outstanding balance/i.test(message))
+    return "This account has no outstanding balance. No payment is required.";
+  if (/amount cannot exceed/i.test(message)) return message;
+  if (/active customer account not found|approved payment notice not found/i.test(message))
+    return "This payment link is no longer available. Please contact Samdamte for assistance.";
+
+  if (stage === "pay")
+    return "We could not start the M-Pesa payment right now. Please try again shortly.";
+  if (stage === "status")
+    return "We could not confirm the payment status right now. If you paid, please keep your M-Pesa message and try again shortly.";
+  return "We could not load your payment details right now. Please try again shortly or contact Samdamte for assistance.";
+}
+
 export default function PublicPaymentPage() {
   const { token = "" } = useParams();
   const [details, setDetails] = useState<PaymentDetails>();
@@ -37,7 +59,7 @@ export default function PublicPaymentPage() {
         setPhoneNumber(String(row.phoneNumber ?? ""));
         setAmount(String(Math.max(0, Math.ceil(Number(row.outstandingBalance ?? 0)))));
       })
-      .catch((reason) => setError(reason.message))
+      .catch((reason) => setError(customerSafeError(reason, "load")))
       .finally(() => setLoading(false));
   }, [token]);
 
@@ -55,7 +77,7 @@ export default function PublicPaymentPage() {
           else if (["FAILED", "CANCELLED", "TIMED_OUT"].includes(row.status))
             setError(row.resultDescription || "The M-Pesa payment was not completed.");
         })
-        .catch((reason) => setError(reason.message));
+        .catch((reason) => setError(customerSafeError(reason, "status")));
     }, 3000);
     return () => window.clearInterval(timer);
   }, [requestId, status, token]);
@@ -73,8 +95,8 @@ export default function PublicPaymentPage() {
       setRequestId(String(row.stkRequestId));
       setStatus(row.status);
       setMessage(row.customerMessage || "Check your phone and enter your M-Pesa PIN.");
-    } catch (reason: any) {
-      setError(reason.message);
+    } catch (reason: unknown) {
+      setError(customerSafeError(reason, "pay"));
     } finally {
       setSending(false);
     }
