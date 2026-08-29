@@ -1595,7 +1595,7 @@ export function ConnectionProfile() {
                 approve={() =>
                   action(
                     { action: "APPROVE", notes: form.notes },
-                    "Connection approved.",
+                    "Connection approved. The welcome SMS will be sent when the account number is created.",
                   )
                 }
                 reject={() =>

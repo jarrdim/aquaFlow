@@ -93,6 +93,12 @@ const accountInclude = {
     orderBy: { paymentDate: "desc" as const },
     take: 1,
   },
+  meterReadings: {
+    where: { approvalStatus: "APPROVED" },
+    include: { meter: true },
+    orderBy: [{ readingDate: "desc" as const }, { readingId: "desc" as const }],
+    take: 1,
+  },
 } satisfies Prisma.CustomerAccountInclude;
 
 async function arrearsRows(asOf: Date, filters: any = {}) {
@@ -177,6 +183,11 @@ async function arrearsRows(asOf: Date, filters: any = {}) {
         ageDays: days,
         ageBucket: ageBucket(days),
         lastPayment: account.payments[0] ?? null,
+        previousReading: account.meterReadings[0]
+          ? Number(account.meterReadings[0].currentReading)
+          : null,
+        previousReadingDate: account.meterReadings[0]?.readingDate ?? null,
+        meterNumber: account.meterReadings[0]?.meter?.meterNumber ?? null,
       };
     })
     .filter((row) => row.arrearsBalance > 0)
@@ -1144,16 +1155,27 @@ arrearsRouter.get("/disconnections/eligible", async (req, res, next) => {
   }
 });
 
-arrearsRouter.get("/disconnections", async (_req, res, next) => {
+arrearsRouter.get("/disconnections", async (req, res, next) => {
   try {
+    const zoneIdText = String(req.query.zoneId ?? "").trim();
+    if (zoneIdText && !/^\d+$/.test(zoneIdText))
+      return res.status(400).json({ error: "Select a valid zone" });
     res.json(
       await prisma.disconnectionList.findMany({
+        where: zoneIdText ? { zoneId: BigInt(zoneIdText) } : undefined,
         include: {
           zone: true,
           creator: true,
           approver: true,
           items: {
-            include: { account: { include: { customer: true } } },
+            include: {
+              account: {
+                include: {
+                  customer: true,
+                  property: { include: { zone: true } },
+                },
+              },
+            },
           },
         },
         orderBy: { createdAt: "desc" },
@@ -1216,6 +1238,9 @@ arrearsRouter.post("/disconnections", officer, async (req, res, next) => {
             disconnectionListId: created.disconnectionListId,
             accountId: row.accountId,
             outstandingAmount: row.arrearsBalance,
+            accountBalance: row.currentBalance,
+            previousReading: row.previousReading,
+            meterNumber: row.meterNumber,
             arrearsAgeDays: row.ageDays,
             lastNoticeId: lastNotice?.noticeId,
           },

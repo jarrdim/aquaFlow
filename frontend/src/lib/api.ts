@@ -651,10 +651,10 @@ export const api = {
       `/payments/mpesa/stk${accountId ? `?accountId=${encodeURIComponent(accountId)}` : ""}`,
     ),
   getMpesaStkRequest: (id: string) => request(`/payments/mpesa/stk/${id}`),
-  allocatePayment: (id: string, accountId: string, reason: string) =>
+  allocatePayment: (id: string, allocations: Array<{ accountId: string; amount: number }>, reason: string) =>
     request(`/payments/${id}/allocate`, {
       method: "PATCH",
-      body: JSON.stringify({ accountId, reason }),
+      body: JSON.stringify({ allocations, reason }),
     }),
   getReceipt: (id: string) => request(`/payments/receipts/${id}`),
   listPaymentReversals: (status = "") =>
@@ -852,7 +852,7 @@ export const api = {
     ).toString();
     return request(`/arrears/disconnections/eligible${query ? `?${query}` : ""}`);
   },
-  listDisconnectionLists: () => request("/arrears/disconnections"),
+  listDisconnectionLists: (zoneId = "") => request(`/arrears/disconnections${zoneId ? `?zoneId=${encodeURIComponent(zoneId)}` : ""}`),
   createDisconnectionList: (data: Record<string, unknown>) =>
     request("/arrears/disconnections", {
       method: "POST",

@@ -531,6 +531,29 @@ mobileRouter.post("/customer/reconnection", requireRole("CUSTOMER"), async (req,
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message });
   try {
     const account = await ownedCustomerAccount(req, parsed.data.accountId);
+    if (account.accountStatus !== "DISCONNECTED") {
+      return res.status(409).json({ error: "Reconnection can only be requested for a disconnected account" });
+    }
+    const [priorDisconnections, openRequests] = await Promise.all([
+      prisma.$queryRaw<any[]>`
+        SELECT wo.work_order_id FROM aquaflow.work_orders wo
+        JOIN aquaflow.work_order_types wt ON wt.work_order_type_id=wo.work_order_type_id
+        WHERE wo.account_id=${account.accountId} AND wt.type_code='DISCONNECTION'
+          AND wo.status IN ('COMPLETED','VERIFIED','CLOSED')
+        ORDER BY wo.completed_at DESC NULLS LAST,wo.created_at DESC LIMIT 1`,
+      prisma.$queryRaw<any[]>`
+        SELECT reconnection_request_id,request_number,status
+        FROM aquaflow.reconnection_requests
+        WHERE account_id=${account.accountId}
+          AND status IN ('SUBMITTED','APPROVED','WORK_ORDER_CREATED')
+        ORDER BY created_at DESC LIMIT 1`,
+    ]);
+    if (!priorDisconnections[0]) {
+      return res.status(409).json({ error: "No completed disconnection exists for this account" });
+    }
+    if (openRequests[0]) {
+      return res.status(409).json({ error: `Open reconnection request ${openRequests[0].request_number} already exists` });
+    }
     const settings = await prisma.systemSetting.findUnique({ where: { settingId: 1n } });
     const number = `RC-${new Date().getFullYear()}-${Date.now().toString().slice(-9)}`;
     const rows = await prisma.$queryRaw<any[]>`
@@ -539,15 +562,15 @@ mobileRouter.post("/customer/reconnection", requireRole("CUSTOMER"), async (req,
       VALUES (${number}, ${account.customerId}, ${account.accountId}, ${parsed.data.reason},
         ${parsed.data.contactPhone || account.customer.phoneNumber},
         ${Number(settings?.reconnectionFee ?? 0)},
-        (SELECT wo.work_order_id FROM aquaflow.work_orders wo
-         JOIN aquaflow.work_order_types wt ON wt.work_order_type_id=wo.work_order_type_id
-         WHERE wo.account_id=${account.accountId} AND wt.type_code='DISCONNECTION' AND wo.status IN ('COMPLETED','VERIFIED','CLOSED')
-         ORDER BY wo.completed_at DESC NULLS LAST, wo.created_at DESC LIMIT 1))
+        ${priorDisconnections[0].work_order_id})
       RETURNING reconnection_request_id AS "reconnectionRequestId",
         request_number AS "requestNumber", status, reconnection_fee AS "reconnectionFee",
         created_at AS "createdAt"`;
     res.status(201).json(rows[0]);
   } catch (error: any) {
+    if (error?.code === "P2010" && error?.meta?.code === "23505") {
+      return res.status(409).json({ error: "An open reconnection request already exists for this account" });
+    }
     if (error.status) return res.status(error.status).json({ error: error.message });
     next(error);
   }
@@ -2496,7 +2519,7 @@ async function ownedDisconnection(req: Request, res: Response, workOrderId: bigi
   const officer = await activeFieldOfficer(req, res);
   if (!officer) return null;
   const rows = await prisma.$queryRaw<any[]>`
-    SELECT wo.work_order_id, wo.status, wt.type_code, a.assignment_id,
+    SELECT wo.work_order_id, wo.account_id, wo.status, wt.type_code, a.assignment_id,
            a.field_officer_id, a.status AS assignment_status
     FROM aquaflow.work_orders wo
     JOIN aquaflow.work_order_types wt ON wt.work_order_type_id=wo.work_order_type_id
@@ -2722,7 +2745,7 @@ async function ownedReconnection(req: Request, res: Response, workOrderId: bigin
   const officer = await activeFieldOfficer(req, res);
   if (!officer) return null;
   const rows = await prisma.$queryRaw<any[]>`
-    SELECT wo.work_order_id, wo.status, wt.type_code, a.assignment_id,
+    SELECT wo.work_order_id, wo.account_id, wo.status, wt.type_code, a.assignment_id,
       a.field_officer_id, a.status AS assignment_status, rr.reconnection_request_id,
       rr.status AS request_status, rr.fee_payment_status, rr.fee_payment_id,
       rr.reconnection_fee, pay.payment_status, pay.payment_type, pay.amount AS paid_amount
@@ -2754,7 +2777,11 @@ async function reconnectionDetail(workOrderId: bigint) {
     prisma.$queryRaw<any[]>`SELECT wo.work_order_id AS "workOrderId",wo.work_order_number AS "workOrderNumber",
       rr.reconnection_request_id AS "reconnectionRequestId",rr.request_number AS "reconnectionReference",
       COALESCE(dwo.source_reference,dwo.work_order_number) AS "disconnectionReference",
-      ca.account_number AS "accountNumber",COALESCE(NULLIF(TRIM(CONCAT_WS(' ',c.first_name,c.middle_name,c.last_name)),''),c.organization_name,c.customer_number) AS "customerName",
+      ca.account_number AS "accountNumber",ca.account_status AS "accountStatus",
+      (SELECT m.status FROM aquaflow.meter_assignments ma JOIN aquaflow.meters m ON m.meter_id=ma.meter_id
+       WHERE ma.account_id=ca.account_id AND ma.assignment_status='ACTIVE' AND ma.removal_date IS NULL
+       ORDER BY ma.assignment_date DESC,ma.assignment_id DESC LIMIT 1) AS "meterStatus",
+      COALESCE(NULLIF(TRIM(CONCAT_WS(' ',c.first_name,c.middle_name,c.last_name)),''),c.organization_name,c.customer_number) AS "customerName",
       CONCAT_WS(', ',p.plot_number,p.building_name,p.physical_address) AS location,wo.scheduled_date AS "scheduledDate",
       wo.status,rr.status AS "requestStatus",rr.fee_payment_status AS "feePaymentStatus",rr.reconnection_fee AS "amountRequired",
       pay.amount AS "amountPaid",pay.payment_status AS "paymentStatus",pay.transaction_reference AS "paymentReference",
@@ -2800,7 +2827,7 @@ async function upsertReconnectionReport(tx:typeof prisma,workOrderId:bigint,requ
     submitted_at=EXCLUDED.submitted_at,updated_at=CURRENT_TIMESTAMP`;
 }
 mobileRouter.post("/field/reconnections/:id/draft",fieldWorkOrderRoles,async(req,res,next)=>{try{const id=workOrderIdSchema.safeParse(req.params.id),data=reconnectionDraftBody.safeParse(req.body);if(!id.success||!data.success)return res.status(400).json({error:data.success?"Invalid reconnection id":data.error.issues[0].message});const owned=await ownedReconnection(req,res,id.data);if(!owned)return;if(!["ASSIGNED","ACCEPTED","IN_PROGRESS"].includes(owned.status))return res.status(409).json({error:"Completed reconnection evidence is read-only"});await upsertReconnectionReport(prisma,id.data,owned.reconnection_request_id,owned.fieldOfficerId,data.data,false);res.json(await reconnectionDetail(id.data));}catch(error){next(error)}});
-mobileRouter.post("/field/reconnections/:id/submit",fieldWorkOrderRoles,async(req,res,next)=>{try{const id=workOrderIdSchema.safeParse(req.params.id),data=reconnectionSubmitBody.safeParse(req.body);if(!id.success||!data.success)return res.status(400).json({error:data.success?"Invalid reconnection id":data.error.issues[0].message});const owned=await ownedReconnection(req,res,id.data);if(!owned)return;if(!["ASSIGNED","ACCEPTED","IN_PROGRESS"].includes(owned.status))return res.status(409).json({error:"This reconnection has already been completed or reassigned"});if(!reconnectionPaid(owned))return res.status(409).json({error:"A posted reconnection-fee payment is required before completion"});const photos=await prisma.$queryRaw<any[]>`SELECT evidence_id FROM aquaflow.work_order_evidence WHERE work_order_id=${id.data} AND evidence_type='AFTER_PHOTO' LIMIT 1`;if(!photos[0])return res.status(400).json({error:"At least one evidence photo is required"});await prisma.$transaction(async tx=>{await upsertReconnectionReport(tx as typeof prisma,id.data,owned.reconnection_request_id,owned.fieldOfficerId,data.data,true);await tx.$executeRaw`UPDATE aquaflow.work_orders SET status='COMPLETED',completed_at=CURRENT_TIMESTAMP,completion_notes=${data.data.remarks},updated_at=CURRENT_TIMESTAMP WHERE work_order_id=${id.data}`;await tx.$executeRaw`UPDATE aquaflow.work_order_assignments SET status='COMPLETED' WHERE assignment_id=${owned.assignment_id} AND field_officer_id=${owned.fieldOfficerId}`;await tx.$executeRaw`UPDATE aquaflow.reconnection_requests SET status='COMPLETED',updated_at=CURRENT_TIMESTAMP WHERE reconnection_request_id=${owned.reconnection_request_id}`;await tx.$executeRaw`INSERT INTO aquaflow.work_order_updates(work_order_id,field_officer_id,previous_status,new_status,notes)VALUES(${id.data},${owned.fieldOfficerId},${owned.status},'COMPLETED',${data.data.remarks})`;});res.json(await reconnectionDetail(id.data));}catch(error){next(error)}});
+mobileRouter.post("/field/reconnections/:id/submit",fieldWorkOrderRoles,async(req,res,next)=>{try{const id=workOrderIdSchema.safeParse(req.params.id),data=reconnectionSubmitBody.safeParse(req.body);if(!id.success||!data.success)return res.status(400).json({error:data.success?"Invalid reconnection id":data.error.issues[0].message});const owned=await ownedReconnection(req,res,id.data);if(!owned)return;if(!["ASSIGNED","ACCEPTED","IN_PROGRESS"].includes(owned.status))return res.status(409).json({error:"This reconnection has already been completed or reassigned"});if(!reconnectionPaid(owned))return res.status(409).json({error:"A posted reconnection-fee payment is required before completion"});const photos=await prisma.$queryRaw<any[]>`SELECT evidence_id FROM aquaflow.work_order_evidence WHERE work_order_id=${id.data} AND evidence_type='AFTER_PHOTO' LIMIT 1`;if(!photos[0])return res.status(400).json({error:"At least one evidence photo is required"});await prisma.$transaction(async tx=>{await upsertReconnectionReport(tx as typeof prisma,id.data,owned.reconnection_request_id,owned.fieldOfficerId,data.data,true);await tx.$executeRaw`UPDATE aquaflow.work_orders SET status='COMPLETED',completed_at=CURRENT_TIMESTAMP,completion_notes=${data.data.remarks},updated_at=CURRENT_TIMESTAMP WHERE work_order_id=${id.data}`;await tx.$executeRaw`UPDATE aquaflow.work_order_assignments SET status='COMPLETED' WHERE assignment_id=${owned.assignment_id} AND field_officer_id=${owned.fieldOfficerId}`;await tx.$executeRaw`UPDATE aquaflow.reconnection_requests SET status='COMPLETED',updated_at=CURRENT_TIMESTAMP WHERE reconnection_request_id=${owned.reconnection_request_id}`;await tx.$executeRaw`UPDATE aquaflow.customer_accounts SET account_status='ACTIVE',updated_at=CURRENT_TIMESTAMP WHERE account_id=${owned.account_id} AND account_status='DISCONNECTED'`;await tx.$executeRaw`UPDATE aquaflow.meters m SET status='ACTIVE',updated_at=CURRENT_TIMESTAMP FROM aquaflow.meter_assignments ma WHERE ma.meter_id=m.meter_id AND ma.account_id=${owned.account_id} AND ma.assignment_status='ACTIVE' AND ma.removal_date IS NULL AND m.status='DISCONNECTED'`;await tx.$executeRaw`INSERT INTO aquaflow.work_order_updates(work_order_id,field_officer_id,previous_status,new_status,notes)VALUES(${id.data},${owned.fieldOfficerId},${owned.status},'COMPLETED',${data.data.remarks})`;});res.json(await reconnectionDetail(id.data));}catch(error){next(error)}});
 mobileRouter.post("/field/reconnections/:id/photos",fieldWorkOrderRoles,async(req,res,next)=>{try{const id=workOrderIdSchema.safeParse(req.params.id),data=disconnectionPhotoBody.safeParse(req.body);if(!id.success||!data.success)return res.status(400).json({error:data.success?"Invalid reconnection id":data.error.issues[0].message});const owned=await ownedReconnection(req,res,id.data);if(!owned)return;if(!["ASSIGNED","ACCEPTED","IN_PROGRESS"].includes(owned.status))return res.status(409).json({error:"Completed reconnection evidence is read-only"});const match=data.data.content.match(/^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=\r\n]+)$/);if(!match)return res.status(400).json({error:"Photo must be a JPEG, PNG, or WebP data URI"});const rows=await prisma.$queryRaw<any[]>`INSERT INTO aquaflow.work_order_evidence(work_order_id,evidence_type,file_path,description,captured_by)VALUES(${id.data},'AFTER_PHOTO',${data.data.content},'Reconnection evidence',${owned.fieldOfficerId})RETURNING *`;res.status(201).json(reconnectionPhotoMetadata(rows[0],id.data));}catch(error){next(error)}});
 mobileRouter.get("/field/reconnections/:id/photos/:photoId/content",fieldWorkOrderRoles,async(req,res,next)=>{try{const id=workOrderIdSchema.safeParse(req.params.id),photoId=workOrderIdSchema.safeParse(req.params.photoId);if(!id.success||!photoId.success)return res.status(400).json({error:"Invalid reconnection photo reference"});if(!(await ownedReconnection(req,res,id.data)))return;const rows=await prisma.$queryRaw<any[]>`SELECT file_path FROM aquaflow.work_order_evidence WHERE evidence_id=${photoId.data} AND work_order_id=${id.data} AND evidence_type='AFTER_PHOTO'`;if(!rows[0])return res.status(404).json({error:"Reconnection photo not found"});const match=String(rows[0].file_path).match(/^data:([^;,]+);base64,(.+)$/s);if(!match)return res.status(422).json({error:"Photo content is unavailable"});res.type(match[1]).send(Buffer.from(match[2],"base64"));}catch(error){next(error)}});
 mobileRouter.delete("/field/reconnections/:id/photos/:photoId",fieldWorkOrderRoles,async(req,res,next)=>{try{const id=workOrderIdSchema.safeParse(req.params.id),photoId=workOrderIdSchema.safeParse(req.params.photoId);if(!id.success||!photoId.success)return res.status(400).json({error:"Invalid reconnection photo reference"});const owned=await ownedReconnection(req,res,id.data);if(!owned)return;if(!["ASSIGNED","ACCEPTED","IN_PROGRESS"].includes(owned.status))return res.status(409).json({error:"Completed reconnection evidence is read-only"});const removed=await prisma.$executeRaw`DELETE FROM aquaflow.work_order_evidence WHERE evidence_id=${photoId.data} AND work_order_id=${id.data} AND evidence_type='AFTER_PHOTO' AND captured_by=${owned.fieldOfficerId}`;if(!removed)return res.status(404).json({error:"Reconnection photo not found or was not captured by you"});res.json({message:"Reconnection photo removed"});}catch(error){next(error)}});

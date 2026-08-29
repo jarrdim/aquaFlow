@@ -98,6 +98,26 @@ function date(value?: string) {
   return value ? new Date(value).toLocaleDateString() : "Not set";
 }
 
+function finalReadingAmount(context: any, currentReading: string) {
+  if (!context?.tariffId || currentReading === "" || context.previousReading == null) return null;
+  const consumption = Math.max(0, Number(currentReading) - Number(context.previousReading));
+  let consumptionCharge = 0;
+  if (context.billingMethod === "FLAT") consumptionCharge = Number(context.flatAmount);
+  else if (context.billingMethod === "TIERED") {
+    for (const band of context.bands ?? []) {
+      const lower = Number(band.lowerLimit);
+      const upper = band.upperLimit == null ? consumption : Number(band.upperLimit);
+      consumptionCharge += Math.max(0, Math.min(consumption, upper) - lower) * Number(band.ratePerUnit);
+    }
+  } else consumptionCharge = consumption * Number(context.ratePerUnit);
+  const round = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
+  consumptionCharge = round(consumptionCharge);
+  return round(
+    consumptionCharge + Math.max(0, Number(context.minimumCharge) - consumptionCharge) +
+    Number(context.standingCharge) + Number(context.meterRent),
+  );
+}
+
 function statusClass(status: string) {
   const palette: Record<string, string> = {
     CREATED: "border border-slate-200 bg-slate-100 text-slate-700",
@@ -164,6 +184,14 @@ export default function WorkOrderManagement() {
     evidenceType: "AFTER_PHOTO",
     filePath: "",
     description: "",
+  });
+  const [disconnection, setDisconnection] = useState({
+    previousReading: "",
+    currentReading: "",
+    disconnectionFee: "",
+    feeOverrideReason: "",
+    fineAmount: "0",
+    fineReason: "",
   });
   const [completionSignatureUrl, setCompletionSignatureUrl] = useState("");
   const typeFieldRef = useRef<HTMLDivElement>(null);
@@ -348,6 +376,17 @@ export default function WorkOrderManagement() {
         dueDate: detail.due_date?.slice(0, 10) || "",
       });
       setNotes("");
+      const context = detail.disconnectionContext;
+      setDisconnection({
+        previousReading: context?.previousReading == null ? "" : String(context.previousReading),
+        currentReading: context?.currentReading == null ? "" : String(context.currentReading),
+        disconnectionFee: context?.disconnectionFee == null
+          ? ""
+          : String(context.disconnectionFee),
+        feeOverrideReason: context?.feeOverrideReason || "",
+        fineAmount: context?.fineAmount == null ? "0" : String(context.fineAmount),
+        fineReason: context?.fineReason || "",
+      });
     } catch (error: any) {
       showToast(error.message, "error");
     } finally {
@@ -881,6 +920,23 @@ export default function WorkOrderManagement() {
         : currentStatus === "IN_PROGRESS" || currentStatus === "REOPENED"
           ? ["COMPLETED", "Complete work"]
           : null;
+  const completingDisconnection =
+    statusAction?.[0] === "COMPLETED" && selected?.type_code === "DISCONNECTION";
+  const defaultDisconnectionFee = finalReadingAmount(
+    selected?.disconnectionContext,
+    disconnection.currentReading,
+  );
+  const disconnectionFeeOverridden =
+    defaultDisconnectionFee != null && disconnection.disconnectionFee !== "" &&
+    Math.abs(Number(disconnection.disconnectionFee) - defaultDisconnectionFee) > 0.009;
+  const disconnectionFormValid = !completingDisconnection || (
+    Boolean(selected?.disconnectionContext?.tariffId) &&
+    disconnection.previousReading !== "" && disconnection.currentReading !== "" &&
+    Number(disconnection.currentReading) >= Number(disconnection.previousReading) &&
+    disconnection.disconnectionFee !== "" && Number(disconnection.disconnectionFee) >= 0 &&
+    (!disconnectionFeeOverridden || disconnection.feeOverrideReason.trim().length >= 3) &&
+    (Number(disconnection.fineAmount || 0) === 0 || disconnection.fineReason.trim().length >= 3)
+  );
 
   return (
     <main className="mx-auto w-full max-w-[1600px] space-y-4 p-4 lg:px-8 lg:py-5">
@@ -1238,6 +1294,74 @@ export default function WorkOrderManagement() {
                   )}
                 </button>
               </div>
+              {completingDisconnection && (
+                <section className="rounded-xl border border-orange-200 bg-orange-50/60 p-3">
+                  <div className="mb-3">
+                    <h3 className="font-bold text-slate-800">Final meter reading and charges</h3>
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      Meter {selected.disconnectionContext?.meterNumber || "not found"}. Completing posts the reading, fee and any fine to the customer statement.
+                    </p>
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <label>
+                      <span className="mb-1 block text-xs font-medium">Previous reading</span>
+                      <input className={`${input} bg-slate-100`} value={disconnection.previousReading} readOnly />
+                    </label>
+                    <label>
+                      <span className="mb-1 block text-xs font-medium">Current reading *</span>
+                      <input type="number" min={disconnection.previousReading || 0} step="0.001" className={input}
+                        value={disconnection.currentReading}
+                        onChange={(e) => {
+                          const currentReading = e.target.value;
+                          const amount = finalReadingAmount(selected.disconnectionContext, currentReading);
+                          setDisconnection({
+                            ...disconnection,
+                            currentReading,
+                            disconnectionFee: amount == null ? "" : String(amount),
+                            feeOverrideReason: "",
+                          });
+                        }} />
+                    </label>
+                    <label>
+                      <span className="mb-1 block text-xs font-medium">Final reading amount (KSh) *</span>
+                      <input type="number" min={0} step="0.01" className={input}
+                        value={disconnection.disconnectionFee}
+                        onChange={(e) => setDisconnection({ ...disconnection, disconnectionFee: e.target.value })} />
+                      <span className="mt-1 block text-[11px] text-slate-500">
+                        {defaultDisconnectionFee == null
+                          ? "Enter the current reading to calculate the amount."
+                          : `${selected.disconnectionContext?.tariffName || "Active tariff"}: ${Math.max(0, Number(disconnection.currentReading) - Number(disconnection.previousReading)).toLocaleString()} units = KSh ${defaultDisconnectionFee.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
+                      </span>
+                    </label>
+                    <label>
+                      <span className="mb-1 block text-xs font-medium">Amount override reason{disconnectionFeeOverridden ? " *" : ""}</span>
+                      <input className={input} value={disconnection.feeOverrideReason}
+                        disabled={!disconnectionFeeOverridden}
+                        placeholder={disconnectionFeeOverridden ? "Why is the default fee changing?" : "Not required"}
+                        onChange={(e) => setDisconnection({ ...disconnection, feeOverrideReason: e.target.value })} />
+                    </label>
+                    <label>
+                      <span className="mb-1 block text-xs font-medium">Fine amount (KSh)</span>
+                      <input type="number" min={0} step="0.01" className={input}
+                        value={disconnection.fineAmount}
+                        onChange={(e) => setDisconnection({ ...disconnection, fineAmount: e.target.value })} />
+                    </label>
+                    <label>
+                      <span className="mb-1 block text-xs font-medium">Fine reason{Number(disconnection.fineAmount || 0) > 0 ? " *" : ""}</span>
+                      <input className={input} value={disconnection.fineReason}
+                        disabled={Number(disconnection.fineAmount || 0) <= 0}
+                        placeholder={Number(disconnection.fineAmount || 0) > 0 ? "Reason for applying the fine" : "No fine"}
+                        onChange={(e) => setDisconnection({ ...disconnection, fineReason: e.target.value })} />
+                    </label>
+                  </div>
+                  {!selected.disconnectionContext?.tariffId && (
+                    <p className="mt-2 text-xs font-semibold text-red-600">This account has no active tariff, so its final reading amount cannot be calculated.</p>
+                  )}
+                  {disconnection.currentReading !== "" && Number(disconnection.currentReading) < Number(disconnection.previousReading) && (
+                    <p className="mt-2 text-xs font-semibold text-red-600">Current reading cannot be lower than the previous reading.</p>
+                  )}
+                </section>
+              )}
               <label className="block">
                 <span className="mb-1 block text-xs font-medium">
                   Action / decision notes *
@@ -1252,7 +1376,7 @@ export default function WorkOrderManagement() {
               </label>
               {statusAction && (
                 <button
-                  disabled={notes.trim().length < 2 || saving}
+                  disabled={notes.trim().length < 2 || saving || !disconnectionFormValid}
                   onClick={() =>
                     perform(
                       "status",
@@ -1260,6 +1384,16 @@ export default function WorkOrderManagement() {
                         api.updateWorkOrderStatus(detailId, {
                           status: statusAction[0],
                           notes,
+                          ...(completingDisconnection ? {
+                            disconnection: {
+                              previousReading: Number(disconnection.previousReading),
+                              currentReading: Number(disconnection.currentReading),
+                              disconnectionFee: Number(disconnection.disconnectionFee),
+                              feeOverrideReason: disconnectionFeeOverridden ? disconnection.feeOverrideReason : null,
+                              fineAmount: Number(disconnection.fineAmount || 0),
+                              fineReason: Number(disconnection.fineAmount || 0) > 0 ? disconnection.fineReason : null,
+                            },
+                          } : {}),
                         }),
                       `Work order moved to ${label(statusAction[0])}.`,
                     )
@@ -1337,6 +1471,20 @@ export default function WorkOrderManagement() {
                     "Close work order"
                   )}
                 </button>
+              )}
+              {selected.disconnectionPosting && (
+                <section className="rounded-lg border border-orange-200 bg-orange-50/50 p-3">
+                  <h3 className="font-bold">Disconnection posting</h3>
+                  <dl className="mt-2 grid grid-cols-2 gap-2 text-xs">
+                    <div><dt className="text-slate-500">Meter</dt><dd>{selected.disconnectionPosting.meterNumber}</dd></div>
+                    <div><dt className="text-slate-500">Reading</dt><dd>{Number(selected.disconnectionPosting.previousReading).toLocaleString()} → {Number(selected.disconnectionPosting.currentReading).toLocaleString()}</dd></div>
+                    <div><dt className="text-slate-500">Final reading amount</dt><dd>KSh {Number(selected.disconnectionPosting.disconnectionFee).toLocaleString(undefined, { minimumFractionDigits: 2 })}</dd></div>
+                    <div><dt className="text-slate-500">Fine</dt><dd>KSh {Number(selected.disconnectionPosting.fineAmount).toLocaleString(undefined, { minimumFractionDigits: 2 })}</dd></div>
+                  </dl>
+                  {selected.disconnectionPosting.feeOverridden && <p className="mt-2 text-xs text-slate-600">Amount override: {selected.disconnectionPosting.feeOverrideReason}</p>}
+                  {Number(selected.disconnectionPosting.fineAmount) > 0 && <p className="mt-1 text-xs text-slate-600">Fine reason: {selected.disconnectionPosting.fineReason}</p>}
+                  <p className="mt-2 text-[11px] font-semibold text-emerald-700">Posted to the customer statement.</p>
+                </section>
               )}
               {selected.disconnectionEvidence && (
                 <section className="rounded-lg border border-slate-200 p-3">

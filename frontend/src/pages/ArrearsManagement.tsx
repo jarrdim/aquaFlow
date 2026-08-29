@@ -2275,9 +2275,75 @@ export function PromisesToPay() {
   );
 }
 
+async function exportDisconnectionListExcel(list: Row) {
+  const { default: ExcelJS } = await import("exceljs");
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = "Samdamte Water Utility Management";
+  const sheet = workbook.addWorksheet("Disconnection List", { views: [{ state: "frozen", ySplit: 5 }] });
+  const zoneName = list.zone?.zoneName ?? "All zones / mixed";
+  const columns = [
+    { header: "No.", key: "number", width: 8 },
+    { header: "Account Number", key: "accountNumber", width: 20 },
+    { header: "Customer", key: "customer", width: 32 },
+    { header: "Zone", key: "zone", width: 22 },
+    { header: "Account Balance (KSh)", key: "accountBalance", width: 22 },
+    { header: "Outstanding at Listing (KSh)", key: "outstanding", width: 28 },
+    { header: "Previous Reading", key: "previousReading", width: 20 },
+    { header: "Meter Number", key: "meterNumber", width: 20 },
+    { header: "Arrears Age (Days)", key: "arrearsAgeDays", width: 20 },
+  ];
+  sheet.columns = columns;
+  sheet.spliceRows(1, 1);
+  sheet.mergeCells(1, 1, 1, columns.length);
+  sheet.getCell("A1").value = `DISCONNECTION LIST - ${list.listReference} - ${zoneName}`;
+  sheet.getCell("A1").font = { bold: true, size: 16, color: { argb: "FFFFFFFF" } };
+  sheet.getCell("A1").alignment = { horizontal: "center", vertical: "middle" };
+  sheet.getCell("A1").fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF075985" } };
+  sheet.getRow(1).height = 28;
+  sheet.mergeCells(2, 1, 2, columns.length);
+  sheet.getCell("A2").value = `Zone: ${zoneName}`;
+  sheet.getCell("A2").font = { bold: true, size: 12 };
+  sheet.getCell("A2").alignment = { horizontal: "center" };
+  sheet.mergeCells(3, 1, 3, columns.length);
+  sheet.getCell("A3").value = `Status: ${pretty(list.status)} | Created: ${date(list.createdAt)} | Accounts: ${list.items?.length ?? 0}`;
+  sheet.getCell("A3").alignment = { horizontal: "center" };
+  sheet.getCell("A3").font = { italic: true, color: { argb: "FF475569" } };
+  const headerRow = sheet.getRow(5);
+  columns.forEach((column, index) => { headerRow.getCell(index + 1).value = column.header; });
+  headerRow.font = { bold: true, color: { argb: "FFFFFFFF" } };
+  headerRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0F766E" } };
+  headerRow.height = 24;
+  (list.items ?? []).forEach((item: Row, index: number) => {
+    const row = sheet.addRow({
+      number: index + 1,
+      accountNumber: item.account?.accountNumber ?? "",
+      customer: customerName(item.account?.customer),
+      zone: item.account?.property?.zone?.zoneName ?? zoneName,
+      accountBalance: Number(item.accountBalance ?? item.account?.currentBalance ?? 0),
+      outstanding: Number(item.outstandingAmount ?? 0),
+      previousReading: item.previousReading == null ? "" : Number(item.previousReading),
+      meterNumber: item.meterNumber ?? "",
+      arrearsAgeDays: Number(item.arrearsAgeDays ?? 0),
+    });
+    if (index % 2 === 1) row.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF8FAFC" } };
+  });
+  sheet.getColumn("accountBalance").numFmt = "#,##0.00";
+  sheet.getColumn("outstanding").numFmt = "#,##0.00";
+  sheet.getColumn("previousReading").numFmt = "#,##0.000";
+  sheet.autoFilter = { from: { row: 5, column: 1 }, to: { row: 5, column: columns.length } };
+  sheet.pageSetup = { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0 };
+  const data = await workbook.xlsx.writeBuffer();
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(new Blob([data], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+  link.download = `disconnection-list-${list.listReference}-${zoneName.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.xlsx`;
+  link.click();
+  URL.revokeObjectURL(link.href);
+}
+
 export function DisconnectionLists() {
   const [eligible, setEligible] = useState<Row[]>([]);
   const [lists, setLists] = useState<Row[]>([]);
+  const [zones, setZones] = useState<Row[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
   const [review, setReview] = useState<Row>();
   const [comments, setComments] = useState("");
@@ -2290,6 +2356,7 @@ export function DisconnectionLists() {
   const [filters, setFilters] = useState<Row>({
     minimumAgeDays: "90",
     minimumBalance: "2000",
+    zoneId: "",
   });
   const load = async () => {
     setLoading(true);
@@ -2297,7 +2364,7 @@ export function DisconnectionLists() {
     try {
       const [eligibleRows, listRows] = await Promise.all([
         api.disconnectionEligible(filters),
-        api.listDisconnectionLists(),
+        api.listDisconnectionLists(String(filters.zoneId || "")),
       ]);
       setEligible(eligibleRows);
       setLists(listRows);
@@ -2321,7 +2388,10 @@ export function DisconnectionLists() {
   };
   useEffect(() => {
     void load();
-  }, [filters.minimumAgeDays, filters.minimumBalance]);
+  }, [filters.minimumAgeDays, filters.minimumBalance, filters.zoneId]);
+  useEffect(() => {
+    api.listZones().then(setZones).catch((e) => setError(e.message));
+  }, []);
   async function create() {
     try {
       setAction("CREATE");
@@ -2330,6 +2400,7 @@ export function DisconnectionLists() {
         accountIds: selected,
         minimumAgeDays: filters.minimumAgeDays,
         minimumBalance: filters.minimumBalance,
+        zoneId: filters.zoneId || undefined,
         remarks: "Generated from approved final demand notices",
       });
       setMessage("Disconnection list submitted for Finance Manager approval.");
@@ -2360,16 +2431,17 @@ export function DisconnectionLists() {
       setAction("");
     }
   }
+  const selectedZoneName = zones.find((zone) => String(zone.zoneId) === String(filters.zoneId))?.zoneName;
   return (
     <Page
-      title="Disconnection lists"
+      title={`Disconnection lists${selectedZoneName ? ` — ${selectedZoneName}` : " — All zones"}`}
       subtitle="Escalate eligible accounts only after formal recovery notices"
-      actions={<LinkButton to="/arrears/notices">Demand notices</LinkButton>}
+      actions={<><Button tone="green" disabled={!review?.items?.length} onClick={() => review && void exportDisconnectionListExcel(review)}>Export Excel</Button><LinkButton to="/arrears/notices">Demand notices</LinkButton></>}
     >
       {error && <Alert>{error}</Alert>}
       {message && <Alert success>{message}</Alert>}
       <Card title="Create disconnection list">
-        <div className="mb-3 grid gap-3 md:grid-cols-3">
+        <div className="mb-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <Field label="Minimum arrears age (days)">
             <input
               type="number"
@@ -2392,6 +2464,12 @@ export function DisconnectionLists() {
               }
             />
           </Field>
+          <Field label="Zone">
+            <SearchableSelect className={INPUT} value={filters.zoneId} onChange={(e) => { setSelected([]); setFilters({ ...filters, zoneId: e.target.value }); }}>
+              <option value="">All zones</option>
+              {zones.map((zone) => <option key={zone.zoneId} value={zone.zoneId}>{zone.zoneName}</option>)}
+            </SearchableSelect>
+          </Field>
           <div className="flex items-end">
             <Button
               className="w-full"
@@ -2411,7 +2489,7 @@ export function DisconnectionLists() {
           </div>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[850px]">
+          <table className="w-full min-w-[1150px]">
             <thead>
               <tr>
                 <th className={TH}>
@@ -2432,7 +2510,9 @@ export function DisconnectionLists() {
                 </th>
                 <th className={TH}>Account / Customer</th>
                 <th className={TH}>Zone</th>
-                <th className={TH}>Balance</th>
+                <th className={TH}>Account balance</th>
+                <th className={TH}>Arrears balance</th>
+                <th className={TH}>Previous reading</th>
                 <th className={TH}>Age</th>
                 <th className={TH}>Last notice</th>
               </tr>
@@ -2440,7 +2520,7 @@ export function DisconnectionLists() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={6} className="p-10 text-center text-slate-500">
+                  <td colSpan={8} className="p-10 text-center text-slate-500">
                     <span className="inline-flex items-center">
                       <span className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-aqua-200 border-t-aqua-700" />
                       Loading eligible accounts…
@@ -2471,8 +2551,15 @@ export function DisconnectionLists() {
                         <div className="text-xs">{row.customerName}</div>
                       </td>
                       <td className={TD}>{row.zone?.zoneName ?? "—"}</td>
+                      <td className={`${TD} font-semibold text-slate-800`}>
+                        {money(row.currentBalance)}
+                      </td>
                       <td className={`${TD} font-semibold text-red-700`}>
                         {money(row.arrearsBalance)}
+                      </td>
+                      <td className={TD}>
+                        <strong>{row.previousReading == null ? "—" : Number(row.previousReading).toLocaleString("en-KE", { maximumFractionDigits: 3 })}</strong>
+                        <div className="text-xs text-slate-400">{row.meterNumber ?? "No meter"}</div>
                       </td>
                       <td className={TD}>{row.ageDays} days</td>
                       <td className={TD}>
@@ -2486,7 +2573,7 @@ export function DisconnectionLists() {
                   {!eligible.length && (
                     <tr>
                       <td
-                        colSpan={6}
+                        colSpan={8}
                         className="p-8 text-center text-slate-400"
                       >
                         No account meets the rule with an approved final demand
@@ -2522,7 +2609,7 @@ export function DisconnectionLists() {
                       <strong>{row.listReference}</strong>
                       <div className="text-xs text-slate-500">
                         {row.items?.length ?? 0} account(s) ·{" "}
-                        {date(row.createdAt)}
+                        {row.zone?.zoneName ?? "All zones"} · {date(row.createdAt)}
                       </div>
                     </div>
                     <Badge value={row.status} />
@@ -2553,6 +2640,7 @@ export function DisconnectionLists() {
             <>
               <div className="rounded-xl bg-slate-50 p-3">
                 <div className="text-lg font-bold">{review.listReference}</div>
+                <div className="mt-1 text-sm font-semibold text-aqua-700">Zone: {review.zone?.zoneName ?? "All zones / mixed"}</div>
                 <div className="mt-1 text-sm">
                   {review.items?.length} account(s) · Minimum{" "}
                   {review.minimumAgeDays} days · {money(review.minimumBalance)}
@@ -2562,13 +2650,13 @@ export function DisconnectionLists() {
                 {(review.items ?? []).map((item: Row) => (
                   <div
                     key={item.disconnectionItemId}
-                    className="flex justify-between border-b py-2 text-sm"
+                    className="grid gap-1 border-b py-2 text-sm sm:grid-cols-[minmax(0,1fr)_auto]"
                   >
                     <span>
                       {item.account?.accountNumber} ·{" "}
                       {customerName(item.account?.customer)}
                     </span>
-                    <strong>{money(item.outstandingAmount)}</strong>
+                    <div className="text-right"><strong>{money(item.accountBalance ?? item.outstandingAmount)}</strong><div className="text-xs text-slate-400">Previous: {item.previousReading == null ? "—" : Number(item.previousReading).toLocaleString("en-KE", { maximumFractionDigits: 3 })}</div></div>
                   </div>
                 ))}
               </div>

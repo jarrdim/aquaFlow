@@ -271,6 +271,9 @@ connectionsRouter.patch("/:id/action", canProcess, async (req, res) => {
       MARK_INSTALLATION_ORDERED: "INSTALLATION_ORDERED",
       MARK_INSTALLATION_COMPLETED: "INSTALLATION_COMPLETED", ACTIVATE: "ACTIVE",
     }[data.action];
+    if (data.action === "APPROVE") {
+      note = `${data.notes} Welcome SMS will be sent automatically when the customer account number is created.`;
+    }
     await prisma.$executeRaw`UPDATE aquaflow.new_connection_applications SET status=${next}, decision_notes=${data.notes}, updated_at=NOW() WHERE connection_application_id=${applicationId}`;
   }
   await recordActivity(applicationId, data.action, note, currentUserId(req));

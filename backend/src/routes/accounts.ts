@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { resolveCustomerReferences } from "../lib/customerReferences";
 import { requireAuth, requireRole } from "../middleware/auth";
+import { queueNewCustomerWelcomeSms } from "../lib/newCustomerWelcome";
 
 export const accountsRouter = Router();
 accountsRouter.use(requireAuth);
@@ -12,7 +13,7 @@ const nonLedgerPaymentTypes = ["RECONNECTION_FEE", "NEW_CONNECTION_FEE"];
 const roundMoney = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
 
 async function accountLedgerBalance(client: any, accountId: bigint, openingBalance: number) {
-  const [bills, payments] = await Promise.all([
+  const [bills, payments, disconnectionPostings] = await Promise.all([
     client.bill.aggregate({
       where: { accountId, status: { in: ledgerBillStatuses } },
       _sum: { totalCurrentCharges: true },
@@ -25,14 +26,21 @@ async function accountLedgerBalance(client: any, accountId: bigint, openingBalan
       },
       _sum: { amount: true },
     }),
+    client.$queryRawUnsafe(
+      `SELECT COALESCE(SUM(disconnection_fee + fine_amount),0) AS total
+       FROM aquaflow.disconnection_postings WHERE account_id=$1`,
+      accountId,
+    ),
   ]);
   const postedBillTotal = roundMoney(Number(bills._sum.totalCurrentCharges ?? 0));
+  const postedServiceChargeTotal = roundMoney(Number(disconnectionPostings[0]?.total ?? 0));
   const postedPaymentTotal = roundMoney(Number(payments._sum.amount ?? 0));
   return {
     openingBalance: roundMoney(openingBalance),
     postedBillTotal,
+    postedServiceChargeTotal,
     postedPaymentTotal,
-    calculatedBalance: roundMoney(openingBalance + postedBillTotal - postedPaymentTotal),
+    calculatedBalance: roundMoney(openingBalance + postedBillTotal + postedServiceChargeTotal - postedPaymentTotal),
   };
 }
 
@@ -450,6 +458,34 @@ accountsRouter.post("/", async (req, res) => {
         },
       });
     });
+
+    const application = await prisma.newConnectionApplication.findFirst({
+      where: {
+        customerId: BigInt(data.customerId),
+        status: { in: ["CUSTOMER_CREATED", "INSTALLATION_ORDERED", "INSTALLATION_COMPLETED", "ACTIVE"] },
+        OR: [{ accountId: null }, { accountId: account.accountId }],
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    if (application) {
+      await prisma.newConnectionApplication.updateMany({
+        where: { connectionApplicationId: application.connectionApplicationId, accountId: null },
+        data: { accountId: account.accountId, updatedAt: new Date() },
+      });
+      const customer = await prisma.customer.findUnique({ where: { customerId: account.customerId } });
+      const welcomeName = customer?.organizationName ||
+        [customer?.firstName, customer?.middleName, customer?.lastName].filter(Boolean).join(" ") ||
+        application.applicantName;
+      await queueNewCustomerWelcomeSms({
+        applicationId: application.connectionApplicationId,
+        customerId: account.customerId,
+        accountId: account.accountId,
+        accountNumber: account.accountNumber,
+        recipient: application.phoneNumber || customer?.phoneNumber || "",
+        customerName: welcomeName,
+        requestedBy: BigInt(req.user!.userId),
+      });
+    }
 
     res.status(201).json(account);
   } catch (error: any) {

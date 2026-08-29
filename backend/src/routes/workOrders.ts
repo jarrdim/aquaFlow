@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { NextFunction, Request, Response, Router } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
+import { queueNewCustomerWelcomeSms } from "../lib/newCustomerWelcome";
 import { isSystemAdmin, requireAuth, requirePermission } from "../middleware/auth";
 
 export const workOrdersRouter = Router();
@@ -30,6 +31,39 @@ function csv(value: unknown) {
 
 function userId(req: Express.Request) {
   return BigInt(req.user!.userId);
+}
+
+function roundMoney(value: number) {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+// Keep final-reading charges aligned with the normal billing tariff rules.
+function readingAmount(tariff: any, consumption: number) {
+  if (!tariff) return null;
+  let consumptionCharge = 0;
+  if (tariff.billing_method === "FLAT") {
+    consumptionCharge = Number(tariff.flat_amount);
+  } else if (tariff.billing_method === "TIERED") {
+    for (const band of tariff.bands ?? []) {
+      const lower = Number(band.lowerLimit);
+      const upper = band.upperLimit == null ? consumption : Number(band.upperLimit);
+      const units = Math.max(0, Math.min(consumption, upper) - lower);
+      consumptionCharge += units * Number(band.ratePerUnit);
+    }
+  } else {
+    consumptionCharge = consumption * Number(tariff.rate_per_unit);
+  }
+  consumptionCharge = roundMoney(consumptionCharge);
+  const minimumAdjustment = roundMoney(Math.max(0, Number(tariff.minimum_charge) - consumptionCharge));
+  const standingCharge = roundMoney(Number(tariff.standing_charge));
+  const meterRent = roundMoney(Number(tariff.meter_rent));
+  return {
+    consumptionCharge,
+    minimumAdjustment,
+    standingCharge,
+    meterRent,
+    total: roundMoney(consumptionCharge + minimumAdjustment + standingCharge + meterRent),
+  };
 }
 
 async function officerForUser(currentUserId: bigint) {
@@ -238,7 +272,7 @@ workOrdersRouter.get("/:id", canView, async (req, res) => {
     WHERE wo.work_order_id = ${parsed.data}`;
   if (!rows[0]) return res.status(404).json({ error: "Work order not found" });
   const [assignments, updates, evidence, consumables, disconnectionReports, reconnectionReports,
-    completionReports, completionMaterials] = await Promise.all([
+    completionReports, completionMaterials, disconnectionPostingRows, disconnectionContextRows] = await Promise.all([
     prisma.$queryRaw<any[]>`
       SELECT a.*, u.first_name, u.last_name, u.username
       FROM aquaflow.work_order_assignments a
@@ -292,6 +326,50 @@ workOrdersRouter.get("/:id", canView, async (req, res) => {
       JOIN aquaflow.field_work_order_completion_reports r
         ON r.completion_report_id=wom.completion_report_id
       WHERE r.work_order_id=${parsed.data} ORDER BY ii.item_name`,
+    prisma.$queryRaw<any[]>`
+      SELECT dp.disconnection_posting_id AS "disconnectionPostingId",
+        dp.previous_reading AS "previousReading",dp.current_reading AS "currentReading",
+        dp.default_disconnection_fee AS "defaultDisconnectionFee",
+        dp.disconnection_fee AS "disconnectionFee",dp.fee_overridden AS "feeOverridden",
+        dp.fee_override_reason AS "feeOverrideReason",dp.fine_amount AS "fineAmount",
+        dp.fine_reason AS "fineReason",dp.posted_at AS "postedAt",
+        m.meter_number AS "meterNumber"
+      FROM aquaflow.disconnection_postings dp
+      JOIN aquaflow.meters m ON m.meter_id=dp.meter_id
+      WHERE dp.work_order_id=${parsed.data}`,
+    prisma.$queryRaw<any[]>`
+      SELECT ma.meter_id AS "meterId",m.meter_number AS "meterNumber",
+        COALESCE(latest.current_reading,m.opening_reading) AS "previousReading",
+        tariff.tariff_id AS "tariffId",tariff.tariff_name AS "tariffName",
+        tariff.billing_method AS "billingMethod",tariff.minimum_charge AS "minimumCharge",
+        tariff.standing_charge AS "standingCharge",tariff.meter_rent AS "meterRent",
+        tariff.flat_amount AS "flatAmount",tariff.rate_per_unit AS "ratePerUnit",
+        tariff.bands
+      FROM aquaflow.work_orders wo
+      JOIN aquaflow.customer_accounts ca ON ca.account_id=wo.account_id
+      JOIN aquaflow.meter_assignments ma ON ma.account_id=wo.account_id
+        AND ma.assignment_status='ACTIVE' AND ma.removal_date IS NULL
+      JOIN aquaflow.meters m ON m.meter_id=ma.meter_id
+      LEFT JOIN LATERAL (
+        SELECT mr.current_reading FROM aquaflow.meter_readings mr
+        WHERE mr.meter_id=m.meter_id AND mr.approval_status='APPROVED'
+        ORDER BY mr.reading_date DESC,mr.reading_id DESC LIMIT 1
+      ) latest ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT t.*,
+          COALESCE((SELECT jsonb_agg(jsonb_build_object(
+            'lowerLimit',tb.lower_limit,'upperLimit',tb.upper_limit,
+            'ratePerUnit',tb.rate_per_unit,'bandSequence',tb.band_sequence
+          ) ORDER BY tb.band_sequence)
+          FROM aquaflow.tariff_bands tb WHERE tb.tariff_id=t.tariff_id AND tb.status='ACTIVE'),'[]'::jsonb) AS bands
+        FROM aquaflow.tariffs t
+        WHERE t.category_id=ca.category_id AND t.status='ACTIVE'
+          AND t.effective_from<=CURRENT_DATE
+          AND (t.effective_to IS NULL OR t.effective_to>=CURRENT_DATE)
+        ORDER BY t.effective_from DESC,t.tariff_id DESC LIMIT 1
+      ) tariff ON TRUE
+      WHERE wo.work_order_id=${parsed.data}
+      ORDER BY ma.assignment_date DESC,ma.assignment_id DESC LIMIT 1`,
   ]);
   const completion = completionReports[0];
   const completionSignatureId = completion?.signature_evidence_id;
@@ -300,6 +378,8 @@ workOrdersRouter.get("/:id", canView, async (req, res) => {
     : evidence;
   res.json({ ...rows[0], assignments, updates, evidence: visibleEvidence, consumables,
     disconnectionEvidence: disconnectionReports[0] ?? null,
+    disconnectionPosting: disconnectionPostingRows[0] ?? null,
+    disconnectionContext: disconnectionPostingRows[0] ?? disconnectionContextRows[0] ?? null,
     reconnectionEvidence: reconnectionReports[0] ?? null,
     completionEvidence: completion ? {
       ...completion,
@@ -521,6 +601,31 @@ workOrdersRouter.post("/", canCreate, asyncRoute(async (req, res) => {
     }
     return rows[0];
   });
+  if (parsed.data.connectionApplicationId && created.account_id) {
+    const [application, account] = await Promise.all([
+      prisma.newConnectionApplication.findUnique({
+        where: { connectionApplicationId: parsed.data.connectionApplicationId },
+      }),
+      prisma.customerAccount.findUnique({
+        where: { accountId: created.account_id },
+        include: { customer: true },
+      }),
+    ]);
+    if (application && account) {
+      const welcomeName = account.customer.organizationName ||
+        [account.customer.firstName, account.customer.middleName, account.customer.lastName].filter(Boolean).join(" ") ||
+        application.applicantName;
+      await queueNewCustomerWelcomeSms({
+        applicationId: application.connectionApplicationId,
+        customerId: account.customerId,
+        accountId: account.accountId,
+        accountNumber: account.accountNumber,
+        recipient: application.phoneNumber || account.customer.phoneNumber || "",
+        customerName: welcomeName,
+        requestedBy: userId(req),
+      });
+    }
+  }
   res.status(201).json(created);
 }));
 
@@ -562,6 +667,14 @@ const transitionInput = z.object({
   notes: z.string().trim().min(2).max(5000),
   gpsLatitude: z.coerce.number().min(-90).max(90).optional().nullable(),
   gpsLongitude: z.coerce.number().min(-180).max(180).optional().nullable(),
+  disconnection: z.object({
+    previousReading: z.coerce.number().min(0),
+    currentReading: z.coerce.number().min(0),
+    disconnectionFee: z.coerce.number().min(0).max(10_000_000),
+    feeOverrideReason: z.string().trim().max(1000).optional().nullable(),
+    fineAmount: z.coerce.number().min(0).max(10_000_000).default(0),
+    fineReason: z.string().trim().max(1000).optional().nullable(),
+  }).optional(),
 });
 const transitions: Record<string, string[]> = {
   ASSIGNED: ["ACCEPTED", "REOPENED", "CANCELLED"],
@@ -577,7 +690,11 @@ workOrdersRouter.patch("/:id/status", canExecute, async (req, res) => {
   if (!workOrderId.success || !parsed.success) return res.status(400).json({ error: parsed.success ? "Invalid work order id" : parsed.error.issues[0].message });
   const ownership = await enforceOfficerOwnership(req, res, workOrderId.data);
   if (!ownership.allowed) return;
-  const current = await prisma.$queryRaw<any[]>`SELECT status, service_request_id FROM aquaflow.work_orders WHERE work_order_id = ${workOrderId.data}`;
+  const current = await prisma.$queryRaw<any[]>`
+    SELECT wo.status,wo.service_request_id,wo.account_id,wt.type_code
+    FROM aquaflow.work_orders wo
+    JOIN aquaflow.work_order_types wt ON wt.work_order_type_id=wo.work_order_type_id
+    WHERE wo.work_order_id=${workOrderId.data}`;
   if (!current[0]) return res.status(404).json({ error: "Work order not found" });
   if (!(transitions[current[0].status] ?? []).includes(parsed.data.status)) {
     return res.status(409).json({ error: `Cannot change a ${current[0].status} work order to ${parsed.data.status}` });
@@ -589,9 +706,110 @@ workOrdersRouter.patch("/:id/status", canExecute, async (req, res) => {
       WHERE wo.work_order_id=${workOrderId.data}`;
     if (types[0]?.requires_signature === true && !["DISCONNECTION", "RECONNECTION"].includes(types[0].type_code))
       return res.status(409).json({ error: "Submit the materials and customer-signature completion report to complete this job" });
+    if (types[0]?.type_code === "RECONNECTION") {
+      return res.status(409).json({ error: "Complete reconnection work through the field reconnection report; payment confirmation and photo evidence are required" });
+    }
+  }
+  let disconnectionContext: any = null;
+  if (parsed.data.status === "COMPLETED" && current[0].type_code === "DISCONNECTION") {
+    if (!parsed.data.disconnection) {
+      return res.status(400).json({ error: "Previous reading, current reading and final reading amount are required" });
+    }
+    const contexts = await prisma.$queryRaw<any[]>`
+      SELECT ma.assignment_id,ma.meter_id,m.opening_reading,
+        COALESCE(latest.current_reading,m.opening_reading) AS previous_reading,
+        tariff.*
+      FROM aquaflow.meter_assignments ma
+      JOIN aquaflow.meters m ON m.meter_id=ma.meter_id
+      JOIN aquaflow.customer_accounts ca ON ca.account_id=ma.account_id
+      LEFT JOIN LATERAL (
+        SELECT mr.current_reading FROM aquaflow.meter_readings mr
+        WHERE mr.meter_id=m.meter_id AND mr.approval_status='APPROVED'
+        ORDER BY mr.reading_date DESC,mr.reading_id DESC LIMIT 1
+      ) latest ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT t.*,
+          COALESCE((SELECT jsonb_agg(jsonb_build_object(
+            'lowerLimit',tb.lower_limit,'upperLimit',tb.upper_limit,
+            'ratePerUnit',tb.rate_per_unit,'bandSequence',tb.band_sequence
+          ) ORDER BY tb.band_sequence)
+          FROM aquaflow.tariff_bands tb WHERE tb.tariff_id=t.tariff_id AND tb.status='ACTIVE'),'[]'::jsonb) AS bands
+        FROM aquaflow.tariffs t
+        WHERE t.category_id=ca.category_id AND t.status='ACTIVE'
+          AND t.effective_from<=CURRENT_DATE
+          AND (t.effective_to IS NULL OR t.effective_to>=CURRENT_DATE)
+        ORDER BY t.effective_from DESC,t.tariff_id DESC LIMIT 1
+      ) tariff ON TRUE
+      WHERE ma.account_id=${current[0].account_id}
+        AND ma.assignment_status='ACTIVE' AND ma.removal_date IS NULL
+      ORDER BY ma.assignment_date DESC,ma.assignment_id DESC LIMIT 1`;
+    disconnectionContext = contexts[0];
+    if (!disconnectionContext) return res.status(409).json({ error: "This account has no active meter to read" });
+    if (!disconnectionContext.tariff_id) return res.status(409).json({ error: "This account has no active tariff for the final reading" });
+    const suppliedPrevious = parsed.data.disconnection.previousReading;
+    const authoritativePrevious = Number(disconnectionContext.previous_reading);
+    if (Math.abs(suppliedPrevious - authoritativePrevious) > 0.001) {
+      return res.status(409).json({ error: `Previous reading changed to ${authoritativePrevious}. Refresh before completing the work order.` });
+    }
+    if (parsed.data.disconnection.currentReading < authoritativePrevious) {
+      return res.status(400).json({ error: "Current reading cannot be lower than the previous reading" });
+    }
+    const calculated = readingAmount(disconnectionContext, parsed.data.disconnection.currentReading - authoritativePrevious)!;
+    const defaultFee = calculated.total;
+    const feeOverridden = Math.abs(parsed.data.disconnection.disconnectionFee - defaultFee) > 0.009;
+    if (feeOverridden && (parsed.data.disconnection.feeOverrideReason?.trim().length ?? 0) < 3) {
+      return res.status(400).json({ error: "Enter a reason for overriding the tariff-calculated reading amount" });
+    }
+    if (parsed.data.disconnection.fineAmount > 0 && (parsed.data.disconnection.fineReason?.trim().length ?? 0) < 3) {
+      return res.status(400).json({ error: "Enter a reason for the fine" });
+    }
   }
   const officerId = ownership.officerId;
   await prisma.$transaction(async (tx) => {
+    if (disconnectionContext && parsed.data.disconnection) {
+      const details = parsed.data.disconnection;
+      const calculated = readingAmount(disconnectionContext, details.currentReading - details.previousReading)!;
+      const defaultFee = calculated.total;
+      const feeOverridden = Math.abs(details.disconnectionFee - defaultFee) > 0.009;
+      const consumption = details.currentReading - details.previousReading;
+      const reading = await tx.meterReading.create({ data: {
+        meterId: disconnectionContext.meter_id,
+        accountId: current[0].account_id,
+        fieldOfficerId: officerId,
+        previousReading: details.previousReading,
+        currentReading: details.currentReading,
+        readingType: "ACTUAL",
+        readingDate: new Date(),
+        abnormalFlag: consumption === 0,
+        exceptionType: consumption === 0 ? "ZERO" : "NONE",
+        approvalStatus: "APPROVED",
+        approvedBy: userId(req),
+        approvalComments: `Final reading captured on disconnection work order ${workOrderId.data}`,
+        approvedAt: new Date(),
+        syncId: `DISCONNECTION-${workOrderId.data}`,
+        events: { create: { eventType: "DISCONNECTION_READING_POSTED", remarks: parsed.data.notes, performedBy: userId(req) } },
+      } });
+      await tx.$executeRaw`
+        INSERT INTO aquaflow.disconnection_postings
+          (work_order_id,account_id,meter_id,reading_id,previous_reading,current_reading,
+           default_disconnection_fee,disconnection_fee,fee_overridden,fee_override_reason,
+           fine_amount,fine_reason,posted_by)
+        VALUES (${workOrderId.data},${current[0].account_id},${disconnectionContext.meter_id},${reading.readingId},
+          ${details.previousReading},${details.currentReading},${defaultFee},${details.disconnectionFee},
+          ${feeOverridden},${details.feeOverrideReason ?? null},${details.fineAmount},
+          ${details.fineReason ?? null},${userId(req)})`;
+      await tx.customerAccount.update({
+        where: { accountId: current[0].account_id },
+        data: { currentBalance: { increment: details.disconnectionFee + details.fineAmount }, accountStatus: "DISCONNECTED", updatedAt: new Date() },
+      });
+      await tx.meter.update({ where: { meterId: disconnectionContext.meter_id }, data: { status: "DISCONNECTED", updatedAt: new Date() } });
+      await tx.meterEvent.create({ data: {
+        meterId: disconnectionContext.meter_id, assignmentId: disconnectionContext.assignment_id,
+        eventType: "READING_CAPTURED", reading: details.currentReading,
+        remarks: parsed.data.notes, performedBy: userId(req),
+        metadata: { workOrderId: workOrderId.data.toString(), readingId: reading.readingId.toString() },
+      } });
+    }
     await tx.$executeRaw`
       UPDATE aquaflow.work_orders SET status = ${parsed.data.status},
         started_at = CASE WHEN ${parsed.data.status} = 'IN_PROGRESS' THEN CURRENT_TIMESTAMP ELSE started_at END,

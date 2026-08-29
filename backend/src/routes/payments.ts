@@ -1445,7 +1445,16 @@ paymentsRouter.post(
 paymentsRouter.patch("/:id/allocate", checker, async (req, res, next) => {
   const paymentId = parse(id, req.params.id, res);
   const data = parse(
-    z.object({ accountId: id, reason: z.string().trim().min(5).max(1000) }),
+    z.union([
+      z.object({ accountId: id, reason: z.string().trim().min(5).max(1000) }),
+      z.object({
+        allocations: z.array(z.object({
+          accountId: id,
+          amount: z.coerce.number().positive().max(999_999_999),
+        })).min(1).max(50),
+        reason: z.string().trim().min(5).max(1000),
+      }),
+    ]),
     req.body,
     res,
   );
@@ -1453,45 +1462,178 @@ paymentsRouter.patch("/:id/allocate", checker, async (req, res, next) => {
   try {
     const result = await prisma.$transaction(async (tx) => {
       const payment = await tx.payment.findUnique({ where: { paymentId } });
-      if (!payment || payment.paymentStatus !== "RECEIVED")
+      if (!payment || payment.paymentStatus !== "RECEIVED" || payment.matchingStatus !== "UNMATCHED" || payment.accountId)
         throw Object.assign(
           new Error("Only received unmatched payments can be allocated"),
           { status: 409 },
         );
-      const allocation = await allocate(tx, payment, data.accountId, uid(req));
+
+      const allocations = "allocations" in data
+        ? data.allocations.map((allocation) => ({
+            accountId: allocation.accountId,
+            amount: round(allocation.amount),
+          }))
+        : [{ accountId: data.accountId, amount: round(Number(payment.amount)) }];
+      const paymentCents = Math.round(Number(payment.amount) * 100);
+      const allocationCents = allocations.reduce((sum, allocation) => sum + Math.round(allocation.amount * 100), 0);
+      if (allocations.some((allocation) => allocation.amount <= 0))
+        throw Object.assign(new Error("Every split amount must be greater than zero"), { status: 400 });
+      if (allocationCents !== paymentCents)
+        throw Object.assign(new Error(`Split amounts must total KSh ${Number(payment.amount).toFixed(2)}`), { status: 400 });
+      if (new Set(allocations.map((allocation) => String(allocation.accountId))).size !== allocations.length)
+        throw Object.assign(new Error("Select each customer account only once"), { status: 400 });
+
+      const accounts = await tx.customerAccount.findMany({
+        where: { accountId: { in: allocations.map((allocation) => allocation.accountId) }, accountStatus: "ACTIVE" },
+        select: { accountId: true, accountNumber: true },
+      });
+      if (accounts.length !== allocations.length)
+        throw Object.assign(new Error("Every allocation must use an active customer account"), { status: 400 });
+
+      // Claim the source row inside this transaction so two operators cannot
+      // allocate the same unmatched transaction concurrently.
+      const claimed = await tx.payment.updateMany({
+        where: { paymentId, paymentStatus: "RECEIVED", matchingStatus: "UNMATCHED", accountId: null },
+        data: { paymentStatus: "ALLOCATING", updatedAt: new Date() },
+      });
+      if (claimed.count !== 1)
+        throw Object.assign(new Error("This unmatched payment is already being allocated"), { status: 409 });
+
+      if (allocations.length === 1) {
+        const allocation = await allocate(tx, payment, allocations[0].accountId, uid(req));
+        await tx.suspensePayment.updateMany({
+          where: { paymentId },
+          data: {
+            status: "RESOLVED",
+            resolvedAccountId: allocations[0].accountId,
+            resolvedBy: uid(req),
+            resolutionDate: new Date(),
+          },
+        });
+        const receipt = await tx.receipt.create({
+          data: {
+            receiptNumber: `RCT-${new Date().getFullYear()}-${String(payment.paymentId).padStart(6, "0")}`,
+            paymentId,
+            accountId: allocations[0].accountId,
+            amount: payment.amount,
+            issuedBy: uid(req),
+          },
+        });
+        await tx.paymentEvent.create({
+          data: {
+            paymentId,
+            eventType: "UNMATCHED_PAYMENT_ALLOCATED",
+            previousStatus: "UNMATCHED",
+            newStatus: allocation.matchingStatus,
+            details: data.reason,
+            performedBy: uid(req),
+          },
+        });
+        return { ...allocation, receiptId: receipt.receiptId, receipts: [{ receiptId: receipt.receiptId, accountId: allocations[0].accountId, amount: allocations[0].amount }] };
+      }
+
+      const accountNumbers = new Map(accounts.map((account) => [String(account.accountId), account.accountNumber]));
+      const splitResults: Array<{ paymentId: bigint; receiptId: bigint; accountId: bigint; accountNumber: string; amount: number }> = [];
+      for (const [index, split] of allocations.entries()) {
+        const suffix = `/S${index + 1}`;
+        const transactionReference = `${payment.transactionReference.slice(0, 100 - suffix.length)}${suffix}`;
+        const child = await tx.payment.create({
+          data: {
+            parentPaymentId: payment.paymentId,
+            transactionReference,
+            accountId: split.accountId,
+            channelId: payment.channelId,
+            payerName: payment.payerName,
+            payerPhone: payment.payerPhone,
+            amount: split.amount,
+            paymentDate: payment.paymentDate,
+            valueDate: payment.valueDate,
+            customerReference: accountNumbers.get(String(split.accountId)),
+            matchingStatus: "UNMATCHED",
+            paymentStatus: "RECEIVED",
+            paymentType: payment.paymentType,
+            remarks: `Split from ${payment.transactionReference}. ${data.reason}`,
+            unallocatedAmount: split.amount,
+            reconciliationStatus: payment.reconciliationStatus,
+            externalPayload: {
+              source: "UNMATCHED_PAYMENT_SPLIT",
+              sourcePaymentId: String(payment.paymentId),
+              sourceTransactionReference: payment.transactionReference,
+              splitSequence: index + 1,
+              splitCount: allocations.length,
+            },
+            receivedBy: uid(req),
+          },
+        });
+        await allocate(tx, child, split.accountId, uid(req));
+        const receipt = await tx.receipt.create({
+          data: {
+            receiptNumber: `RCT-${new Date().getFullYear()}-${String(child.paymentId).padStart(6, "0")}`,
+            paymentId: child.paymentId,
+            accountId: split.accountId,
+            amount: split.amount,
+            issuedBy: uid(req),
+          },
+        });
+        await tx.paymentEvent.create({
+          data: {
+            paymentId: child.paymentId,
+            eventType: "SPLIT_PAYMENT_POSTED",
+            previousStatus: "RECEIVED",
+            newStatus: "POSTED",
+            details: `KSh ${split.amount.toFixed(2)} split from ${payment.transactionReference}. ${data.reason}`,
+            performedBy: uid(req),
+            metadata: { sourcePaymentId: String(payment.paymentId), splitSequence: index + 1, splitCount: allocations.length },
+          },
+        });
+        splitResults.push({ paymentId: child.paymentId, receiptId: receipt.receiptId, accountId: split.accountId, accountNumber: accountNumbers.get(String(split.accountId))!, amount: split.amount });
+      }
+
       await tx.suspensePayment.updateMany({
         where: { paymentId },
         data: {
           status: "RESOLVED",
-          resolvedAccountId: data.accountId,
+          resolvedAccountId: null,
           resolvedBy: uid(req),
           resolutionDate: new Date(),
         },
       });
-      const receipt = await tx.receipt.create({
+      await tx.payment.update({
+        where: { paymentId },
         data: {
-          receiptNumber: `RCT-${new Date().getFullYear()}-${String(payment.paymentId).padStart(6, "0")}`,
-          paymentId,
-          accountId: data.accountId,
-          amount: payment.amount,
-          issuedBy: uid(req),
+          matchingStatus: "MATCHED",
+          paymentStatus: "SPLIT",
+          unallocatedAmount: 0,
+          postedAt: new Date(),
+          remarks: `Split across ${allocations.length} accounts. ${data.reason}`,
+          updatedAt: new Date(),
         },
       });
       await tx.paymentEvent.create({
         data: {
           paymentId,
-          eventType: "UNMATCHED_PAYMENT_ALLOCATED",
+          eventType: "UNMATCHED_PAYMENT_SPLIT",
           previousStatus: "UNMATCHED",
-          newStatus: allocation.matchingStatus,
+          newStatus: "SPLIT",
           details: data.reason,
           performedBy: uid(req),
+          metadata: {
+            allocations: splitResults.map((split) => ({
+              paymentId: String(split.paymentId),
+              receiptId: String(split.receiptId),
+              accountId: String(split.accountId),
+              accountNumber: split.accountNumber,
+              amount: split.amount,
+            })),
+          },
         },
       });
-      return { ...allocation, receiptId: receipt.receiptId };
+      return { matchingStatus: "MATCHED", split: true, allocated: Number(payment.amount), remaining: 0, receipts: splitResults };
     });
     res.json(result);
   } catch (e: any) {
     if (e.status) return res.status(e.status).json({ error: e.message });
+    if (e.code === "P2002") return res.status(409).json({ error: "This payment split has already been posted" });
     next(e);
   }
 });

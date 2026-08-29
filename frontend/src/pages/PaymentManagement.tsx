@@ -1493,7 +1493,7 @@ export function UnmatchedPayments() {
   const [rows, setRows] = useState<Row[]>([]),
     [accounts, setAccounts] = useState<Row[]>([]),
     [focus, setFocus] = useState<Row>(),
-    [accountId, setAccountId] = useState(""),
+    [allocationRows, setAllocationRows] = useState<Array<{ accountId: string; amount: string }>>([]),
     [reason, setReason] = useState(""),
     [error, setError] = useState(""),
     [message, setMessage] = useState("");
@@ -1526,7 +1526,7 @@ export function UnmatchedPayments() {
     const payment = rows.find((row) => String(row.paymentId) === requestedPaymentId);
     if (!payment) return;
     setFocus(payment);
-    setAccountId(payment.suggestedAccount?.accountId ? String(payment.suggestedAccount.accountId) : "");
+    setAllocationRows([{ accountId: payment.suggestedAccount?.accountId ? String(payment.suggestedAccount.accountId) : "", amount: Number(payment.amount).toFixed(2) }]);
     setReason("");
   }, [focus, loading, rows, unmatchedSearchParams]);
   async function allocate() {
@@ -1535,10 +1535,10 @@ export function UnmatchedPayments() {
     setError("");
     setMessage("");
     try {
-      await api.allocatePayment(String(focus.paymentId), accountId, reason);
-      setMessage("Payment allocated and receipt generated.");
+      await api.allocatePayment(String(focus.paymentId), allocationRows.map((row) => ({ accountId: row.accountId, amount: Number(row.amount) })), reason);
+      setMessage(allocationRows.length > 1 ? `Payment split across ${allocationRows.length} accounts and receipts generated.` : "Payment allocated and receipt generated.");
       setFocus(undefined);
-      setAccountId("");
+      setAllocationRows([]);
       setReason("");
       await load();
     } catch (e: any) {
@@ -1556,6 +1556,12 @@ export function UnmatchedPayments() {
       .some((value) => String(value ?? "").toLowerCase().includes(query));
   });
   const unmatchedTotal = rows.reduce((sum, payment) => sum + Number(payment.amount ?? 0), 0);
+  const paymentCents = Math.round(Number(focus?.amount ?? 0) * 100);
+  const allocatedCents = allocationRows.reduce((sum, row) => sum + (Number.isFinite(Number(row.amount)) ? Math.round(Number(row.amount) * 100) : 0), 0);
+  const remainingCents = paymentCents - allocatedCents;
+  const selectedAccountIds = allocationRows.map((row) => row.accountId).filter(Boolean);
+  const hasDuplicateAccounts = new Set(selectedAccountIds).size !== selectedAccountIds.length;
+  const allocationIsValid = allocationRows.length > 0 && allocationRows.every((row) => row.accountId && Number(row.amount) > 0) && !hasDuplicateAccounts && remainingCents === 0;
   const allocationInput = `${INPUT} rounded-xl border-slate-200 px-3.5 py-2.5 transition duration-200 hover:border-slate-300 focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10`;
   return (
     <Page
@@ -1569,7 +1575,7 @@ export function UnmatchedPayments() {
         <div className="rounded-2xl border border-rose-100 bg-rose-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-rose-700">Value awaiting allocation</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{money(unmatchedTotal)}</div></div>
         <div className="rounded-2xl border border-sky-100 bg-sky-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-sky-700">Available accounts</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{accounts.length}</div></div>
       </div>
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_400px] xl:items-start">
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_480px] xl:items-start">
         <Card title="Payments awaiting reconciliation" className="overflow-hidden shadow-md shadow-slate-200/50">
           <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div><div className="font-semibold text-slate-800">Select a transaction to allocate</div><div className="mt-0.5 text-xs text-slate-500">Match unresolved deposits to the correct customer account.</div></div>
@@ -1588,7 +1594,7 @@ export function UnmatchedPayments() {
                     <td className={TD}>{payment.suggestedAccount ? <div className="min-w-[190px]"><div className="font-bold text-slate-800">{payment.suggestedAccount.customerName}</div><div className="mt-1 text-xs text-slate-500">Account: <strong>{payment.suggestedAccount.accountNumber}</strong></div><div className="text-xs text-slate-500">Customer: {payment.suggestedAccount.customer?.customerNumber || "—"}</div><div className="text-xs text-slate-500">Phone: {payment.suggestedAccount.customer?.phoneNumber || "—"}</div><span className="mt-1.5 inline-flex rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-bold text-amber-700">Verify before allocating</span></div> : <span className="text-sm text-slate-400">No account suggestion</span>}</td>
                     <td className={TD}><span className="inline-flex items-center gap-1.5 rounded-full bg-sky-50 px-2.5 py-1 text-xs font-semibold text-sky-700"><span className="h-1.5 w-1.5 shrink-0 rounded-full bg-sky-500" />{payment.channel?.channelName || "Unknown"}</span><div className="mt-2 break-words text-xs leading-5 text-slate-500">{dateTime(payment.paymentDate)}</div></td>
                     <td className={`${TD} font-bold text-slate-900`}>{money(payment.amount)}</td>
-                    <td className={TD}><button type="button" onClick={() => { setFocus(payment); setAccountId(payment.suggestedAccount?.accountId ? String(payment.suggestedAccount.accountId) : ""); setReason(""); }} className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-2 text-xs font-bold transition hover:-translate-y-0.5 ${selected ? "bg-emerald-600 text-white shadow-sm" : "bg-slate-100 text-slate-700 hover:bg-emerald-600 hover:text-white"}`}><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-3.5 w-3.5 shrink-0"><path d="M5 12h14M13 6l6 6-6 6" /></svg>{selected ? "Selected" : "Allocate"}</button></td>
+                    <td className={TD}><button type="button" onClick={() => { setFocus(payment); setAllocationRows([{ accountId: payment.suggestedAccount?.accountId ? String(payment.suggestedAccount.accountId) : "", amount: Number(payment.amount).toFixed(2) }]); setReason(""); }} className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-2 text-xs font-bold transition hover:-translate-y-0.5 ${selected ? "bg-emerald-600 text-white shadow-sm" : "bg-slate-100 text-slate-700 hover:bg-emerald-600 hover:text-white"}`}><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-3.5 w-3.5 shrink-0"><path d="M5 12h14M13 6l6 6-6 6" /></svg>{selected ? "Selected" : "Allocate"}</button></td>
                   </tr>;
                 })}
                 {!loading && !filteredRows.length && <tr><td colSpan={6} className="px-4 py-16 text-center"><div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-emerald-50 text-emerald-600"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-7 w-7"><path d="M5 12l4 4L19 6" /></svg></div><div className="mt-4 font-bold text-slate-700">{rows.length ? "No payments match your search" : "All payments are reconciled"}</div><div className="mt-1 text-sm text-slate-400">{rows.length ? "Try a different reference, payer or phone number." : "There are no unmatched transactions requiring attention."}</div></td></tr>}
@@ -1616,21 +1622,31 @@ export function UnmatchedPayments() {
                 </div>
                 <p className="mt-3 text-xs leading-5 text-amber-800">Suggested from the payment account reference. Confirm these details before allocating.</p>
               </div>}
-              <div className="rounded-xl border border-sky-100 bg-sky-50 px-3.5 py-3 text-xs leading-5 text-sky-700">Confirm the payer details, choose the correct account and record why the manual match was made.</div>
-              <Field label="Customer account">
-                <SearchableSelect
-                  className={allocationInput}
-                  value={accountId}
-                  onChange={(e) => setAccountId(e.target.value)}
-                >
-                  <option value="">Select account</option>
-                  {accounts.map((a) => (
-                    <option value={a.accountId} key={a.accountId}>
-                      {a.accountNumber} · {a.customerName} · {a.customer?.customerNumber} · {a.customer?.phoneNumber}
-                    </option>
+              <div className="rounded-xl border border-sky-100 bg-sky-50 px-3.5 py-3 text-xs leading-5 text-sky-700">Allocate the full transaction to one account, or add rows to split it across multiple accounts. Each account receives its own payment and receipt.</div>
+              <div>
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <div><div className="text-sm font-semibold text-slate-700">Account allocations</div><div className="text-xs text-slate-400">Each account can be selected once.</div></div>
+                  <button type="button" onClick={() => setAllocationRows((current) => [...current, { accountId: "", amount: "" }])} className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700 transition hover:bg-emerald-100">+ Add account</button>
+                </div>
+                <div className="space-y-3">
+                  {allocationRows.map((allocation, index) => (
+                    <div key={index} className="rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+                      <div className="mb-2 flex items-center justify-between"><span className="text-xs font-bold uppercase tracking-wide text-slate-500">Allocation {index + 1}</span>{allocationRows.length > 1 && <button type="button" onClick={() => setAllocationRows((current) => current.filter((_, rowIndex) => rowIndex !== index))} className="text-xs font-bold text-rose-600 hover:text-rose-700">Remove</button>}</div>
+                      <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_130px]">
+                        <SearchableSelect className={allocationInput} value={allocation.accountId} onChange={(event) => setAllocationRows((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, accountId: event.target.value } : row))}>
+                          <option value="">Select account</option>
+                          {accounts.map((account) => <option value={account.accountId} key={account.accountId}>{account.accountNumber} · {account.customerName} · {account.customer?.customerNumber} · {account.customer?.phoneNumber}</option>)}
+                        </SearchableSelect>
+                        <input type="number" min="0.01" step="0.01" className={allocationInput} aria-label={`Amount for allocation ${index + 1}`} placeholder="Amount" value={allocation.amount} onChange={(event) => setAllocationRows((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, amount: event.target.value } : row))} />
+                      </div>
+                    </div>
                   ))}
-                </SearchableSelect>
-              </Field>
+                </div>
+                <div className={`mt-3 flex items-center justify-between rounded-xl border px-3.5 py-3 text-sm ${remainingCents === 0 ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-amber-200 bg-amber-50 text-amber-800"}`}>
+                  <span className="font-semibold">{remainingCents >= 0 ? "Remaining to allocate" : "Over allocated"}</span><strong>{money(Math.abs(remainingCents) / 100)}</strong>
+                </div>
+                {hasDuplicateAccounts && <p className="mt-2 text-xs font-semibold text-rose-600">The same customer account cannot appear more than once.</p>}
+              </div>
               <Field label="Allocation reason">
                 <textarea
                   rows={4}
@@ -1642,10 +1658,10 @@ export function UnmatchedPayments() {
               </Field>
               <Button
                 className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3 shadow-sm transition hover:-translate-y-0.5 hover:bg-emerald-700 hover:shadow-md disabled:hover:translate-y-0"
-                disabled={allocating || !accountId || reason.trim().length < 5}
+                disabled={allocating || !allocationIsValid || reason.trim().length < 5}
                 onClick={allocate}
               >
-                {allocating ? <><span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />Allocating…</> : <><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="M5 12l4 4L19 6" /></svg>Allocate and generate receipt</>}
+                {allocating ? <><span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />Allocating…</> : <><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="M5 12l4 4L19 6" /></svg>{allocationRows.length > 1 ? "Split and generate receipts" : "Allocate and generate receipt"}</>}
               </Button>
             </div>
           ) : (

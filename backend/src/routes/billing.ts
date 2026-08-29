@@ -3,6 +3,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { isSystemAdmin, requireAuth, requireRole } from "../middleware/auth";
+import { createPaymentLinkToken, publicAppUrl } from "../lib/paymentLink";
 
 export const billingRouter = Router();
 billingRouter.use(requireAuth);
@@ -35,6 +36,22 @@ function customerName(customer: any) {
 function round(value: number, places = 2) {
   const factor = 10 ** places;
   return Math.round((value + Number.EPSILON) * factor) / factor;
+}
+function smsDate(value: Date) {
+  return `${String(value.getUTCDate()).padStart(2, "0")}/${String(value.getUTCMonth() + 1).padStart(2, "0")}/${value.getUTCFullYear()}`;
+}
+function smsNumber(value: number, places = 2) {
+  return value.toLocaleString("en-KE", {
+    minimumFractionDigits: places,
+    maximumFractionDigits: places,
+  });
+}
+function smsReading(value: number | null) {
+  if (value === null) return "N/A";
+  return value.toLocaleString("en-KE", {
+    minimumFractionDigits: Number.isInteger(value) ? 0 : 3,
+    maximumFractionDigits: 3,
+  });
 }
 
 const billInclude = {
@@ -440,15 +457,26 @@ billingRouter.post("/notifications", requireRole("SYSTEM_ADMIN", "BILLING_OFFICE
     if (readingCycle.status !== "CLOSED") return res.status(409).json({ error: "Close the linked reading cycle before sending bill notifications" });
 
     const bills = await prisma.bill.findMany({ where: { billingCycleId: data.billingCycleId, status: { in: ["APPROVED", "POSTED", "PARTIALLY_PAID", "PAID"] }, ...(data.billIds ? { billId: { in: data.billIds } } : {}) }, include: { account: { include: { customer: true } }, billingCycle: true, reading: true } });
+    const settings = await prisma.systemSetting.findUnique({
+      where: { settingId: 1n },
+      select: { reconnectionFee: true },
+    });
     const notificationIds: bigint[] = [];
     let queued = 0;
     await prisma.$transaction(async (tx) => {
       for (const bill of bills) {
         const name = customerName(bill.account.customer);
-        const previousReading = bill.reading ? Number(bill.reading.previousReading).toFixed(3) : "N/A";
-        const currentReading = bill.reading ? Number(bill.reading.currentReading).toFixed(3) : "N/A";
-        const units = Number(bill.consumptionUnits).toFixed(3);
-        const message = `Dear ${name}, water bill for ${bill.billingCycle.cycleName}. Acc: ${bill.account.accountNumber}. Reading cycle: ${readingCycle.cycleName} (closed). Prev: ${previousReading}, Curr: ${currentReading}, Units: ${units}. Amount due: KSh ${Number(bill.totalAmountDue).toFixed(2)}. Pay by ${bill.dueDate.toISOString().slice(0, 10)}.`;
+        const previousReading = bill.reading ? Number(bill.reading.previousReading) : null;
+        const currentReading = bill.reading ? Number(bill.reading.currentReading) : null;
+        const amountPaid = Number(bill.paidAmount);
+        const totalAmount = Math.max(0, Number(bill.totalAmountDue) - amountPaid);
+        const expiresAt = new Date(Date.now() + 30 * 86_400_000);
+        const paymentToken = createPaymentLinkToken({
+          accountId: bill.accountId.toString(),
+          expiresAt: expiresAt.toISOString(),
+        });
+        const paymentUrl = `${publicAppUrl()}/pay/${paymentToken}`;
+        const message = `Dear ${name} A/C ${bill.account.accountNumber} your bill as at ${smsDate(bill.issueDate)}. Prev Read ${smsReading(previousReading)} Curr Read ${smsReading(currentReading)} Consumption ${smsReading(Number(bill.consumptionUnits))} Arrears ${smsNumber(Number(bill.previousBalance))} Amount Paid ${smsNumber(amountPaid)} Current Bill ${smsNumber(Number(bill.totalCurrentCharges))} Total Amount ${smsNumber(totalAmount)}. Due date is ${smsDate(bill.dueDate)}. Reconnection Fee is ${smsNumber(Number(settings?.reconnectionFee ?? 1155), 0)}. Bills payable through PayBill No 823496 using ${bill.account.accountNumber} as the account number. WE MAKE IT SAFE BECAUSE WATER IS LIFE. THANK YOU.\n\nPay now: ${paymentUrl}`;
         for (const channel of data.channels) {
           const deliveryChannel = channel === "APP" ? "PUSH" : "SMS";
           const recipient = channel === "SMS" ? bill.account.customer.phoneNumber : bill.account.customer.customerNumber;
@@ -503,7 +531,8 @@ billingRouter.get("/statements/:accountId", async (req, res, next) => {
     if (from > to) {
       return res.status(400).json({ error: "Statement start date cannot be after the end date." });
     }
-    const [bills, payments, otherServicePayments, priorBills, priorPayments, latestBill, settings] = await Promise.all([
+    const [bills, payments, otherServicePayments, priorBills, priorPayments, latestBill, settings,
+      disconnectionPostings, priorDisconnectionPostings] = await Promise.all([
       prisma.bill.findMany({
         where: { accountId, status: { in: ["POSTED", "PARTIALLY_PAID", "PAID"] }, issueDate: { gte: from, lte: to } },
         include: { billingCycle: true, tariff: true, reading: true },
@@ -542,6 +571,17 @@ billingRouter.get("/statements/:accountId", async (req, res, next) => {
         orderBy: { issueDate: "desc" },
       }),
       prisma.systemSetting.findFirst(),
+      prisma.$queryRaw<any[]>`
+        SELECT dp.*,wo.work_order_number,m.meter_number
+        FROM aquaflow.disconnection_postings dp
+        JOIN aquaflow.work_orders wo ON wo.work_order_id=dp.work_order_id
+        JOIN aquaflow.meters m ON m.meter_id=dp.meter_id
+        WHERE dp.account_id=${accountId} AND dp.posted_at>=${from} AND dp.posted_at<=${to}
+        ORDER BY dp.posted_at`,
+      prisma.$queryRaw<any[]>`
+        SELECT COALESCE(SUM(disconnection_fee + fine_amount),0) AS total
+        FROM aquaflow.disconnection_postings
+        WHERE account_id=${accountId} AND posted_at<${from}`,
     ]);
     const entries = [
       ...bills.map((bill: any) => ({
@@ -568,8 +608,35 @@ billingRouter.get("/statements/:accountId", async (req, res, next) => {
         debit: 0,
         credit: Number(payment.amount),
       })),
+      ...disconnectionPostings.flatMap((posting: any) => {
+        const readingDetails = `Meter ${posting.meter_number} - Prev: ${Number(posting.previous_reading)} - Curr: ${Number(posting.current_reading)} - Units: ${Number(posting.current_reading) - Number(posting.previous_reading)}`;
+        const rows = [{
+          id: `D${posting.disconnection_posting_id}`,
+          date: posting.posted_at,
+          particulars: "Disconnection reading charge",
+          reference: posting.work_order_number,
+          period: new Date(posting.posted_at).toISOString().slice(0, 7),
+          details: `${readingDetails}${posting.fee_overridden ? ` - Amount override: ${posting.fee_override_reason}` : ""}`,
+          description: `Final disconnection reading charge ${posting.work_order_number}`,
+          debit: Number(posting.disconnection_fee),
+          credit: 0,
+        }];
+        if (Number(posting.fine_amount) > 0) rows.push({
+          id: `F${posting.disconnection_posting_id}`,
+          date: posting.posted_at,
+          particulars: "Disconnection fine",
+          reference: posting.work_order_number,
+          period: new Date(posting.posted_at).toISOString().slice(0, 7),
+          details: posting.fine_reason || "Fine applied during disconnection",
+          description: `Disconnection fine ${posting.work_order_number}`,
+          debit: Number(posting.fine_amount),
+          credit: 0,
+        });
+        return rows;
+      }),
     ].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-    const openingBalance = round(Number(account.openingBalance) + Number(priorBills._sum.totalCurrentCharges ?? 0) - Number(priorPayments._sum.amount ?? 0));
+    const openingBalance = round(Number(account.openingBalance) + Number(priorBills._sum.totalCurrentCharges ?? 0)
+      + Number(priorDisconnectionPostings[0]?.total ?? 0) - Number(priorPayments._sum.amount ?? 0));
     let balance = openingBalance;
     const statement = entries.map((entry) => { balance = round(balance + entry.debit - entry.credit); return { ...entry, balance }; });
     const totalDebits = round(entries.reduce((sum, entry) => sum + entry.debit, 0));

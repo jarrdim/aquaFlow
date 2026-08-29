@@ -136,6 +136,12 @@ reconnectionsRouter.post("/:id/work-order", canCreateWorkOrder, async (req, res,
     if (!types[0]) return res.status(409).json({ error: "The RECONNECTION work-order type is not active" });
     const number = `WO-${new Date().getFullYear()}-${Date.now().toString().slice(-9)}`;
     const row = await prisma.$transaction(async (tx) => {
+      const locked = await tx.$queryRaw<any[]>`
+        SELECT status FROM aquaflow.reconnection_requests
+        WHERE reconnection_request_id=${parsedId.data} FOR UPDATE`;
+      if (locked[0]?.status !== "APPROVED") {
+        throw Object.assign(new Error("This reconnection request has already been dispatched or changed"), { status: 409 });
+      }
       const created = await tx.$queryRaw<any[]>`
         INSERT INTO aquaflow.work_orders
           (work_order_number, work_order_type_id, account_id, property_id, zone_id,
@@ -164,7 +170,8 @@ reconnectionsRouter.post("/:id/work-order", canCreateWorkOrder, async (req, res,
       return created[0];
     });
     res.status(201).json(row);
-  } catch (error) {
+  } catch (error: any) {
+    if (error?.status) return res.status(error.status).json({ error: error.message });
     next(error);
   }
 });
