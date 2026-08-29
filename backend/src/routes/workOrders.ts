@@ -707,11 +707,9 @@ workOrdersRouter.patch("/:id/status", canExecute, async (req, res) => {
       WHERE wo.work_order_id=${workOrderId.data}`;
     if (types[0]?.requires_signature === true && !["DISCONNECTION", "RECONNECTION", "NEW_CONNECTION"].includes(types[0].type_code))
       return res.status(409).json({ error: "Submit the materials and customer-signature completion report to complete this job" });
-    if (types[0]?.type_code === "RECONNECTION") {
-      return res.status(409).json({ error: "Complete reconnection work through the field reconnection report; payment confirmation and photo evidence are required" });
-    }
   }
   let disconnectionContext: any = null;
+  let reconnectionContext: any = null;
   if (parsed.data.status === "COMPLETED" && current[0].type_code === "DISCONNECTION") {
     if (!parsed.data.disconnection) {
       return res.status(400).json({ error: "Previous reading, current reading and final reading amount are required" });
@@ -765,6 +763,26 @@ workOrdersRouter.patch("/:id/status", canExecute, async (req, res) => {
       return res.status(400).json({ error: "Enter a reason for the fine" });
     }
   }
+  if (parsed.data.status === "COMPLETED" && current[0].type_code === "RECONNECTION") {
+    const contexts = await prisma.$queryRaw<any[]>`
+      SELECT rr.reconnection_request_id,rr.reconnection_fee,rr.fee_payment_status,
+        pay.payment_status,pay.payment_type,pay.amount AS paid_amount
+      FROM aquaflow.reconnection_requests rr
+      LEFT JOIN aquaflow.payments pay ON pay.payment_id=rr.fee_payment_id
+      WHERE rr.work_order_id=${workOrderId.data}
+      LIMIT 1`;
+    reconnectionContext = contexts[0];
+    if (!reconnectionContext) {
+      return res.status(409).json({ error: "This work order is not linked to a reconnection request" });
+    }
+    const paymentConfirmed = reconnectionContext.fee_payment_status === "PAID" &&
+      reconnectionContext.payment_status === "POSTED" &&
+      reconnectionContext.payment_type === "RECONNECTION_FEE" &&
+      Number(reconnectionContext.paid_amount) >= Number(reconnectionContext.reconnection_fee);
+    if (!paymentConfirmed) {
+      return res.status(409).json({ error: "A posted reconnection-fee payment is required before completion" });
+    }
+  }
   const officerId = ownership.officerId;
   await prisma.$transaction(async (tx) => {
     if (disconnectionContext && parsed.data.disconnection) {
@@ -810,6 +828,23 @@ workOrdersRouter.patch("/:id/status", canExecute, async (req, res) => {
         remarks: parsed.data.notes, performedBy: userId(req),
         metadata: { workOrderId: workOrderId.data.toString(), readingId: reading.readingId.toString() },
       } });
+    }
+    if (reconnectionContext) {
+      await tx.$executeRaw`
+        UPDATE aquaflow.reconnection_requests
+        SET status='COMPLETED',updated_at=CURRENT_TIMESTAMP
+        WHERE reconnection_request_id=${reconnectionContext.reconnection_request_id}`;
+      await tx.$executeRaw`
+        UPDATE aquaflow.customer_accounts
+        SET account_status='ACTIVE',updated_at=CURRENT_TIMESTAMP
+        WHERE account_id=${current[0].account_id} AND account_status='DISCONNECTED'`;
+      await tx.$executeRaw`
+        UPDATE aquaflow.meters m
+        SET status='ACTIVE',updated_at=CURRENT_TIMESTAMP
+        FROM aquaflow.meter_assignments ma
+        WHERE ma.meter_id=m.meter_id AND ma.account_id=${current[0].account_id}
+          AND ma.assignment_status='ACTIVE' AND ma.removal_date IS NULL
+          AND m.status='DISCONNECTED'`;
     }
     await tx.$executeRaw`
       UPDATE aquaflow.work_orders SET status = ${parsed.data.status},
