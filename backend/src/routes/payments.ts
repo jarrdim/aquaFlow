@@ -1461,6 +1461,16 @@ paymentsRouter.patch("/:id/allocate", checker, async (req, res, next) => {
   if (!paymentId || !data) return;
   try {
     const result = await prisma.$transaction(async (tx) => {
+      // Serialize allocation attempts without inventing a temporary payment
+      // status. Production constrains payment_status to RECEIVED, POSTED or
+      // REVERSED, so the database row lock is the concurrency control.
+      const locked = await tx.$queryRaw<Array<{ paymentId: bigint }>>`
+        SELECT payment_id AS "paymentId"
+        FROM aquaflow.payments
+        WHERE payment_id = ${paymentId}
+        FOR UPDATE`;
+      if (!locked.length)
+        throw Object.assign(new Error("Payment not found"), { status: 404 });
       const payment = await tx.payment.findUnique({ where: { paymentId } });
       if (!payment || payment.paymentStatus !== "RECEIVED" || payment.matchingStatus !== "UNMATCHED" || payment.accountId)
         throw Object.assign(
@@ -1489,15 +1499,6 @@ paymentsRouter.patch("/:id/allocate", checker, async (req, res, next) => {
       });
       if (accounts.length !== allocations.length)
         throw Object.assign(new Error("Every allocation must use an active customer account"), { status: 400 });
-
-      // Claim the source row inside this transaction so two operators cannot
-      // allocate the same unmatched transaction concurrently.
-      const claimed = await tx.payment.updateMany({
-        where: { paymentId, paymentStatus: "RECEIVED", matchingStatus: "UNMATCHED", accountId: null },
-        data: { paymentStatus: "ALLOCATING", updatedAt: new Date() },
-      });
-      if (claimed.count !== 1)
-        throw Object.assign(new Error("This unmatched payment is already being allocated"), { status: 409 });
 
       if (allocations.length === 1) {
         const allocation = await allocate(tx, payment, allocations[0].accountId, uid(req));
@@ -1602,7 +1603,9 @@ paymentsRouter.patch("/:id/allocate", checker, async (req, res, next) => {
         where: { paymentId },
         data: {
           matchingStatus: "MATCHED",
-          paymentStatus: "SPLIT",
+          // The source is an audit record, not an account credit. Keep its
+          // allowed RECEIVED status while child payments are POSTED.
+          paymentStatus: "RECEIVED",
           unallocatedAmount: 0,
           postedAt: new Date(),
           remarks: `Split across ${allocations.length} accounts. ${data.reason}`,
@@ -1614,7 +1617,7 @@ paymentsRouter.patch("/:id/allocate", checker, async (req, res, next) => {
           paymentId,
           eventType: "UNMATCHED_PAYMENT_SPLIT",
           previousStatus: "UNMATCHED",
-          newStatus: "SPLIT",
+          newStatus: "MATCHED",
           details: data.reason,
           performedBy: uid(req),
           metadata: {
