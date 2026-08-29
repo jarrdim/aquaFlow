@@ -246,8 +246,9 @@ workOrdersRouter.get("/", canView, async (req, res) => {
              NULLIF(TRIM(CONCAT_WS(' ', assignee.first_name, assignee.last_name)), '') AS "officerName"
       ${base} ${where}
       ORDER BY
-        CASE wo.priority WHEN 'EMERGENCY' THEN 1 WHEN 'HIGH' THEN 2 WHEN 'NORMAL' THEN 3 ELSE 4 END,
-        wo.due_date NULLS LAST, wo.created_at DESC
+        wo.due_date ASC NULLS LAST,
+        wo.created_at DESC,
+        wo.work_order_id DESC
       OFFSET ${offset} LIMIT ${take}`),
   ]);
   const total = countRows[0]?.total ?? 0;
@@ -704,7 +705,7 @@ workOrdersRouter.patch("/:id/status", canExecute, async (req, res) => {
       SELECT wt.type_code,wt.requires_signature FROM aquaflow.work_orders wo
       JOIN aquaflow.work_order_types wt ON wt.work_order_type_id=wo.work_order_type_id
       WHERE wo.work_order_id=${workOrderId.data}`;
-    if (types[0]?.requires_signature === true && !["DISCONNECTION", "RECONNECTION"].includes(types[0].type_code))
+    if (types[0]?.requires_signature === true && !["DISCONNECTION", "RECONNECTION", "NEW_CONNECTION"].includes(types[0].type_code))
       return res.status(409).json({ error: "Submit the materials and customer-signature completion report to complete this job" });
     if (types[0]?.type_code === "RECONNECTION") {
       return res.status(409).json({ error: "Complete reconnection work through the field reconnection report; payment confirmation and photo evidence are required" });

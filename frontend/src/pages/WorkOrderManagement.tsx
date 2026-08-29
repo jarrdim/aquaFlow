@@ -403,6 +403,19 @@ export default function WorkOrderManagement() {
   };
 
   useEffect(() => {
+    if (creating) return;
+
+    const focusId = params.get("focus");
+    if (!focusId || !/^\d+$/.test(focusId)) return;
+
+    void open({ workOrderId: focusId }).finally(() => {
+      const nextParams = new URLSearchParams(params);
+      nextParams.delete("focus");
+      setParams(nextParams, { replace: true });
+    });
+  }, [creating, params, setParams]);
+
+  useEffect(() => {
     const path = selected?.completionEvidence?.signature?.contentUrl;
     if (!path) {
       setCompletionSignatureUrl("");
@@ -489,14 +502,13 @@ export default function WorkOrderManagement() {
       });
       showToast(`Work order ${created.work_order_number} created.`, "success");
       setCreateOpen(false);
-      if (routeCreating) {
-        navigate(
-          connectionApplicationId
-            ? `/connections/${connectionApplicationId}`
-            : "/work-orders",
-          { replace: true },
-        );
-      }
+      const createdId = created.work_order_id || created.workOrderId;
+      navigate(
+        createdId
+          ? `/work-orders?focus=${encodeURIComponent(String(createdId))}`
+          : "/work-orders",
+        { replace: true },
+      );
       setForm({
         workOrderTypeId: "",
         accountId: "",
@@ -924,7 +936,7 @@ export default function WorkOrderManagement() {
     statusAction?.[0] === "COMPLETED" && selected?.type_code === "DISCONNECTION";
   const awaitingSignedFieldReport =
     statusAction?.[0] === "COMPLETED" && selected?.requires_signature === true &&
-    !["DISCONNECTION", "RECONNECTION"].includes(selected?.type_code);
+    !["DISCONNECTION", "RECONNECTION", "NEW_CONNECTION"].includes(selected?.type_code);
   const defaultDisconnectionFee = finalReadingAmount(
     selected?.disconnectionContext,
     disconnection.currentReading,

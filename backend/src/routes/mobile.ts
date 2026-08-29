@@ -1954,7 +1954,7 @@ function evidenceMetadata(row: any, workOrderId: bigint) {
 
 function completionEligible(row: any) {
   return row?.requires_signature === true &&
-    !["DISCONNECTION", "RECONNECTION"].includes(row.type_code ?? row.taskTypeCode);
+    !["DISCONNECTION", "RECONNECTION", "NEW_CONNECTION"].includes(row.type_code ?? row.taskTypeCode);
 }
 
 async function completionDetail(workOrderId: bigint, eligible: boolean) {
