@@ -922,6 +922,9 @@ export default function WorkOrderManagement() {
           : null;
   const completingDisconnection =
     statusAction?.[0] === "COMPLETED" && selected?.type_code === "DISCONNECTION";
+  const awaitingSignedFieldReport =
+    statusAction?.[0] === "COMPLETED" && selected?.requires_signature === true &&
+    !["DISCONNECTION", "RECONNECTION"].includes(selected?.type_code);
   const defaultDisconnectionFee = finalReadingAmount(
     selected?.disconnectionContext,
     disconnection.currentReading,
@@ -1362,6 +1365,19 @@ export default function WorkOrderManagement() {
                   )}
                 </section>
               )}
+              {awaitingSignedFieldReport && (
+                <section className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                  <h3 className="font-bold">Awaiting signed field completion report</h3>
+                  <p className="mt-1 text-xs leading-5">
+                    {latestAssignment?.first_name
+                      ? `${latestAssignment.first_name} ${latestAssignment.last_name}`
+                      : "The assigned field officer"} must open this job in the mobile app, record the inventory materials used or confirm none were used, verify the customer name and identity, capture the customer signature, and submit completion. Submission completes the work order automatically.
+                  </p>
+                  <button type="button" disabled={loading || saving} onClick={() => void refreshSelected()} className="mt-2 rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-bold text-amber-800 disabled:opacity-50">
+                    Refresh completion status
+                  </button>
+                </section>
+              )}
               <label className="block">
                 <span className="mb-1 block text-xs font-medium">
                   Action / decision notes *
@@ -1376,7 +1392,8 @@ export default function WorkOrderManagement() {
               </label>
               {statusAction && (
                 <button
-                  disabled={notes.trim().length < 2 || saving || !disconnectionFormValid}
+                  disabled={awaitingSignedFieldReport || notes.trim().length < 2 || saving || !disconnectionFormValid}
+                  title={awaitingSignedFieldReport ? "The assigned officer must submit the signed completion report in the mobile app" : undefined}
                   onClick={() =>
                     perform(
                       "status",
@@ -1403,7 +1420,7 @@ export default function WorkOrderManagement() {
                   {busyAction === "status" ? (
                     <InlineLoader label="Updating…" />
                   ) : (
-                    statusAction[1]
+                    awaitingSignedFieldReport ? "Awaiting signed field report" : statusAction[1]
                   )}
                 </button>
               )}
@@ -1723,9 +1740,16 @@ export default function WorkOrderManagement() {
               ) && (
                 <details className="rounded-lg border border-slate-200 p-3">
                   <summary className="cursor-pointer text-sm font-bold">
-                    Evidence and materials
+                    {awaitingSignedFieldReport
+                      ? "Additional evidence and consumables"
+                      : "Evidence and materials"}
                   </summary>
                   <div className="mt-3 space-y-3">
+                    {awaitingSignedFieldReport && (
+                      <p className="rounded-lg bg-sky-50 px-3 py-2 text-xs leading-5 text-sky-800">
+                        Items added here are supplementary audit records. They do not replace the mobile inventory and customer-signature completion report.
+                      </p>
+                    )}
                     <SearchableSelect
                       className={input}
                       value={evidence.evidenceType}
