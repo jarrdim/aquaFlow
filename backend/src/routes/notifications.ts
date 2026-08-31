@@ -1000,6 +1000,8 @@ notificationsRouter.put(
         clientId: parsed.data.clientId || existing.clientId,
         accessKey: parsed.data.accessKey || existing.accessKey,
         callbackToken: parsed.data.callbackToken || existing.callbackToken,
+
+        
       };
       const validSecrets = onfonSecretSchema.safeParse(secrets);
       if (!validSecrets.success)

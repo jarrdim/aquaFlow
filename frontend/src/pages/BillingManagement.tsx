@@ -2869,8 +2869,12 @@ export function BillNotifications() {
         billIds: filteredBills.map((bill) => bill.billId),
         channels,
       });
-      const delivery = await api.processNotifications((result.notificationIds ?? []).map(String), 1000);
-      const processed = delivery.processed ?? [];
+      const notificationIds = (result.notificationIds ?? []).map(String);
+      const processed: Row[] = [];
+      for (let offset = 0; offset < notificationIds.length; offset += 1000) {
+        const delivery = await api.processNotifications(notificationIds.slice(offset, offset + 1000), 1000);
+        processed.push(...(delivery.processed ?? []));
+      }
       const successful = processed.filter((item: Row) => ["SENT", "DELIVERED"].includes(item?.deliveryStatus)).length;
       const failed = processed.filter((item: Row) => item?.deliveryStatus === "FAILED").length;
       setMessage(

@@ -37,6 +37,13 @@ function round(value: number, places = 2) {
   const factor = 10 ** places;
   return Math.round((value + Number.EPSILON) * factor) / factor;
 }
+function batchesOf<T>(values: T[], size: number): T[][] {
+  const batches: T[][] = [];
+  for (let offset = 0; offset < values.length; offset += size) {
+    batches.push(values.slice(offset, offset + size));
+  }
+  return batches;
+}
 function smsDate(value: Date) {
   return `${String(value.getUTCDate()).padStart(2, "0")}/${String(value.getUTCMonth() + 1).padStart(2, "0")}/${value.getUTCFullYear()}`;
 }
@@ -307,6 +314,7 @@ billingRouter.get("/preview", async (req, res, next) => {
         approvedReadings: result.rows.filter((row) => row.reading).length,
         missingReadings: result.rows.filter((row) => row.issue === "MISSING_READING").length,
         missingTariffs: result.rows.filter((row) => row.issue === "MISSING_TARIFF").length,
+
         duplicates: result.rows.filter((row) => row.issue === "DUPLICATE_BILL").length,
         exceptions: result.rows.filter((row) => row.eligible && row.issue !== "NONE").length,
         totalAmount: round(result.rows.filter((row) => row.eligible).reduce((sum, row) => sum + row.totalAmountDue, 0)),
@@ -330,6 +338,8 @@ billingRouter.get("/preview", async (req, res, next) => {
         eligible: row.eligible,
       })),
     });
+
+
   } catch (error: any) {
     if (error.status) return res.status(error.status).json({ error: error.message });
     next(error);
@@ -479,43 +489,79 @@ billingRouter.post("/notifications", requireRole("SYSTEM_ADMIN", "BILLING_OFFICE
       where: { settingId: 1n },
       select: { reconnectionFee: true },
     });
-    const notificationIds: bigint[] = [];
-    let queued = 0;
-    await prisma.$transaction(async (tx) => {
-      for (const bill of bills) {
-        const name = customerName(bill.account.customer);
-        const accountNumber = customerFacingAccountNumber(bill.account.accountNumber);
-        const previousReading = bill.reading ? Number(bill.reading.previousReading) : null;
-        const currentReading = bill.reading ? Number(bill.reading.currentReading) : null;
-        const amountPaid = Number(bill.paidAmount);
-        const totalAmount = Math.max(0, Number(bill.totalAmountDue) - amountPaid);
-        const expiresAt = new Date(Date.now() + 30 * 86_400_000);
-        const paymentToken = createPaymentLinkToken({
-          accountId: bill.accountId.toString(),
-          expiresAt: expiresAt.toISOString(),
+    const requestedBy = uid(req);
+    const notificationRows: Prisma.NotificationCreateManyInput[] = [];
+    const billNotificationRows: Prisma.BillNotificationCreateManyInput[] = [];
+    const billingEventRows: Prisma.BillingEventCreateManyInput[] = [];
+    const updatedAt = new Date();
+
+    for (const bill of bills) {
+      const name = customerName(bill.account.customer);
+      const accountNumber = customerFacingAccountNumber(bill.account.accountNumber);
+      const previousReading = bill.reading ? Number(bill.reading.previousReading) : null;
+      const currentReading = bill.reading ? Number(bill.reading.currentReading) : null;
+      const amountPaid = Number(bill.paidAmount);
+      const totalAmount = Math.max(0, Number(bill.totalAmountDue) - amountPaid);
+      const expiresAt = new Date(Date.now() + 30 * 86_400_000);
+      const paymentToken = createPaymentLinkToken({
+        accountId: bill.accountId.toString(),
+        expiresAt: expiresAt.toISOString(),
+      });
+      const paymentUrl = `${publicAppUrl()}/pay/${paymentToken}`;
+      const message = `Dear ${name} A/C ${accountNumber} your bill as at ${smsDate(bill.issueDate)}. Prev Read ${smsReading(previousReading)} Curr Read ${smsReading(currentReading)} Consumption ${smsReading(Number(bill.consumptionUnits))} Arrears ${smsNumber(Number(bill.previousBalance))} Amount Paid ${smsNumber(amountPaid)} Current Bill ${smsNumber(Number(bill.totalCurrentCharges))} Total Amount ${smsNumber(totalAmount)}. Due date is ${smsDate(bill.dueDate)}. Reconnection Fee is ${smsNumber(Number(settings?.reconnectionFee ?? 1155), 0)}. Bills payable through PayBill No 823496 using ${accountNumber} as the account number. WE MAKE IT SAFE BECAUSE WATER IS LIFE. THANK YOU.\n\nPay now: ${paymentUrl}`;
+      for (const channel of data.channels) {
+        const deliveryChannel = channel === "APP" ? "PUSH" : "SMS";
+        const recipient = channel === "SMS" ? bill.account.customer.phoneNumber : bill.account.customer.customerNumber;
+        if (!recipient) continue;
+        notificationRows.push({
+          customerId: bill.account.customerId,
+          accountId: bill.accountId,
+          billId: bill.billId,
+          notificationType: "BILL_ISSUED",
+          channel: deliveryChannel,
+          recipient,
+          subject: `Water bill - ${bill.billingCycle.cycleName}`,
+          messageBody: message,
+          requestedBy,
+          metadata: { source: "BILLING", billingCycleId: bill.billingCycleId.toString(), requestedChannel: channel },
         });
-        const paymentUrl = `${publicAppUrl()}/pay/${paymentToken}`;
-        const message = `Dear ${name} A/C ${accountNumber} your bill as at ${smsDate(bill.issueDate)}. Prev Read ${smsReading(previousReading)} Curr Read ${smsReading(currentReading)} Consumption ${smsReading(Number(bill.consumptionUnits))} Arrears ${smsNumber(Number(bill.previousBalance))} Amount Paid ${smsNumber(amountPaid)} Current Bill ${smsNumber(Number(bill.totalCurrentCharges))} Total Amount ${smsNumber(totalAmount)}. Due date is ${smsDate(bill.dueDate)}. Reconnection Fee is ${smsNumber(Number(settings?.reconnectionFee ?? 1155), 0)}. Bills payable through PayBill No 823496 using ${accountNumber} as the account number. WE MAKE IT SAFE BECAUSE WATER IS LIFE. THANK YOU.\n\nPay now: ${paymentUrl}`;
-        for (const channel of data.channels) {
-          const deliveryChannel = channel === "APP" ? "PUSH" : "SMS";
-          const recipient = channel === "SMS" ? bill.account.customer.phoneNumber : bill.account.customer.customerNumber;
-          if (!recipient) continue;
-          const notification = await tx.notification.create({ data: {
-            customerId: bill.account.customerId, accountId: bill.accountId, billId: bill.billId,
-            notificationType: "BILL_ISSUED", channel: deliveryChannel, recipient,
-            subject: `Water bill - ${bill.billingCycle.cycleName}`, messageBody: message,
-            requestedBy: uid(req),
-            metadata: { source: "BILLING", billingCycleId: bill.billingCycleId.toString(), requestedChannel: channel },
-          } });
-          notificationIds.push(notification.notificationId);
-          await tx.billNotification.create({ data: { billId: bill.billId, channel, recipient, message, status: "QUEUED", sentBy: uid(req) } });
-          queued += 1;
-        }
-        await tx.bill.update({ where: { billId: bill.billId }, data: { notificationStatus: "QUEUED", updatedAt: new Date() } });
-        await tx.billingEvent.create({ data: { billingCycleId: bill.billingCycleId, billId: bill.billId, eventType: "NOTIFICATION_QUEUED", details: data.channels.join(", "), performedBy: uid(req) } });
+        billNotificationRows.push({ billId: bill.billId, channel, recipient, message, status: "QUEUED", sentBy: requestedBy });
       }
-    });
-    res.json({ bills: bills.length, notifications: queued, notificationIds });
+      billingEventRows.push({
+        billingCycleId: bill.billingCycleId,
+        billId: bill.billId,
+        eventType: "NOTIFICATION_QUEUED",
+        details: data.channels.join(", "),
+        performedBy: requestedBy,
+        createdAt: updatedAt,
+      });
+
+      // console.log(billNotificationRows, notificationRows, billingEventRows);
+    }
+
+    const notificationIds: bigint[] = [];
+    await prisma.$transaction(async (tx) => {
+      for (const batch of batchesOf(notificationRows, 500)) {
+        const created = await tx.notification.createManyAndReturn({
+          data: batch,
+          select: { notificationId: true },
+        });
+        notificationIds.push(...created.map((notification) => notification.notificationId));
+      }
+      for (const batch of batchesOf(billNotificationRows, 500)) {
+        await tx.billNotification.createMany({ data: batch });
+      }
+      if (bills.length) {
+        await tx.bill.updateMany({
+          where: { billId: { in: bills.map((bill) => bill.billId) } },
+          data: { notificationStatus: "QUEUED", updatedAt },
+        });
+      }
+      for (const batch of batchesOf(billingEventRows, 500)) {
+        await tx.billingEvent.createMany({ data: batch });
+      }
+    }, { maxWait: 10_000, timeout: 120_000 });
+    res.json({ bills: bills.length, notifications: notificationRows.length, notificationIds });
   } catch (error) { next(error); }
 });
 
