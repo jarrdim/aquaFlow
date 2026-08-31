@@ -2954,11 +2954,17 @@ export function BillNotifications() {
             >
               {readingCycleClosed ? "Send bill notifications" : "Close reading cycle first"}
             </Button>
+            <Link
+              to="/notifications/queue"
+              className="flex w-full items-center justify-center rounded-xl border border-emerald-600 bg-white px-4 py-2.5 text-[15px] font-semibold text-emerald-700 transition hover:bg-emerald-50"
+            >
+              Open delivery queue
+            </Link>
           </div>
         </Card>
         <Card title="Message preview">
           <div className="rounded-xl bg-slate-50 p-5 text-slate-700">
-            Dear <strong>[Customer Name]</strong> A/C <strong>[Account Number]</strong> your bill as at <strong>[Bill Date]</strong>. Prev Read <strong>[Previous Reading]</strong> Curr Read <strong>[Current Reading]</strong> Consumption <strong>[Units]</strong> Arrears <strong>[Arrears]</strong> Amount Paid <strong>[Amount Paid]</strong> Current Bill <strong>[Current Bill]</strong> Total Amount <strong>[Total Amount]</strong>. Due date is <strong>[Due Date]</strong>. Reconnection Fee is <strong>1155</strong>. Bills payable through PayBill No <strong>823496</strong> using <strong>[Account Number]</strong> as the account number. WE MAKE IT SAFE BECAUSE WATER IS LIFE. THANK YOU.
+            Dear <strong>[Customer Name]</strong> A/C <strong>[Account Number without ACC-]</strong> your bill as at <strong>[Bill Date]</strong>. Prev Read <strong>[Previous Reading]</strong> Curr Read <strong>[Current Reading]</strong> Consumption <strong>[Units]</strong> Arrears <strong>[Arrears]</strong> Amount Paid <strong>[Amount Paid]</strong> Current Bill <strong>[Current Bill]</strong> Total Amount <strong>[Total Amount]</strong>. Due date is <strong>[Due Date]</strong>. Reconnection Fee is <strong>1155</strong>. Bills payable through PayBill No <strong>823496</strong> using <strong>[Account Number without ACC-]</strong> as the account number. WE MAKE IT SAFE BECAUSE WATER IS LIFE. THANK YOU.
             <div className="mt-3 font-semibold text-aqua-700">Pay now: [Secure Payment Link]</div>
           </div>
           <div className="mt-4 grid gap-3 md:grid-cols-3">

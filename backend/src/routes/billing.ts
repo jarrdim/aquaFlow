@@ -54,6 +54,10 @@ function smsReading(value: number | null) {
   });
 }
 
+function customerFacingAccountNumber(value: string) {
+  return value.trim().replace(/^ACC-/i, "");
+}
+
 const billInclude = {
   account: {
     include: {
@@ -480,6 +484,7 @@ billingRouter.post("/notifications", requireRole("SYSTEM_ADMIN", "BILLING_OFFICE
     await prisma.$transaction(async (tx) => {
       for (const bill of bills) {
         const name = customerName(bill.account.customer);
+        const accountNumber = customerFacingAccountNumber(bill.account.accountNumber);
         const previousReading = bill.reading ? Number(bill.reading.previousReading) : null;
         const currentReading = bill.reading ? Number(bill.reading.currentReading) : null;
         const amountPaid = Number(bill.paidAmount);
@@ -490,7 +495,7 @@ billingRouter.post("/notifications", requireRole("SYSTEM_ADMIN", "BILLING_OFFICE
           expiresAt: expiresAt.toISOString(),
         });
         const paymentUrl = `${publicAppUrl()}/pay/${paymentToken}`;
-        const message = `Dear ${name} A/C ${bill.account.accountNumber} your bill as at ${smsDate(bill.issueDate)}. Prev Read ${smsReading(previousReading)} Curr Read ${smsReading(currentReading)} Consumption ${smsReading(Number(bill.consumptionUnits))} Arrears ${smsNumber(Number(bill.previousBalance))} Amount Paid ${smsNumber(amountPaid)} Current Bill ${smsNumber(Number(bill.totalCurrentCharges))} Total Amount ${smsNumber(totalAmount)}. Due date is ${smsDate(bill.dueDate)}. Reconnection Fee is ${smsNumber(Number(settings?.reconnectionFee ?? 1155), 0)}. Bills payable through PayBill No 823496 using ${bill.account.accountNumber} as the account number. WE MAKE IT SAFE BECAUSE WATER IS LIFE. THANK YOU.\n\nPay now: ${paymentUrl}`;
+        const message = `Dear ${name} A/C ${accountNumber} your bill as at ${smsDate(bill.issueDate)}. Prev Read ${smsReading(previousReading)} Curr Read ${smsReading(currentReading)} Consumption ${smsReading(Number(bill.consumptionUnits))} Arrears ${smsNumber(Number(bill.previousBalance))} Amount Paid ${smsNumber(amountPaid)} Current Bill ${smsNumber(Number(bill.totalCurrentCharges))} Total Amount ${smsNumber(totalAmount)}. Due date is ${smsDate(bill.dueDate)}. Reconnection Fee is ${smsNumber(Number(settings?.reconnectionFee ?? 1155), 0)}. Bills payable through PayBill No 823496 using ${accountNumber} as the account number. WE MAKE IT SAFE BECAUSE WATER IS LIFE. THANK YOU.\n\nPay now: ${paymentUrl}`;
         for (const channel of data.channels) {
           const deliveryChannel = channel === "APP" ? "PUSH" : "SMS";
           const recipient = channel === "SMS" ? bill.account.customer.phoneNumber : bill.account.customer.customerNumber;

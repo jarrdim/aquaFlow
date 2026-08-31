@@ -257,12 +257,7 @@ workOrdersRouter.get("/", canView, async (req, res) => {
                  AND child_request.work_order_id IS NOT NULL
              ) AS "hasChildren"
       ${base} ${where}
-      ORDER BY
-        COALESCE(parent_wo.due_date, wo.due_date) ASC NULLS LAST,
-        COALESCE(parent_wo.created_at, wo.created_at) DESC,
-        CASE WHEN parent_wo.work_order_id IS NULL THEN 0 ELSE 1 END,
-        wo.created_at ASC,
-        wo.work_order_id DESC
+      ORDER BY wo.created_at DESC, wo.work_order_id DESC
       OFFSET ${offset} LIMIT ${take}`),
   ]);
   const total = countRows[0]?.total ?? 0;

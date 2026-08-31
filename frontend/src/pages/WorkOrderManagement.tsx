@@ -144,6 +144,7 @@ export default function WorkOrderManagement() {
   const creating = routeCreating || createOpen;
   const sourceRequestId = params.get("serviceRequestId") || "";
   const connectionApplicationId = params.get("connectionId") || "";
+  const selectedWorkOrderId = params.get("workOrderId") || "";
   const [lookups, setLookups] = useState<Lookup>({
     types: [],
     zones: [],
@@ -219,18 +220,36 @@ export default function WorkOrderManagement() {
     dueDate: "",
   });
 
+  const filterQuery = params.get("q") || "";
+  const filterStatus = params.get("status") || "";
+  const filterPriority = params.get("priority") || "";
+  const filterZoneId = params.get("zoneId") || "";
+  const filterTypeId = params.get("typeId") || "";
+  const filterOfficerId = params.get("officerId") || "";
+  const filterPage = params.get("page") || "1";
+  const filterTake = params.get("take") || "25";
+
   const filters = useMemo(
     () => ({
-      q: params.get("q") || "",
-      status: params.get("status") || "",
-      priority: params.get("priority") || "",
-      zoneId: params.get("zoneId") || "",
-      typeId: params.get("typeId") || "",
-      officerId: params.get("officerId") || "",
-      page: params.get("page") || "1",
-      take: params.get("take") || "25",
+      q: filterQuery,
+      status: filterStatus,
+      priority: filterPriority,
+      zoneId: filterZoneId,
+      typeId: filterTypeId,
+      officerId: filterOfficerId,
+      page: filterPage,
+      take: filterTake,
     }),
-    [params],
+    [
+      filterQuery,
+      filterStatus,
+      filterPriority,
+      filterZoneId,
+      filterTypeId,
+      filterOfficerId,
+      filterPage,
+      filterTake,
+    ],
   );
 
   const load = useCallback(async () => {
@@ -370,8 +389,20 @@ export default function WorkOrderManagement() {
     setParams(next, { replace: true });
   };
 
-  const open = async (item: any) => {
-    setSelected(item);
+  const open = async (item: any, persistSelection = true) => {
+    const workOrderId = String(item.work_order_id || item.workOrderId || "");
+    if (!workOrderId) return;
+
+    if (persistSelection) {
+      const next = new URLSearchParams(params);
+      next.set("workOrderId", workOrderId);
+      setParams(next, { replace: true });
+    }
+
+    // A row click has enough summary data to render immediately. A selection
+    // restored from the URL only has an ID, so keep the panel closed until the
+    // complete work order arrives instead of showing an `undefined` shell.
+    if (persistSelection) setSelected(item);
     setCashPaymentOpen(false);
     setCashPayment({
       transactionReference: "",
@@ -380,7 +411,7 @@ export default function WorkOrderManagement() {
     });
     setDetailLoading(true);
     try {
-      const detail = await api.getWorkOrder(item.workOrderId);
+      const detail = await api.getWorkOrder(workOrderId);
       setSelected(detail);
       const latest = detail.assignments?.[0];
       setAssignment({
@@ -406,6 +437,20 @@ export default function WorkOrderManagement() {
       setDetailLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (creating || !selectedWorkOrderId) return;
+
+    const currentId = String(
+      selected?.work_order_id || selected?.workOrderId || "",
+    );
+    if (currentId === selectedWorkOrderId) return;
+
+    void open({ workOrderId: selectedWorkOrderId }, false);
+    // Selection restoration is driven only by the URL ID. Including `selected`
+    // would restart the detail request while it is being hydrated.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [creating, selectedWorkOrderId]);
 
   const refreshSelected = async () => {
     if (!selected?.work_order_id && !selected?.workOrderId) return;
@@ -1023,7 +1068,12 @@ export default function WorkOrderManagement() {
         <div className="flex gap-2">
           <button
             disabled={loading}
-            onClick={() => void load()}
+            onClick={() =>
+              void Promise.all([
+                load(),
+                selected ? refreshSelected() : Promise.resolve(),
+              ])
+            }
             className="min-w-28 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold disabled:opacity-60"
           >
             {loading ? <InlineLoader label="Refreshing…" /> : "Refresh"}

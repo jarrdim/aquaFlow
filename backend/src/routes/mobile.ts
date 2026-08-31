@@ -2030,7 +2030,7 @@ mobileRouter.get("/field/work-orders", fieldWorkOrderRoles, async (req, res, nex
            (a.status='COMPLETED' AND EXISTS (
              SELECT 1 FROM aquaflow.field_work_order_completion_reports cr
              WHERE cr.work_order_id=wo.work_order_id AND cr.status='SUBMITTED')))
-      ORDER BY wo.scheduled_date NULLS LAST, wo.created_at DESC`;
+      ORDER BY wo.created_at DESC, wo.work_order_id DESC`;
     res.json({ items: rows });
   } catch (error) { next(error); }
 });
@@ -2848,7 +2848,7 @@ async function ownedReconnection(req: Request, res: Response, workOrderId: bigin
       rr.reconnection_fee, pay.payment_status, pay.payment_type, pay.amount AS paid_amount
     FROM aquaflow.work_orders wo
     JOIN aquaflow.work_order_types wt ON wt.work_order_type_id=wo.work_order_type_id
-    JOIN aquaflow.reconnection_requests rr ON rr.work_order_id=wo.work_order_id
+    LEFT JOIN aquaflow.reconnection_requests rr ON rr.work_order_id=wo.work_order_id
     LEFT JOIN aquaflow.payments pay ON pay.payment_id=rr.fee_payment_id
     JOIN LATERAL (SELECT assignment_id,field_officer_id,status FROM aquaflow.work_order_assignments
       WHERE work_order_id=wo.work_order_id ORDER BY assigned_at DESC,assignment_id DESC LIMIT 1) a ON TRUE
@@ -2872,7 +2872,7 @@ function reconnectionPhotoMetadata(row: any, workOrderId: bigint) {
 async function reconnectionDetail(workOrderId: bigint) {
   const [rows,reports,photos] = await Promise.all([
     prisma.$queryRaw<any[]>`SELECT wo.work_order_id AS "workOrderId",wo.work_order_number AS "workOrderNumber",
-      rr.reconnection_request_id AS "reconnectionRequestId",rr.request_number AS "reconnectionReference",
+      rr.reconnection_request_id AS "reconnectionRequestId",COALESCE(rr.request_number,'') AS "reconnectionReference",
       COALESCE(dwo.source_reference,dwo.work_order_number) AS "disconnectionReference",
       ca.account_number AS "accountNumber",ca.account_status AS "accountStatus",
       (SELECT m.status FROM aquaflow.meter_assignments ma JOIN aquaflow.meters m ON m.meter_id=ma.meter_id
@@ -2880,10 +2880,13 @@ async function reconnectionDetail(workOrderId: bigint) {
        ORDER BY ma.assignment_date DESC,ma.assignment_id DESC LIMIT 1) AS "meterStatus",
       COALESCE(NULLIF(TRIM(CONCAT_WS(' ',c.first_name,c.middle_name,c.last_name)),''),c.organization_name,c.customer_number) AS "customerName",
       CONCAT_WS(', ',p.plot_number,p.building_name,p.physical_address) AS location,wo.scheduled_date AS "scheduledDate",
-      wo.status,rr.status AS "requestStatus",rr.fee_payment_status AS "feePaymentStatus",rr.reconnection_fee AS "amountRequired",
-      pay.amount AS "amountPaid",pay.payment_status AS "paymentStatus",pay.transaction_reference AS "paymentReference",
-      (rr.fee_payment_status='PAID' AND pay.payment_status='POSTED' AND pay.payment_type='RECONNECTION_FEE' AND pay.amount>=rr.reconnection_fee) AS "paymentConfirmed"
-      FROM aquaflow.work_orders wo JOIN aquaflow.reconnection_requests rr ON rr.work_order_id=wo.work_order_id
+      wo.status,COALESCE(rr.status,'NOT_CREATED') AS "requestStatus",
+      COALESCE(rr.fee_payment_status,'NOT_STARTED') AS "feePaymentStatus",
+      COALESCE(rr.reconnection_fee,0) AS "amountRequired",
+      COALESCE(pay.amount,0) AS "amountPaid",COALESCE(pay.payment_status,'NOT_STARTED') AS "paymentStatus",
+      pay.transaction_reference AS "paymentReference",
+      COALESCE(rr.fee_payment_status='PAID' AND pay.payment_status='POSTED' AND pay.payment_type='RECONNECTION_FEE' AND pay.amount>=rr.reconnection_fee,FALSE) AS "paymentConfirmed"
+      FROM aquaflow.work_orders wo LEFT JOIN aquaflow.reconnection_requests rr ON rr.work_order_id=wo.work_order_id
       JOIN aquaflow.customer_accounts ca ON ca.account_id=wo.account_id JOIN aquaflow.customers c ON c.customer_id=ca.customer_id
       LEFT JOIN aquaflow.properties p ON p.property_id=wo.property_id LEFT JOIN aquaflow.payments pay ON pay.payment_id=rr.fee_payment_id
       LEFT JOIN aquaflow.work_orders dwo ON dwo.work_order_id=rr.disconnection_work_order_id WHERE wo.work_order_id=${workOrderId}`,
@@ -2899,14 +2902,15 @@ async function reconnectionDetail(workOrderId: bigint) {
 mobileRouter.get("/field/reconnections",fieldWorkOrderRoles,async(req,res,next)=>{try{
   const officer=await activeFieldOfficer(req,res);if(!officer)return;
   const rows=await prisma.$queryRaw<any[]>`SELECT wo.work_order_id AS "workOrderId",wo.work_order_number AS "workOrderNumber",
-    rr.request_number AS "reconnectionReference",COALESCE(dwo.source_reference,dwo.work_order_number) AS "disconnectionReference",
+    COALESCE(rr.request_number,'') AS "reconnectionReference",COALESCE(dwo.source_reference,dwo.work_order_number) AS "disconnectionReference",
     ca.account_number AS "accountNumber",COALESCE(NULLIF(TRIM(CONCAT_WS(' ',c.first_name,c.middle_name,c.last_name)),''),c.organization_name,c.customer_number) AS "customerName",
     CONCAT_WS(', ',p.plot_number,p.building_name,p.physical_address) AS location,wo.scheduled_date AS "scheduledDate",wo.status,
-    rr.fee_payment_status AS "feePaymentStatus",pay.payment_status AS "paymentStatus",
-    (rr.fee_payment_status='PAID' AND pay.payment_status='POSTED' AND pay.payment_type='RECONNECTION_FEE' AND pay.amount>=rr.reconnection_fee) AS "paymentConfirmed",
+    COALESCE(rr.fee_payment_status,'NOT_STARTED') AS "feePaymentStatus",
+    COALESCE(pay.payment_status,'NOT_STARTED') AS "paymentStatus",
+    COALESCE(rr.fee_payment_status='PAID' AND pay.payment_status='POSTED' AND pay.payment_type='RECONNECTION_FEE' AND pay.amount>=rr.reconnection_fee,FALSE) AS "paymentConfirmed",
     fr.status AS "evidenceStatus",a.assignment_id AS "assignmentId",a.status AS "assignmentStatus"
     FROM aquaflow.work_orders wo JOIN aquaflow.work_order_types wt ON wt.work_order_type_id=wo.work_order_type_id AND wt.type_code='RECONNECTION'
-    JOIN aquaflow.reconnection_requests rr ON rr.work_order_id=wo.work_order_id JOIN aquaflow.customer_accounts ca ON ca.account_id=wo.account_id
+    LEFT JOIN aquaflow.reconnection_requests rr ON rr.work_order_id=wo.work_order_id JOIN aquaflow.customer_accounts ca ON ca.account_id=wo.account_id
     JOIN aquaflow.customers c ON c.customer_id=ca.customer_id LEFT JOIN aquaflow.properties p ON p.property_id=wo.property_id
     LEFT JOIN aquaflow.payments pay ON pay.payment_id=rr.fee_payment_id LEFT JOIN aquaflow.work_orders dwo ON dwo.work_order_id=rr.disconnection_work_order_id
     LEFT JOIN aquaflow.field_reconnection_reports fr ON fr.work_order_id=wo.work_order_id
