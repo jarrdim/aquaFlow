@@ -5,7 +5,7 @@ import {
   useParams,
   useSearchParams,
 } from "react-router-dom";
-import { api } from "../lib/api";
+import { api, getSessionUser } from "../lib/api";
 import { decodeId, encodeId } from "../lib/hashids";
 import { SearchableSelect } from "../components/SearchableSelect";
 import { SweetAlertToast } from "../components/SweetAlertToast";
@@ -102,6 +102,7 @@ function Field({
 const tones: Record<string, string> = {
   ACTIVE: "bg-emerald-50 text-emerald-700 ring-emerald-600/20",
   IN_STOCK: "bg-cyan-50 text-cyan-700 ring-cyan-600/20",
+  RESERVED: "bg-amber-50 text-amber-700 ring-amber-600/20",
   FAULTY: "bg-orange-50 text-orange-700 ring-orange-600/20",
   TAMPERED: "bg-red-50 text-red-700 ring-red-600/20",
   REPLACED: "bg-violet-50 text-violet-700 ring-violet-600/20",
@@ -1715,21 +1716,98 @@ export function AssignMeter({
 
 function MeterSummary({ meter }: { meter: AnyRecord }) {
   return (
-    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
       {[
         ["Type", pretty(meter.meterType)],
         ["Size", displaySize(meter.meterSizeMm)],
-        ["Brand", meter.brand || "—"],
-        ["Model", meter.model || "—"],
-        ["Serial no.", meter.serialNumber || "—"],
-        ["Opening reading", Number(meter.openingReading).toLocaleString()],
+        ["Technology", pretty(meter.technology)],
+        [
+          "Opening reading",
+          `${Number(meter.openingReading).toLocaleString()} units`,
+        ],
       ].map(([label, value]) => (
-        <div key={label} className="rounded-xl border border-slate-200 p-4">
-          <div className="text-xs text-slate-500">{label}</div>
-          <div className="mt-1 font-semibold text-slate-800">{value}</div>
+        <div
+          key={label}
+          className="rounded-xl border border-slate-200/80 bg-white px-4 py-3 shadow-sm"
+        >
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+            {label}
+          </div>
+          <div className="mt-1 text-sm font-bold text-slate-800">{value}</div>
         </div>
       ))}
     </div>
+  );
+}
+
+function ProfileLine({
+  label,
+  value,
+  strong = false,
+}: {
+  label: string;
+  value: ReactNode;
+  strong?: boolean;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-4 border-b border-slate-100 py-2 last:border-0">
+      <span className="text-sm text-slate-500">{label}</span>
+      <span
+        className={`max-w-[65%] text-right text-sm ${strong ? "font-bold text-slate-900" : "font-medium text-slate-700"}`}
+      >
+        {value}
+      </span>
+    </div>
+  );
+}
+
+function ProfileAction({
+  to,
+  title,
+  description,
+  tone = "slate",
+}: {
+  to: string;
+  title: string;
+  description: string;
+  tone?: "aqua" | "slate" | "amber" | "red" | "green";
+}) {
+  const tones = {
+    aqua: "border-aqua-200 bg-aqua-50 text-aqua-800 hover:border-aqua-300 hover:bg-aqua-100",
+    slate:
+      "border-slate-200 bg-white text-slate-800 hover:border-slate-300 hover:bg-slate-50",
+    amber:
+      "border-amber-200 bg-amber-50/70 text-amber-900 hover:border-amber-300 hover:bg-amber-50",
+    red: "border-red-200 bg-red-50/60 text-red-800 hover:border-red-300 hover:bg-red-50",
+    green:
+      "border-emerald-200 bg-emerald-50/70 text-emerald-800 hover:border-emerald-300 hover:bg-emerald-50",
+  };
+  return (
+    <Link
+      to={to}
+      className={`group flex min-h-[68px] items-center justify-between gap-3 rounded-xl border px-4 py-3 transition ${tones[tone]}`}
+    >
+      <span>
+        <span className="block text-sm font-bold">{title}</span>
+        <span className="mt-0.5 block text-xs font-medium opacity-70">
+          {description}
+        </span>
+      </span>
+      <svg
+        viewBox="0 0 20 20"
+        fill="none"
+        className="h-4 w-4 shrink-0 transition-transform group-hover:translate-x-0.5"
+        aria-hidden="true"
+      >
+        <path
+          d="m7.5 4.5 5.5 5.5-5.5 5.5"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    </Link>
   );
 }
 
@@ -1813,22 +1891,76 @@ export function MeterProfile() {
       {!meter ? (
         <Spinner />
       ) : (
-        <Card>
-          <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-3">
-              <h2 className="text-xl font-bold text-slate-900">
-                {meter.meterNumber}
-              </h2>
-              <Status value={meter.status} />
-              <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
-                {pretty(meter.installationStatus)}
-              </span>
+        <Card className="overflow-hidden">
+          <div className="-mx-4 -mt-4 mb-4 border-b border-aqua-100 bg-gradient-to-r from-aqua-50 via-white to-slate-50 px-5 py-5 lg:px-6">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="flex min-w-0 items-center gap-4">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-aqua-700 text-white shadow-sm shadow-aqua-700/20">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    className="h-6 w-6"
+                    aria-hidden="true"
+                  >
+                    <path
+                      d="M7 5.5h10v13H7zM9.5 3.5h5M9.5 20.5h5"
+                      stroke="currentColor"
+                      strokeWidth="1.7"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                    <circle
+                      cx="12"
+                      cy="11"
+                      r="2.5"
+                      stroke="currentColor"
+                      strokeWidth="1.7"
+                    />
+                  </svg>
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-aqua-700">
+                    Meter asset
+                  </p>
+                  <div className="mt-1 flex flex-wrap items-center gap-2.5">
+                    <h2 className="truncate text-xl font-bold tracking-tight text-slate-900 lg:text-2xl">
+                      {meter.meterNumber}
+                    </h2>
+                    <Status value={meter.status} />
+                    <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-600">
+                      {pretty(meter.installationStatus)}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-sm text-slate-500">
+                    {meter.brand || "Brand not recorded"}
+                    {meter.model ? ` · ${meter.model}` : ""}
+                    {meter.serialNumber ? ` · S/N ${meter.serialNumber}` : ""}
+                  </p>
+                </div>
+              </div>
+              {!editing && (
+                <button
+                  type="button"
+                  onClick={beginEdit}
+                  className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition hover:border-aqua-300 hover:text-aqua-700"
+                >
+                  <svg
+                    viewBox="0 0 20 20"
+                    fill="none"
+                    className="h-4 w-4"
+                    aria-hidden="true"
+                  >
+                    <path
+                      d="m12.8 3.2 4 4L7 17H3v-4L12.8 3.2Z"
+                      stroke="currentColor"
+                      strokeWidth="1.6"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                  Edit details
+                </button>
+              )}
             </div>
-            {!editing && (
-              <Button type="button" tone="blue" onClick={beginEdit}>
-                Edit meter
-              </Button>
-            )}
           </div>
 
           {editing && (
@@ -2011,109 +2143,113 @@ export function MeterProfile() {
             </form>
           )}
           <MeterSummary meter={meter} />
-          <div className="mt-6 grid gap-5 lg:grid-cols-3">
-            <div className="rounded-xl border border-slate-200 p-5">
-              <h3 className="font-semibold text-slate-800">
-                Current assignment
-              </h3>
-              <div className="mt-3 space-y-1 text-sm text-slate-600">
-                <p>
-                  Assigned to:{" "}
-                  <strong>{meter.assignedTo ?? "Not assigned"}</strong>
-                </p>
-                <p>
-                  Account: {meter.assignment?.account?.accountNumber ?? "—"}
-                </p>
-                <p>Zone: {assignmentZone(meter)}</p>
-                <p>
-                  Route:{" "}
-                  {meter.assignment?.account?.property?.route?.routeName ?? "—"}
-                </p>
-                <p>Installed: {formatDate(meter.installationDate)}</p>
+
+          <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_1.15fr_1fr]">
+            <section className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4">
+              <div className="mb-2 flex items-center gap-2">
+                <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-white text-aqua-700 shadow-sm">
+                  <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4" aria-hidden="true">
+                    <path d="M3 9.5 10 4l7 5.5V17H3V9.5Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+                    <path d="M8 17v-5h4v5" stroke="currentColor" strokeWidth="1.6" />
+                  </svg>
+                </span>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">Current assignment</h3>
+                  <p className="text-xs text-slate-500">Customer and service location</p>
+                </div>
               </div>
-            </div>
-            <div className="rounded-xl border border-slate-200 p-5">
-              <h3 className="font-semibold text-slate-800">Latest reading</h3>
-              <div className="mt-3 space-y-1 text-sm text-slate-600">
-                {meter.latestReading ? (
-                  <>
-                    <p>
-                      Previous:{" "}
-                      {Number(
-                        meter.latestReading.previousReading,
-                      ).toLocaleString()}
-                    </p>
-                    <p>
-                      Current:{" "}
-                      {Number(
-                        meter.latestReading.currentReading,
-                      ).toLocaleString()}
-                    </p>
-                    <p>
-                      Consumption:{" "}
-                      {Number(meter.latestReading.consumption).toLocaleString()}{" "}
-                      units
-                    </p>
-                    <p>
-                      Read on: {formatDate(meter.latestReading.readingDate)}
-                    </p>
-                  </>
-                ) : (
-                  <p>No readings have been recorded.</p>
-                )}
+              <ProfileLine label="Customer" value={meter.assignedTo ?? "Not assigned"} strong />
+              <ProfileLine label="Account" value={meter.assignment?.account?.accountNumber ?? "—"} />
+              <ProfileLine label="Zone" value={assignmentZone(meter)} />
+              <ProfileLine label="Route" value={meter.assignment?.account?.property?.route?.routeName ?? "—"} />
+              <ProfileLine label="Installed" value={formatDate(meter.installationDate)} />
+            </section>
+
+            <section className="rounded-2xl border border-aqua-200 bg-gradient-to-br from-aqua-50 to-white p-4 shadow-sm shadow-aqua-100/50">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-aqua-700">Latest reading</p>
+                  {meter.latestReading ? (
+                    <>
+                      <div className="mt-2 flex items-end gap-2">
+                        <span className="text-4xl font-bold tracking-tight text-slate-900">
+                          {Number(meter.latestReading.currentReading).toLocaleString()}
+                        </span>
+                        <span className="pb-1 text-sm font-semibold text-slate-500">units</span>
+                      </div>
+                      <p className="mt-1 text-xs text-slate-500">Recorded {formatDate(meter.latestReading.readingDate)}</p>
+                    </>
+                  ) : (
+                    <p className="mt-3 text-sm font-medium text-slate-600">No readings recorded yet.</p>
+                  )}
+                </div>
+                <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-aqua-700 text-white shadow-sm">
+                  <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5" aria-hidden="true">
+                    <path d="M4 18V9m5 9V5m5 13v-7m5 7V3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                  </svg>
+                </span>
               </div>
-            </div>
-            <div className="rounded-xl border border-slate-200 p-5">
-              <h3 className="font-semibold text-slate-800">
-                Inventory details
-              </h3>
-              <div className="mt-3 space-y-1 text-sm text-slate-600">
-                <p>Purchased: {formatDate(meter.purchaseDate)}</p>
-                <p>Warranty expires: {formatDate(meter.warrantyExpiryDate)}</p>
-                <p>Storage: {meter.storageLocation ?? "—"}</p>
-                <p>Seal: {meter.sealNumber ?? "—"}</p>
-                <p>Remarks: {meter.remarks ?? "—"}</p>
+              {meter.latestReading && (
+                <div className="mt-4 grid grid-cols-2 gap-3 border-t border-aqua-100 pt-4">
+                  <div className="rounded-xl bg-white/80 p-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Previous</p>
+                    <p className="mt-1 text-lg font-bold text-slate-800">{Number(meter.latestReading.previousReading).toLocaleString()}</p>
+                  </div>
+                  <div className="rounded-xl bg-white/80 p-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Consumption</p>
+                    <p className="mt-1 text-lg font-bold text-aqua-800">{Number(meter.latestReading.consumption).toLocaleString()} units</p>
+                  </div>
+                </div>
+              )}
+            </section>
+
+            <section className="rounded-2xl border border-slate-200 bg-white p-4">
+              <div className="mb-2 flex items-center gap-2">
+                <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 text-slate-600">
+                  <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4" aria-hidden="true">
+                    <path d="M4 4h12v12H4zM7 7h6M7 10h6M7 13h3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </span>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">Asset details</h3>
+                  <p className="text-xs text-slate-500">Inventory and identification</p>
+                </div>
               </div>
-            </div>
+              <ProfileLine label="Brand / model" value={[meter.brand, meter.model].filter(Boolean).join(" · ") || "—"} />
+              <ProfileLine label="Serial number" value={meter.serialNumber || "—"} />
+              <ProfileLine label="Purchased" value={formatDate(meter.purchaseDate)} />
+              <ProfileLine label="Warranty" value={formatDate(meter.warrantyExpiryDate)} />
+              <ProfileLine label="Seal number" value={meter.sealNumber || "—"} />
+            </section>
           </div>
-          <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
-            <LinkButton to={`/meters/${encodeId(id)}/history`}>
-              View readings
-            </LinkButton>
-            <LinkButton
-              to={`/meters/${encodeId(id)}/status?status=FAULTY`}
-              tone="orange"
-            >
-              Report fault
-            </LinkButton>
-            <LinkButton to={`/meters/${encodeId(id)}/replace`} tone="red">
-              Replace meter
-            </LinkButton>
-            <LinkButton to={`/meters/${encodeId(id)}/history`} tone="teal">
-              View history
-            </LinkButton>
-            <LinkButton
-              to={`/meters/${encodeId(id)}/status?status=INACTIVE`}
-              tone="orange"
-            >
-              Deactivate
-            </LinkButton>
-            {meter.assignment ? (
-              <LinkButton
-                to={`/meters/${encodeId(id)}/installation`}
-                tone="green"
-              >
-                Installation
-              </LinkButton>
-            ) : (
-              <LinkButton
-                to={`${meter.meterType === "CUSTOMER" ? "/meters/assign" : "/meters/assign/non-customer"}?meterId=${encodeURIComponent(String(meter.meterId))}`}
-                tone="green"
-              >
-                Assign meter
-              </LinkButton>
-            )}
-          </div>
+
+          {meter.remarks && (
+            <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+              <span className="mr-2 font-bold text-slate-800">Remarks:</span>
+              {meter.remarks}
+            </div>
+          )}
+
+          <section className="mt-4 border-t border-slate-200 pt-4">
+            <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">Meter actions</h3>
+                <p className="mt-0.5 text-xs text-slate-500">Readings, assignment and lifecycle controls</p>
+              </div>
+              <span className="text-xs font-medium text-slate-400">Changes are recorded in meter history</span>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <ProfileAction to={`/meters/${encodeId(id)}/history`} title="Reading history" description="View readings and consumption" tone="aqua" />
+              {meter.assignment ? (
+                <ProfileAction to={`/meters/${encodeId(id)}/installation`} title="Installation details" description="Review the current installation" tone="green" />
+              ) : (
+                <ProfileAction to={`${meter.meterType === "CUSTOMER" ? "/meters/assign" : "/meters/assign/non-customer"}?meterId=${encodeURIComponent(String(meter.meterId))}`} title="Assign meter" description="Link this meter to a service point" tone="green" />
+              )}
+              <ProfileAction to={`/meters/${encodeId(id)}/replace`} title="Replace meter" description="Start a controlled replacement" />
+              <ProfileAction to={`/meters/${encodeId(id)}/status?status=FAULTY`} title="Report a fault" description="Record a meter issue" tone="amber" />
+              <ProfileAction to={`/meters/${encodeId(id)}/status?status=INACTIVE`} title="Deactivate meter" description="Remove the meter from active use" tone="red" />
+            </div>
+          </section>
         </Card>
       )}
     </Page>
@@ -2675,6 +2811,9 @@ export function UpdateMeterStatus() {
 
 export function MeterReplacement() {
   const id = useMeterParam();
+  const isAdmin = Boolean(getSessionUser()?.roles.includes("SYSTEM_ADMIN"));
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedReplacementId = searchParams.get("replacementId") || "";
   const [meter, setMeter] = useState<AnyRecord | null>(null);
   const [available, setAvailable] = useState<AnyRecord[]>([]);
   const [form, setForm] = useState<AnyRecord>({
@@ -2690,21 +2829,66 @@ export function MeterReplacement() {
   const [evidence, setEvidence] = useState<MeterEvidenceInput[]>([]);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
+  const [replacementId, setReplacementId] = useState(requestedReplacementId);
+  const [submittedRequest, setSubmittedRequest] = useState<AnyRecord | null>(null);
+  const [refreshingProgress, setRefreshingProgress] = useState(false);
+  const [saveMessage, setSaveMessage] = useState("");
   const navigate = useNavigate();
   useEffect(() => {
-    Promise.all([api.getMeter(id), api.listMeters({ status: "IN_STOCK" })])
-      .then(([m, list]) => {
+    Promise.all([
+      api.getMeter(id),
+      api.listMeters({ status: "IN_STOCK" }),
+      requestedReplacementId ? api.getMeterReplacement(requestedReplacementId) : Promise.resolve(null),
+    ])
+      .then(([m, list, draft]) => {
+        if (draft && String(draft.oldMeterId) !== String(m.meterId)) {
+          throw new Error("This replacement draft belongs to a different old meter.");
+        }
         setMeter(m);
         setAvailable(list);
         setForm((f) => ({
           ...f,
-          oldFinalReading: String(
-            m.latestReading?.currentReading ?? m.openingReading ?? 0,
-          ),
+          newMeterId: draft ? String(draft.newMeterId) : f.newMeterId,
+          oldFinalReading: draft ? String(draft.oldFinalReading) : String(m.latestReading?.currentReading ?? m.openingReading ?? 0),
+          newOpeningReading: draft ? String(draft.newOpeningReading) : f.newOpeningReading,
+          replacementDate: draft ? String(draft.replacementDate).slice(0, 10) : f.replacementDate,
+          replacementReason: draft?.replacementReason ?? f.replacementReason,
+          gpsLatitude: draft?.gpsLatitude == null ? f.gpsLatitude : String(draft.gpsLatitude),
+          gpsLongitude: draft?.gpsLongitude == null ? f.gpsLongitude : String(draft.gpsLongitude),
+          remarks: draft?.remarks ?? f.remarks,
         }));
+        if (draft) {
+          setReplacementId(String(draft.replacementId));
+          setEvidence(draft.evidence ?? []);
+          if (["DRAFT", "RETURNED"].includes(draft.requestStatus)) {
+            setSaveMessage(draft.requestStatus === "RETURNED" ? `Returned for correction: ${draft.decisionComments || "Update and resubmit the request."}` : "Draft loaded. Continue editing and submit when ready.");
+          } else {
+            setSaved(true);
+            setSubmittedRequest(draft);
+            setSaveMessage("");
+          }
+        }
       })
       .catch((e) => setError(e.message));
-  }, [id]);
+  }, [id, requestedReplacementId]);
+  async function refreshProgress(silent = false) {
+    if (!replacementId) return;
+    if (!silent) setRefreshingProgress(true);
+    try {
+      const request = await api.getMeterReplacement(replacementId);
+      setSubmittedRequest(request);
+      setError("");
+    } catch (err: any) {
+      if (!silent) setError(err.message);
+    } finally {
+      if (!silent) setRefreshingProgress(false);
+    }
+  }
+  useEffect(() => {
+    if (!saved || !replacementId) return;
+    const timer = window.setInterval(() => void refreshProgress(true), 10000);
+    return () => window.clearInterval(timer);
+  }, [saved, replacementId]);
   async function addFile(file?: File) {
     if (!file) return;
     try {
@@ -2718,8 +2902,13 @@ export function MeterReplacement() {
     requestStatus: "DRAFT" | "PENDING" = "PENDING",
   ) {
     e.preventDefault();
+    if (requestStatus === "PENDING" && !isAdmin && !evidence.length) {
+      setError("Add a replacement evidence photo before submitting for approval.");
+      return;
+    }
     try {
-      await api.createMeterReplacement({
+      setError("");
+      const payload = {
         accountId: String(meter?.assignment?.accountId ?? ""),
         oldMeterId: id,
         newMeterId: form.newMeterId,
@@ -2732,12 +2921,33 @@ export function MeterReplacement() {
         gpsLongitude: form.gpsLongitude ? Number(form.gpsLongitude) : undefined,
         remarks: form.remarks || undefined,
         evidence,
-      });
-      setSaved(true);
+      };
+      const result = replacementId
+        ? await api.updateMeterReplacement(replacementId, payload)
+        : await api.createMeterReplacement(payload);
+      setReplacementId(String(result.replacementId));
+      if (!requestedReplacementId) setSearchParams({ replacementId: String(result.replacementId) }, { replace: true });
+      setSaved(requestStatus === "PENDING");
+      if (requestStatus === "PENDING") {
+        const request = await api.getMeterReplacement(String(result.replacementId));
+        setSubmittedRequest(request);
+      }
+      setSaveMessage(requestStatus === "PENDING"
+        ? ""
+        : "Draft saved. You can continue editing it and submit when ready.");
     } catch (err: any) {
       setError(err.message);
     }
   }
+  const trackedWorkOrder = submittedRequest?.workOrder;
+  const fieldWorkComplete = Boolean(
+    trackedWorkOrder &&
+      ["COMPLETED", "VERIFIED", "CLOSED"].includes(trackedWorkOrder.status),
+  );
+  const replacementApproved = submittedRequest?.requestStatus === "APPROVED";
+  const replacementFinished = ["APPROVED", "REJECTED"].includes(
+    submittedRequest?.requestStatus,
+  );
   return (
     <Page
       title="Meter replacement"
@@ -2746,188 +2956,320 @@ export function MeterReplacement() {
       {!meter ? (
         <Spinner />
       ) : (
-        <Card title="Replace faulty or tampered meter">
+        <Card className="overflow-hidden">
           <form onSubmit={(e) => submit(e)}>
-            {error && <Notice>{error}</Notice>}
-            {saved && (
-              <Notice kind="success">
-                Replacement request saved. Pending requests now require a
-                supervisor role to approve.
-              </Notice>
-            )}
-            <div className="grid gap-5 md:grid-cols-2">
-              <Field label="Customer account">
-                <input
-                  disabled
-                  className={INPUT}
-                  value={
-                    meter.assignment?.account?.accountNumber ??
-                    "No active customer account"
-                  }
-                />
-              </Field>
-              <Field label="Customer name">
-                <input
-                  disabled
-                  className={INPUT}
-                  value={meter.assignedTo ?? "—"}
-                />
-              </Field>
-              <Field label="Old meter number">
-                <input disabled className={INPUT} value={meter.meterNumber} />
-              </Field>
-              <Field label="Old meter status">
-                <input
-                  disabled
-                  className={INPUT}
-                  value={pretty(meter.status)}
-                />
-              </Field>
-              <Field label="Old final reading" required>
-                <input
-                  required
-                  min="0"
-                  step="0.001"
-                  type="number"
-                  className={INPUT}
-                  value={form.oldFinalReading}
-                  onChange={(e) =>
-                    setForm({ ...form, oldFinalReading: e.target.value })
-                  }
-                />
-              </Field>
-              <Field label="Replacement reason" required>
-                <input
-                  required
-                  className={INPUT}
-                  value={form.replacementReason}
-                  onChange={(e) =>
-                    setForm({ ...form, replacementReason: e.target.value })
-                  }
-                  placeholder="Faulty meter"
-                />
-              </Field>
-              <Field label="New meter number" required>
-                <SearchableSelect
-                  required
-                  className={INPUT}
-                  value={form.newMeterId}
-                  onChange={(e) =>
-                    setForm({ ...form, newMeterId: e.target.value })
-                  }
-                >
-                  <option value="">Select in-store meter</option>
-                  {available.map((m) => (
-                    <option key={m.meterId} value={m.meterId}>
-                      {m.meterNumber} · {displaySize(m.meterSizeMm)}
-                    </option>
-                  ))}
-                </SearchableSelect>
-              </Field>
-              <Field label="New opening reading" required>
-                <input
-                  required
-                  min="0"
-                  step="0.001"
-                  type="number"
-                  className={INPUT}
-                  value={form.newOpeningReading}
-                  onChange={(e) =>
-                    setForm({ ...form, newOpeningReading: e.target.value })
-                  }
-                />
-              </Field>
-              <Field label="Replacement date" required>
-                <input
-                  required
-                  type="date"
-                  className={INPUT}
-                  value={form.replacementDate}
-                  onChange={(e) =>
-                    setForm({ ...form, replacementDate: e.target.value })
-                  }
-                />
-              </Field>
-              <Field label="Replaced by">
-                <input
-                  disabled
-                  className={INPUT}
-                  value="Current authenticated user"
-                />
-              </Field>
-              <Field label="Evidence photo">
-                <input
-                  type="file"
-                  accept="image/*"
-                  className={INPUT}
-                  onChange={(e) => addFile(e.target.files?.[0])}
-                />
-                <span className="mt-1 block text-xs text-emerald-600">
-                  {evidence[0]?.fileName}
-                </span>
-              </Field>
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="GPS latitude">
-                  <input
-                    type="number"
-                    step="any"
-                    className={INPUT}
-                    value={form.gpsLatitude}
-                    onChange={(e) =>
-                      setForm({ ...form, gpsLatitude: e.target.value })
-                    }
-                  />
-                </Field>
-                <Field label="GPS longitude">
-                  <input
-                    type="number"
-                    step="any"
-                    className={INPUT}
-                    value={form.gpsLongitude}
-                    onChange={(e) =>
-                      setForm({ ...form, gpsLongitude: e.target.value })
-                    }
-                  />
-                </Field>
-              </div>
-              <GpsMap
-                latitude={form.gpsLatitude}
-                longitude={form.gpsLongitude}
-                label="Inspection location"
-                className="md:col-span-2"
-              />
-              <div className="md:col-span-2">
-                <Field label="Remarks">
-                  <textarea
-                    className={`${INPUT} min-h-20`}
-                    value={form.remarks}
-                    onChange={(e) =>
-                      setForm({ ...form, remarks: e.target.value })
-                    }
-                  />
-                </Field>
+            <div className="-m-4 mb-0 border-b border-cyan-100 bg-gradient-to-r from-cyan-50 via-white to-sky-50 px-4 py-3 lg:px-5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-aqua-700 text-white shadow-sm">
+                    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-6 w-6">
+                      <path d="M4 7h11M4 12h7M4 17h5" />
+                      <path d="m15 15 2-2 3 3-2 2-3-3Z" />
+                      <path d="m14 16-2 4 4-2" />
+                    </svg>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-aqua-700">Controlled meter change</p>
+                    <h2 className="text-lg font-bold text-slate-900">Replace {meter.meterNumber}</h2>
+                    <p className="text-xs text-slate-500">Record the final reading and select an in-store replacement.</p>
+                  </div>
+                </div>
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5">
+                  <p className="text-[9px] font-bold uppercase tracking-wider text-emerald-600">Current status</p>
+                  <p className="text-sm font-bold text-emerald-800">{pretty(meter.status)}</p>
+                </div>
               </div>
             </div>
-            <div className="mt-6 rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-700">
-              The old meter remains unchanged until approval. Approval
-              atomically ends its assignment, marks it replaced and activates
-              the new meter.
-            </div>
-            <div className="mt-6 flex flex-wrap justify-end gap-3">
-              <Button type="button" tone="slate" onClick={() => navigate(-1)}>
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                tone="teal"
-                disabled={saved || !meter.assignment?.accountId}
-                onClick={(e) => submit(e as any, "DRAFT")}
-              >
-                Save draft
-              </Button>
-              <Button disabled={saved || !meter.assignment?.accountId}>
-                Submit replacement
-              </Button>
+
+            <div className="pt-3">
+              {error && <Notice>{error}</Notice>}
+              {saved && saveMessage && (
+                <Notice kind="success">
+                  {saveMessage}
+                </Notice>
+              )}
+              {!saved && saveMessage && <Notice kind="success">{saveMessage}</Notice>}
+
+              {saved && !submittedRequest && <Spinner />}
+              {saved && submittedRequest && (
+                <section className="overflow-hidden rounded-2xl border border-emerald-200 bg-white shadow-sm">
+                  <div className="flex flex-wrap items-start justify-between gap-4 border-b border-emerald-100 bg-gradient-to-r from-emerald-50 via-white to-cyan-50 px-5 py-4">
+                    <div className="flex items-start gap-3">
+                      <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-emerald-600 text-white shadow-sm">
+                        <svg viewBox="0 0 20 20" fill="none" className="h-5 w-5" aria-hidden="true">
+                          <path d="m5 10 3 3 7-7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      </span>
+                      <div>
+                        <p className="text-[10px] font-black uppercase tracking-[0.15em] text-emerald-700">Request submitted</p>
+                        <h3 className="mt-0.5 text-lg font-black text-slate-900">
+                          REP-{String(submittedRequest.replacementId).padStart(4, "0")}
+                        </h3>
+                        <p className="mt-0.5 text-sm text-slate-600">
+                          The incoming meter is reserved while field work and approval are completed.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Status value={submittedRequest.requestStatus} />
+                      <button
+                        type="button"
+                        onClick={() => void refreshProgress()}
+                        disabled={refreshingProgress}
+                        className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 shadow-sm transition hover:border-aqua-300 hover:text-aqua-700 disabled:opacity-50"
+                      >
+                        {refreshingProgress ? "Checking…" : "Refresh status"}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="p-5">
+                    <div className="grid gap-2 sm:grid-cols-4">
+                      {[
+                        { label: "Submitted", note: "Request received", done: true, active: false },
+                        { label: "Work order", note: trackedWorkOrder ? "Created" : "Creating", done: Boolean(trackedWorkOrder), active: !trackedWorkOrder },
+                        { label: "Field work", note: fieldWorkComplete ? "Completed" : trackedWorkOrder ? pretty(trackedWorkOrder.status) : "Waiting", done: fieldWorkComplete, active: Boolean(trackedWorkOrder) && !fieldWorkComplete },
+                        { label: "Approval", note: replacementApproved ? "Approved" : replacementFinished ? pretty(submittedRequest.requestStatus) : "Waiting", done: replacementApproved, active: fieldWorkComplete && !replacementFinished },
+                      ].map((step, index) => (
+                        <div key={step.label} className="relative rounded-xl border border-slate-200 bg-slate-50/60 p-3">
+                          <div className="flex items-center gap-2">
+                            <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs font-black ${
+                              step.done
+                                ? "bg-emerald-600 text-white"
+                                : step.active
+                                  ? "bg-aqua-700 text-white ring-4 ring-aqua-100"
+                                  : "bg-slate-200 text-slate-500"
+                            }`}>
+                              {step.done ? "✓" : index + 1}
+                            </span>
+                            <div className="min-w-0">
+                              <p className="text-sm font-bold text-slate-800">{step.label}</p>
+                              <p className={`truncate text-xs ${step.active ? "font-semibold text-aqua-700" : "text-slate-500"}`}>{step.note}</p>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="mt-4 grid gap-3 lg:grid-cols-[1.25fr_0.75fr]">
+                      <div className="rounded-xl border border-aqua-200 bg-aqua-50/60 p-4">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div>
+                            <p className="text-[10px] font-bold uppercase tracking-wider text-aqua-700">Linked work order</p>
+                            <p className="mt-1 text-base font-black text-slate-900">
+                              {trackedWorkOrder?.work_order_number ?? "Work order is being created"}
+                            </p>
+                            <div className="mt-1 flex items-center gap-2 text-xs text-slate-600">
+                              {trackedWorkOrder ? <Status value={trackedWorkOrder.status} /> : <span>Refresh in a moment</span>}
+                              {trackedWorkOrder?.created_at && <span>Created {formatDate(trackedWorkOrder.created_at)}</span>}
+                            </div>
+                          </div>
+                          {trackedWorkOrder && (
+                            <Link
+                              to={`/work-orders?focus=${trackedWorkOrder.work_order_id}`}
+                              className="inline-flex items-center gap-2 rounded-lg bg-aqua-700 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-aqua-600"
+                            >
+                              Open work order
+                              <span aria-hidden="true">→</span>
+                            </Link>
+                          )}
+                        </div>
+                      </div>
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Meter change</p>
+                        <div className="mt-2 flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-bold text-slate-700">{meter.meterNumber}</p>
+                            <p className="text-xs text-slate-500">Outgoing</p>
+                          </div>
+                          <span className="text-lg font-bold text-aqua-600">→</span>
+                          <div className="min-w-0 text-right">
+                            <p className="truncate text-sm font-bold text-slate-700">{submittedRequest.newMeter?.meterNumber ?? "Reserved meter"}</p>
+                            <p className="text-xs text-slate-500">Incoming</p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
+                      <p className="text-xs text-slate-500">Status refreshes automatically every 10 seconds.</p>
+                      <div className="flex flex-wrap gap-2">
+                        <Link to="/meters/replacements" className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50">Replacement reviews</Link>
+                        <Link to={meterUrl(meter)} className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50">Back to meter</Link>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+              )}
+
+              <div className={`${saved ? "hidden" : "grid"} gap-3 xl:grid-cols-[minmax(0,1fr)_360px]`}>
+                <div className="space-y-3">
+                  <section className="rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+                    <div className="mb-2.5 flex items-center gap-2.5">
+                      <span className="grid h-7 w-7 place-items-center rounded-lg bg-slate-700 text-xs font-black text-white">1</span>
+                      <div>
+                        <h3 className="font-bold text-slate-900">Account and outgoing meter</h3>
+                        <p className="text-xs text-slate-500">Confirm the customer and capture the meter’s closing value.</p>
+                      </div>
+                    </div>
+                    <div className="mb-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                      {[
+                        ["Customer account", meter.assignment?.account?.accountNumber ?? "No active account"],
+                        ["Customer", meter.assignedTo ?? "—"],
+                        ["Old meter", meter.meterNumber],
+                        ["Meter status", pretty(meter.status)],
+                      ].map(([label, value]) => (
+                        <div key={label} className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                          <p className="text-[9px] font-semibold uppercase tracking-wide text-slate-400">{label}</p>
+                          <p className="truncate text-sm font-bold text-slate-800" title={String(value)}>{value}</p>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <Field label="Old final reading" required>
+                        <div className="relative">
+                          <input
+                            required min="0" step="0.001" type="number" className={`${INPUT} pr-16 font-semibold`}
+                            value={form.oldFinalReading}
+                            onChange={(e) => setForm({ ...form, oldFinalReading: e.target.value })}
+                          />
+                          <span className="pointer-events-none absolute right-9 top-1/2 -translate-y-1/2 text-xs font-semibold text-slate-400">units</span>
+                        </div>
+                      </Field>
+                      <Field label="Replacement reason" required>
+                        <input
+                          required className={INPUT} value={form.replacementReason}
+                          onChange={(e) => setForm({ ...form, replacementReason: e.target.value })}
+                          placeholder="e.g. Meter stopped, damaged or tampered"
+                        />
+                      </Field>
+                    </div>
+                  </section>
+
+                  <section className="rounded-xl border border-cyan-200 bg-cyan-50/40 p-3">
+                    <div className="mb-2.5 flex items-center gap-2.5">
+                      <span className="grid h-7 w-7 place-items-center rounded-lg bg-aqua-700 text-xs font-black text-white">2</span>
+                      <div>
+                        <h3 className="font-bold text-slate-900">Incoming meter</h3>
+                        <p className="text-xs text-slate-500">Only available meters currently held in store can be selected.</p>
+                      </div>
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <Field label="New meter number" required>
+                        <SearchableSelect
+                          required className={INPUT} value={form.newMeterId}
+                          onChange={(e) => setForm({ ...form, newMeterId: e.target.value })}
+                        >
+                          <option value="">Select an in-store meter</option>
+                          {available.map((m) => (
+                            <option key={m.meterId} value={m.meterId}>
+                              {m.meterNumber} · {displaySize(m.meterSizeMm)}
+                            </option>
+                          ))}
+                        </SearchableSelect>
+                        <span className="mt-1 block text-[11px] text-slate-500">{available.length} meter(s) available</span>
+                      </Field>
+                      <Field label="New opening reading" required>
+                        <div className="relative">
+                          <input
+                            required min="0" step="0.001" type="number" className={`${INPUT} pr-16 font-semibold`}
+                            value={form.newOpeningReading}
+                            onChange={(e) => setForm({ ...form, newOpeningReading: e.target.value })}
+                          />
+                          <span className="pointer-events-none absolute right-9 top-1/2 -translate-y-1/2 text-xs font-semibold text-slate-400">units</span>
+                        </div>
+                      </Field>
+                      <Field label="Replacement date" required>
+                        <input
+                          required type="date" className={INPUT} value={form.replacementDate}
+                          onChange={(e) => setForm({ ...form, replacementDate: e.target.value })}
+                        />
+                      </Field>
+                      <Field label="Recorded by">
+                        <div className="flex h-[38px] items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-600">
+                          <span className="grid h-5 w-5 place-items-center rounded-full bg-emerald-100 text-[10px] font-black text-emerald-700">✓</span>
+                          Current authenticated user
+                        </div>
+                      </Field>
+                      <div className="md:col-span-2">
+                        <Field label="Additional remarks">
+                          <textarea
+                            className={`${INPUT} min-h-14 resize-y`} value={form.remarks}
+                            onChange={(e) => setForm({ ...form, remarks: e.target.value })}
+                            placeholder="Condition notes, seal details or installation instructions…"
+                          />
+                        </Field>
+                      </div>
+                    </div>
+                  </section>
+                </div>
+
+                <aside className="space-y-3">
+                  <section className="rounded-xl border border-slate-200 bg-white p-3">
+                    <div className="mb-2 flex items-center justify-between">
+                      <div>
+                        <h3 className="font-bold text-slate-900">Evidence photo</h3>
+                        <p className="mt-0.5 text-xs text-slate-500">
+                          {isAdmin
+                            ? "Optional for system administrators."
+                            : "Photograph the meter before removal."}
+                        </p>
+                      </div>
+                      <span
+                        className={`rounded-full px-2 py-1 text-[10px] font-bold uppercase ${
+                          isAdmin
+                            ? "bg-slate-100 text-slate-500"
+                            : "bg-red-50 text-red-600"
+                        }`}
+                      >
+                        {isAdmin ? "Optional" : "Required"}
+                      </span>
+                    </div>
+                    <label className="flex min-h-20 cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-slate-300 bg-slate-50 px-3 text-center transition hover:border-aqua-400 hover:bg-cyan-50/50">
+                      <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="mb-1 h-5 w-5 text-aqua-700">
+                        <path d="M4 16.5V19h16v-2.5M8 9l4-4 4 4M12 5v11" />
+                      </svg>
+                      <span className="text-sm font-bold text-slate-700">{evidence[0]?.fileName || "Choose meter photo"}</span>
+                      <span className="text-[10px] text-slate-500">JPG or PNG</span>
+                      <input type="file" accept="image/*" className="sr-only" onChange={(e) => addFile(e.target.files?.[0])} />
+                    </label>
+                  </section>
+
+                  <section className="rounded-xl border border-slate-200 bg-white p-3">
+                    <div className="mb-2">
+                      <h3 className="font-bold text-slate-900">Replacement location</h3>
+                      <p className="mt-0.5 text-xs text-slate-500">Capture coordinates when completing this on site.</p>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <Field label="Latitude">
+                        <input type="number" step="any" className={INPUT} value={form.gpsLatitude} onChange={(e) => setForm({ ...form, gpsLatitude: e.target.value })} placeholder="-1.2864" />
+                      </Field>
+                      <Field label="Longitude">
+                        <input type="number" step="any" className={INPUT} value={form.gpsLongitude} onChange={(e) => setForm({ ...form, gpsLongitude: e.target.value })} placeholder="36.8172" />
+                      </Field>
+                    </div>
+                    <GpsMap latitude={form.gpsLatitude} longitude={form.gpsLongitude} label="Replacement location" className="mt-2" compact />
+                  </section>
+                </aside>
+              </div>
+
+              <div className={`${saved ? "hidden" : "flex"} -mx-4 -mb-4 mt-3 flex-wrap items-center justify-between gap-2 border-t border-slate-200 bg-slate-50 px-4 py-3`}>
+                <p className="text-xs text-slate-500"><span className="font-bold text-blue-700">Approval:</span> the old meter remains active until a supervisor approves the change.</p>
+                <div className="flex flex-wrap justify-end gap-3">
+                  <Button type="button" tone="slate" onClick={() => navigate(-1)}>Cancel</Button>
+                  <Button type="button" tone="teal" disabled={saved || !meter.assignment?.accountId} onClick={(e) => submit(e as any, "DRAFT")}>{replacementId ? "Update draft" : "Save draft"}</Button>
+                  <Button
+                    disabled={
+                      saved ||
+                      !meter.assignment?.accountId ||
+                      (!isAdmin && !evidence.length)
+                    }
+                    className="min-w-44"
+                  >
+                    Submit for approval
+                  </Button>
+                </div>
+              </div>
             </div>
           </form>
         </Card>
@@ -2944,10 +3286,11 @@ export function ReplacementApproval() {
   const [error, setError] = useState("");
   function load() {
     api
-      .listMeterReplacements("PENDING")
+      .listMeterReplacements()
       .then((rows) => {
-        setItems(rows);
-        setSelected(rows[0] ?? null);
+        const open = rows.filter((row: AnyRecord) => ["DRAFT", "PENDING", "RETURNED"].includes(row.requestStatus));
+        setItems(open);
+        setSelected(open[0] ?? null);
       })
       .catch((e) => setError(e.message));
   }
@@ -2973,124 +3316,271 @@ export function ReplacementApproval() {
   return (
     <Page
       title="Meter replacement approval"
-      subtitle={`${items.length} pending requests`}
+      subtitle={`${items.length} open replacement request(s)`}
     >
       {error && <Notice>{error}</Notice>}
       {message && <Notice kind="success">{message}</Notice>}
-      <div className="grid gap-6 xl:grid-cols-[1.3fr_0.7fr]">
-        <Card title="Pending replacement requests">
+      <div className="mb-4 grid gap-3 sm:grid-cols-3">
+        {[
+          {
+            label: "Awaiting approval",
+            value: items.filter((item) => item.requestStatus === "PENDING").length,
+            className: "border-amber-200 bg-amber-50/70 text-amber-800",
+          },
+          {
+            label: "Draft requests",
+            value: items.filter((item) => item.requestStatus === "DRAFT").length,
+            className: "border-slate-200 bg-white text-slate-700",
+          },
+          {
+            label: "Returned for correction",
+            value: items.filter((item) => item.requestStatus === "RETURNED").length,
+            className: "border-orange-200 bg-orange-50/60 text-orange-800",
+          },
+        ].map((summary) => (
+          <div
+            key={summary.label}
+            className={`flex items-center justify-between rounded-xl border px-4 py-3 ${summary.className}`}
+          >
+            <span className="text-sm font-semibold">{summary.label}</span>
+            <span className="text-2xl font-black">{summary.value}</span>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid items-start gap-4 xl:grid-cols-[minmax(390px,0.8fr)_minmax(0,1.2fr)]">
+        <Card className="overflow-hidden">
+          <div className="-mx-4 -mt-4 mb-3 flex items-center justify-between border-b border-slate-100 bg-slate-50/70 px-4 py-3">
+            <div>
+              <h2 className="font-bold text-slate-900">Open requests</h2>
+              <p className="mt-0.5 text-xs text-slate-500">Select a replacement to inspect</p>
+            </div>
+            <span className="rounded-full bg-slate-200 px-2.5 py-1 text-xs font-bold text-slate-600">
+              {items.length}
+            </span>
+          </div>
           {items.length ? (
-            <Table
-              headers={["Ref", "Customer", "Old meter", "New meter", "Reason"]}
-            >
-              {items.map((r) => (
-                <tr
-                  key={r.replacementId}
-                  onClick={() => setSelected(r)}
-                  className={`cursor-pointer hover:bg-slate-50 ${selected?.replacementId === r.replacementId ? "bg-blue-50" : ""}`}
-                >
-                  <td className={TD}>
-                    REP-{String(r.replacementId).padStart(4, "0")}
-                  </td>
-                  <td className={TD}>{r.customerName}</td>
-                  <td className={TD}>{r.oldMeter.meterNumber}</td>
-                  <td className={TD}>{r.newMeter.meterNumber}</td>
-                  <td className={TD}>{r.replacementReason}</td>
-                </tr>
-              ))}
-            </Table>
-          ) : (
-            <Empty text="No pending replacement requests." />
-          )}
-        </Card>
-        <Card
-          title={
-            selected
-              ? `Selected request REP-${String(selected.replacementId).padStart(4, "0")}`
-              : "Selected request"
-          }
-        >
-          {selected ? (
-            <div className="space-y-4">
-              <Field label="Old final reading">
-                <input
-                  disabled
-                  className={INPUT}
-                  value={selected.oldFinalReading}
-                />
-              </Field>
-              <Field label="New opening reading">
-                <input
-                  disabled
-                  className={INPUT}
-                  value={selected.newOpeningReading}
-                />
-              </Field>
-              <Field label="GPS">
-                <div className="flex gap-2">
-                  <input
-                    disabled
-                    className={INPUT}
-                    value={
-                      selected.gpsLatitude
-                        ? `${selected.gpsLatitude}, ${selected.gpsLongitude}`
-                        : "Not captured"
-                    }
-                  />
-                  {selected.gpsLatitude && (
-                    <Button
-                      tone="teal"
-                      onClick={() =>
-                        window.open(
-                          `https://www.google.com/maps?q=${selected.gpsLatitude},${selected.gpsLongitude}`,
-                          "_blank",
-                          "noopener,noreferrer",
-                        )
-                      }
-                    >
-                      Map
-                    </Button>
-                  )}
-                </div>
-              </Field>
-              <GpsMap
-                latitude={selected.gpsLatitude}
-                longitude={selected.gpsLongitude}
-                label="Recorded event location"
-              />
-              <Field label="Evidence">
-                {selected.evidence?.length ? (
-                  <Button
-                    tone="teal"
-                    onClick={() => openEvidence(selected.evidence[0])}
+            <div className="space-y-2">
+              {items.map((request) => {
+                const active = selected?.replacementId === request.replacementId;
+                return (
+                  <button
+                    type="button"
+                    key={request.replacementId}
+                    onClick={() => {
+                      setSelected(request);
+                      setError("");
+                    }}
+                    className={`w-full rounded-xl border p-3 text-left transition ${
+                      active
+                        ? "border-aqua-300 bg-aqua-50 shadow-sm ring-1 ring-aqua-200"
+                        : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50"
+                    }`}
                   >
-                    View photo
-                  </Button>
-                ) : (
-                  <input disabled className={INPUT} value="No evidence" />
-                )}
-              </Field>
-              <Field label="Approval comments" required>
-                <textarea
-                  className={`${INPUT} min-h-20`}
-                  value={comments}
-                  onChange={(e) => setComments(e.target.value)}
-                />
-              </Field>
-              <div className="flex flex-wrap gap-3">
-                <Button tone="green" onClick={() => decide("APPROVE")}>
-                  Approve
-                </Button>
-                <Button tone="red" onClick={() => decide("REJECT")}>
-                  Reject
-                </Button>
-                <Button tone="orange" onClick={() => decide("RETURN")}>
-                  Return for correction
-                </Button>
-              </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-sm font-black text-slate-900">
+                            REP-{String(request.replacementId).padStart(4, "0")}
+                          </span>
+                          <Status value={request.requestStatus} />
+                        </div>
+                        <p className="mt-1 truncate text-sm font-semibold text-slate-700">
+                          {request.customerName}
+                        </p>
+                        <p className="text-xs text-slate-500">
+                          {request.account?.accountNumber}
+                        </p>
+                      </div>
+                      <svg
+                        viewBox="0 0 20 20"
+                        fill="none"
+                        className={`mt-1 h-4 w-4 shrink-0 ${active ? "text-aqua-700" : "text-slate-300"}`}
+                        aria-hidden="true"
+                      >
+                        <path d="m7.5 4.5 5.5 5.5-5.5 5.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    </div>
+                    <div className="mt-3 flex items-center gap-2 rounded-lg border border-slate-200/80 bg-white/80 px-3 py-2">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[9px] font-bold uppercase tracking-wide text-slate-400">Outgoing</p>
+                        <p className="truncate text-xs font-bold text-slate-700">{request.oldMeter.meterNumber}</p>
+                      </div>
+                      <span className="text-aqua-600">→</span>
+                      <div className="min-w-0 flex-1 text-right">
+                        <p className="text-[9px] font-bold uppercase tracking-wide text-slate-400">Incoming</p>
+                        <p className="truncate text-xs font-bold text-slate-700">{request.newMeter.meterNumber}</p>
+                      </div>
+                    </div>
+                    <div className="mt-2 flex items-center justify-between gap-3 text-xs">
+                      <span className="truncate text-slate-500" title={request.replacementReason}>
+                        {request.replacementReason}
+                      </span>
+                      <span className={`shrink-0 font-semibold ${request.workOrder ? "text-emerald-700" : "text-slate-400"}`}>
+                        {request.workOrder ? pretty(request.workOrder.status) : "No work order"}
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
             </div>
           ) : (
-            <Empty text="Select a request." />
+            <div className="py-14">
+              <Empty text="No open replacement requests." />
+            </div>
+          )}
+        </Card>
+
+        <Card className="overflow-hidden">
+          {selected ? (
+            <div>
+              <div className="-mx-4 -mt-4 mb-4 border-b border-aqua-100 bg-gradient-to-r from-aqua-50 via-white to-slate-50 px-5 py-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-[0.15em] text-aqua-700">Replacement review</p>
+                    <div className="mt-1 flex flex-wrap items-center gap-2">
+                      <h2 className="text-xl font-black text-slate-900">
+                        REP-{String(selected.replacementId).padStart(4, "0")}
+                      </h2>
+                      <Status value={selected.requestStatus} />
+                    </div>
+                    <p className="mt-1 text-sm font-semibold text-slate-600">
+                      {selected.customerName} · {selected.account?.accountNumber}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-right shadow-sm">
+                    <p className="text-[9px] font-bold uppercase tracking-wide text-slate-400">Replacement date</p>
+                    <p className="text-sm font-bold text-slate-800">{formatDate(selected.replacementDate)}</p>
+                  </div>
+                </div>
+              </div>
+
+              <section className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4">
+                <div className="grid items-center gap-3 sm:grid-cols-[1fr_auto_1fr]">
+                  <div className="rounded-xl border border-slate-200 bg-white p-4">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Outgoing meter</p>
+                    <p className="mt-1 text-lg font-black text-slate-900">{selected.oldMeter.meterNumber}</p>
+                    <div className="mt-3 border-t border-slate-100 pt-3">
+                      <p className="text-xs text-slate-500">Final reading</p>
+                      <p className="mt-0.5 text-2xl font-black text-slate-800">
+                        {Number(selected.oldFinalReading).toLocaleString()}
+                        <span className="ml-1 text-xs font-semibold text-slate-400">units</span>
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-center">
+                    <span className="grid h-10 w-10 place-items-center rounded-full bg-aqua-700 text-xl font-bold text-white shadow-sm">→</span>
+                  </div>
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-4">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-600">Incoming meter</p>
+                    <p className="mt-1 text-lg font-black text-slate-900">{selected.newMeter.meterNumber}</p>
+                    <div className="mt-3 border-t border-emerald-100 pt-3">
+                      <p className="text-xs text-slate-500">Opening reading</p>
+                      <p className="mt-0.5 text-2xl font-black text-emerald-800">
+                        {Number(selected.newOpeningReading).toLocaleString()}
+                        <span className="ml-1 text-xs font-semibold text-emerald-600/70">units</span>
+                      </p>
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-3 rounded-xl border border-slate-200 bg-white px-4 py-3">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Reason for replacement</p>
+                  <p className="mt-1 text-sm font-medium text-slate-700">{selected.replacementReason}</p>
+                  {selected.remarks && <p className="mt-1 text-xs text-slate-500">{selected.remarks}</p>}
+                </div>
+              </section>
+
+              <section className="mt-4">
+                <h3 className="text-sm font-bold text-slate-900">Readiness checks</h3>
+                <div className="mt-2 grid gap-3 sm:grid-cols-3">
+                  <div className={`rounded-xl border p-3 ${selected.workOrder ? "border-emerald-200 bg-emerald-50/60" : "border-slate-200 bg-slate-50"}`}>
+                    <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Field work</p>
+                    {selected.workOrder ? (
+                      <Link to={`/work-orders?focus=${selected.workOrder.work_order_id}`} className="mt-1 flex items-center justify-between gap-2 text-sm font-bold text-aqua-800 hover:underline">
+                        <span className="truncate">{selected.workOrder.work_order_number}</span>
+                        <Status value={selected.workOrder.status} />
+                      </Link>
+                    ) : (
+                      <p className="mt-1 text-sm font-semibold text-slate-500">Legacy · not linked</p>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    disabled={!selected.evidence?.length}
+                    onClick={() => selected.evidence?.length && openEvidence(selected.evidence[0])}
+                    className={`rounded-xl border p-3 text-left ${selected.evidence?.length ? "border-emerald-200 bg-emerald-50/60 hover:bg-emerald-50" : "cursor-default border-slate-200 bg-slate-50"}`}
+                  >
+                    <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Evidence</p>
+                    <p className={`mt-1 text-sm font-bold ${selected.evidence?.length ? "text-emerald-800" : "text-slate-500"}`}>
+                      {selected.evidence?.length ? `${selected.evidence.length} file(s) · View` : "Not provided"}
+                    </p>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!selected.gpsLatitude}
+                    onClick={() => selected.gpsLatitude && window.open(`https://www.google.com/maps?q=${selected.gpsLatitude},${selected.gpsLongitude}`, "_blank", "noopener,noreferrer")}
+                    className={`rounded-xl border p-3 text-left ${selected.gpsLatitude ? "border-emerald-200 bg-emerald-50/60 hover:bg-emerald-50" : "cursor-default border-slate-200 bg-slate-50"}`}
+                  >
+                    <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">GPS location</p>
+                    <p className={`mt-1 text-sm font-bold ${selected.gpsLatitude ? "text-emerald-800" : "text-slate-500"}`}>
+                      {selected.gpsLatitude ? "Captured · Open map" : "Not captured"}
+                    </p>
+                  </button>
+                </div>
+                {selected.gpsLatitude && (
+                  <GpsMap latitude={selected.gpsLatitude} longitude={selected.gpsLongitude} label="Recorded event location" className="mt-3" compact />
+                )}
+              </section>
+
+              {selected.requestStatus === "PENDING" ? (
+                <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                  <Field label="Decision comments" required>
+                    <textarea
+                      className={`${INPUT} min-h-20 resize-y`}
+                      value={comments}
+                      onChange={(event) => setComments(event.target.value)}
+                      placeholder="Record the reason for this approval decision"
+                    />
+                  </Field>
+                  {selected.workOrder && !["COMPLETED", "VERIFIED", "CLOSED"].includes(selected.workOrder.status) && (
+                    <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
+                      Complete the linked field work before approving this replacement.
+                    </p>
+                  )}
+                  <div className="mt-3 flex flex-wrap justify-end gap-2 border-t border-slate-100 pt-3">
+                    <Button tone="red" onClick={() => decide("REJECT")}>Reject</Button>
+                    <Button tone="orange" onClick={() => decide("RETURN")}>Return for correction</Button>
+                    <Button
+                      tone="green"
+                      disabled={Boolean(selected.workOrder) && !["COMPLETED", "VERIFIED", "CLOSED"].includes(selected.workOrder.status)}
+                      title={Boolean(selected.workOrder) && !["COMPLETED", "VERIFIED", "CLOSED"].includes(selected.workOrder.status) ? "Complete the linked work order first" : undefined}
+                      onClick={() => decide("APPROVE")}
+                    >
+                      Approve replacement
+                    </Button>
+                  </div>
+                </section>
+              ) : (
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3">
+                  <div>
+                    <p className="text-sm font-bold text-blue-900">
+                      {selected.requestStatus === "RETURNED" ? "This request needs correction" : "This request is still a draft"}
+                    </p>
+                    <p className="mt-0.5 text-xs text-blue-700">Open the replacement form to complete and submit it.</p>
+                  </div>
+                  <Link
+                    to={`${meterUrl(selected.oldMeter)}/replace?replacementId=${selected.replacementId}`}
+                    className="inline-flex items-center rounded-lg bg-aqua-700 px-4 py-2 text-sm font-bold text-white shadow-sm hover:bg-aqua-600"
+                  >
+                    Edit and submit
+                  </Link>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="py-20">
+              <Empty text="Select a replacement request to review." />
+            </div>
           )}
         </Card>
       </div>

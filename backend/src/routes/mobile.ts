@@ -1148,49 +1148,6 @@ function statementPdf(data: CustomerStatementData & { printedAt: Date }) {
     doc.font("Helvetica-Oblique").fontSize(8).fillColor("#60708A")
       .text("Positive balances are amounts owed. Negative balances represent customer credit.");
 
-    if (data.otherServicePayments.length) {
-      if (doc.y > 650) doc.addPage();
-      doc.moveDown(2);
-      doc.font("Helvetica-Bold").fontSize(12).fillColor("#132036")
-        .text("OTHER SERVICE PAYMENTS");
-      doc.font("Helvetica").fontSize(8).fillColor("#60708A")
-        .text("Informational only — these payments do not affect the water account balance.");
-      doc.moveDown(0.7);
-      const drawOtherHeader = () => {
-        const y = doc.y;
-        doc.rect(42, y, 511, 20).fill("#3B647E");
-        doc.font("Helvetica-Bold").fontSize(7.5).fillColor("#FFFFFF");
-        doc.text("Date", 47, y + 6, { width: 62 });
-        doc.text("Service / Reference", 112, y + 6, { width: 175 });
-        doc.text("Receipt", 290, y + 6, { width: 95 });
-        doc.text("Status", 388, y + 6, { width: 70 });
-        doc.text("Amount", 461, y + 6, { width: 87, align: "right" });
-        doc.y = y + 25;
-      };
-      drawOtherHeader();
-      for (const payment of data.otherServicePayments) {
-        if (doc.y > 748) {
-          doc.addPage();
-          drawOtherHeader();
-        }
-        const y = doc.y;
-        const height = 30;
-        doc.font("Helvetica").fontSize(8).fillColor("#132036");
-        doc.text(payment.date.toISOString().slice(0, 10), 47, y + 5, { width: 62 });
-        doc.font("Helvetica-Bold").text(payment.label, 112, y + 5, { width: 175 });
-        doc.font("Helvetica").fontSize(7).fillColor("#60708A")
-          .text(payment.reference, 112, y + 16, { width: 175 });
-        doc.fontSize(8).fillColor("#132036")
-          .text(payment.receiptNumber || "-", 290, y + 5, { width: 95 })
-          .text(payment.paymentStatus.replace(/_/g, " "), 388, y + 5, { width: 70 })
-          .text(money(payment.amount), 461, y + 5, { width: 87, align: "right" });
-        doc.strokeColor("#DCE4EF").moveTo(42, y + height).lineTo(553, y + height).stroke();
-        doc.y = y + height + 3;
-      }
-      doc.font("Helvetica-Bold").fontSize(9).fillColor("#132036")
-        .text("Other service payments subtotal", 290, doc.y + 5, { width: 168, align: "right" })
-        .text(money(data.otherServicePaymentsSubtotal), 461, doc.y + 5, { width: 87, align: "right" });
-    }
     doc.end();
   });
 }
@@ -1317,7 +1274,7 @@ async function loadCustomerStatement(
       reference: bill.billNumber,
       period: bill.billingCycle.cycleCode || bill.billingCycle.cycleName,
       details: bill.reading
-        ? `Prev: ${Number(bill.reading.previousReading)} - Curr: ${Number(bill.reading.currentReading)} - Units: ${Number(bill.reading.consumption)} - Due: ${bill.dueDate.toISOString().slice(0, 10)}`
+        ? `Prev: ${Number(bill.reading.previousReading)} - Curr: ${Number(bill.reading.currentReading)} - Units billed: ${Number(bill.consumptionUnits)}${Number(bill.consumptionUnits) !== Number(bill.reading.consumption) ? " (includes meter replacement final consumption)" : ""} - Due: ${bill.dueDate.toISOString().slice(0, 10)}`
         : `Units: ${Number(bill.consumptionUnits)} - Due: ${bill.dueDate.toISOString().slice(0, 10)}`,
       debit: Number(bill.totalCurrentCharges),
       credit: 0,
@@ -1331,6 +1288,33 @@ async function loadCustomerStatement(
       debit: 0,
       credit: Number(payment.amount),
     })),
+    ...otherServicePayments
+      .filter((payment) => payment.paymentStatus === "POSTED")
+      .flatMap((payment) => {
+        const isReconnection = payment.paymentType === "RECONNECTION_FEE";
+        const service = isReconnection ? "Reconnection fee" : "New connection fee";
+        const receipt = payment.receipt?.receiptNumber ?? payment.transactionReference;
+        const amount = Number(payment.amount);
+        const common = {
+          date: payment.paymentDate,
+          period: payment.paymentDate.toISOString().slice(0, 7),
+        };
+        return [{
+          ...common,
+          particulars: service,
+          reference: payment.customerReference || payment.transactionReference,
+          details: `${service} settled under receipt ${receipt}`,
+          debit: amount,
+          credit: 0,
+        }, {
+          ...common,
+          particulars: `${service} payment`,
+          reference: receipt,
+          details: `Transaction ${payment.transactionReference}`,
+          debit: 0,
+          credit: amount,
+        }];
+      }),
   ].sort((a, b) => a.date.getTime() - b.date.getTime());
   let runningBalance = openingBalance;
   const entries: StatementEntry[] = rawEntries.map((entry) => {
@@ -1988,7 +1972,7 @@ async function completionDetail(workOrderId: bigint, eligible: boolean) {
   } : null;
   return {
     eligible: true,
-    requiresSignature: true,
+    requiresSignature: false,
     status: report?.status ?? null,
     customerNameConfirmed: report?.customer_name_confirmed ?? false,
     customerIdentityConfirmed: report?.customer_identity_confirmed ?? false,
@@ -2142,7 +2126,7 @@ mobileRouter.patch("/field/work-orders/:id/status", fieldWorkOrderRoles, async (
           ON wt.work_order_type_id=wo.work_order_type_id
         WHERE wo.work_order_id=${workOrderId.data}`;
       if (completionEligible(types[0])) return res.status(409).json({
-        error: "Submit the materials and customer-signature completion report to complete this job",
+        error: "Use the job completion screen to finish this task",
       });
     }
     if (!(mobileTransitions[owned.status] ?? []).includes(input.data.status)) {
@@ -2243,11 +2227,12 @@ const completionDraftInput = z.object({
   completionNotes: z.string().trim().max(5000).optional().nullable(),
 }).strict();
 const completionSubmitInput = z.object({
-  materials: z.array(completionMaterialInput).max(100).optional(),
-  customerNameConfirmed: z.boolean(),
-  customerIdentityConfirmed: z.boolean(),
-  noMaterialsUsed: z.boolean(),
-  completionNotes: z.string().trim().min(2).max(5000),
+  materials: z.array(completionMaterialInput).max(100).optional().default([]),
+  // Optional legacy fields keep older installed app versions compatible.
+  customerNameConfirmed: z.boolean().optional(),
+  customerIdentityConfirmed: z.boolean().optional(),
+  noMaterialsUsed: z.boolean().optional(),
+  completionNotes: z.string().trim().max(5000).optional().nullable(),
 }).strict();
 const completionSignatureInput = z.object({
   content: z.string().trim().min(100).max(3_000_000),
@@ -2262,7 +2247,7 @@ async function ownedCompletionWorkOrder(req: Request, res: Response, workOrderId
       ON wt.work_order_type_id=wo.work_order_type_id
     WHERE wo.work_order_id=${workOrderId}`;
   if (!completionEligible(rows[0])) {
-    res.status(409).json({ error: "This work-order type does not use materials and signature completion" });
+    res.status(409).json({ error: "This work-order type does not use the detailed completion flow" });
     return null;
   }
   return { ...owned, ...rows[0] };
@@ -2448,34 +2433,28 @@ mobileRouter.post("/field/work-orders/:id/completion/submit", fieldWorkOrderRole
     if (!owned) return;
     if (owned.status !== "IN_PROGRESS")
       return res.status(409).json({ error: "The work order must be in progress before job completion can be submitted" });
-    if (!input.data.customerNameConfirmed || !input.data.customerIdentityConfirmed)
-      return res.status(400).json({ error: "Confirm both the customer name and customer identity" });
     const materials = await validateCompletionMaterials(input.data.materials);
-    if (input.data.noMaterialsUsed && materials?.length)
-      return res.status(400).json({ error: "Remove material rows when no materials were used" });
+    const completionNotes = input.data.completionNotes?.trim() || "Completed by field officer";
+    const submission = {
+      ...input.data,
+      customerNameConfirmed: true,
+      customerIdentityConfirmed: true,
+      noMaterialsUsed: materials?.length === 0,
+      completionNotes,
+    };
     await prisma.$transaction(async (tx) => {
       const locked = await tx.$queryRaw<any[]>`
         SELECT status FROM aquaflow.work_orders WHERE work_order_id=${workOrderId.data} FOR UPDATE`;
       if (locked[0]?.status !== "IN_PROGRESS")
         throw Object.assign(new Error("The work order is no longer in progress"), { status: 409 });
-      const reportId = await saveCompletionReport(tx, workOrderId.data, owned.fieldOfficerId, input.data, materials);
-      const reports = await tx.$queryRaw<any[]>`
-        SELECT signature_evidence_id,no_materials_used FROM aquaflow.field_work_order_completion_reports
-        WHERE completion_report_id=${reportId}`;
-      if (!reports[0]?.signature_evidence_id)
-        throw Object.assign(new Error("Capture the customer signature before submitting the job"), { status: 400 });
-      const counts = await tx.$queryRaw<any[]>`
-        SELECT COUNT(*)::int AS count FROM aquaflow.work_order_materials
-        WHERE completion_report_id=${reportId}`;
-      if (!reports[0].no_materials_used && counts[0].count === 0)
-        throw Object.assign(new Error("Record materials used or explicitly confirm that no materials were used"), { status: 400 });
+      const reportId = await saveCompletionReport(tx, workOrderId.data, owned.fieldOfficerId, submission, materials);
       await tx.$executeRaw`
         UPDATE aquaflow.field_work_order_completion_reports
         SET status='SUBMITTED',submitted_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP
         WHERE completion_report_id=${reportId}`;
       await tx.$executeRaw`
         UPDATE aquaflow.work_orders SET status='COMPLETED',completed_at=CURRENT_TIMESTAMP,
-          completion_notes=${input.data.completionNotes},updated_at=CURRENT_TIMESTAMP
+          completion_notes=${completionNotes},updated_at=CURRENT_TIMESTAMP
         WHERE work_order_id=${workOrderId.data}`;
       await tx.$executeRaw`
         UPDATE aquaflow.work_order_assignments SET status='COMPLETED'
@@ -2484,7 +2463,7 @@ mobileRouter.post("/field/work-orders/:id/completion/submit", fieldWorkOrderRole
         INSERT INTO aquaflow.work_order_updates
           (work_order_id,field_officer_id,previous_status,new_status,notes)
         VALUES (${workOrderId.data},${owned.fieldOfficerId},'IN_PROGRESS','COMPLETED',
-          ${`Job completion submitted: ${input.data.completionNotes}`})`;
+          ${`Job completion submitted: ${completionNotes}`})`;
     });
     res.json({ workOrderId: workOrderId.data, status: "COMPLETED",
       assignmentStatus: "COMPLETED", completion: await completionDetail(workOrderId.data, true) });
@@ -2501,6 +2480,7 @@ const disconnectionDraftBody = z.object({
   gpsLongitude: z.coerce.number().min(-180).max(180).optional().nullable(),
   gpsCapturedAt: z.coerce.date().optional().nullable(),
   customerAcknowledgement: disconnectionAcknowledgement.optional().nullable(),
+  currentReading: z.coerce.number().finite().min(0).max(999_999_999).optional().nullable(),
   remarks: z.string().trim().max(5000).optional().nullable(),
   officerConfirmed: z.boolean().optional(),
 });
@@ -2510,10 +2490,68 @@ const disconnectionSubmitBody = z.object({
   gpsLongitude: z.coerce.number().min(-180).max(180),
   gpsCapturedAt: z.coerce.date(),
   customerAcknowledgement: disconnectionAcknowledgement,
+  currentReading: z.coerce.number().finite().min(0).max(999_999_999),
   remarks: z.string().trim().min(2).max(5000),
   officerConfirmed: z.literal(true),
 });
 const disconnectionPhotoBody = z.object({ content: z.string().trim().min(20).max(6_000_000) });
+
+function mobileDisconnectionReadingAmount(context: any, consumption: number) {
+  let consumptionCharge = 0;
+  if (context.billingMethod === "FLAT") {
+    consumptionCharge = Number(context.flatAmount);
+  } else if (context.billingMethod === "TIERED") {
+    for (const band of context.bands ?? []) {
+      const lower = Number(band.lowerLimit);
+      const upper = band.upperLimit == null ? consumption : Number(band.upperLimit);
+      consumptionCharge += Math.max(0, Math.min(consumption, upper) - lower) * Number(band.ratePerUnit);
+    }
+  } else {
+    consumptionCharge = consumption * Number(context.ratePerUnit);
+  }
+  consumptionCharge = roundMoney(consumptionCharge);
+  return roundMoney(
+    consumptionCharge + Math.max(0, Number(context.minimumCharge) - consumptionCharge) +
+      Number(context.standingCharge) + Number(context.meterRent),
+  );
+}
+
+async function mobileDisconnectionReadingContext(workOrderId: bigint) {
+  const rows = await prisma.$queryRaw<any[]>`
+    SELECT wo.account_id AS "accountId", ma.assignment_id AS "meterAssignmentId",
+      ma.meter_id AS "meterId", m.meter_number AS "meterNumber",
+      COALESCE(latest.current_reading,m.opening_reading) AS "previousReading",
+      tariff.tariff_id AS "tariffId", tariff.tariff_name AS "tariffName",
+      tariff.billing_method AS "billingMethod", tariff.minimum_charge AS "minimumCharge",
+      tariff.standing_charge AS "standingCharge", tariff.meter_rent AS "meterRent",
+      tariff.flat_amount AS "flatAmount", tariff.rate_per_unit AS "ratePerUnit", tariff.bands
+    FROM aquaflow.work_orders wo
+    JOIN aquaflow.customer_accounts ca ON ca.account_id=wo.account_id
+    JOIN aquaflow.meter_assignments ma ON ma.account_id=wo.account_id
+      AND ma.assignment_status='ACTIVE' AND ma.removal_date IS NULL
+    JOIN aquaflow.meters m ON m.meter_id=ma.meter_id
+    LEFT JOIN LATERAL (
+      SELECT mr.current_reading FROM aquaflow.meter_readings mr
+      WHERE mr.meter_id=m.meter_id AND mr.approval_status='APPROVED'
+      ORDER BY mr.reading_date DESC,mr.reading_id DESC LIMIT 1
+    ) latest ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT t.*,
+        COALESCE((SELECT jsonb_agg(jsonb_build_object(
+          'lowerLimit',tb.lower_limit,'upperLimit',tb.upper_limit,
+          'ratePerUnit',tb.rate_per_unit,'bandSequence',tb.band_sequence
+        ) ORDER BY tb.band_sequence)
+        FROM aquaflow.tariff_bands tb WHERE tb.tariff_id=t.tariff_id AND tb.status='ACTIVE'),'[]'::jsonb) AS bands
+      FROM aquaflow.tariffs t
+      WHERE t.category_id=ca.category_id AND t.status='ACTIVE'
+        AND t.effective_from<=CURRENT_DATE
+        AND (t.effective_to IS NULL OR t.effective_to>=CURRENT_DATE)
+      ORDER BY t.effective_from DESC,t.tariff_id DESC LIMIT 1
+    ) tariff ON TRUE
+    WHERE wo.work_order_id=${workOrderId}
+    ORDER BY ma.assignment_date DESC,ma.assignment_id DESC LIMIT 1`;
+  return rows[0] ?? null;
+}
 
 async function ownedDisconnection(req: Request, res: Response, workOrderId: bigint) {
   const officer = await activeFieldOfficer(req, res);
@@ -2544,7 +2582,7 @@ function disconnectionPhotoMetadata(row: any, workOrderId: bigint) {
 }
 
 async function disconnectionDetail(workOrderId: bigint) {
-  const [rows, reports, photos] = await Promise.all([
+  const [rows, reports, photos, readingContext] = await Promise.all([
     prisma.$queryRaw<any[]>`
       SELECT wo.work_order_id AS "workOrderId", wo.work_order_number AS "workOrderNumber",
              COALESCE(wo.source_reference, dn.notice_reference, wo.work_order_number) AS "noticeReference",
@@ -2571,13 +2609,20 @@ async function disconnectionDetail(workOrderId: bigint) {
       WHERE wo.work_order_id=${workOrderId}`,
     prisma.$queryRaw<any[]>`SELECT * FROM aquaflow.field_disconnection_reports WHERE work_order_id=${workOrderId}`,
     prisma.$queryRaw<any[]>`SELECT * FROM aquaflow.work_order_evidence WHERE work_order_id=${workOrderId} AND evidence_type='AFTER_PHOTO' ORDER BY captured_at DESC`,
+    mobileDisconnectionReadingContext(workOrderId),
   ]);
   const report = reports[0];
-  return { ...rows[0], evidenceStatus: report?.status ?? null, draft: report ? {
+  return { ...rows[0],
+    meterNumber: readingContext?.meterNumber ?? null,
+    previousReading: readingContext == null ? null : Number(readingContext.previousReading),
+    tariffName: readingContext?.tariffName ?? null,
+    hasActiveTariff: Boolean(readingContext?.tariffId),
+    evidenceStatus: report?.status ?? null, draft: report ? {
     disconnectionDateTime: report.disconnection_datetime,
     gpsLatitude: report.gps_latitude, gpsLongitude: report.gps_longitude,
     gpsCapturedAt: report.gps_captured_at,
     customerAcknowledgement: report.customer_acknowledgement,
+    currentReading: report.current_reading == null ? null : Number(report.current_reading),
     remarks: report.remarks, officerConfirmed: report.officer_confirmed,
     submittedAt: report.submitted_at,
   } : null, photos: photos.map((row) => disconnectionPhotoMetadata(row, workOrderId)) };
@@ -2625,10 +2670,10 @@ mobileRouter.get("/field/disconnections/:id", fieldWorkOrderRoles, async (req, r
 async function upsertDisconnectionReport(tx: typeof prisma, workOrderId: bigint, officerId: bigint, data: z.infer<typeof disconnectionDraftBody>, submitted: boolean) {
   await tx.$executeRaw`INSERT INTO aquaflow.field_disconnection_reports
     (work_order_id, field_officer_id, disconnection_datetime, gps_latitude, gps_longitude, gps_captured_at,
-     customer_acknowledgement, remarks, officer_confirmed, status, submitted_at)
+     customer_acknowledgement, current_reading, remarks, officer_confirmed, status, submitted_at)
     VALUES (${workOrderId}, ${officerId}, ${data.disconnectionDateTime ?? null}, ${data.gpsLatitude ?? null},
       ${data.gpsLongitude ?? null}, ${data.gpsCapturedAt ?? null}, ${data.customerAcknowledgement ?? null},
-      ${data.remarks ?? null}, ${data.officerConfirmed ?? false}, ${submitted ? "SUBMITTED" : "DRAFT"},
+      ${data.currentReading ?? null}, ${data.remarks ?? null}, ${data.officerConfirmed ?? false}, ${submitted ? "SUBMITTED" : "DRAFT"},
       ${submitted ? new Date() : null})
     ON CONFLICT (work_order_id) DO UPDATE SET
       field_officer_id=EXCLUDED.field_officer_id,
@@ -2637,6 +2682,7 @@ async function upsertDisconnectionReport(tx: typeof prisma, workOrderId: bigint,
       gps_longitude=COALESCE(EXCLUDED.gps_longitude, field_disconnection_reports.gps_longitude),
       gps_captured_at=COALESCE(EXCLUDED.gps_captured_at, field_disconnection_reports.gps_captured_at),
       customer_acknowledgement=COALESCE(EXCLUDED.customer_acknowledgement, field_disconnection_reports.customer_acknowledgement),
+      current_reading=COALESCE(EXCLUDED.current_reading, field_disconnection_reports.current_reading),
       remarks=COALESCE(EXCLUDED.remarks, field_disconnection_reports.remarks),
       officer_confirmed=CASE WHEN ${data.officerConfirmed === undefined} THEN field_disconnection_reports.officer_confirmed ELSE EXCLUDED.officer_confirmed END,
       status=EXCLUDED.status, submitted_at=EXCLUDED.submitted_at, updated_at=CURRENT_TIMESTAMP`;
@@ -2663,10 +2709,61 @@ mobileRouter.post("/field/disconnections/:id/submit", fieldWorkOrderRoles, async
     const owned = await ownedDisconnection(req, res, id.data);
     if (!owned) return;
     if (!["ASSIGNED", "ACCEPTED", "IN_PROGRESS"].includes(owned.status)) return res.status(409).json({ error: "This disconnection has already been completed or reassigned" });
+    const readingContext = await mobileDisconnectionReadingContext(id.data);
+    if (!readingContext) return res.status(409).json({ error: "This account has no active meter to read" });
+    if (!readingContext.tariffId) return res.status(409).json({ error: "This account has no active tariff for the final reading" });
+    const previousReading = Number(readingContext.previousReading);
+    const currentReading = data.data.currentReading;
+    if (currentReading < previousReading) {
+      return res.status(400).json({ error: `Current reading cannot be lower than the previous reading of ${previousReading}` });
+    }
+    const consumption = currentReading - previousReading;
+    const finalReadingAmount = mobileDisconnectionReadingAmount(readingContext, consumption);
     const photos = await prisma.$queryRaw<any[]>`SELECT evidence_id FROM aquaflow.work_order_evidence WHERE work_order_id=${id.data} AND evidence_type='AFTER_PHOTO' LIMIT 1`;
     if (!photos[0]) return res.status(400).json({ error: "At least one evidence photo is required" });
     await prisma.$transaction(async (tx) => {
       await upsertDisconnectionReport(tx as typeof prisma, id.data, owned.fieldOfficerId, data.data, true);
+      const reading = await tx.meterReading.create({ data: {
+        meterId: readingContext.meterId,
+        accountId: readingContext.accountId,
+        fieldOfficerId: owned.fieldOfficerId,
+        previousReading,
+        currentReading,
+        readingType: "ACTUAL",
+        readingDate: data.data.disconnectionDateTime,
+        gpsLatitude: data.data.gpsLatitude,
+        gpsLongitude: data.data.gpsLongitude,
+        abnormalFlag: consumption === 0,
+        exceptionType: consumption === 0 ? "ZERO" : "NONE",
+        approvalStatus: "APPROVED",
+        approvedBy: credentialUserId(req),
+        approvalComments: `Final reading captured in the field app for disconnection ${id.data}`,
+        approvedAt: new Date(),
+        syncId: `DISCONNECTION-${id.data}`,
+        events: { create: { eventType: "DISCONNECTION_READING_POSTED", remarks: data.data.remarks, performedBy: credentialUserId(req) } },
+      } });
+      await tx.$executeRaw`
+        INSERT INTO aquaflow.disconnection_postings
+          (work_order_id,account_id,meter_id,reading_id,previous_reading,current_reading,
+           default_disconnection_fee,disconnection_fee,fee_overridden,fee_override_reason,
+           fine_amount,fine_reason,posted_by)
+        VALUES (${id.data},${readingContext.accountId},${readingContext.meterId},${reading.readingId},
+          ${previousReading},${currentReading},${finalReadingAmount},${finalReadingAmount},
+          FALSE,NULL,0,NULL,${credentialUserId(req)})`;
+      await tx.customerAccount.update({
+        where: { accountId: readingContext.accountId },
+        data: { currentBalance: { increment: finalReadingAmount }, accountStatus: "DISCONNECTED", updatedAt: new Date() },
+      });
+      await tx.meter.update({ where: { meterId: readingContext.meterId }, data: { status: "DISCONNECTED", updatedAt: new Date() } });
+      await tx.meterEvent.create({ data: {
+        meterId: readingContext.meterId,
+        assignmentId: readingContext.meterAssignmentId,
+        eventType: "READING_CAPTURED",
+        reading: currentReading,
+        remarks: data.data.remarks,
+        performedBy: credentialUserId(req),
+        metadata: { workOrderId: id.data.toString(), readingId: reading.readingId.toString(), source: "FIELD_APP_DISCONNECTION" },
+      } });
       await tx.$executeRaw`UPDATE aquaflow.work_orders SET status='COMPLETED', completed_at=CURRENT_TIMESTAMP,
         completion_notes=${data.data.remarks}, updated_at=CURRENT_TIMESTAMP WHERE work_order_id=${id.data}`;
       await tx.$executeRaw`UPDATE aquaflow.work_order_assignments SET status='COMPLETED'

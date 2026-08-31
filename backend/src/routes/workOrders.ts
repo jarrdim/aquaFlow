@@ -3,7 +3,9 @@ import { NextFunction, Request, Response, Router } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { queueNewCustomerWelcomeSms } from "../lib/newCustomerWelcome";
-import { isSystemAdmin, requireAuth, requirePermission } from "../middleware/auth";
+import { initiateMpesaStk } from "../lib/mpesaStk";
+import { queryStkPush } from "../lib/mpesa";
+import { isSystemAdmin, requireAuth, requirePermission, requireRole } from "../middleware/auth";
 
 export const workOrdersRouter = Router();
 workOrdersRouter.use(requireAuth);
@@ -13,6 +15,7 @@ const canCreate = requirePermission("WORK_ORDER_CREATE");
 const canAssign = requirePermission("WORK_ORDER_ASSIGN");
 const canExecute = requirePermission("WORK_ORDER_EXECUTE");
 const canVerify = requirePermission("WORK_ORDER_VERIFY");
+const canRecordReconnectionCash = requireRole("SYSTEM_ADMIN", "FINANCE_MANAGER", "CASHIER", "ACCOUNTANT");
 const id = z.coerce.bigint().positive();
 const priorities = ["LOW", "NORMAL", "HIGH", "EMERGENCY"] as const;
 const statuses = ["CREATED", "ASSIGNED", "ACCEPTED", "IN_PROGRESS", "COMPLETED", "VERIFIED", "CLOSED", "REOPENED", "CANCELLED"] as const;
@@ -221,6 +224,8 @@ workOrdersRouter.get("/", canView, async (req, res) => {
     LEFT JOIN aquaflow.customer_accounts ca ON ca.account_id = wo.account_id
     LEFT JOIN aquaflow.properties p ON p.property_id = wo.property_id
     LEFT JOIN aquaflow.customers c ON c.customer_id = COALESCE(ca.customer_id, p.owner_customer_id)
+    LEFT JOIN aquaflow.reconnection_requests rr_child ON rr_child.work_order_id = wo.work_order_id
+    LEFT JOIN aquaflow.work_orders parent_wo ON parent_wo.work_order_id = rr_child.disconnection_work_order_id
     LEFT JOIN LATERAL (
       SELECT a.assignment_id, a.field_officer_id, a.status AS assignment_status,
              u.first_name, u.last_name, u.username
@@ -243,11 +248,20 @@ workOrdersRouter.get("/", canView, async (req, res) => {
              COALESCE(NULLIF(TRIM(CONCAT_WS(' ', c.first_name, c.middle_name, c.last_name)), ''), c.organization_name, c.customer_number) AS "customerName",
              assignee.assignment_id AS "assignmentId", assignee.field_officer_id AS "fieldOfficerId",
              assignee.assignment_status AS "assignmentStatus",
-             NULLIF(TRIM(CONCAT_WS(' ', assignee.first_name, assignee.last_name)), '') AS "officerName"
+             NULLIF(TRIM(CONCAT_WS(' ', assignee.first_name, assignee.last_name)), '') AS "officerName",
+             parent_wo.work_order_id AS "parentWorkOrderId",
+             parent_wo.work_order_number AS "parentWorkOrderNumber",
+             EXISTS (
+               SELECT 1 FROM aquaflow.reconnection_requests child_request
+               WHERE child_request.disconnection_work_order_id=wo.work_order_id
+                 AND child_request.work_order_id IS NOT NULL
+             ) AS "hasChildren"
       ${base} ${where}
       ORDER BY
-        wo.due_date ASC NULLS LAST,
-        wo.created_at DESC,
+        COALESCE(parent_wo.due_date, wo.due_date) ASC NULLS LAST,
+        COALESCE(parent_wo.created_at, wo.created_at) DESC,
+        CASE WHEN parent_wo.work_order_id IS NULL THEN 0 ELSE 1 END,
+        wo.created_at ASC,
         wo.work_order_id DESC
       OFFSET ${offset} LIMIT ${take}`),
   ]);
@@ -273,7 +287,8 @@ workOrdersRouter.get("/:id", canView, async (req, res) => {
     WHERE wo.work_order_id = ${parsed.data}`;
   if (!rows[0]) return res.status(404).json({ error: "Work order not found" });
   const [assignments, updates, evidence, consumables, disconnectionReports, reconnectionReports,
-    completionReports, completionMaterials, disconnectionPostingRows, disconnectionContextRows] = await Promise.all([
+    completionReports, completionMaterials, disconnectionPostingRows, disconnectionContextRows,
+    reconnectionRequestRows] = await Promise.all([
     prisma.$queryRaw<any[]>`
       SELECT a.*, u.first_name, u.last_name, u.username
       FROM aquaflow.work_order_assignments a
@@ -371,6 +386,22 @@ workOrdersRouter.get("/:id", canView, async (req, res) => {
       ) tariff ON TRUE
       WHERE wo.work_order_id=${parsed.data}
       ORDER BY ma.assignment_date DESC,ma.assignment_id DESC LIMIT 1`,
+    prisma.$queryRaw<any[]>`
+      SELECT rr.reconnection_request_id AS "reconnectionRequestId",
+        rr.request_number AS "requestNumber",rr.status,
+        rr.reconnection_fee AS "reconnectionFee",
+        rr.fee_payment_status AS "feePaymentStatus",rr.fee_paid_at AS "feePaidAt",
+        rr.contact_phone AS "contactPhone",pay.payment_status AS "paymentStatus",
+        pay.amount AS "amountPaid",pay.transaction_reference AS "paymentReference",
+        receipt.receipt_number AS "receiptNumber",
+        dwo.work_order_id AS "disconnectionWorkOrderId",
+        dwo.work_order_number AS "disconnectionWorkOrderNumber"
+      FROM aquaflow.reconnection_requests rr
+      LEFT JOIN aquaflow.payments pay ON pay.payment_id=rr.fee_payment_id
+      LEFT JOIN aquaflow.receipts receipt ON receipt.payment_id=pay.payment_id
+      LEFT JOIN aquaflow.work_orders dwo ON dwo.work_order_id=rr.disconnection_work_order_id
+      WHERE rr.work_order_id=${parsed.data}
+      LIMIT 1`,
   ]);
   const completion = completionReports[0];
   const completionSignatureId = completion?.signature_evidence_id;
@@ -381,6 +412,7 @@ workOrdersRouter.get("/:id", canView, async (req, res) => {
     disconnectionEvidence: disconnectionReports[0] ?? null,
     disconnectionPosting: disconnectionPostingRows[0] ?? null,
     disconnectionContext: disconnectionPostingRows[0] ?? disconnectionContextRows[0] ?? null,
+    reconnectionRequest: reconnectionRequestRows[0] ?? null,
     reconnectionEvidence: reconnectionReports[0] ?? null,
     completionEvidence: completion ? {
       ...completion,
@@ -508,7 +540,7 @@ workOrdersRouter.post("/", canCreate, asyncRoute(async (req, res) => {
     return res.status(400).json({ error: "Select a customer category to create an account for this customer" });
   }
   const type = await prisma.$queryRaw<any[]>`
-    SELECT work_order_type_id FROM aquaflow.work_order_types
+    SELECT work_order_type_id,type_code FROM aquaflow.work_order_types
     WHERE work_order_type_id = ${parsed.data.workOrderTypeId} AND status = 'ACTIVE'`;
   if (!type[0]) return res.status(404).json({ error: "Work order type not found" });
   const fieldOfficerIds = [...new Set([
@@ -557,6 +589,18 @@ workOrdersRouter.post("/", canCreate, asyncRoute(async (req, res) => {
       });
       resolvedAccountId = account.accountId;
     }
+    if (type[0].type_code === "DISCONNECTION" && resolvedAccountId) {
+      await tx.$queryRaw`
+        SELECT pg_advisory_xact_lock(hashtext(${`open-disconnection:${resolvedAccountId}`}))::text AS lock`;
+      const existing = await tx.$queryRaw<any[]>`
+        SELECT wo.work_order_id AS "workOrderId",wo.work_order_number AS "workOrderNumber"
+        FROM aquaflow.work_orders wo
+        JOIN aquaflow.work_order_types wt ON wt.work_order_type_id=wo.work_order_type_id
+        WHERE wo.account_id=${resolvedAccountId} AND wt.type_code='DISCONNECTION'
+          AND wo.status IN ('CREATED','ASSIGNED','ACCEPTED','IN_PROGRESS','REOPENED')
+        ORDER BY wo.created_at DESC,wo.work_order_id DESC LIMIT 1`;
+      if (existing[0]) return { duplicate: true, ...existing[0] };
+    }
     const initialStatus = fieldOfficerIds.length ? "ASSIGNED" : "CREATED";
     const rows = await tx.$queryRaw<any[]>`
       INSERT INTO aquaflow.work_orders
@@ -602,6 +646,13 @@ workOrdersRouter.post("/", canCreate, asyncRoute(async (req, res) => {
     }
     return rows[0];
   });
+  if (created.duplicate) {
+    return res.status(409).json({
+      error: `Open disconnection work order ${created.workOrderNumber} already exists for this account`,
+      existingWorkOrderId: created.workOrderId,
+      existingWorkOrderNumber: created.workOrderNumber,
+    });
+  }
   if (parsed.data.connectionApplicationId && created.account_id) {
     const [application, account] = await Promise.all([
       prisma.newConnectionApplication.findUnique({
@@ -661,6 +712,297 @@ workOrdersRouter.patch("/:id/assign", canAssign, async (req, res) => {
       VALUES (${workOrderId.data}, ${current[0].status}, 'ASSIGNED', ${parsed.data.notes ?? "Work assigned"})`;
   });
   res.json({ message: "Work order assigned" });
+});
+
+workOrdersRouter.post("/:id/reconnection-payment", canExecute, async (req, res, next) => {
+  const workOrderId = id.safeParse(req.params.id);
+  const body = z.object({
+    phoneNumber: z.string().trim().min(7).max(40).optional(),
+  }).safeParse(req.body ?? {});
+  if (!workOrderId.success) return res.status(400).json({ error: "Invalid work order id" });
+  if (!body.success) return res.status(400).json({ error: body.error.issues[0].message });
+  try {
+    const rows = await prisma.$queryRaw<any[]>`
+      SELECT wo.work_order_id,wo.account_id,wo.status,wt.type_code,
+        ca.account_number,ca.account_status,ca.customer_id,c.phone_number,
+        rr.reconnection_request_id,rr.request_number,rr.reconnection_fee,
+        rr.fee_payment_status,rr.fee_payment_id
+      FROM aquaflow.work_orders wo
+      JOIN aquaflow.work_order_types wt ON wt.work_order_type_id=wo.work_order_type_id
+      JOIN aquaflow.customer_accounts ca ON ca.account_id=wo.account_id
+      JOIN aquaflow.customers c ON c.customer_id=ca.customer_id
+      LEFT JOIN aquaflow.reconnection_requests rr ON rr.work_order_id=wo.work_order_id
+      WHERE wo.work_order_id=${workOrderId.data}`;
+    const workOrder = rows[0];
+    if (!workOrder || workOrder.type_code !== "RECONNECTION") {
+      return res.status(404).json({ error: "Reconnection work order not found" });
+    }
+    if (["COMPLETED", "VERIFIED", "CLOSED", "CANCELLED"].includes(workOrder.status)) {
+      return res.status(409).json({ error: "This reconnection work order can no longer receive a payment" });
+    }
+    if (workOrder.account_status !== "DISCONNECTED") {
+      return res.status(409).json({ error: "Only a disconnected customer account can be processed for reconnection" });
+    }
+
+    let request = workOrder.reconnection_request_id ? workOrder : null;
+    if (!request) {
+      const settings = await prisma.systemSetting.findUnique({ where: { settingId: 1n } });
+      const configuredFee = Number(settings?.reconnectionFee ?? 0);
+      if (!Number.isInteger(configuredFee) || configuredFee <= 0) {
+        return res.status(409).json({ error: "A positive whole-number reconnection fee is not configured" });
+      }
+      request = await prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`
+          SELECT pg_advisory_xact_lock(hashtext(${`open-reconnection:${workOrder.account_id}`}))::text AS lock`;
+        const disconnections = await tx.$queryRaw<any[]>`
+          SELECT wo.work_order_id FROM aquaflow.work_orders wo
+          JOIN aquaflow.work_order_types wt ON wt.work_order_type_id=wo.work_order_type_id
+          WHERE wo.account_id=${workOrder.account_id} AND wt.type_code='DISCONNECTION'
+            AND wo.status IN ('COMPLETED','VERIFIED','CLOSED')
+          ORDER BY wo.completed_at DESC NULLS LAST,wo.created_at DESC LIMIT 1`;
+        if (!disconnections[0]) {
+          throw Object.assign(new Error("No completed disconnection exists for this account"), { status: 409 });
+        }
+        const open = await tx.$queryRaw<any[]>`
+          SELECT reconnection_request_id,request_number,work_order_id,reconnection_fee,
+            fee_payment_status,fee_payment_id
+          FROM aquaflow.reconnection_requests
+          WHERE account_id=${workOrder.account_id}
+            AND status IN ('SUBMITTED','APPROVED','WORK_ORDER_CREATED')
+          ORDER BY created_at DESC LIMIT 1`;
+        if (open[0]?.work_order_id && open[0].work_order_id !== workOrderId.data) {
+          throw Object.assign(new Error(`Open reconnection request ${open[0].request_number} belongs to another work order`), { status: 409 });
+        }
+        if (open[0]) {
+          const adopted = await tx.$queryRaw<any[]>`
+            UPDATE aquaflow.reconnection_requests
+            SET status='WORK_ORDER_CREATED',work_order_id=${workOrderId.data},
+              disconnection_work_order_id=COALESCE(disconnection_work_order_id,${disconnections[0].work_order_id}),
+              decision_notes=COALESCE(decision_notes,'Processed from work-order management'),
+              decided_by=COALESCE(decided_by,${userId(req)}),decided_at=COALESCE(decided_at,NOW()),updated_at=NOW()
+            WHERE reconnection_request_id=${open[0].reconnection_request_id}
+            RETURNING reconnection_request_id,request_number,reconnection_fee,fee_payment_status,fee_payment_id`;
+          return adopted[0];
+        }
+        const requestNumber = `RC-${new Date().getFullYear()}-${Date.now().toString().slice(-9)}`;
+        const created = await tx.$queryRaw<any[]>`
+          INSERT INTO aquaflow.reconnection_requests
+            (request_number,customer_id,account_id,reason,contact_phone,status,reconnection_fee,
+             decision_notes,decided_by,decided_at,work_order_id,disconnection_work_order_id)
+          VALUES (${requestNumber},${workOrder.customer_id},${workOrder.account_id},
+            ${`Staff-initiated reconnection from work order ${workOrderId.data}`},
+            ${body.data.phoneNumber || workOrder.phone_number},'WORK_ORDER_CREATED',${configuredFee},
+            'Processed from work-order management',${userId(req)},NOW(),${workOrderId.data},${disconnections[0].work_order_id})
+          RETURNING reconnection_request_id,request_number,reconnection_fee,fee_payment_status,fee_payment_id`;
+        return created[0];
+      });
+    }
+    if (request.fee_payment_status === "PAID") {
+      return res.status(409).json({ error: "The reconnection fee has already been paid" });
+    }
+    const fee = Number(request.reconnection_fee);
+    if (!Number.isInteger(fee) || fee <= 0) {
+      return res.status(409).json({ error: "A positive whole-number reconnection fee is not configured for this request" });
+    }
+    const phoneNumber = String(body.data.phoneNumber || workOrder.phone_number || "").trim();
+    if (phoneNumber.length < 7) {
+      return res.status(409).json({ error: "The customer does not have a valid phone number" });
+    }
+    const stk = await initiateMpesaStk({
+      account: { accountId: workOrder.account_id, accountNumber: workOrder.account_number },
+      phoneNumber,
+      amount: fee,
+      initiatedBy: userId(req),
+      accountReference: request.request_number,
+      description: "AquaFlow reconnection fee",
+      purposeType: "RECONNECTION_FEE",
+      purposeReference: request.request_number,
+    });
+    await prisma.$executeRaw`
+      UPDATE aquaflow.reconnection_requests
+      SET fee_payment_status='PENDING',contact_phone=${phoneNumber},updated_at=NOW()
+      WHERE reconnection_request_id=${request.reconnection_request_id}`;
+    res.status(201).json({
+      requestNumber: request.request_number,
+      reconnectionFee: fee,
+      feePaymentStatus: "PENDING",
+      stkRequestId: stk.stkRequestId,
+      customerMessage: stk.customerMessage,
+    });
+  } catch (error: any) {
+    if (error?.status) return res.status(error.status).json({
+      error: error.message,
+      ...(error.stkRequestId ? { stkRequestId: error.stkRequestId } : {}),
+    });
+    next(error);
+  }
+});
+
+workOrdersRouter.post("/:id/reconnection-payment/status", canExecute, async (req, res, next) => {
+  const workOrderId = id.safeParse(req.params.id);
+  if (!workOrderId.success) return res.status(400).json({ error: "Invalid work order id" });
+  try {
+    const requests = await prisma.$queryRaw<any[]>`
+      SELECT rr.reconnection_request_id,rr.request_number,rr.fee_payment_status
+      FROM aquaflow.reconnection_requests rr
+      JOIN aquaflow.work_orders wo ON wo.work_order_id=rr.work_order_id
+      JOIN aquaflow.work_order_types wt ON wt.work_order_type_id=wo.work_order_type_id
+      WHERE wo.work_order_id=${workOrderId.data} AND wt.type_code='RECONNECTION'
+      LIMIT 1`;
+    const request = requests[0];
+    if (!request) return res.status(404).json({ error: "This work order is not linked to a reconnection request" });
+    if (request.fee_payment_status !== "PENDING") {
+      return res.json({ feePaymentStatus: request.fee_payment_status });
+    }
+    const stk = await prisma.mpesaStkRequest.findFirst({
+      where: {
+        purposeType: "RECONNECTION_FEE",
+        purposeReference: request.request_number,
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    if (!stk) {
+      await prisma.$executeRaw`
+        UPDATE aquaflow.reconnection_requests SET fee_payment_status='UNPAID',updated_at=NOW()
+        WHERE reconnection_request_id=${request.reconnection_request_id} AND fee_payment_status='PENDING'`;
+      return res.json({ feePaymentStatus: "UNPAID", message: "No pending M-Pesa request was found. You can send a new prompt." });
+    }
+    if (["FAILED", "CANCELLED"].includes(stk.status)) {
+      await prisma.$executeRaw`
+        UPDATE aquaflow.reconnection_requests SET fee_payment_status='UNPAID',updated_at=NOW()
+        WHERE reconnection_request_id=${request.reconnection_request_id} AND fee_payment_status='PENDING'`;
+      return res.json({ feePaymentStatus: "UNPAID", message: stk.resultDescription || "The M-Pesa prompt was not completed. You can retry." });
+    }
+    if (stk.status === "COMPLETED") {
+      return res.json({ feePaymentStatus: "PAID", message: "Reconnection fee payment completed." });
+    }
+    if (!stk.checkoutRequestId) {
+      return res.status(409).json({ error: "The pending M-Pesa request has no checkout reference" });
+    }
+    const result = await queryStkPush(stk.checkoutRequestId);
+    const resultCode = result.ResultCode == null ? null : Number(result.ResultCode);
+    const resultDescription = String(result.ResultDesc ?? result.ResponseDescription ?? "M-Pesa request is still pending");
+    if (resultCode != null && resultCode !== 0) {
+      const cancelled = resultCode === 1032;
+      await prisma.$transaction(async (tx) => {
+        await tx.mpesaStkRequest.update({
+          where: { stkRequestId: stk.stkRequestId },
+          data: {
+            status: cancelled ? "CANCELLED" : "FAILED",
+            resultCode,
+            resultDescription,
+            completedAt: new Date(),
+            updatedAt: new Date(),
+          },
+        });
+        await tx.$executeRaw`
+          UPDATE aquaflow.reconnection_requests SET fee_payment_status='UNPAID',updated_at=NOW()
+          WHERE reconnection_request_id=${request.reconnection_request_id} AND fee_payment_status='PENDING'`;
+      });
+      return res.json({ feePaymentStatus: "UNPAID", message: resultDescription });
+    }
+    res.json({
+      feePaymentStatus: "PENDING",
+      message: resultCode === 0
+        ? "M-Pesa reports success; waiting for the payment confirmation callback."
+        : resultDescription,
+    });
+  } catch (error: any) {
+    if (error?.status) return res.status(error.status).json({ error: error.message });
+    next(error);
+  }
+});
+
+workOrdersRouter.post("/:id/reconnection-payment/cash", canRecordReconnectionCash, async (req, res, next) => {
+  const workOrderId = id.safeParse(req.params.id);
+  const body = z.object({
+    transactionReference: z.string().trim().min(2).max(100),
+    paymentDate: z.string().date(),
+    remarks: z.string().trim().max(1000).optional(),
+  }).safeParse(req.body);
+  if (!workOrderId.success) return res.status(400).json({ error: "Invalid work order id" });
+  if (!body.success) return res.status(400).json({ error: body.error.issues[0].message });
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      const requests = await tx.$queryRaw<any[]>`
+        SELECT rr.reconnection_request_id,rr.request_number,rr.reconnection_fee,
+          rr.fee_payment_status,wo.account_id,wo.status AS work_order_status,
+          ca.account_number,c.phone_number,
+          COALESCE(NULLIF(TRIM(CONCAT_WS(' ',c.first_name,c.middle_name,c.last_name)),''),c.organization_name,c.customer_number) AS customer_name
+        FROM aquaflow.reconnection_requests rr
+        JOIN aquaflow.work_orders wo ON wo.work_order_id=rr.work_order_id
+        JOIN aquaflow.work_order_types wt ON wt.work_order_type_id=wo.work_order_type_id
+        JOIN aquaflow.customer_accounts ca ON ca.account_id=wo.account_id
+        JOIN aquaflow.customers c ON c.customer_id=ca.customer_id
+        WHERE wo.work_order_id=${workOrderId.data} AND wt.type_code='RECONNECTION'
+        FOR UPDATE OF rr`;
+      const request = requests[0];
+      if (!request) throw Object.assign(new Error("Create and link the reconnection request before recording cash"), { status: 409 });
+      if (["COMPLETED", "VERIFIED", "CLOSED", "CANCELLED"].includes(request.work_order_status)) {
+        throw Object.assign(new Error("This reconnection work order can no longer receive a payment"), { status: 409 });
+      }
+      if (request.fee_payment_status === "PAID") {
+        throw Object.assign(new Error("The reconnection fee has already been paid"), { status: 409 });
+      }
+      if (request.fee_payment_status === "PENDING") {
+        throw Object.assign(new Error("Refresh or cancel the pending M-Pesa prompt before recording cash"), { status: 409 });
+      }
+      const fee = Number(request.reconnection_fee);
+      if (!Number.isFinite(fee) || fee <= 0) {
+        throw Object.assign(new Error("A positive reconnection fee is required"), { status: 409 });
+      }
+      const channel = await tx.paymentChannel.findFirst({
+        where: { channelCode: "CASH", status: "ACTIVE" },
+      });
+      if (!channel) throw Object.assign(new Error("The Cash payment channel is not active"), { status: 409 });
+      const paymentDate = new Date(`${body.data.paymentDate}T00:00:00.000Z`);
+      const payment = await tx.payment.create({ data: {
+        transactionReference: body.data.transactionReference,
+        accountId: request.account_id,
+        channelId: channel.channelId,
+        payerName: request.customer_name,
+        payerPhone: request.phone_number,
+        amount: fee,
+        paymentDate,
+        valueDate: paymentDate,
+        customerReference: request.request_number,
+        paymentType: "RECONNECTION_FEE",
+        remarks: body.data.remarks || `Cash reconnection fee for ${request.request_number}`,
+        matchingStatus: "MATCHED",
+        paymentStatus: "POSTED",
+        unallocatedAmount: 0,
+        postedAt: new Date(),
+        receivedBy: userId(req),
+      } });
+      const receipt = await tx.receipt.create({ data: {
+        receiptNumber: `RCT-${new Date().getFullYear()}-${String(payment.paymentId).padStart(6, "0")}`,
+        paymentId: payment.paymentId,
+        accountId: request.account_id,
+        amount: fee,
+        issueDate: paymentDate,
+        issuedBy: userId(req),
+      } });
+      await tx.paymentEvent.create({ data: {
+        paymentId: payment.paymentId,
+        eventType: "CASH_RECONNECTION_FEE_POSTED",
+        previousStatus: "RECEIVED",
+        newStatus: "POSTED",
+        details: `Cash reconnection fee ${body.data.transactionReference}; KSh ${fee.toFixed(2)}`,
+        performedBy: userId(req),
+        metadata: { reconnectionRequestId: String(request.reconnection_request_id), workOrderId: String(workOrderId.data) },
+      } });
+      await tx.$executeRaw`
+        UPDATE aquaflow.reconnection_requests
+        SET fee_payment_status='PAID',fee_payment_id=${payment.paymentId},fee_paid_at=NOW(),updated_at=NOW()
+        WHERE reconnection_request_id=${request.reconnection_request_id}`;
+      return { paymentId: payment.paymentId, receiptNumber: receipt.receiptNumber, amount: fee };
+    });
+    res.status(201).json(result);
+  } catch (error: any) {
+    if (error?.status) return res.status(error.status).json({ error: error.message });
+    if (error?.code === "P2002") return res.status(409).json({ error: "That cash receipt/reference has already been used" });
+    next(error);
+  }
 });
 
 const transitionInput = z.object({

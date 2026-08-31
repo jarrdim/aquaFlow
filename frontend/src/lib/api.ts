@@ -325,9 +325,15 @@ export const api = {
     }),
   listMeterReplacements: (status = "") =>
     request(`/meters/replacements${status ? `?status=${status}` : ""}`),
+  getMeterReplacement: (id: string) => request(`/meters/replacements/${id}`),
   createMeterReplacement: (data: Record<string, unknown>) =>
     request("/meters/replacements", {
       method: "POST",
+      body: JSON.stringify(data),
+    }),
+  updateMeterReplacement: (id: string, data: Record<string, unknown>) =>
+    request(`/meters/replacements/${id}`, {
+      method: "PUT",
       body: JSON.stringify(data),
     }),
   decideMeterReplacement: (
@@ -939,6 +945,9 @@ export const api = {
   createWorkOrder: (data: Record<string, unknown>) => request("/work-orders", { method: "POST", body: JSON.stringify(data) }),
   assignWorkOrder: (id: string, data: Record<string, unknown>) => request(`/work-orders/${id}/assign`, { method: "PATCH", body: JSON.stringify(data) }),
   updateWorkOrderStatus: (id: string, data: Record<string, unknown>) => request(`/work-orders/${id}/status`, { method: "PATCH", body: JSON.stringify(data) }),
+  requestWorkOrderReconnectionPayment: (id: string, data: Record<string, unknown> = {}) => request(`/work-orders/${id}/reconnection-payment`, { method: "POST", body: JSON.stringify(data) }),
+  refreshWorkOrderReconnectionPayment: (id: string) => request(`/work-orders/${id}/reconnection-payment/status`, { method: "POST", body: "{}" }),
+  recordWorkOrderReconnectionCash: (id: string, data: Record<string, unknown>) => request(`/work-orders/${id}/reconnection-payment/cash`, { method: "POST", body: JSON.stringify(data) }),
   addWorkOrderEvidence: (id: string, data: Record<string, unknown>) => request(`/work-orders/${id}/evidence`, { method: "POST", body: JSON.stringify(data) }),
   addWorkOrderConsumable: (id: string, data: Record<string, unknown>) => request(`/work-orders/${id}/consumables`, { method: "POST", body: JSON.stringify(data) }),
   verifyWorkOrder: (id: string, data: Record<string, unknown>) => request(`/work-orders/${id}/verify`, { method: "PATCH", body: JSON.stringify(data) }),

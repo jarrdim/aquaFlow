@@ -145,6 +145,11 @@ async function cycleCandidates(cycleId: bigint, filters: any = {}) {
         take: 1,
         include: { meter: { include: { readings: { where: { readingCycleId: readingCycle.readingCycleId, approvalStatus: "APPROVED" }, take: 1 } } } },
       },
+      meterReadings: {
+        where: { readingCycleId: readingCycle.readingCycleId, approvalStatus: "APPROVED" },
+        include: { meter: true },
+        orderBy: [{ readingDate: "asc" }, { readingId: "asc" }],
+      },
       bills: { where: { billingCycleId: cycleId }, take: 1 },
     },
     orderBy: { accountNumber: "asc" },
@@ -160,14 +165,23 @@ async function cycleCandidates(cycleId: bigint, filters: any = {}) {
 
   const rows = accounts.map((account: any) => {
     const assignment = account.meterAssignments[0];
-    const reading = assignment?.meter?.readings?.[0];
+    // A replacement can legitimately produce two approved readings in one
+    // cycle: the old meter's final reading and the new meter's cycle reading.
+    // Bill their combined consumption once against the customer account.
+    const cycleReadings = account.meterReadings ?? [];
+    const reading = cycleReadings[cycleReadings.length - 1] ?? assignment?.meter?.readings?.[0];
     const tariff = tariffs.find((value: any) => value.categoryId === account.categoryId);
     let issue = "NONE";
     if (account.bills.length) issue = "DUPLICATE_BILL";
     else if (!tariff) issue = "MISSING_TARIFF";
     else if (tariff.billingMethod !== "FLAT" && !reading) issue = "MISSING_READING";
-    else if (reading?.exceptionType && reading.exceptionType !== "NONE") issue = reading.exceptionType === "HIGH" ? "HIGH_USAGE" : reading.exceptionType;
-    const consumption = Number(reading?.consumption ?? 0);
+    else {
+      const exception = cycleReadings.find((value: any) => value.exceptionType && value.exceptionType !== "NONE")?.exceptionType;
+      if (exception) issue = exception === "HIGH" ? "HIGH_USAGE" : exception;
+    }
+    const consumption = cycleReadings.length
+      ? cycleReadings.reduce((sum: number, value: any) => sum + Number(value.consumption), 0)
+      : Number(reading?.consumption ?? 0);
     const calculation = tariff ? calculateTariff(tariff, consumption) : null;
     const previousBalance = filters.includePreviousBalance === false ? 0 : Number(account.currentBalance);
     const penalties = 0;
@@ -532,7 +546,7 @@ billingRouter.get("/statements/:accountId", async (req, res, next) => {
       return res.status(400).json({ error: "Statement start date cannot be after the end date." });
     }
     const [bills, payments, otherServicePayments, priorBills, priorPayments, latestBill, settings,
-      disconnectionPostings, priorDisconnectionPostings] = await Promise.all([
+      disconnectionPostings, priorDisconnectionPostings, meterReplacements] = await Promise.all([
       prisma.bill.findMany({
         where: { accountId, status: { in: ["POSTED", "PARTIALLY_PAID", "PAID"] }, issueDate: { gte: from, lte: to } },
         include: { billingCycle: true, tariff: true, reading: true },
@@ -582,6 +596,23 @@ billingRouter.get("/statements/:accountId", async (req, res, next) => {
         SELECT COALESCE(SUM(disconnection_fee + fine_amount),0) AS total
         FROM aquaflow.disconnection_postings
         WHERE account_id=${accountId} AND posted_at<${from}`,
+      prisma.$queryRaw<any[]>`
+        SELECT mr.replacement_id,mr.replacement_date,mr.old_final_reading,
+          mr.new_opening_reading,mr.replacement_reason,
+          old_meter.meter_number AS old_meter_number,
+          new_meter.meter_number AS new_meter_number,
+          final_reading.previous_reading,
+          final_reading.consumption AS final_consumption,
+          wo.work_order_number
+        FROM aquaflow.meter_replacements mr
+        JOIN aquaflow.meters old_meter ON old_meter.meter_id=mr.old_meter_id
+        JOIN aquaflow.meters new_meter ON new_meter.meter_id=mr.new_meter_id
+        LEFT JOIN aquaflow.meter_readings final_reading
+          ON final_reading.sync_id='METER_REPLACEMENT:' || mr.replacement_id::text
+        LEFT JOIN aquaflow.work_orders wo ON wo.work_order_id=mr.work_order_id
+        WHERE mr.account_id=${accountId} AND mr.request_status='APPROVED'
+          AND mr.replacement_date>=${from} AND mr.replacement_date<=${to}
+        ORDER BY mr.replacement_date,mr.replacement_id`,
     ]);
     const entries = [
       ...bills.map((bill: any) => ({
@@ -591,7 +622,7 @@ billingRouter.get("/statements/:accountId", async (req, res, next) => {
         reference: bill.billNumber,
         period: bill.billingCycle.cycleCode || bill.billingCycle.cycleName,
         details: bill.reading
-          ? `Prev: ${Number(bill.reading.previousReading)} - Curr: ${Number(bill.reading.currentReading)} - Units: ${Number(bill.reading.consumption)} (${String(bill.reading.readingType).replace(/_/g, " ")}) - Due: ${bill.dueDate.toISOString().slice(0, 10)}`
+          ? `Prev: ${Number(bill.reading.previousReading)} - Curr: ${Number(bill.reading.currentReading)} - Units billed: ${Number(bill.consumptionUnits)}${Number(bill.consumptionUnits) !== Number(bill.reading.consumption) ? " (includes meter replacement final consumption)" : ""} (${String(bill.reading.readingType).replace(/_/g, " ")}) - Due: ${bill.dueDate.toISOString().slice(0, 10)}`
           : `Units: ${Number(bill.consumptionUnits)} - Due: ${bill.dueDate.toISOString().slice(0, 10)}`,
         description: `Water bill ${bill.billNumber}`,
         debit: Number(bill.totalCurrentCharges),
@@ -608,6 +639,37 @@ billingRouter.get("/statements/:accountId", async (req, res, next) => {
         debit: 0,
         credit: Number(payment.amount),
       })),
+      ...otherServicePayments
+        .filter((payment: any) => payment.paymentStatus === "POSTED")
+        .flatMap((payment: any) => {
+          const isReconnection = payment.paymentType === "RECONNECTION_FEE";
+          const service = isReconnection ? "Reconnection fee" : "New connection fee";
+          const receipt = payment.receipt?.receiptNumber ?? payment.transactionReference;
+          const amount = Number(payment.amount);
+          const common = {
+            date: payment.paymentDate,
+            period: payment.paymentDate.toISOString().slice(0, 7),
+          };
+          return [{
+            ...common,
+            id: `S${payment.paymentId}-CHARGE`,
+            particulars: service,
+            reference: payment.customerReference || payment.transactionReference,
+            details: `${service} settled under receipt ${receipt}`,
+            description: `${service} charge`,
+            debit: amount,
+            credit: 0,
+          }, {
+            ...common,
+            id: `S${payment.paymentId}-PAYMENT`,
+            particulars: `${service} payment`,
+            reference: receipt,
+            details: `Transaction ${payment.transactionReference}`,
+            description: `${service} payment ${receipt}`,
+            debit: 0,
+            credit: amount,
+          }];
+        }),
       ...disconnectionPostings.flatMap((posting: any) => {
         const readingDetails = `Meter ${posting.meter_number} - Prev: ${Number(posting.previous_reading)} - Curr: ${Number(posting.current_reading)} - Units: ${Number(posting.current_reading) - Number(posting.previous_reading)}`;
         const rows = [{
@@ -634,6 +696,17 @@ billingRouter.get("/statements/:accountId", async (req, res, next) => {
         });
         return rows;
       }),
+      ...meterReplacements.map((replacement: any) => ({
+        id: `MR${replacement.replacement_id}`,
+        date: replacement.replacement_date,
+        particulars: "Meter replacement",
+        reference: replacement.work_order_number ?? `REP-${replacement.replacement_id}`,
+        period: new Date(replacement.replacement_date).toISOString().slice(0, 7),
+        details: `Old meter ${replacement.old_meter_number} - Prev: ${Number(replacement.previous_reading)} - Final: ${Number(replacement.old_final_reading)} → New meter ${replacement.new_meter_number} - Opening: ${Number(replacement.new_opening_reading)} - ${Number(replacement.final_consumption ?? 0)} units carried to the next bill`,
+        description: `Meter replacement REP-${replacement.replacement_id}`,
+        debit: 0,
+        credit: 0,
+      })),
     ].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
     const openingBalance = round(Number(account.openingBalance) + Number(priorBills._sum.totalCurrentCharges ?? 0)
       + Number(priorDisconnectionPostings[0]?.total ?? 0) - Number(priorPayments._sum.amount ?? 0));

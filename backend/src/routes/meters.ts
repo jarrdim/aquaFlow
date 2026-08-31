@@ -9,7 +9,7 @@ metersRouter.use(requireAuth);
 
 const meterTypes = ["CUSTOMER", "BULK", "ZONE", "BOREHOLE"] as const;
 const technologies = ["MANUAL", "PREPAID", "SMART"] as const;
-const meterStatuses = ["IN_STOCK", "ACTIVE", "FAULTY", "INACTIVE", "REMOVED", "REPLACED", "DISCONNECTED", "TAMPERED"] as const;
+const meterStatuses = ["IN_STOCK", "RESERVED", "ACTIVE", "FAULTY", "INACTIVE", "REMOVED", "REPLACED", "DISCONNECTED", "TAMPERED"] as const;
 const installationStatuses = ["IN_STORE", "INSTALLED", "REMOVED"] as const;
 const evidenceTypes = ["INSTALLATION_PHOTO", "METER_PHOTO", "CUSTOMER_SIGNATURE", "STATUS_PHOTO", "REPLACEMENT_PHOTO", "DOCUMENT"] as const;
 
@@ -274,7 +274,33 @@ metersRouter.get("/replacements", async (req, res) => {
     where: status ? { requestStatus: status } : undefined,
     include: { account: { include: { customer: true } }, oldMeter: true, newMeter: true, evidence: true }, orderBy: { createdAt: "desc" },
   });
-  res.json(items.map((item) => ({ ...item, customerName: customerName(item.account.customer) })));
+  const workOrderIds = items.flatMap((item) => item.workOrderId ? [item.workOrderId] : []);
+  const workOrders = workOrderIds.length ? await prisma.$queryRaw<any[]>`
+    SELECT work_order_id,work_order_number,status FROM aquaflow.work_orders
+    WHERE work_order_id IN (${Prisma.join(workOrderIds)})` : [];
+  const workOrderById = new Map(workOrders.map((row) => [String(row.work_order_id), row]));
+  res.json(items.map((item) => ({
+    ...item,
+    customerName: customerName(item.account.customer),
+    workOrder: item.workOrderId ? workOrderById.get(String(item.workOrderId)) ?? null : null,
+  })));
+});
+
+metersRouter.get("/replacements/:id", async (req, res) => {
+  if (!/^\d+$/.test(req.params.id)) return res.status(400).json({ error: "Invalid replacement id" });
+  const item = await prisma.meterReplacement.findUnique({
+    where: { replacementId: BigInt(req.params.id) },
+    include: { account: { include: { customer: true } }, oldMeter: true, newMeter: true, evidence: true },
+  });
+  if (!item) return res.status(404).json({ error: "Replacement request not found" });
+  const workOrders = item.workOrderId ? await prisma.$queryRaw<any[]>`
+    SELECT work_order_id,work_order_number,status,created_at,started_at,completed_at,verified_at,closed_at
+    FROM aquaflow.work_orders WHERE work_order_id=${item.workOrderId}` : [];
+  res.json({
+    ...item,
+    customerName: customerName(item.account.customer),
+    workOrder: workOrders[0] ?? null,
+  });
 });
 
 metersRouter.get("/alerts", async (req, res) => {
@@ -502,47 +528,222 @@ metersRouter.post("/assign", async (req, res) => {
   res.status(201).json(result);
 });
 
-metersRouter.post("/replacements", async (req, res) => {
-  const parsed = z.object({
-    accountId: z.string(), oldMeterId: z.string(), newMeterId: z.string(), replacementDate: z.string(), oldFinalReading: z.coerce.number().min(0),
-    newOpeningReading: z.coerce.number().min(0), replacementReason: z.string().min(1), requestStatus: z.enum(["DRAFT", "PENDING"]).default("PENDING"),
-    gpsLatitude: optNumber, gpsLongitude: optNumber, remarks: optText, evidence: z.array(evidenceSchema).default([]),
-  }).refine((data) => data.oldMeterId !== data.newMeterId, { path: ["newMeterId"], message: "Choose a different replacement meter" }).safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const data = parsed.data; const newMeter = await prisma.meter.findUnique({ where: { meterId: BigInt(data.newMeterId) } });
-  if (!newMeter || newMeter.status !== "IN_STOCK") return res.status(409).json({ error: "The replacement meter must be available and in store" });
-  const replacement = await prisma.$transaction(async (tx) => {
-    const created = await tx.meterReplacement.create({ data: {
-      accountId: BigInt(data.accountId), oldMeterId: BigInt(data.oldMeterId), newMeterId: BigInt(data.newMeterId), replacementDate: new Date(data.replacementDate),
-      oldFinalReading: data.oldFinalReading, newOpeningReading: data.newOpeningReading, replacementReason: data.replacementReason,
-      requestStatus: data.requestStatus, requestedBy: userId(req), replacedBy: userId(req), gpsLatitude: data.gpsLatitude, gpsLongitude: data.gpsLongitude, remarks: data.remarks,
-    } });
-    await addEvidence(tx, created.oldMeterId, data.evidence, userId(req), undefined, created.replacementId);
-    await tx.meterEvent.create({ data: { meterId: created.oldMeterId, replacementId: created.replacementId, eventType: data.requestStatus === "DRAFT" ? "REPLACEMENT_DRAFTED" : "REPLACEMENT_SUBMITTED", reading: data.oldFinalReading, reason: data.replacementReason, remarks: data.remarks, gpsLatitude: data.gpsLatitude, gpsLongitude: data.gpsLongitude, performedBy: userId(req), metadata: { newMeterId: created.newMeterId.toString() } } });
-    return created;
-  });
-  res.status(201).json(replacement);
+const replacementInputSchema = z.object({
+  accountId: z.string().min(1), oldMeterId: z.string().min(1), newMeterId: z.string().min(1),
+  replacementDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), oldFinalReading: z.coerce.number().min(0),
+  newOpeningReading: z.coerce.number().min(0), replacementReason: z.string().trim().min(2).max(1000),
+  requestStatus: z.enum(["DRAFT", "PENDING"]).default("PENDING"),
+  gpsLatitude: optNumber, gpsLongitude: optNumber, remarks: optText,
+  evidence: z.array(evidenceSchema).default([]),
+}).refine((data) => data.oldMeterId !== data.newMeterId, {
+  path: ["newMeterId"], message: "Choose a different replacement meter",
 });
 
-metersRouter.patch("/replacements/:id", requireRole("SYSTEM_ADMIN", "METER_SUPERVISOR", "SUPERVISOR"), async (req, res) => {
-  const parsed = z.object({ decision: z.enum(["APPROVE", "REJECT", "RETURN"]), comments: z.string().min(1) }).safeParse(req.body);
+async function validateReplacementMeters(
+  tx: Prisma.TransactionClient,
+  data: z.infer<typeof replacementInputSchema>,
+  replacementId?: bigint,
+) {
+  const accountId = BigInt(data.accountId);
+  const oldMeterId = BigInt(data.oldMeterId);
+  const newMeterId = BigInt(data.newMeterId);
+  const assignments = await tx.$queryRaw<any[]>`
+    SELECT ma.assignment_id,m.status,m.opening_reading,
+      COALESCE((SELECT mr.current_reading FROM aquaflow.meter_readings mr
+        WHERE mr.meter_id=m.meter_id AND mr.approval_status='APPROVED'
+        ORDER BY mr.reading_date DESC,mr.reading_id DESC LIMIT 1),m.opening_reading) AS previous_reading,
+      (SELECT mr.reading_date FROM aquaflow.meter_readings mr
+        WHERE mr.meter_id=m.meter_id AND mr.approval_status='APPROVED'
+        ORDER BY mr.reading_date DESC,mr.reading_id DESC LIMIT 1) AS latest_reading_date
+    FROM aquaflow.meter_assignments ma JOIN aquaflow.meters m ON m.meter_id=ma.meter_id
+    WHERE ma.account_id=${accountId} AND ma.meter_id=${oldMeterId}
+      AND ma.assignment_status='ACTIVE' AND ma.removal_date IS NULL
+    FOR UPDATE OF ma,m`;
+  if (!assignments[0]) throw Object.assign(new Error("The old meter is not actively assigned to this customer account"), { status: 409 });
+  const previousReading = Number(assignments[0].previous_reading);
+  if (assignments[0].latest_reading_date && new Date(`${data.replacementDate}T23:59:59.999Z`) < new Date(assignments[0].latest_reading_date)) {
+    throw Object.assign(new Error("Replacement date cannot be before the latest approved meter reading"), { status: 409 });
+  }
+  if (data.oldFinalReading < previousReading) {
+    throw Object.assign(new Error(`Old final reading cannot be below the latest approved reading of ${previousReading}`), { status: 409 });
+  }
+  const newMeters = await tx.$queryRaw<any[]>`SELECT meter_id,status,installation_status FROM aquaflow.meters WHERE meter_id=${newMeterId} FOR UPDATE`;
+  if (!newMeters[0]) throw Object.assign(new Error("Replacement meter not found"), { status: 404 });
+  const ownedReservation = replacementId ? await tx.meterReplacement.findFirst({
+    where: { replacementId, newMeterId, requestStatus: "PENDING" }, select: { replacementId: true },
+  }) : null;
+  if (newMeters[0].status !== "IN_STOCK" && !(newMeters[0].status === "RESERVED" && ownedReservation)) {
+    throw Object.assign(new Error("The replacement meter is no longer available in store"), { status: 409 });
+  }
+  const conflicts = await tx.$queryRaw<any[]>`
+    SELECT replacement_id FROM aquaflow.meter_replacements
+    WHERE request_status='PENDING' AND (old_meter_id=${oldMeterId} OR new_meter_id=${newMeterId})
+      AND (${replacementId ?? null}::bigint IS NULL OR replacement_id<>${replacementId ?? null}::bigint)
+    LIMIT 1`;
+  if (conflicts[0]) throw Object.assign(new Error("An open replacement already uses the old or incoming meter"), { status: 409 });
+  return { accountId, oldMeterId, newMeterId, previousReading };
+}
+
+async function createReplacementWorkOrder(tx: Prisma.TransactionClient, replacement: any, createdBy: bigint) {
+  if (replacement.workOrderId) return replacement.workOrderId;
+  const accounts = await tx.$queryRaw<any[]>`
+    SELECT ca.property_id,p.zone_id,old_meter.meter_number AS old_meter_number,new_meter.meter_number AS new_meter_number
+    FROM aquaflow.customer_accounts ca JOIN aquaflow.properties p ON p.property_id=ca.property_id
+    JOIN aquaflow.meters old_meter ON old_meter.meter_id=${replacement.oldMeterId}
+    JOIN aquaflow.meters new_meter ON new_meter.meter_id=${replacement.newMeterId}
+    WHERE ca.account_id=${replacement.accountId}`;
+  if (!accounts[0]?.zone_id) throw Object.assign(new Error("The customer account needs a zone before a replacement work order can be created"), { status: 409 });
+  const types = await tx.$queryRaw<any[]>`
+    INSERT INTO aquaflow.work_order_types(type_code,type_name,description,requires_photo,requires_gps,requires_signature,status)
+    VALUES('METER_REPLACEMENT','Meter replacement','Remove and replace a customer meter',TRUE,TRUE,TRUE,'ACTIVE')
+    ON CONFLICT(type_code) DO UPDATE SET status='ACTIVE' RETURNING work_order_type_id`;
+  const number = `WO-MREP-${Date.now()}-${String(replacement.replacementId).padStart(5, "0")}`;
+  const rows = await tx.$queryRaw<any[]>`
+    INSERT INTO aquaflow.work_orders(work_order_number,work_order_type_id,account_id,property_id,zone_id,priority,
+      description,status,source_type,source_reference,created_by)
+    VALUES(${number},${types[0].work_order_type_id},${replacement.accountId},${accounts[0].property_id},${accounts[0].zone_id},'HIGH',
+      ${`Replace ${accounts[0].old_meter_number} with reserved meter ${accounts[0].new_meter_number}. Final old reading: ${replacement.oldFinalReading}; new opening reading: ${replacement.newOpeningReading}. Reason: ${replacement.replacementReason}`},'CREATED','MANUAL',
+      ${`REP-${replacement.replacementId}`},${createdBy}) RETURNING work_order_id`;
+  await tx.meterReplacement.update({ where: { replacementId: replacement.replacementId }, data: { workOrderId: rows[0].work_order_id } });
+  const photos = await tx.meterEvidence.findMany({ where: { replacementId: replacement.replacementId, evidenceType: "REPLACEMENT_PHOTO" } });
+  for (const photo of photos) {
+    await tx.$executeRaw`INSERT INTO aquaflow.work_order_evidence(work_order_id,evidence_type,file_path,description)
+      VALUES(${rows[0].work_order_id},'BEFORE_PHOTO',${photo.contentData},${photo.description ?? "Meter replacement request photo"})`;
+  }
+  return rows[0].work_order_id;
+}
+
+async function saveReplacement(req: Express.Request, data: z.infer<typeof replacementInputSchema>, replacementId?: bigint) {
+  return prisma.$transaction(async (tx) => {
+    const ids = await validateReplacementMeters(tx, data, replacementId);
+    const existing = replacementId ? await tx.meterReplacement.findUnique({ where: { replacementId } }) : null;
+    if (replacementId && (!existing || !["DRAFT", "RETURNED"].includes(existing.requestStatus))) {
+      throw Object.assign(new Error("Only draft or returned replacements can be edited"), { status: 409 });
+    }
+    const retainedEvidence = replacementId ? await tx.meterEvidence.count({ where: { replacementId } }) : 0;
+    if (data.requestStatus === "PENDING" && !req.user?.roles.includes("SYSTEM_ADMIN") && data.evidence.length + retainedEvidence < 1) {
+      throw Object.assign(new Error("Add at least one replacement evidence photo before submitting"), { status: 400 });
+    }
+    const values = {
+      accountId: ids.accountId, oldMeterId: ids.oldMeterId, newMeterId: ids.newMeterId,
+      replacementDate: new Date(`${data.replacementDate}T00:00:00.000Z`), oldFinalReading: data.oldFinalReading,
+      newOpeningReading: data.newOpeningReading, replacementReason: data.replacementReason,
+      requestStatus: data.requestStatus, replacedBy: userId(req), gpsLatitude: data.gpsLatitude,
+      gpsLongitude: data.gpsLongitude, remarks: data.remarks,
+    };
+    const replacement = existing
+      ? await tx.meterReplacement.update({ where: { replacementId: existing.replacementId }, data: values })
+      : await tx.meterReplacement.create({ data: { ...values, requestedBy: userId(req) } });
+    if (data.evidence.length) {
+      await tx.meterEvidence.deleteMany({ where: { replacementId: replacement.replacementId } });
+      await addEvidence(tx, replacement.oldMeterId, data.evidence, userId(req), undefined, replacement.replacementId);
+    }
+    let workOrderId = replacement.workOrderId;
+    if (data.requestStatus === "PENDING") {
+      await tx.meter.update({ where: { meterId: replacement.newMeterId }, data: { status: "RESERVED" } });
+      workOrderId = await createReplacementWorkOrder(tx, replacement, userId(req)!);
+    }
+    await tx.meterEvent.create({ data: {
+      meterId: replacement.oldMeterId, replacementId: replacement.replacementId,
+      eventType: data.requestStatus === "DRAFT" ? "REPLACEMENT_DRAFTED" : "REPLACEMENT_SUBMITTED",
+      reading: data.oldFinalReading, reason: data.replacementReason, remarks: data.remarks,
+      gpsLatitude: data.gpsLatitude, gpsLongitude: data.gpsLongitude, performedBy: userId(req),
+      metadata: { newMeterId: replacement.newMeterId.toString(), workOrderId: workOrderId?.toString() ?? null },
+    } });
+    return { ...replacement, workOrderId };
+  });
+}
+
+metersRouter.post("/replacements", async (req, res, next) => {
+  const parsed = replacementInputSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const replacement = await prisma.meterReplacement.findUnique({ where: { replacementId: BigInt(req.params.id) } });
-  if (!replacement) return res.status(404).json({ error: "Replacement request not found" });
-  if (replacement.requestStatus !== "PENDING") return res.status(409).json({ error: "Only a pending request can be decided" });
+  try { res.status(201).json(await saveReplacement(req, parsed.data)); }
+  catch (error: any) { if (error.status) return res.status(error.status).json({ error: error.message }); next(error); }
+});
+
+metersRouter.put("/replacements/:id", async (req, res, next) => {
+  const parsed = replacementInputSchema.safeParse(req.body);
+  if (!parsed.success || !/^\d+$/.test(req.params.id)) return res.status(400).json({ error: parsed.success ? "Invalid replacement id" : parsed.error.flatten() });
+  try { res.json(await saveReplacement(req, parsed.data, BigInt(req.params.id))); }
+  catch (error: any) { if (error.status) return res.status(error.status).json({ error: error.message }); next(error); }
+});
+
+metersRouter.patch("/replacements/:id", requireRole("SYSTEM_ADMIN", "METER_SUPERVISOR", "SUPERVISOR"), async (req, res, next) => {
+  const parsed = z.object({ decision: z.enum(["APPROVE", "REJECT", "RETURN"]), comments: z.string().trim().min(2) }).safeParse(req.body);
+  if (!parsed.success || !/^\d+$/.test(req.params.id)) return res.status(400).json({ error: parsed.success ? "Invalid replacement id" : parsed.error.flatten() });
   const decisionStatus = parsed.data.decision === "APPROVE" ? "APPROVED" : parsed.data.decision === "REJECT" ? "REJECTED" : "RETURNED";
   const eventType = parsed.data.decision === "APPROVE" ? "REPLACEMENT_APPROVED" : parsed.data.decision === "REJECT" ? "REPLACEMENT_REJECTED" : "REPLACEMENT_RETURNED";
-  await prisma.$transaction(async (tx) => {
-    if (parsed.data.decision === "APPROVE") {
-      await tx.meterAssignment.updateMany({ where: { meterId: replacement.oldMeterId, assignmentStatus: "ACTIVE" }, data: { assignmentStatus: "ENDED", removalDate: replacement.replacementDate } });
-      await tx.meter.update({ where: { meterId: replacement.oldMeterId }, data: { status: "REPLACED", installationStatus: "REMOVED" } });
-      await tx.meter.update({ where: { meterId: replacement.newMeterId }, data: { status: "ACTIVE", installationStatus: "INSTALLED", installationDate: replacement.replacementDate, openingReading: replacement.newOpeningReading, gpsLatitude: replacement.gpsLatitude, gpsLongitude: replacement.gpsLongitude } });
-      await tx.meterAssignment.create({ data: { meterId: replacement.newMeterId, accountId: replacement.accountId, assignmentDate: replacement.replacementDate, installedBy: replacement.replacedBy, remarks: replacement.remarks } });
-    }
-    await tx.meterReplacement.update({ where: { replacementId: replacement.replacementId }, data: { requestStatus: decisionStatus, approvedBy: parsed.data.decision === "APPROVE" ? userId(req) : null, decisionComments: parsed.data.comments, decidedAt: new Date() } });
-    await tx.meterEvent.create({ data: { meterId: replacement.oldMeterId, replacementId: replacement.replacementId, eventType, previousStatus: parsed.data.decision === "APPROVE" ? "ACTIVE" : undefined, newStatus: parsed.data.decision === "APPROVE" ? "REPLACED" : undefined, reading: replacement.oldFinalReading, reason: replacement.replacementReason, remarks: parsed.data.comments, performedBy: userId(req) } });
-  });
-  res.json({ decision: decisionStatus });
+  try {
+    await prisma.$transaction(async (tx) => {
+      const rows = await tx.$queryRaw<any[]>`
+        SELECT mr.*,wo.status AS work_order_status,m.status AS new_meter_status
+        FROM aquaflow.meter_replacements mr
+        LEFT JOIN aquaflow.work_orders wo ON wo.work_order_id=mr.work_order_id
+        JOIN aquaflow.meters m ON m.meter_id=mr.new_meter_id
+        WHERE mr.replacement_id=${BigInt(req.params.id)} FOR UPDATE OF mr,m`;
+      const replacement = rows[0];
+      if (!replacement) throw Object.assign(new Error("Replacement request not found"), { status: 404 });
+      if (replacement.request_status !== "PENDING") throw Object.assign(new Error("Only a pending request can be decided"), { status: 409 });
+      if (parsed.data.decision === "APPROVE") {
+        if (replacement.work_order_id && !["COMPLETED", "VERIFIED", "CLOSED"].includes(replacement.work_order_status)) {
+          throw Object.assign(new Error("Complete the linked meter-replacement work order before approval"), { status: 409 });
+        }
+        if (replacement.new_meter_status !== "RESERVED") throw Object.assign(new Error("The incoming meter reservation is no longer valid"), { status: 409 });
+        const evidenceCount = await tx.meterEvidence.count({ where: { replacementId: replacement.replacement_id } });
+        const requestedByAdmin = replacement.requested_by
+          ? await tx.userRole.count({
+              where: {
+                userId: replacement.requested_by,
+                status: "ACTIVE",
+                role: { roleCode: "SYSTEM_ADMIN", status: "ACTIVE" },
+              },
+            })
+          : 0;
+        if (!evidenceCount && !req.user?.roles.includes("SYSTEM_ADMIN") && !requestedByAdmin) {
+          throw Object.assign(new Error("Replacement evidence is required before approval"), { status: 409 });
+        }
+        const assignment = await tx.meterAssignment.findFirst({
+          where: { accountId: replacement.account_id, meterId: replacement.old_meter_id, assignmentStatus: "ACTIVE", removalDate: null },
+        });
+        if (!assignment) throw Object.assign(new Error("The old meter is no longer actively assigned to this account"), { status: 409 });
+        const previousRows = await tx.$queryRaw<any[]>`SELECT COALESCE((SELECT current_reading FROM aquaflow.meter_readings
+          WHERE meter_id=${replacement.old_meter_id} AND approval_status='APPROVED' ORDER BY reading_date DESC,reading_id DESC LIMIT 1),
+          (SELECT opening_reading FROM aquaflow.meters WHERE meter_id=${replacement.old_meter_id})) AS value`;
+        const previousReading = Number(previousRows[0].value);
+        if (Number(replacement.old_final_reading) < previousReading) throw Object.assign(new Error(`Old final reading cannot be below ${previousReading}`), { status: 409 });
+        const cycles = await tx.$queryRaw<any[]>`SELECT reading_cycle_id FROM aquaflow.reading_cycles
+          WHERE status IN ('PLANNED','OPEN','IN_PROGRESS') AND end_date>=${replacement.replacement_date}
+          ORDER BY CASE WHEN start_date<=${replacement.replacement_date} AND end_date>=${replacement.replacement_date} THEN 0 ELSE 1 END,start_date LIMIT 1`;
+        if (!cycles[0]) throw Object.assign(new Error("Create or open a reading cycle covering the replacement before approval"), { status: 409 });
+        const syncId = `METER_REPLACEMENT:${replacement.replacement_id}`;
+        await tx.meterReading.upsert({
+          where: { syncId }, update: {}, create: {
+            meterId: replacement.old_meter_id, accountId: replacement.account_id,
+            readingCycleId: cycles[0].reading_cycle_id, previousReading,
+            currentReading: Number(replacement.old_final_reading), readingType: "ACTUAL",
+            readingDate: replacement.replacement_date, gpsLatitude: replacement.gps_latitude,
+            gpsLongitude: replacement.gps_longitude, abnormalFlag: false, exceptionType: "NONE",
+            approvalStatus: "APPROVED", approvedBy: userId(req), approvedAt: new Date(),
+            approvalComments: `Final reading from replacement REP-${replacement.replacement_id}`,
+            syncId,
+          },
+        });
+        await tx.meterAssignment.update({ where: { assignmentId: assignment.assignmentId }, data: { assignmentStatus: "ENDED", removalDate: replacement.replacement_date } });
+        await tx.meter.update({ where: { meterId: replacement.old_meter_id }, data: { status: "REPLACED", installationStatus: "REMOVED" } });
+        await tx.meter.update({ where: { meterId: replacement.new_meter_id }, data: { status: "ACTIVE", installationStatus: "INSTALLED", installationDate: replacement.replacement_date, openingReading: replacement.new_opening_reading, gpsLatitude: replacement.gps_latitude, gpsLongitude: replacement.gps_longitude } });
+        await tx.meterAssignment.create({ data: { meterId: replacement.new_meter_id, accountId: replacement.account_id, assignmentDate: replacement.replacement_date, installedBy: replacement.replaced_by, remarks: replacement.remarks } });
+      } else {
+        await tx.meter.updateMany({ where: { meterId: replacement.new_meter_id, status: "RESERVED" }, data: { status: "IN_STOCK" } });
+        if (parsed.data.decision === "REJECT" && replacement.work_order_id) {
+          await tx.$executeRaw`UPDATE aquaflow.work_orders SET status='CANCELLED',updated_at=CURRENT_TIMESTAMP
+            WHERE work_order_id=${replacement.work_order_id} AND status IN ('CREATED','ASSIGNED','ACCEPTED','IN_PROGRESS','REOPENED')`;
+        }
+      }
+      await tx.meterReplacement.update({ where: { replacementId: replacement.replacement_id }, data: { requestStatus: decisionStatus, approvedBy: parsed.data.decision === "APPROVE" ? userId(req) : null, decisionComments: parsed.data.comments, decidedAt: new Date() } });
+      await tx.meterEvent.create({ data: { meterId: replacement.old_meter_id, replacementId: replacement.replacement_id, eventType, previousStatus: parsed.data.decision === "APPROVE" ? "ACTIVE" : undefined, newStatus: parsed.data.decision === "APPROVE" ? "REPLACED" : undefined, reading: replacement.old_final_reading, reason: replacement.replacement_reason, remarks: parsed.data.comments, performedBy: userId(req) } });
+    });
+    res.json({ decision: decisionStatus });
+  } catch (error: any) { if (error.status) return res.status(error.status).json({ error: error.message }); next(error); }
 });
 
 metersRouter.get("/:id/history", async (req, res) => {

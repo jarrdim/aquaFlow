@@ -194,6 +194,13 @@ export default function WorkOrderManagement() {
     fineReason: "",
   });
   const [completionSignatureUrl, setCompletionSignatureUrl] = useState("");
+  const [cashPaymentOpen, setCashPaymentOpen] = useState(false);
+  const [autoPaymentChecking, setAutoPaymentChecking] = useState(false);
+  const [cashPayment, setCashPayment] = useState({
+    transactionReference: "",
+    paymentDate: new Date().toISOString().slice(0, 10),
+    remarks: "",
+  });
   const typeFieldRef = useRef<HTMLDivElement>(null);
   const targetFieldRef = useRef<HTMLDivElement>(null);
   const descriptionFieldRef = useRef<HTMLTextAreaElement>(null);
@@ -365,6 +372,12 @@ export default function WorkOrderManagement() {
 
   const open = async (item: any) => {
     setSelected(item);
+    setCashPaymentOpen(false);
+    setCashPayment({
+      transactionReference: "",
+      paymentDate: new Date().toISOString().slice(0, 10),
+      remarks: "",
+    });
     setDetailLoading(true);
     try {
       const detail = await api.getWorkOrder(item.workOrderId);
@@ -401,6 +414,46 @@ export default function WorkOrderManagement() {
     );
     setSelected(detail);
   };
+
+  useEffect(() => {
+    const selectedId = selected?.work_order_id || selected?.workOrderId;
+    const paymentPending = selected?.reconnectionRequest?.feePaymentStatus === "PENDING";
+    if (!selectedId || !paymentPending) {
+      setAutoPaymentChecking(false);
+      return;
+    }
+
+    let active = true;
+    let requestRunning = false;
+    const checkPayment = async () => {
+      if (!active || requestRunning) return;
+      requestRunning = true;
+      setAutoPaymentChecking(true);
+      try {
+        await api.refreshWorkOrderReconnectionPayment(String(selectedId));
+        const detail = await api.getWorkOrder(String(selectedId));
+        if (active) setSelected(detail);
+      } catch {
+        // A temporary status-query failure should not interrupt work. The next
+        // automatic check or the manual button can retry it.
+      } finally {
+        requestRunning = false;
+        if (active) setAutoPaymentChecking(false);
+      }
+    };
+
+    const firstCheck = window.setTimeout(() => void checkPayment(), 3_000);
+    const poller = window.setInterval(() => void checkPayment(), 8_000);
+    return () => {
+      active = false;
+      window.clearTimeout(firstCheck);
+      window.clearInterval(poller);
+    };
+  }, [
+    selected?.work_order_id,
+    selected?.workOrderId,
+    selected?.reconnectionRequest?.feePaymentStatus,
+  ]);
 
   useEffect(() => {
     if (creating) return;
@@ -934,6 +987,13 @@ export default function WorkOrderManagement() {
           : null;
   const completingDisconnection =
     statusAction?.[0] === "COMPLETED" && selected?.type_code === "DISCONNECTION";
+  const completingReconnection =
+    statusAction?.[0] === "COMPLETED" && selected?.type_code === "RECONNECTION";
+  const reconnectionPaymentConfirmed =
+    selected?.reconnectionRequest?.feePaymentStatus === "PAID" &&
+    selected?.reconnectionRequest?.paymentStatus === "POSTED" &&
+    Number(selected?.reconnectionRequest?.amountPaid) >=
+      Number(selected?.reconnectionRequest?.reconnectionFee);
   const awaitingSignedFieldReport =
     statusAction?.[0] === "COMPLETED" && selected?.requires_signature === true &&
     !["DISCONNECTION", "RECONNECTION", "NEW_CONNECTION"].includes(selected?.type_code);
@@ -1104,13 +1164,39 @@ export default function WorkOrderManagement() {
                         className={
                           String(detailId) === String(item.workOrderId)
                             ? "bg-sky-50"
-                            : ""
+                            : item.parentWorkOrderId
+                              ? "bg-slate-50/70"
+                              : ""
                         }
                       >
-                        <td className="px-3 py-3">
-                          <strong>{item.workOrderNumber}</strong>
-                          <div className="text-xs text-slate-500">
-                            {item.typeName}
+                        <td className={`px-3 py-3 ${item.parentWorkOrderId ? "border-l-4 border-aqua-300 pl-7" : ""}`}>
+                          <div className="flex items-start gap-2">
+                            {item.parentWorkOrderId && (
+                              <span aria-hidden="true" className="mt-0.5 text-base font-bold text-aqua-600">↳</span>
+                            )}
+                            <div>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <strong>{item.workOrderNumber}</strong>
+                                {item.hasChildren && (
+                                  <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-600">
+                                    Parent
+                                  </span>
+                                )}
+                                {item.parentWorkOrderId && (
+                                  <span className="rounded-full bg-aqua-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-aqua-700">
+                                    Child
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-xs text-slate-500">
+                                {item.typeName}
+                              </div>
+                              {item.parentWorkOrderNumber && (
+                                <div className="mt-0.5 text-[11px] font-medium text-aqua-700">
+                                  Under {item.parentWorkOrderNumber}
+                                </div>
+                              )}
+                            </div>
                           </div>
                         </td>
                         <td className="px-3 py-3">
@@ -1309,6 +1395,138 @@ export default function WorkOrderManagement() {
                   )}
                 </button>
               </div>
+              {selected.type_code === "RECONNECTION" && (
+                <section className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h3 className="font-bold text-slate-800">Reconnection fee processing</h3>
+                      <p className="mt-0.5 text-xs text-slate-600">
+                        Collect through M-Pesa or record an authorised cash payment.
+                      </p>
+                    </div>
+                    <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${reconnectionPaymentConfirmed ? "bg-emerald-100 text-emerald-700" : selected.reconnectionRequest?.feePaymentStatus === "PENDING" ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-600"}`}>
+                      {reconnectionPaymentConfirmed ? "Paid" : label(selected.reconnectionRequest?.feePaymentStatus || "Not started")}
+                    </span>
+                  </div>
+                  {selected.reconnectionRequest ? (
+                    <dl className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                      <div><dt className="text-slate-500">Request</dt><dd className="font-semibold">{selected.reconnectionRequest.requestNumber}</dd></div>
+                      <div><dt className="text-slate-500">Fee</dt><dd className="font-semibold">KSh {Number(selected.reconnectionRequest.reconnectionFee).toLocaleString()}</dd></div>
+                      <div><dt className="text-slate-500">Customer phone</dt><dd>{selected.reconnectionRequest.contactPhone || "Not set"}</dd></div>
+                      <div><dt className="text-slate-500">Receipt</dt><dd>{selected.reconnectionRequest.receiptNumber || selected.reconnectionRequest.paymentReference || "Awaiting payment"}</dd></div>
+                      {selected.reconnectionRequest.disconnectionWorkOrderNumber && (
+                        <div className="col-span-2"><dt className="text-slate-500">Parent disconnection</dt><dd className="font-semibold">{selected.reconnectionRequest.disconnectionWorkOrderNumber}</dd></div>
+                      )}
+                    </dl>
+                  ) : (
+                    <p className="mt-3 text-xs font-medium text-amber-800">
+                      No reconnection request is linked yet. Sending the prompt will create and link one automatically.
+                    </p>
+                  )}
+                  {selected.reconnectionRequest?.feePaymentStatus === "PENDING" && (
+                    <p className="mt-3 flex items-center gap-2 text-xs font-medium text-amber-700">
+                      {autoPaymentChecking && <span className="h-3 w-3 animate-spin rounded-full border-2 border-amber-600 border-t-transparent" />}
+                      {autoPaymentChecking ? "Checking M-Pesa payment now…" : "Payment status checks automatically every 8 seconds."}
+                    </p>
+                  )}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {!reconnectionPaymentConfirmed && selected.reconnectionRequest?.feePaymentStatus !== "PENDING" && (
+                      <button
+                        type="button"
+                        disabled={saving}
+                        onClick={() => perform(
+                          "reconnection-payment",
+                          () => api.requestWorkOrderReconnectionPayment(detailId),
+                          "Reconnection fee M-Pesa prompt sent to the customer.",
+                        )}
+                        className="rounded-lg bg-emerald-700 px-3 py-2 text-xs font-bold text-white disabled:opacity-50"
+                      >
+                        {busyAction === "reconnection-payment" ? <InlineLoader label="Sending…" /> : selected.reconnectionRequest ? "Send M-Pesa prompt" : "Create request and send prompt"}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      disabled={saving || autoPaymentChecking}
+                      onClick={() => selected.reconnectionRequest?.feePaymentStatus === "PENDING"
+                        ? perform(
+                            "reconnection-payment-status",
+                            () => api.refreshWorkOrderReconnectionPayment(detailId),
+                            "M-Pesa payment status refreshed.",
+                          )
+                        : void refreshSelected()}
+                      className="rounded-lg border border-emerald-300 bg-white px-3 py-2 text-xs font-bold text-emerald-800 disabled:opacity-50"
+                    >
+                      {busyAction === "reconnection-payment-status" || autoPaymentChecking ? <InlineLoader label="Checking…" /> : "Check payment now"}
+                    </button>
+                    {selected.reconnectionRequest && !reconnectionPaymentConfirmed && selected.reconnectionRequest.feePaymentStatus !== "PENDING" && (
+                      <button
+                        type="button"
+                        disabled={saving}
+                        onClick={() => setCashPaymentOpen((current) => !current)}
+                        className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-bold text-slate-700 disabled:opacity-50"
+                      >
+                        {cashPaymentOpen ? "Cancel cash entry" : "Record cash payment"}
+                      </button>
+                    )}
+                  </div>
+                  {cashPaymentOpen && selected.reconnectionRequest && !reconnectionPaymentConfirmed && selected.reconnectionRequest.feePaymentStatus !== "PENDING" && (
+                    <div className="mt-3 rounded-lg border border-emerald-200 bg-white p-3">
+                      <p className="mb-3 text-xs text-slate-600">
+                        This posts KSh {Number(selected.reconnectionRequest.reconnectionFee).toLocaleString()} as a cash reconnection fee and generates a receipt. It does not reduce the water-bill balance.
+                      </p>
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <label>
+                          <span className="mb-1 block text-xs font-medium">Cash receipt / reference *</span>
+                          <input
+                            className={input}
+                            value={cashPayment.transactionReference}
+                            onChange={(event) => setCashPayment({ ...cashPayment, transactionReference: event.target.value })}
+                            placeholder="e.g. CASH-00125"
+                          />
+                        </label>
+                        <label>
+                          <span className="mb-1 block text-xs font-medium">Payment date *</span>
+                          <input
+                            type="date"
+                            className={input}
+                            value={cashPayment.paymentDate}
+                            onChange={(event) => setCashPayment({ ...cashPayment, paymentDate: event.target.value })}
+                          />
+                        </label>
+                        <label className="sm:col-span-2">
+                          <span className="mb-1 block text-xs font-medium">Remarks</span>
+                          <input
+                            className={input}
+                            value={cashPayment.remarks}
+                            onChange={(event) => setCashPayment({ ...cashPayment, remarks: event.target.value })}
+                            placeholder="Optional cashier note"
+                          />
+                        </label>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={saving || !cashPayment.transactionReference.trim() || !cashPayment.paymentDate}
+                        onClick={() => perform(
+                          "reconnection-cash",
+                          () => api.recordWorkOrderReconnectionCash(detailId, cashPayment).then((result: any) => {
+                            setCashPaymentOpen(false);
+                            setCashPayment({
+                              transactionReference: "",
+                              paymentDate: new Date().toISOString().slice(0, 10),
+                              remarks: "",
+                            });
+                            return result;
+                          }),
+                          "Cash reconnection fee recorded and receipt generated.",
+                        )}
+                        className="mt-3 rounded-lg bg-slate-800 px-3 py-2 text-xs font-bold text-white disabled:opacity-40"
+                      >
+                        {busyAction === "reconnection-cash" ? <InlineLoader label="Recording…" /> : "Confirm cash payment"}
+                      </button>
+                    </div>
+                  )}
+                </section>
+              )}
               {completingDisconnection && (
                 <section className="rounded-xl border border-orange-200 bg-orange-50/60 p-3">
                   <div className="mb-3">
@@ -1404,8 +1622,8 @@ export default function WorkOrderManagement() {
               </label>
               {statusAction && (
                 <button
-                  disabled={awaitingSignedFieldReport || notes.trim().length < 2 || saving || !disconnectionFormValid}
-                  title={awaitingSignedFieldReport ? "The assigned officer must submit the signed completion report in the mobile app" : undefined}
+                  disabled={awaitingSignedFieldReport || notes.trim().length < 2 || saving || !disconnectionFormValid || (completingReconnection && !reconnectionPaymentConfirmed)}
+                  title={awaitingSignedFieldReport ? "The assigned officer must submit the signed completion report in the mobile app" : completingReconnection && !reconnectionPaymentConfirmed ? "The reconnection fee must be paid before completion" : undefined}
                   onClick={() =>
                     perform(
                       "status",

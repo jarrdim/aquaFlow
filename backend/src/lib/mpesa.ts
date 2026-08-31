@@ -150,6 +150,23 @@ export async function requestStkPush(input: { phoneNumber: string; amount: numbe
   });
 }
 
+export async function queryStkPush(checkoutRequestId: string) {
+  const config = getMpesaConfig();
+  const time = timestamp();
+  const password = Buffer.from(`${config.shortCode}${config.passkey}${time}`).toString("base64");
+  const token = await accessToken(config);
+  return darajaJson(`${config.baseUrl}/mpesa/stkpushquery/v1/query`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      BusinessShortCode: config.shortCode,
+      Password: password,
+      Timestamp: time,
+      CheckoutRequestID: checkoutRequestId,
+    }),
+  });
+}
+
 export async function registerC2bUrls() {
   const config = getMpesaC2bConfig();
   const token = await accessToken(config);

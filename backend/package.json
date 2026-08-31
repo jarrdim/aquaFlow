@@ -39,6 +39,7 @@
     "db:payment-split-upgrade": "prisma db execute --file prisma/migrations/20260829160000_unmatched_payment_splits/migration.sql --schema prisma/schema.prisma",
     "db:disconnection-list-export-upgrade": "prisma db execute --file prisma/migrations/20260829170000_disconnection_list_export_fields/migration.sql --schema prisma/schema.prisma",
     "db:new-connection-signature-optional-upgrade": "prisma db execute --file prisma/migrations/20260829180000_relax_new_connection_signature/migration.sql --schema prisma/schema.prisma",
+    "db:meter-replacement-integrity-upgrade": "prisma db execute --file prisma/migrations/20260830090000_meter_replacement_integrity/migration.sql --schema prisma/schema.prisma",
     "db:work-order-completion-upgrade": "prisma db execute --file prisma/migrations/20260815090000_field_work_order_completion_contract/migration.sql --schema prisma/schema.prisma",
     "verify:work-order-completion": "node scripts/verify-work-order-completion-contract.js",
     "verify:reconnection": "node scripts/verify-reconnection-contract.js",

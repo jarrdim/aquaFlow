@@ -126,16 +126,11 @@ async function cleanup() {
     await call("cross signature delete", "DELETE", `${mainPath}/signature`, other, null, 403);
     await call("signature delete", "DELETE", `${mainPath}/signature`, own, null, 200);
     await call("signature retake", "POST", `${mainPath}/signature`, own, { content: signature }, 201);
-    await call("missing confirmation", "POST", `${mainPath}/submit`, own, { customerNameConfirmed: false, customerIdentityConfirmed: true, noMaterialsUsed: false, completionNotes: "Done" }, 400);
     await call("wrong work-order status", "POST", `/mobile/field/work-orders/${assigned}/completion/submit`, own, { customerNameConfirmed: true, customerIdentityConfirmed: true, noMaterialsUsed: true, completionNotes: "Done" }, 409);
     await call("Screen 22 direct completion blocked", "PATCH", `/mobile/field/work-orders/${main}/status`, own, { status: "COMPLETED", notes: "Done" }, 409);
 
-    await call("missing required signature", "POST", `/mobile/field/work-orders/${noMaterials}/completion/submit`, own,
-      { materials: [], customerNameConfirmed: true, customerIdentityConfirmed: true, noMaterialsUsed: true, completionNotes: "Completed without materials" }, 400);
-    await call("no-material signature", "POST", `/mobile/field/work-orders/${noMaterials}/completion/signature`, own, { content: signature }, 201);
-    data = await call("explicit no-material completion", "POST", `/mobile/field/work-orders/${noMaterials}/completion/submit`, own,
-      { materials: [], customerNameConfirmed: true, customerIdentityConfirmed: true, noMaterialsUsed: true, completionNotes: "Completed without materials" }, 200);
-    results.push({ name: "no-material state completed", pass: data.status === "COMPLETED" && data.completion.noMaterialsUsed === true });
+    data = await call("minimal completion without signature", "POST", `/mobile/field/work-orders/${noMaterials}/completion/submit`, own, {}, 200);
+    results.push({ name: "minimal completion defaults", pass: data.status === "COMPLETED" && data.completion.noMaterialsUsed === true && data.completion.requiresSignature === false });
 
     const stockBefore = (await prisma.$queryRawUnsafe(`SELECT COUNT(*)::int count FROM aquaflow.stock_transactions WHERE work_order_id=ANY($1::bigint[])`, fixture.workOrders))[0].count;
     await call("cross final submission", "POST", `${mainPath}/submit`, other, { customerNameConfirmed: true, customerIdentityConfirmed: true, noMaterialsUsed: false, completionNotes: "Denied" }, 403);
