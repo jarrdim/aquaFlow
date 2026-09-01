@@ -656,8 +656,14 @@ export function IndividualBillingWorkspace() {
       accountRows.some((account: Row) => String(account.accountId) === accountId),
     );
     setSelectedAccountIds(validAccountIds);
-    const preferredPeriod = billingRows.find((cycle: Row) => String(cycle.billingCycleId) === preferredBillingCycleId);
     const preferredReadingCycle = readingRows.find((cycle: Row) => String(cycle.readingCycleId) === preferredReadingCycleId);
+    const linkedBillingCycleId = preferredReadingCycle?.billingCycleId
+      ? String(preferredReadingCycle.billingCycleId)
+      : "";
+    const preferredPeriod = billingRows.find((cycle: Row) =>
+      String(cycle.billingCycleId) === preferredBillingCycleId ||
+      (linkedBillingCycleId && String(cycle.billingCycleId) === linkedBillingCycleId),
+    );
     if (preferredPeriod) {
       setBillingCycleId(String(preferredPeriod.billingCycleId));
       const linkedReadingCycle = preferredPeriod.readingCycles?.[0];
@@ -755,7 +761,7 @@ export function IndividualBillingWorkspace() {
     (!readingCycleId && noOpenReadingCycle) || (closedCycleHasUncapturedReadings && !approvedReadingAccountIds.length)
   );
   const readingsReadyForBilling = worklist.length > 0 && worklist.every((row) => row.cycleReading?.approvalStatus === "APPROVED");
-  const needsBillingPeriod = !needsReadingCycle && selectedReadingCycle?.status === "CLOSED" && readingsReadyForBilling && !billingCycleId;
+  const needsBillingPeriod = !needsReadingCycle && selectedReadingCycle?.status === "CLOSED" && readingsReadyForBilling && !billingCycleId && !selectedReadingCycle?.billingCycleId;
   const cyclesAwaitingBilling = readingCycles.filter((cycle) => {
     if (cycle.status !== "CLOSED") return false;
     if (!cycle.billingCycleId) return true;
@@ -926,7 +932,7 @@ export function IndividualBillingWorkspace() {
       <section className="mb-4 rounded-xl border border-slate-200 bg-white shadow-sm">
         <div className="grid gap-3 p-4 lg:grid-cols-[minmax(280px,1.3fr)_minmax(220px,1fr)_minmax(220px,1fr)_auto]">
           <Field label="Accounts / customers" required><CheckboxMultiSelect className={INPUT} maxSelected={500} options={accountOptions} placeholder={loading ? "Loading accounts…" : "Select one or more accounts"} value={selectedAccountIds} onChange={setSelectedAccountIds} /></Field>
-          <Field label="Reading cycle" required><SearchableSelect className={INPUT} value={readingCycleId} onChange={(event) => { setReadingCycleId(event.target.value); const linked = billingCycles.find((cycle) => String(cycle.readingCycles?.[0]?.readingCycleId) === event.target.value); setBillingCycleId(linked ? String(linked.billingCycleId) : ""); }}><option value="">Select reading cycle</option>{readingCycles.filter((cycle) => !["CANCELLED"].includes(cycle.status)).map((cycle) => <option key={cycle.readingCycleId} value={cycle.readingCycleId}>{cycle.cycleCode} · {pretty(cycle.status)}</option>)}</SearchableSelect></Field>
+          <Field label="Reading cycle" required><SearchableSelect className={INPUT} value={readingCycleId} onChange={(event) => { const value = event.target.value; setReadingCycleId(value); const readingCycle = readingCycles.find((cycle) => String(cycle.readingCycleId) === value); const linked = readingCycle?.billingCycleId ? billingCycles.find((cycle) => String(cycle.billingCycleId) === String(readingCycle.billingCycleId)) : billingCycles.find((cycle) => cycle.readingCycles?.some((item: Row) => String(item.readingCycleId) === value)); setBillingCycleId(linked ? String(linked.billingCycleId) : ""); }}><option value="">Select reading cycle</option>{readingCycles.filter((cycle) => !["CANCELLED"].includes(cycle.status)).map((cycle) => <option key={cycle.readingCycleId} value={cycle.readingCycleId}>{cycle.cycleCode} · {pretty(cycle.status)}</option>)}</SearchableSelect></Field>
           <Field label="Billing period"><SearchableSelect className={INPUT} value={billingCycleId} onChange={(event) => { const value = event.target.value; setBillingCycleId(value); const cycle = billingCycles.find((item) => String(item.billingCycleId) === value); if (cycle?.readingCycles?.[0]) setReadingCycleId(String(cycle.readingCycles[0].readingCycleId)); }}><option value="">Select or create period</option>{billingCycles.filter((cycle) => cycle.status !== "CANCELLED").map((cycle) => <option key={cycle.billingCycleId} value={cycle.billingCycleId}>{cycle.cycleCode} · {pretty(cycle.status)}</option>)}</SearchableSelect></Field>
           <div className="flex items-end">{!mixedReadingReadiness && <button type="button" onClick={() => setShowSetup((value) => !value)} className="whitespace-nowrap rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">{showSetup ? "Hide setup" : needsReadingCycle ? "Create reading cycle" : needsBillingPeriod ? "Create billing period" : "Create cycles"}</button>}</div>
         </div>
