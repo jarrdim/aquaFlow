@@ -1421,7 +1421,7 @@ export function PaymentRegister() {
     <Page
       title="Payment register"
       subtitle="Search all valid, unmatched and reversed payment transactions"
-      actions={<div className="flex gap-2"><Button tone="blue" onClick={() => setShowImport((value) => !value)}>{showImport ? "Close import" : "Import receipts"}</Button><Button tone="green" onClick={() => exportExcel("payment-register.xlsx", "Payments", rows)}>Export register</Button></div>}
+      actions={<div className="flex gap-2"><Button tone="blue" onClick={() => setShowImport((value) => !value)}>{showImport ? "Close import" : "Import receipts"}</Button><Button tone="slate" onClick={() => exportExcel("payment-register.xlsx", "Payments", rows)}>Export register</Button></div>}
     >
       {loadError && <Notice>{loadError}</Notice>}
       {showImport && <Card title="Import historical receipts" className="mb-4">
@@ -2137,7 +2137,7 @@ export function CollectionReport() {
       subtitle="Collections by channel, cashier, receipt and transaction"
       actions={
         <Button
-          tone="green"
+          tone="slate"
           onClick={() =>
             exportExcel("daily-collections.xlsx", "Collections", filteredRows)
           }
@@ -2238,7 +2238,7 @@ export function PaymentAudit() {
       subtitle="Permanent payment, allocation, receipt and cancellation events"
       actions={
         <Button
-          tone="green"
+          tone="slate"
           onClick={() => exportExcel("payment-audit.xlsx", "Audit", rows)}
         >
           <span className="inline-flex items-center gap-2"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="M12 3v12M7 10l5 5 5-5M5 21h14" /></svg>Export audit</span>

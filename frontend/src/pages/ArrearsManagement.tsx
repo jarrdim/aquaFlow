@@ -501,7 +501,7 @@ export function ArrearsAgingReport() {
       actions={
         <>
           <Button
-            tone="green"
+            tone="slate"
             disabled={!rows.length}
             onClick={() =>
               exportExcel("arrears-aging-report", "Arrears ageing", exportRows)
@@ -2296,9 +2296,8 @@ async function exportDisconnectionListExcel(list: Row) {
   sheet.spliceRows(1, 1);
   sheet.mergeCells(1, 1, 1, columns.length);
   sheet.getCell("A1").value = `DISCONNECTION LIST - ${list.listReference} - ${zoneName}`;
-  sheet.getCell("A1").font = { bold: true, size: 16, color: { argb: "FFFFFFFF" } };
+  sheet.getCell("A1").font = { bold: true, size: 16 };
   sheet.getCell("A1").alignment = { horizontal: "center", vertical: "middle" };
-  sheet.getCell("A1").fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF075985" } };
   sheet.getRow(1).height = 28;
   sheet.mergeCells(2, 1, 2, columns.length);
   sheet.getCell("A2").value = `Zone: ${zoneName}`;
@@ -2307,11 +2306,10 @@ async function exportDisconnectionListExcel(list: Row) {
   sheet.mergeCells(3, 1, 3, columns.length);
   sheet.getCell("A3").value = `Status: ${pretty(list.status)} | Created: ${date(list.createdAt)} | Accounts: ${list.items?.length ?? 0}`;
   sheet.getCell("A3").alignment = { horizontal: "center" };
-  sheet.getCell("A3").font = { italic: true, color: { argb: "FF475569" } };
+  sheet.getCell("A3").font = { italic: true };
   const headerRow = sheet.getRow(5);
   columns.forEach((column, index) => { headerRow.getCell(index + 1).value = column.header; });
-  headerRow.font = { bold: true, color: { argb: "FFFFFFFF" } };
-  headerRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0F766E" } };
+  headerRow.font = { bold: true };
   headerRow.height = 24;
   (list.items ?? []).forEach((item: Row, index: number) => {
     const row = sheet.addRow({
@@ -2325,7 +2323,6 @@ async function exportDisconnectionListExcel(list: Row) {
       meterNumber: item.meterNumber ?? "",
       arrearsAgeDays: Number(item.arrearsAgeDays ?? 0),
     });
-    if (index % 2 === 1) row.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF8FAFC" } };
   });
   sheet.getColumn("accountBalance").numFmt = "#,##0.00";
   sheet.getColumn("outstanding").numFmt = "#,##0.00";
@@ -2436,7 +2433,7 @@ export function DisconnectionLists() {
     <Page
       title={`Disconnection lists${selectedZoneName ? ` — ${selectedZoneName}` : " — All zones"}`}
       subtitle="Escalate eligible accounts only after formal recovery notices"
-      actions={<><Button tone="green" disabled={!review?.items?.length} onClick={() => review && void exportDisconnectionListExcel(review)}>Export Excel</Button><LinkButton to="/arrears/notices">Demand notices</LinkButton></>}
+      actions={<><Button tone="slate" disabled={!review?.items?.length} onClick={() => review && void exportDisconnectionListExcel(review)}>Export Excel</Button><LinkButton to="/arrears/notices">Demand notices</LinkButton></>}
     >
       {error && <Alert>{error}</Alert>}
       {message && <Alert success>{message}</Alert>}
@@ -2996,7 +2993,7 @@ export function DebtRecoveryReport() {
       actions={
         <>
           <Button
-            tone="green"
+            tone="slate"
             disabled={!exportRows.length}
             onClick={() =>
               exportExcel("debt-recovery-report", "Debt recovery", exportRows)
@@ -3119,7 +3116,7 @@ export function ArrearsAudit() {
       subtitle="Immutable history of reminders, notices, arrangements and approvals"
       actions={
         <Button
-          tone="green"
+          tone="slate"
           disabled={!rows.length}
           onClick={() =>
             exportExcel(

@@ -1974,7 +1974,7 @@ export function BillApprovals() {
       <div className="grid gap-4 xl:grid-cols-[1.25fr_0.75fr]">
         <Card title={`${bills.length} pending bill(s)`}>
           <div className="overflow-x-auto">
-            <table className="w-full">
+            <table className="w-full min-w-[850px]">
               <thead>
                 <tr>
                   <th className={TH}>
@@ -2148,7 +2148,7 @@ export function InvoiceRegister() {
       subtitle="Search, print and share customer water bills"
       actions={
         <Button
-          tone="green"
+          tone="slate"
           onClick={() =>
             exportExcel(
               "invoice-register.xlsx",
@@ -2463,7 +2463,7 @@ function LegacyCustomerStatements() {
             </Button>
           )}
           <Button
-            tone="green"
+            tone="slate"
             disabled={!statement}
             onClick={() =>
               statement &&
@@ -2583,7 +2583,12 @@ function CustomerStatementsOld() {
   const [statement, setStatement] = useState<Row | null>(null);
   const [loadingAccounts, setLoadingAccounts] = useState(true);
   const [loadingStatement, setLoadingStatement] = useState(false);
+  const [reconcilingBalance, setReconcilingBalance] = useState(false);
   const [error, setError] = useState("");
+  const actor = getSessionUser();
+  const canReconcileBalance = Boolean(
+    actor?.roles.some((role) => ["SYSTEM_ADMIN", "FINANCE_MANAGER"].includes(role)),
+  );
   const accounts = useMemo(
     () =>
       Array.from(
@@ -2666,6 +2671,58 @@ function CustomerStatementsOld() {
     );
   }
 
+  async function reconcileBalance() {
+    if (!statement || !canReconcileBalance || reconcilingBalance) return;
+    const accountNumber = String(statement.account.accountNumber);
+    setReconcilingBalance(true);
+    setError("");
+    try {
+      const preview = await api.previewAccountBalanceReconciliation(accountNumber);
+      if (preview.balanced) {
+        await Swal.fire({
+          icon: "info",
+          title: "Balance is already reconciled",
+          text: `${accountNumber} already agrees with its posted ledger at ${money(preview.calculatedBalance)}.`,
+          confirmButtonText: "Close",
+        });
+        await load(accountId);
+        return;
+      }
+
+      const confirmation = await Swal.fire({
+        icon: "warning",
+        title: "Reconcile stored account balance?",
+        text: `${accountNumber}: change the stored balance from ${money(preview.storedBalance)} to the verified ledger balance of ${money(preview.calculatedBalance)}. Variance: ${money(preview.variance)}.`,
+        input: "textarea",
+        inputLabel: "Reconciliation reason (required)",
+        inputPlaceholder: "Explain why the stored balance should be aligned to the posted ledger…",
+        inputAttributes: { maxlength: "1000", "aria-label": "Reconciliation reason" },
+        inputValidator: (value) =>
+          String(value ?? "").trim().length < 10
+            ? "Enter a clear reason of at least 10 characters."
+            : undefined,
+        showCancelButton: true,
+        confirmButtonText: "Reconcile balance",
+        cancelButtonText: "Cancel",
+        reverseButtons: true,
+      });
+      if (!confirmation.isConfirmed) return;
+
+      await api.reconcileAccountBalance(accountNumber, String(confirmation.value).trim());
+      await load(accountId);
+      await Swal.fire({
+        icon: "success",
+        title: "Balance reconciled",
+        text: `${accountNumber} now agrees with its posted ledger. The correction was added to the reconciliation audit history.`,
+        confirmButtonText: "Done",
+      });
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setReconcilingBalance(false);
+    }
+  }
+
   return (
     <Page
       className="statement-print-page"
@@ -2681,7 +2738,7 @@ function CustomerStatementsOld() {
             Print / Save PDF
           </Button>
           <Button
-            tone="green"
+            tone="slate"
             disabled={!statement || loadingStatement}
             onClick={exportStatement}
           >
@@ -2909,24 +2966,71 @@ export function CustomerStatements() {
   const now = new Date();
   const localDate = (value: Date) =>
     `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
+  const [savedSelection] = useState<{ accountId: string; from: string; to: string }>(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem("aquaflow_customer_statement_selection") ?? "{}");
+      return {
+        accountId: String(stored.accountId ?? ""),
+        from: String(stored.from ?? ""),
+        to: String(stored.to ?? ""),
+      };
+    } catch {
+      return { accountId: "", from: "", to: "" };
+    }
+  });
   const [accounts, setAccounts] = useState<Row[]>([]);
-  const [accountId, setAccountId] = useState("");
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
+  const [accountId, setAccountId] = useState(savedSelection.accountId);
+  const [from, setFrom] = useState(savedSelection.from);
+  const [to, setTo] = useState(savedSelection.to);
   const [statement, setStatement] = useState<Row | null>(null);
   const [loadingAccounts, setLoadingAccounts] = useState(true);
+  const [searchingAccounts, setSearchingAccounts] = useState(false);
+  const [accountSearch, setAccountSearch] = useState("");
+  const accountRequest = useRef(0);
   const [loadingStatement, setLoadingStatement] = useState(false);
+  const [reconcilingBalance, setReconcilingBalance] = useState(false);
   const [error, setError] = useState("");
+  const actor = getSessionUser();
+  const canReconcileBalance = Boolean(
+    actor?.roles.some((role) => ["SYSTEM_ADMIN", "FINANCE_MANAGER"].includes(role)),
+  );
   useEffect(() => {
-    api
-      .listAccounts("", 20000)
-      .then((rows) => {
-        setAccounts(rows);
-        if (rows[0]) setAccountId(String(rows[0].accountId));
-      })
-      .catch((e) => setError(e.message))
-      .finally(() => setLoadingAccounts(false));
-  }, []);
+    const requestId = ++accountRequest.current;
+    const timer = window.setTimeout(async () => {
+      if (loadingAccounts) setLoadingAccounts(true);
+      else setSearchingAccounts(true);
+      try {
+        const [matches, restored] = await Promise.all([
+          api.listAccounts(accountSearch, 75),
+          !accountSearch && savedSelection.accountId
+            ? api.listAccounts("", 1, savedSelection.accountId)
+            : Promise.resolve([]),
+        ]);
+        if (requestId !== accountRequest.current) return;
+        setAccounts((current) => {
+          const selectedAccount = current.find((account: Row) => String(account.accountId) === accountId);
+          const unique = new Map<string, Row>();
+          [...restored, ...(selectedAccount ? [selectedAccount] : []), ...matches].forEach((account: Row) =>
+            unique.set(String(account.accountId), account),
+          );
+          return Array.from(unique.values());
+        });
+        if (!accountId && restored[0]) setAccountId(String(restored[0].accountId));
+        setError("");
+      } catch (e: any) {
+        if (requestId === accountRequest.current) setError(e.message);
+      } finally {
+        if (requestId === accountRequest.current) {
+          setLoadingAccounts(false);
+          setSearchingAccounts(false);
+        }
+      }
+    }, accountSearch ? 250 : 0);
+    return () => window.clearTimeout(timer);
+  }, [accountSearch]);
+  useEffect(() => {
+    localStorage.setItem("aquaflow_customer_statement_selection", JSON.stringify({ accountId, from, to }));
+  }, [accountId, from, to]);
 
   async function load(selectedAccountId = accountId) {
     if (!selectedAccountId) return;
@@ -2943,8 +3047,8 @@ export function CustomerStatements() {
   }
 
   useEffect(() => {
-    if (accountId) load(accountId);
-  }, [accountId]);
+    if (!loadingAccounts && accountId) load(accountId);
+  }, [accountId, loadingAccounts]);
 
   function printStatement() {
     const cleanup = () => document.body.classList.remove("printing-statement");
@@ -2997,6 +3101,58 @@ export function CustomerStatements() {
     );
   }
 
+  async function reconcileBalance() {
+    if (!statement || !canReconcileBalance || reconcilingBalance) return;
+    const accountNumber = String(statement.account.accountNumber);
+    setReconcilingBalance(true);
+    setError("");
+    try {
+      const preview = await api.previewAccountBalanceReconciliation(accountNumber);
+      if (preview.balanced) {
+        await Swal.fire({
+          icon: "info",
+          title: "Balance is already reconciled",
+          text: `${accountNumber} already agrees with its posted ledger at ${money(preview.calculatedBalance)}.`,
+          confirmButtonText: "Close",
+        });
+        await load(accountId);
+        return;
+      }
+
+      const confirmation = await Swal.fire({
+        icon: "warning",
+        title: "Reconcile stored account balance?",
+        text: `${accountNumber}: change the stored balance from ${money(preview.storedBalance)} to the verified ledger balance of ${money(preview.calculatedBalance)}. Variance: ${money(preview.variance)}.`,
+        input: "textarea",
+        inputLabel: "Reconciliation reason (required)",
+        inputPlaceholder: "Explain why the stored balance should be aligned to the posted ledger...",
+        inputAttributes: { maxlength: "1000", "aria-label": "Reconciliation reason" },
+        inputValidator: (value) =>
+          String(value ?? "").trim().length < 10
+            ? "Enter a clear reason of at least 10 characters."
+            : undefined,
+        showCancelButton: true,
+        confirmButtonText: "Reconcile balance",
+        cancelButtonText: "Cancel",
+        reverseButtons: true,
+      });
+      if (!confirmation.isConfirmed) return;
+
+      await api.reconcileAccountBalance(accountNumber, String(confirmation.value).trim());
+      await load(accountId);
+      await Swal.fire({
+        icon: "success",
+        title: "Balance reconciled",
+        text: `${accountNumber} now agrees with its posted ledger. The correction was added to the reconciliation audit history.`,
+        confirmButtonText: "Done",
+      });
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setReconcilingBalance(false);
+    }
+  }
+
   const printedAt = new Date();
   const utilityAddress = statement
     ? [
@@ -3023,6 +3179,15 @@ export function CustomerStatements() {
     setFrom(localDate(start));
     setTo(localDate(now));
   }
+  const statementSkeleton = (
+    <section className="statement-screen-loader overflow-hidden rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" aria-label="Loading customer statement" aria-busy="true">
+      <div className="flex items-center justify-between border-b-[3px] border-slate-200 pb-5"><div className="h-16 w-64 animate-pulse rounded-xl bg-slate-100" /><div className="space-y-2"><div className="h-3 w-56 animate-pulse rounded bg-slate-100" /><div className="h-3 w-44 animate-pulse rounded bg-slate-100" /><div className="h-3 w-48 animate-pulse rounded bg-slate-100" /></div></div>
+      <div className="mx-auto my-5 h-6 w-56 animate-pulse rounded bg-slate-200" />
+      <div className="grid gap-8 border-b border-slate-200 pb-5 md:grid-cols-2">{[0, 1].map((column) => <div key={column} className="space-y-3">{["w-3/4", "w-2/3", "w-4/5", "w-1/2"].map((width, index) => <div key={index} className={`h-3 ${width} animate-pulse rounded bg-slate-100`} />)}</div>)}</div>
+      <div className="mt-5 overflow-hidden rounded-lg border border-slate-100"><div className="grid grid-cols-[60px_120px_1.3fr_1fr_2fr_120px_120px_130px] gap-3 bg-slate-50 px-4 py-3">{Array.from({ length: 8 }, (_, index) => <div key={index} className="h-3 animate-pulse rounded bg-slate-200" />)}</div>{Array.from({ length: 6 }, (_, row) => <div key={row} className="grid grid-cols-[60px_120px_1.3fr_1fr_2fr_120px_120px_130px] gap-3 border-t border-slate-100 px-4 py-4">{Array.from({ length: 8 }, (_, index) => <div key={index} className={`h-3 animate-pulse rounded ${index === 4 ? "bg-slate-100" : "bg-slate-200"}`} />)}</div>)}</div>
+      <div className="mt-5 flex items-center justify-center gap-3 text-sm font-semibold text-slate-500"><span className="h-5 w-5 animate-spin rounded-full border-2 border-sky-200 border-t-sky-700" />Preparing the reconciled ledger…</div>
+    </section>
+  );
 
   return (
     <Page
@@ -3039,7 +3204,7 @@ export function CustomerStatements() {
             Print / Save PDF
           </Button>
           <Button
-            tone="green"
+            tone="slate"
             disabled={!statement || loadingStatement}
             onClick={exportStatement}
           >
@@ -3057,9 +3222,10 @@ export function CustomerStatements() {
               disabled={loadingAccounts || loadingStatement}
               value={accountId}
               onChange={(e) => setAccountId(e.target.value)}
+              onSearchQuery={setAccountSearch}
             >
               <option value="">
-                {loadingAccounts ? "Loading accounts..." : "Select account"}
+                {loadingAccounts ? "Loading accounts..." : searchingAccounts ? "Searching accounts..." : "Select account"}
               </option>
               {accounts.map((account: Row) => (
                 <option key={account.accountId} value={account.accountId}>
@@ -3115,28 +3281,34 @@ export function CustomerStatements() {
       </Card>
 
       {statement && Math.abs(balanceVariance) >= 0.01 && (
-        <div className="statement-screen-filters mb-4 flex items-start gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900" role="alert">
+        <div className="statement-screen-filters mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900" role="alert">
           <svg className="mt-0.5 h-5 w-5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M12 3 2.5 20h19z" /><path d="M12 9v5m0 3h.01" /></svg>
-          <div><div className="font-bold">Account balance reconciliation required</div><div className="mt-0.5">The statement ledger closes at {money(statement.closingBalance)}, while the stored account balance is {money(statement.currentBalance)}. Variance: {money(balanceVariance)}.</div></div>
+          <div className="min-w-0 flex-1"><div className="font-bold">Account balance reconciliation required</div><div className="mt-0.5">The statement ledger closes at {money(statement.closingBalance)}, while the stored account balance is {money(statement.currentBalance)}. Variance: {money(balanceVariance)}.</div></div>
+          {canReconcileBalance ? (
+            <Button tone="slate" disabled={reconcilingBalance || loadingStatement} onClick={reconcileBalance}>
+              {reconcilingBalance ? "Checking ledger…" : "Review & reconcile"}
+            </Button>
+          ) : (
+            <span className="rounded-lg border border-amber-300 bg-white/70 px-3 py-2 text-xs font-semibold">Finance Manager or System Administrator required</span>
+          )}
         </div>
       )}
 
-      {loadingStatement && !statement ? (
-        <Card>
-          <Spinner />
-        </Card>
+      {loadingAccounts || (loadingStatement && !statement) ? (
+        statementSkeleton
       ) : (
         statement && (
           <Card className="statement-print-document relative">
             {loadingStatement && (
-              <div className="statement-loading-overlay absolute inset-0 z-20 flex items-start justify-center rounded-2xl bg-white/75 pt-24 backdrop-blur-[1px]">
-                <div className="flex items-center gap-3 rounded-xl border bg-white px-5 py-3 font-semibold text-slate-700 shadow-lg">
+              <div className="statement-loading-overlay pointer-events-none absolute inset-x-0 top-0 z-20 overflow-hidden rounded-t-2xl border-b border-sky-100 bg-white/95 px-4 py-2.5 shadow-sm backdrop-blur-sm">
+                <div className="flex items-center justify-center gap-3 font-semibold text-slate-700">
                   <span
-                    className="h-5 w-5 animate-spin rounded-full border-2 border-aqua-200 border-t-aqua-700"
+                    className="h-4 w-4 animate-spin rounded-full border-2 border-sky-200 border-t-sky-700"
                     aria-hidden
                   />
-                  Refreshing statement...
+                  Refreshing the selected statement…
                 </div>
+                <div className="absolute inset-x-0 bottom-0 h-0.5 overflow-hidden bg-sky-100"><div className="h-full w-1/3 animate-pulse rounded-full bg-sky-600" /></div>
               </div>
             )}
 
@@ -3649,17 +3821,26 @@ async function fileData(file?: File) {
 export function BillingAdjustments() {
   const [bills, setBills] = useState<Row[]>([]);
   const [items, setItems] = useState<Row[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [file, setFile] = useState<File>();
+  const [fileKey, setFileKey] = useState(0);
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("ALL");
+  const [typeFilter, setTypeFilter] = useState("ALL");
+  const [page, setPage] = useState(1);
+  const pageSize = 10;
   const [form, setForm] = useState<Row>({
     billId: "",
     adjustmentType: "CREDIT_NOTE",
     amount: "",
     reason: "",
   });
-  const load = () =>
-    Promise.all([api.listBills(), api.listBillingAdjustments()]).then(
+  const load = (initial = false) => {
+    if (initial) setLoading(true);
+    return Promise.all([api.listBills(), api.listBillingAdjustments()]).then(
       ([b, a]) => {
         setBills(
           b.filter((x: Row) =>
@@ -3668,13 +3849,38 @@ export function BillingAdjustments() {
         );
         setItems(a);
       },
-    );
+    ).finally(() => initial && setLoading(false));
+  };
   useEffect(() => {
-    load().catch((e) => setError(e.message));
+    load(true).catch((e) => setError(e.message));
   }, []);
   const bill = bills.find((b) => String(b.billId) === form.billId);
+  const visibleItems = useMemo(() => {
+    const query = search.trim().toLocaleLowerCase();
+    return items.filter((adjustment) => {
+      const matchesStatus = statusFilter === "ALL" || adjustment.status === statusFilter;
+      const matchesType = typeFilter === "ALL" || adjustment.adjustmentType === typeFilter;
+      const matchesSearch = !query || [
+        adjustment.adjustmentNumber,
+        adjustment.bill?.billNumber,
+        adjustment.bill?.account?.accountNumber,
+        accountCustomerName(adjustment.bill?.account),
+        person(adjustment.requester),
+        adjustment.reason,
+      ].some((value) => String(value ?? "").toLocaleLowerCase().includes(query));
+      return matchesStatus && matchesType && matchesSearch;
+    });
+  }, [items, search, statusFilter, typeFilter]);
+  const totalPages = Math.max(1, Math.ceil(visibleItems.length / pageSize));
+  const pagedItems = visibleItems.slice((page - 1) * pageSize, page * pageSize);
+  const pendingCount = items.filter((adjustment) => adjustment.status === "PENDING").length;
+  useEffect(() => { setPage(1); }, [search, statusFilter, typeFilter]);
+  useEffect(() => { if (page > totalPages) setPage(totalPages); }, [page, totalPages]);
   async function submit(e: FormEvent) {
     e.preventDefault();
+    setSubmitting(true);
+    setError("");
+    setMessage("");
     try {
       await api.createBillingAdjustment({
         ...form,
@@ -3689,9 +3895,12 @@ export function BillingAdjustments() {
         reason: "",
       });
       setFile(undefined);
+      setFileKey((value) => value + 1);
       await load();
     } catch (e: any) {
       setError(e.message);
+    } finally {
+      setSubmitting(false);
     }
   }
   return (
@@ -3700,15 +3909,20 @@ export function BillingAdjustments() {
       subtitle="Request controlled credit notes, debit notes and corrections"
       actions={
         <LinkButton to="/billing/adjustments/approvals">
-          Adjustment approval
+          Adjustment approval{pendingCount ? ` (${pendingCount})` : ""}
         </LinkButton>
       }
+      className="[&_.page-screen-header]:mb-3"
     >
       {error && <Notice>{error}</Notice>}
       {message && <Notice tone="green">{message}</Notice>}
-      <div className="grid gap-4 lg:grid-cols-[430px_1fr]">
-        <Card title="New adjustment request">
-          <form onSubmit={submit} className="space-y-3">
+      <div className="grid items-start gap-4 xl:grid-cols-[420px_minmax(0,1fr)]">
+        <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm shadow-slate-200/50">
+          <div className="flex items-center gap-3 border-b border-slate-100 px-4 py-3">
+            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-sky-50 text-sky-700 ring-1 ring-sky-100"><svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="M6 3h9l3 3v15H6z" /><path d="M14 3v4h4M9 12h6M9 16h4" /></svg></span>
+            <div><h2 className="font-bold text-slate-900">New adjustment request</h2><p className="text-xs text-slate-500">Every request requires independent approval</p></div>
+          </div>
+          <form onSubmit={submit} className="space-y-3 p-4">
             <Field label="Bill" required>
               <SearchableSelect
                 required
@@ -3725,13 +3939,12 @@ export function BillingAdjustments() {
               </SearchableSelect>
             </Field>
             {bill && (
-              <div className="rounded-lg bg-slate-50 p-3 text-sm">
-                <div>
-                  {bill.account.accountNumber} · {bill.customerName}
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
+                <div className="flex items-start justify-between gap-3"><div><div className="font-bold text-slate-900">{bill.account.accountNumber}</div><div className="text-xs text-slate-500">{bill.customerName}</div></div><Badge value={bill.status} /></div>
+                <div className="mt-3 grid grid-cols-2 gap-2 border-t border-slate-200 pt-3">
+                  <div><div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Current charges</div><div className="mt-0.5 font-bold text-slate-800">{money(bill.totalCurrentCharges)}</div></div>
+                  <div><div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Total due</div><div className="mt-0.5 font-bold text-slate-900">{money(bill.totalAmountDue)}</div></div>
                 </div>
-                <strong>
-                  Current charges: {money(bill.totalCurrentCharges)}
-                </strong>
               </div>
             )}
             <div className="grid grid-cols-2 gap-3">
@@ -3743,10 +3956,10 @@ export function BillingAdjustments() {
                     setForm({ ...form, adjustmentType: e.target.value })
                   }
                 >
-                  <option>CREDIT_NOTE</option>
-                  <option>DEBIT_NOTE</option>
-                  <option>CORRECTION</option>
-                  <option>CANCELLATION</option>
+                  <option value="CREDIT_NOTE">Credit note</option>
+                  <option value="DEBIT_NOTE">Debit note</option>
+                  <option value="CORRECTION">Correction</option>
+                  <option value="CANCELLATION">Cancellation</option>
                 </SearchableSelect>
               </Field>
               <Field label="Amount" required>
@@ -3768,21 +3981,38 @@ export function BillingAdjustments() {
                 className={INPUT}
                 value={form.reason}
                 onChange={(e) => setForm({ ...form, reason: e.target.value })}
+                placeholder="Explain why this bill adjustment is required"
               />
             </Field>
             <Field label="Supporting document">
               <input
+                key={fileKey}
                 type="file"
                 className={INPUT}
                 onChange={(e) => setFile(e.target.files?.[0])}
               />
             </Field>
-            <Button className="w-full" disabled={!form.billId}>
-              Submit adjustment
+            <div className={`rounded-lg border px-3 py-2 text-xs ${["CREDIT_NOTE", "CANCELLATION"].includes(form.adjustmentType) ? "border-emerald-100 bg-emerald-50 text-emerald-800" : "border-orange-100 bg-orange-50 text-orange-800"}`}>
+              <span className="font-bold">{["CREDIT_NOTE", "CANCELLATION"].includes(form.adjustmentType) ? "Reduces the bill:" : "Increases or corrects the bill:"}</span> the customer balance changes only after approval.
+            </div>
+            <Button className="flex w-full items-center justify-center" disabled={submitting || !form.billId || !form.amount || form.reason.trim().length < 5}>
+              {submitting ? <><span className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />Submitting…</> : "Submit for approval"}
             </Button>
           </form>
-        </Card>
-        <Card title="Adjustment history">
+        </section>
+        <section className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm shadow-slate-200/50">
+          <div className="border-b border-slate-100 px-4 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2"><h2 className="font-bold text-slate-900">Adjustment history</h2><span className="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">{items.length}</span>{pendingCount > 0 && <span className="text-xs font-medium text-amber-700">{pendingCount} pending</span>}</div>
+              <div className="text-xs text-slate-400">Maker-checker audit trail</div>
+            </div>
+            <div className="mt-3 grid gap-2 md:grid-cols-[minmax(240px,1fr)_155px_155px]">
+              <div className="relative"><svg className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" /><path d="m12.5 12.5 4 4" /></svg><input className={`${INPUT} py-2 pl-9`} value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search reference, bill, account or requester" /></div>
+              <select className={`${INPUT} py-2`} value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)}><option value="ALL">All types</option><option value="CREDIT_NOTE">Credit notes</option><option value="DEBIT_NOTE">Debit notes</option><option value="CORRECTION">Corrections</option><option value="CANCELLATION">Cancellations</option></select>
+              <select className={`${INPUT} py-2`} value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="ALL">All statuses</option><option value="PENDING">Pending</option><option value="POSTED">Approved / posted</option><option value="RETURNED">Returned</option><option value="REJECTED">Rejected</option></select>
+            </div>
+          </div>
+          {loading ? <div className="py-16"><Spinner /></div> : <>
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
@@ -3796,22 +4026,25 @@ export function BillingAdjustments() {
                 </tr>
               </thead>
               <tbody>
-                {items.map((a) => (
-                  <tr key={a.adjustmentId} className="border-t">
-                    <td className={TD}>{a.adjustmentNumber}</td>
-                    <td className={TD}>{a.bill.billNumber}</td>
-                    <td className={TD}>{pretty(a.adjustmentType)}</td>
-                    <td className={TD}>{money(a.amount)}</td>
+                {pagedItems.map((a) => (
+                  <tr key={a.adjustmentId} className="border-t border-slate-100 transition hover:bg-slate-50/70">
+                    <td className={TD}><div className="font-semibold text-slate-800">{a.adjustmentNumber}</div><div className="mt-0.5 text-xs text-slate-400">{date(a.createdAt)}</div></td>
+                    <td className={TD}><div className="font-medium text-slate-700">{a.bill.billNumber}</div><div className="mt-0.5 text-xs text-slate-400">{a.bill.account?.accountNumber}</div></td>
+                    <td className={TD}><span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-bold ${["CREDIT_NOTE", "CANCELLATION"].includes(a.adjustmentType) ? "bg-emerald-50 text-emerald-700" : "bg-orange-50 text-orange-700"}`}>{pretty(a.adjustmentType)}</span></td>
+                    <td className={`${TD} whitespace-nowrap font-bold text-slate-800`}>{money(a.amount)}</td>
                     <td className={TD}>{person(a.requester)}</td>
                     <td className={TD}>
                       <Badge value={a.status} />
                     </td>
                   </tr>
                 ))}
+                {!visibleItems.length && <tr><td colSpan={6} className="px-6 py-14 text-center"><div className="mx-auto grid h-10 w-10 place-items-center rounded-xl bg-slate-100 text-slate-400"><svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M6 3h9l3 3v15H6z" /><path d="M14 3v4h4M9 12h6" /></svg></div><div className="mt-2 font-semibold text-slate-700">{items.length ? "No matching adjustments" : "No adjustment requests yet"}</div><div className="mt-0.5 text-sm text-slate-400">{items.length ? "Try a different search or filter." : "Submitted requests will appear here for tracking."}</div></td></tr>}
               </tbody>
             </table>
           </div>
-        </Card>
+          {visibleItems.length > 0 && <div className="border-t border-slate-100 px-4 py-3"><Pagination page={page} totalPages={totalPages} total={visibleItems.length} pageSize={pageSize} onPageChange={setPage} label="adjustments" /></div>}
+          </>}
+        </section>
       </div>
     </Page>
   );
@@ -3821,18 +4054,46 @@ export function BillingAdjustmentApprovals() {
   const [items, setItems] = useState<Row[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
   const [focus, setFocus] = useState<Row | null>(null);
+  const [search, setSearch] = useState("");
+  const [typeFilter, setTypeFilter] = useState("ALL");
+  const [page, setPage] = useState(1);
+  const pageSize = 10;
   const [comments, setComments] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
-  const load = () =>
-    api.listBillingAdjustments("PENDING").then((rows) => {
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [decisionAction, setDecisionAction] = useState("");
+  const load = (initial = false) => {
+    if (initial) setLoading(true); else setRefreshing(true);
+    return api.listBillingAdjustments("PENDING").then((rows) => {
       setItems(rows);
       setSelected([]);
-      setFocus(rows[0] ?? null);
-    });
+      setFocus(null);
+    }).finally(() => { setLoading(false); setRefreshing(false); });
+  };
   useEffect(() => {
-    load().catch((e) => setError(e.message));
+    load(true).catch((e) => setError(e.message));
   }, []);
+  const visibleItems = useMemo(() => {
+    const query = search.trim().toLocaleLowerCase();
+    return items.filter((adjustment) => {
+      const matchesType = typeFilter === "ALL" || adjustment.adjustmentType === typeFilter;
+      const matchesSearch = !query || [
+        adjustment.adjustmentNumber,
+        adjustment.bill?.billNumber,
+        adjustment.bill?.account?.accountNumber,
+        accountCustomerName(adjustment.bill?.account),
+        person(adjustment.requester),
+        adjustment.reason,
+      ].some((value) => String(value ?? "").toLocaleLowerCase().includes(query));
+      return matchesType && matchesSearch;
+    });
+  }, [items, search, typeFilter]);
+  const totalPages = Math.max(1, Math.ceil(visibleItems.length / pageSize));
+  const pagedItems = visibleItems.slice((page - 1) * pageSize, page * pageSize);
+  useEffect(() => { setPage(1); }, [search, typeFilter]);
+  useEffect(() => { if (page > totalPages) setPage(totalPages); }, [page, totalPages]);
   const actor = getSessionUser();
   const isAdmin = Boolean(actor?.roles.includes("SYSTEM_ADMIN"));
   const canDecide = Boolean(
@@ -3857,6 +4118,8 @@ export function BillingAdjustmentApprovals() {
       return setError(
         "Select at least one adjustment and enter decision comments.",
       );
+    setDecisionAction(decision);
+    setError("");
     try {
       const result = await api.decideBillingAdjustments(
         selected,
@@ -3871,19 +4134,25 @@ export function BillingAdjustmentApprovals() {
       await load();
     } catch (e: any) {
       setError(e.message);
+    } finally {
+      setDecisionAction("");
     }
   }
+  const visibleIds = pagedItems.map((adjustment) => String(adjustment.adjustmentId));
+  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selected.includes(id));
+  const signedImpact = focus ? (["CREDIT_NOTE", "CANCELLATION"].includes(focus.adjustmentType) ? -Number(focus.amount) : Number(focus.amount)) : 0;
+  const projectedBillTotal = focus ? Number(focus.bill.totalAmountDue) + signedImpact : 0;
   return (
     <Page
       title="Bill adjustment approval"
       subtitle="Independent maker-checker review before balances are changed"
+      className="[&_.page-screen-header]:mb-3"
     >
       {error && <Notice>{error}</Notice>}
       {message && <Notice tone="green">{message}</Notice>}
-      <div className="mb-3 rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm text-blue-700">
-        Adjustments may be requested after posting. Credit notes and
-        cancellations reduce the posted balance; debit notes and corrections
-        increase it after independent approval.
+      <div className="mb-3 flex items-start gap-3 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800">
+        <span className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-sky-100 text-sky-700"><svg className="h-4 w-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="M10 6v4m0 3h.01" /><circle cx="10" cy="10" r="8" /></svg></span>
+        <div><div className="font-bold">Review the balance impact before deciding</div><div className="mt-0.5 text-xs leading-5">Credit notes and cancellations reduce the bill; debit notes and corrections increase it only after independent approval.</div></div>
       </div>
       {!canDecide && (
         <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-700">
@@ -3899,8 +4168,13 @@ export function BillingAdjustmentApprovals() {
           sign in as an independent checker.
         </div>
       )}
-      <div className="grid gap-4 xl:grid-cols-[1fr_0.8fr]">
-        <Card title={`${items.length} pending request(s)`}>
+      <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_410px]">
+        <section className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm shadow-slate-200/50">
+          <div className="border-b border-slate-100 px-4 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-2"><div className="flex items-center gap-2"><h2 className="font-bold text-slate-900">Pending requests</h2><span className="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">{items.length}</span>{selected.length > 0 && <span className="text-xs font-medium text-aqua-700">{selected.length} selected</span>}</div><button type="button" onClick={() => load().catch((e) => setError(e.message))} disabled={refreshing} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-60"><svg className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="M16 6V2m0 0h-4m4 0-3 3a6 6 0 1 0 1.5 6" /></svg>{refreshing ? "Refreshing…" : "Refresh"}</button></div>
+            <div className="mt-3 grid gap-2 md:grid-cols-[minmax(240px,1fr)_180px]"><div className="relative"><svg className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" /><path d="m12.5 12.5 4 4" /></svg><input className={`${INPUT} py-2 pl-9`} value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search reference, bill, account or requester" /></div><select className={`${INPUT} py-2`} value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)}><option value="ALL">All adjustment types</option><option value="CREDIT_NOTE">Credit notes</option><option value="DEBIT_NOTE">Debit notes</option><option value="CORRECTION">Corrections</option><option value="CANCELLATION">Cancellations</option></select></div>
+          </div>
+          {loading ? <div className="py-16"><Spinner /></div> : <>
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
@@ -3910,13 +4184,13 @@ export function BillingAdjustmentApprovals() {
                       aria-label="Select all adjustments"
                       type="checkbox"
                       checked={
-                        items.length > 0 && selected.length === items.length
+                        allVisibleSelected
                       }
                       onChange={(e) =>
                         setSelected(
                           e.target.checked
-                            ? items.map((a) => String(a.adjustmentId))
-                            : [],
+                            ? Array.from(new Set([...selected, ...visibleIds]))
+                            : selected.filter((id) => !visibleIds.includes(id)),
                         )
                       }
                     />
@@ -3929,8 +4203,8 @@ export function BillingAdjustmentApprovals() {
                 </tr>
               </thead>
               <tbody>
-                {items.map((a) => (
-                  <tr key={a.adjustmentId} className="border-t">
+                {pagedItems.map((a) => (
+                  <tr key={a.adjustmentId} className={`border-t border-slate-100 transition ${focus?.adjustmentId === a.adjustmentId ? "bg-sky-50/60" : "hover:bg-slate-50/70"}`}>
                     <td className={TD}>
                       <input
                         aria-label={`Select ${a.adjustmentNumber}`}
@@ -3939,7 +4213,7 @@ export function BillingAdjustmentApprovals() {
                         onChange={(e) =>
                           setSelected(
                             e.target.checked
-                              ? [...selected, String(a.adjustmentId)]
+                              ? Array.from(new Set([...selected, String(a.adjustmentId)]))
                               : selected.filter(
                                   (id) => id !== String(a.adjustmentId),
                                 ),
@@ -3947,53 +4221,49 @@ export function BillingAdjustmentApprovals() {
                         }
                       />
                     </td>
-                    <td className={TD}>{a.adjustmentNumber}</td>
+                    <td className={TD}><div className="font-semibold text-slate-800">{a.adjustmentNumber}</div><div className="mt-0.5 text-xs text-slate-400">{date(a.createdAt)}</div></td>
                     <td className={TD}>
-                      {a.bill.billNumber}
-                      <div className="text-xs">
+                      <div className="font-medium text-slate-700">{a.bill.billNumber}</div>
+                      <div className="mt-0.5 text-xs text-slate-400">
                         {a.bill.account.accountNumber}
                       </div>
                     </td>
-                    <td className={TD}>{pretty(a.adjustmentType)}</td>
-                    <td className={TD}>{money(a.amount)}</td>
+                    <td className={TD}><span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-bold ${["CREDIT_NOTE", "CANCELLATION"].includes(a.adjustmentType) ? "bg-emerald-50 text-emerald-700" : "bg-orange-50 text-orange-700"}`}>{pretty(a.adjustmentType)}</span></td>
+                    <td className={`${TD} whitespace-nowrap font-bold text-slate-800`}>{money(a.amount)}</td>
                     <td className={TD}>
                       <button
-                        className="font-semibold text-aqua-700"
-                        onClick={() => setFocus(a)}
+                        className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-700"
+                        onClick={() => { setFocus(a); setSelected((current) => current.includes(String(a.adjustmentId)) ? current : [...current, String(a.adjustmentId)]); }}
                       >
                         Review
                       </button>
                     </td>
                   </tr>
                 ))}
-                {!items.length && (
+                {!visibleItems.length && (
                   <tr>
-                    <td colSpan={6} className="p-8 text-center text-slate-400">
-                      No adjustment requests await approval.
+                    <td colSpan={6} className="px-6 py-14 text-center">
+                      <div className="mx-auto grid h-10 w-10 place-items-center rounded-xl bg-slate-100 text-slate-400"><svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M5 12.5 9 16l10-10" /><circle cx="12" cy="12" r="9" /></svg></div><div className="mt-2 font-semibold text-slate-700">{items.length ? "No matching requests" : "Approval queue is clear"}</div><div className="mt-0.5 text-sm text-slate-400">{items.length ? "Try a different search or type filter." : "There are no bill adjustments awaiting review."}</div>
                     </td>
                   </tr>
                 )}
               </tbody>
             </table>
           </div>
-        </Card>
-        <Card title={`Approval decision · ${selected.length} selected`}>
+          {visibleItems.length > 0 && <div className="border-t border-slate-100 px-4 py-3"><Pagination page={page} totalPages={totalPages} total={visibleItems.length} pageSize={pageSize} onPageChange={setPage} disabled={refreshing} label="requests" /></div>}
+          </>}
+        </section>
+        <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm shadow-slate-200/50 xl:sticky xl:top-4">
+          <div className="border-b border-slate-100 px-4 py-3"><div className="flex items-center justify-between gap-3"><div><h2 className="font-bold text-slate-900">Approval decision</h2><p className="text-xs text-slate-500">Review the selected request and balance impact</p></div><span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">{selected.length} selected</span></div></div>
+          <div className="p-4">
           {focus ? (
             <>
-              <div className="rounded-xl bg-slate-50 p-4">
-                <h3 className="font-bold">{focus.adjustmentNumber}</h3>
-                <p className="text-sm">
-                  {focus.bill.billNumber} · {focus.bill.account.accountNumber}
-                </p>
-                <div className="mt-3 text-2xl font-bold text-aqua-700">
-                  {money(focus.amount)}
-                </div>
-                <div className="mt-3 text-sm">
-                  <strong>Reason:</strong> {focus.reason}
-                </div>
-                <div className="mt-2 text-sm">
-                  <strong>Requested by:</strong> {person(focus.requester)}
-                </div>
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm">
+                <div className="flex items-start justify-between gap-3"><div><h3 className="font-bold text-slate-900">{focus.adjustmentNumber}</h3><p className="mt-0.5 text-xs text-slate-500">Requested {date(focus.createdAt)}</p></div><span className={`rounded-full px-2.5 py-1 text-xs font-bold ${["CREDIT_NOTE", "CANCELLATION"].includes(focus.adjustmentType) ? "bg-emerald-50 text-emerald-700" : "bg-orange-50 text-orange-700"}`}>{pretty(focus.adjustmentType)}</span></div>
+                <div className="mt-3 border-t border-slate-200 pt-3"><div className="font-semibold text-slate-800">{focus.bill.billNumber}</div><div className="text-xs text-slate-500">{focus.bill.account.accountNumber} · {accountCustomerName(focus.bill.account)}</div></div>
+                <div className="mt-3 grid grid-cols-2 gap-2"><div className="rounded-lg border border-slate-200 bg-white p-2.5"><div className="text-xs text-slate-500">Current total due</div><div className="mt-0.5 font-bold text-slate-800">{money(focus.bill.totalAmountDue)}</div></div><div className={`rounded-lg border p-2.5 ${signedImpact < 0 ? "border-emerald-100 bg-emerald-50" : "border-orange-100 bg-orange-50"}`}><div className="text-xs text-slate-500">After approval</div><div className={`mt-0.5 font-bold ${signedImpact < 0 ? "text-emerald-700" : "text-orange-700"}`}>{money(projectedBillTotal)}</div></div></div>
+                <div className="mt-3 flex items-center justify-between border-b border-slate-200 pb-3"><span className="text-xs font-semibold text-slate-500">Adjustment amount</span><span className={`text-xl font-extrabold ${signedImpact < 0 ? "text-emerald-700" : "text-orange-700"}`}>{signedImpact < 0 ? "−" : "+"}{money(Math.abs(signedImpact))}</span></div>
+                <dl className="mt-3 space-y-2"><div><dt className="text-[11px] font-bold uppercase tracking-wide text-slate-400">Reason</dt><dd className="mt-0.5 leading-5 text-slate-700">{focus.reason}</dd></div><div><dt className="text-[11px] font-bold uppercase tracking-wide text-slate-400">Requested by</dt><dd className="mt-0.5 text-slate-700">{person(focus.requester)}</dd></div></dl>
               </div>
               <Field label="Decision comments" required>
                 <textarea
@@ -4001,38 +4271,38 @@ export function BillingAdjustmentApprovals() {
                   className={`${INPUT} mt-3`}
                   value={comments}
                   onChange={(e) => setComments(e.target.value)}
+                  placeholder="Add a clear reason for this decision"
                 />
               </Field>
-              <div className="mt-3 flex justify-end gap-2">
+              <div className="mt-3 grid grid-cols-3 gap-2">
                 <Button
-                  disabled={decisionDisabled}
+                  disabled={decisionDisabled || Boolean(decisionAction)}
                   tone="red"
                   onClick={() => decide("REJECT")}
                 >
-                  Reject selected
+                  {decisionAction === "REJECT" ? "Rejecting…" : "Reject"}
                 </Button>
                 <Button
-                  disabled={decisionDisabled}
+                  disabled={decisionDisabled || Boolean(decisionAction)}
                   tone="orange"
                   onClick={() => decide("RETURN")}
                 >
-                  Return selected
+                  {decisionAction === "RETURN" ? "Returning…" : "Return"}
                 </Button>
                 <Button
-                  disabled={decisionDisabled}
+                  disabled={decisionDisabled || Boolean(decisionAction)}
                   tone="green"
                   onClick={() => decide("APPROVE")}
                 >
-                  Approve selected
+                  {decisionAction === "APPROVE" ? "Approving…" : "Approve"}
                 </Button>
               </div>
             </>
           ) : (
-            <div className="py-8 text-center text-slate-400">
-              No request selected.
-            </div>
+            <div className="py-12 text-center"><div className="mx-auto grid h-10 w-10 place-items-center rounded-xl bg-slate-100 text-slate-400"><svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M8 4h8M9 2h6v4H9zM6 4h12v17H6zM9 11h6M9 15h4" /></svg></div><div className="mt-2 font-semibold text-slate-700">No request selected</div><div className="mt-0.5 text-sm text-slate-400">Choose Review from the approval queue.</div></div>
           )}
-        </Card>
+          </div>
+        </section>
       </div>
     </Page>
   );
@@ -4624,7 +4894,7 @@ export function BillingHistory() {
       subtitle="Permanent customer billing records across all periods"
       actions={
         <Button
-          tone="green"
+          tone="slate"
           onClick={() =>
             exportExcel(
               "billing-history.xlsx",
@@ -4730,7 +5000,7 @@ export function BillingAudit() {
       subtitle="Creation, generation, approval, posting, notification and adjustment events"
       actions={
         <Button
-          tone="green"
+          tone="slate"
           onClick={() =>
             exportExcel(
               "billing-audit-trail.xlsx",

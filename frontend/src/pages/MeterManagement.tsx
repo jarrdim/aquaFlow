@@ -953,7 +953,7 @@ export function MeterList() {
         )}
         <div className="mt-5 flex flex-wrap gap-3">
           <Button
-            tone="teal"
+            tone="slate"
             onClick={() =>
               exportExcel(
                 "meter-register.xlsx",
@@ -3660,7 +3660,7 @@ export function MeterHistory() {
       actions={
         <>
           <Button
-            tone="teal"
+            tone="slate"
             onClick={() =>
               exportExcel("meter-history.xlsx", "Meter History", events)
             }
@@ -4114,7 +4114,7 @@ export function ExceptionReport({ alerts = false }: { alerts?: boolean }) {
             </Button>
           )}
           <Button
-            tone="teal"
+            tone="slate"
             onClick={() =>
               exportExcel(
                 alerts ? "meter-alerts.xlsx" : "meter-exception-report.xlsx",
@@ -4311,7 +4311,7 @@ export function BulkMeterImport() {
                   Download the approved import template.
                 </div>
               </div>
-              <Button type="button" tone="teal" onClick={template}>
+              <Button type="button" tone="slate" onClick={template}>
                 Download template
               </Button>
             </div>
@@ -4385,7 +4385,7 @@ export function BulkMeterImport() {
               </Button>
               {errors.length > 0 && (
                 <Button
-                  tone="orange"
+                  tone="slate"
                   onClick={() =>
                     exportExcel(
                       "meter-import-errors.xlsx",
@@ -4483,7 +4483,7 @@ export function BulkMeterAssignmentImport() {
       <section className="mx-auto max-w-5xl rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div><h2 className="font-bold text-slate-900">Assignment workbook</h2><p className="mt-1 text-sm text-slate-500">Import customers, properties, accounts and meters before running this step.</p></div>
-          <Button tone="teal" onClick={() => exportExcel("meter-assignment-import-template.xlsx", "Assignments", [{ meterNumber: "MTR-2026-00001", accountNumber: "ACC-00001", assignmentDate: new Date().toISOString().slice(0, 10), installationPoint: "Plot 1", installationStatus: "COMPLETED", remarks: "" }])}>Download template</Button>
+          <Button tone="slate" onClick={() => exportExcel("meter-assignment-import-template.xlsx", "Assignments", [{ meterNumber: "MTR-2026-00001", accountNumber: "ACC-00001", assignmentDate: new Date().toISOString().slice(0, 10), installationPoint: "Plot 1", installationStatus: "COMPLETED", remarks: "" }])}>Download template</Button>
         </div>
         <label className="mt-5 block rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 p-8 text-center">
           <span className="block font-bold text-slate-800">{fileName || "Choose assignment Excel or CSV file"}</span>

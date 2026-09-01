@@ -3018,7 +3018,7 @@ export function ReadingWorklist() {
               </Button>
               {bulkErrors.length > 0 && (
                 <Button
-                  tone="orange"
+                  tone="slate"
                   disabled={Boolean(operation)}
                   onClick={() =>
                     exportExcel(
@@ -4048,7 +4048,7 @@ export function ReadingRegister({
       }
       actions={
         <Button
-          tone="green"
+          tone="slate"
           onClick={() =>
             exportExcel(
               exceptions ? "reading-exceptions.xlsx" : "meter-readings.xlsx",
@@ -4647,7 +4647,7 @@ export function ReadingProgress() {
       subtitle="Monitor assigned readers, unread meters and route-level progress"
       actions={
         <Button
-          tone="green"
+          tone="slate"
           disabled={loading || !filteredRows.length}
           onClick={() =>
             exportExcel(
@@ -5003,7 +5003,7 @@ export function BulkCurrentReadingImport() {
             </div>
             <p className="mt-1 text-sm text-slate-500">Meters, customer accounts and assignments must be imported first.</p>
           </div>
-          <button type="button" className="rounded-lg bg-aqua-700 px-4 py-2 text-sm font-bold text-white" onClick={() => exportExcel("current-reading-import-template.xlsx", "Current Readings", [{ meterNumber: "MTR-2026-00001", accountNumber: "ACC-00001", cycleCode: "RC-2026-07", cycleStartDate: "2026-07-01", cycleEndDate: "2026-08-04", previousReading: 100, currentReading: 110, readingDate: "2026-07-31" }])}>Download template</button>
+          <button type="button" className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50" onClick={() => exportExcel("current-reading-import-template.xlsx", "Current Readings", [{ meterNumber: "MTR-2026-00001", accountNumber: "ACC-00001", cycleCode: "RC-2026-07", cycleStartDate: "2026-07-01", cycleEndDate: "2026-08-04", previousReading: 100, currentReading: 110, readingDate: "2026-07-31" }])}>Download template</button>
         </div>
         <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
           <p className="font-bold">Do not use this page for routine monthly meter reading.</p>

@@ -249,9 +249,9 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ reason }),
     }),
-  listAccounts: (search = "", take = 8) =>
+  listAccounts: (search = "", take = 8, accountId = "") =>
     request(
-      `/accounts?search=${encodeURIComponent(search)}&take=${encodeURIComponent(String(take))}`,
+      `/accounts?search=${encodeURIComponent(search)}&take=${encodeURIComponent(String(take))}${accountId ? `&accountId=${encodeURIComponent(accountId)}` : ""}`,
     ),
 
   meterDashboard: (filters: Record<string, string> = {}) => {

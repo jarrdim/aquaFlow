@@ -286,7 +286,7 @@ export default function Reports() {
                     incomeRows,
                   )
                 }
-                className="mt-5 h-10 rounded-lg border border-emerald-300 px-5 text-sm font-bold text-emerald-700 disabled:opacity-50"
+                className="mt-5 h-10 rounded-lg border border-slate-300 bg-white px-5 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
               >
                 Export Excel
               </button>
@@ -436,7 +436,7 @@ export default function Reports() {
                     meterRows,
                   )
                 }
-                className="h-10 rounded-lg border border-emerald-300 px-5 text-sm font-bold text-emerald-700 disabled:opacity-50"
+                className="h-10 rounded-lg border border-slate-300 bg-white px-5 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
               >
                 Export filtered meters
               </button>

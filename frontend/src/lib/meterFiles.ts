@@ -51,11 +51,6 @@ export async function exportExcel(
   }));
   rows.forEach((row) => sheet.addRow(row));
   sheet.getRow(1).font = { bold: true };
-  sheet.getRow(1).fill = {
-    type: "pattern",
-    pattern: "solid",
-    fgColor: { argb: "FFE8F1FB" },
-  };
   sheet.autoFilter = {
     from: { row: 1, column: 1 },
     to: { row: 1, column: headers.length },
@@ -146,7 +141,7 @@ export async function exportMeterReadingZoneWorkbook(
     sheet.mergeCells("A1:F2");
     const title = sheet.getCell("A1");
     title.value = `SAMDAMTE WATER\nREADING SHEETS FOR ${group.readingCycle.toUpperCase()}`;
-    title.font = { bold: true, size: 18, color: { argb: "FF0B3A6E" } };
+    title.font = { bold: true, size: 18 };
     title.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
     sheet.getRow(1).height = 25;
     sheet.getRow(2).height = 25;
@@ -166,11 +161,11 @@ export async function exportMeterReadingZoneWorkbook(
       sheet.mergeCells(rowNumber, valueStart, rowNumber, valueEnd);
       const labelCell = sheet.getCell(rowNumber, startColumn);
       labelCell.value = label;
-      labelCell.font = { bold: true, size: 9, color: { argb: "FF64748B" } };
+      labelCell.font = { bold: true, size: 9 };
       labelCell.alignment = { horizontal: "center", vertical: "middle" };
       const valueCell = sheet.getCell(rowNumber, valueStart);
       valueCell.value = value;
-      valueCell.font = { bold: true, size: 10, color: { argb: "FF0F172A" } };
+      valueCell.font = { bold: true, size: 10 };
       valueCell.alignment = {
         horizontal: "center",
         vertical: "middle",
@@ -181,12 +176,7 @@ export async function exportMeterReadingZoneWorkbook(
     const headerRow = sheet.getRow(7);
     headerRow.values = sheet.columns.map((column) => column.key);
     headerRow.height = 28;
-    headerRow.font = { bold: true, size: 9, color: { argb: "FFFFFFFF" } };
-    headerRow.fill = {
-      type: "pattern",
-      pattern: "solid",
-      fgColor: { argb: "FF075985" },
-    };
+    headerRow.font = { bold: true, size: 9 };
     headerRow.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
 
     group.rows.forEach((row, index) => {
@@ -207,13 +197,6 @@ export async function exportMeterReadingZoneWorkbook(
         wrapText: true,
       };
       excelRow.height = 13;
-      if (index % 2 === 1) {
-        excelRow.fill = {
-          type: "pattern",
-          pattern: "solid",
-          fgColor: { argb: "FFF4F9FC" },
-        };
-      }
       if ((index + 1) % 48 === 0 && index + 1 < group.rows.length) {
         excelRow.addPageBreak();
       }
@@ -222,10 +205,10 @@ export async function exportMeterReadingZoneWorkbook(
       if (rowNumber < 7) return;
       row.eachCell((cell) => {
         cell.border = {
-          top: { style: "thin", color: { argb: "FFD6E3EE" } },
-          left: { style: "thin", color: { argb: "FFD6E3EE" } },
-          bottom: { style: "thin", color: { argb: "FFD6E3EE" } },
-          right: { style: "thin", color: { argb: "FFD6E3EE" } },
+          top: { style: "thin", color: { argb: "FFBFBFBF" } },
+          left: { style: "thin", color: { argb: "FFBFBFBF" } },
+          bottom: { style: "thin", color: { argb: "FFBFBFBF" } },
+          right: { style: "thin", color: { argb: "FFBFBFBF" } },
         };
       });
     });
@@ -247,7 +230,7 @@ export async function exportMeterReadingZoneWorkbook(
 export async function exportMeterReadingZonePdf(
   filename: string,
   zoneSheets: MeterReadingZoneSheet[],
-  logoUrl = "/samdamte-water-logo-print.png",
+  _logoUrl = "/samdamte-water-logo-print.png",
   printedBy = "Signed-in user",
 ) {
   if (!zoneSheets.length) return;
@@ -258,12 +241,6 @@ export async function exportMeterReadingZonePdf(
   pdf.setSubject("Meter reading worklist by zone");
   const regular = await pdf.embedFont(StandardFonts.Helvetica);
   const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
-  let logo: Awaited<ReturnType<typeof pdf.embedPng>> | undefined;
-  try {
-    logo = await pdf.embedPng(await (await fetch(logoUrl)).arrayBuffer());
-  } catch {
-    // A readable branded text header remains when the logo is unavailable.
-  }
 
   // A4 portrait gives the 48-record field sheet a larger on-screen type size.
   const pageWidth = 595.28;
@@ -301,28 +278,17 @@ export async function exportMeterReadingZonePdf(
     );
     chunks.forEach((rows, chunkIndex) => {
       const page = pdf.addPage([pageWidth, pageHeight]);
-      const navy = rgb(0.03, 0.29, 0.51);
-      const ink = rgb(0.06, 0.12, 0.22);
-      const muted = rgb(0.38, 0.46, 0.56);
-      const border = rgb(0.82, 0.87, 0.92);
-      const pale = rgb(0.95, 0.98, 1);
-
-      if (logo) {
-        const scaled = logo.scaleToFit(86, 44);
-        page.drawImage(logo, {
-          x: (pageWidth - scaled.width) / 2,
-          y: pageHeight - margin - scaled.height,
-          width: scaled.width,
-          height: scaled.height,
-        });
-      }
+      const ink = rgb(0, 0, 0);
+      const muted = rgb(0.3, 0.3, 0.3);
+      const border = rgb(0.65, 0.65, 0.65);
+      const paper = rgb(1, 1, 1);
       const brandTitle = "SAMDAMTE WATER";
       page.drawText(brandTitle, {
         x: (pageWidth - bold.widthOfTextAtSize(brandTitle, 16)) / 2,
         y: pageHeight - 82,
         size: 14,
         font: bold,
-        color: navy,
+        color: ink,
       });
       const title = `READING SHEETS FOR ${group.readingCycle.toUpperCase()}`;
       const fittedTitle = fit(title, 500, 12, bold);
@@ -352,7 +318,7 @@ export async function exportMeterReadingZonePdf(
       const metaWidth = tableWidth / 3;
       meta.forEach(([label, value], index) => {
         const x = margin + index * metaWidth;
-        page.drawRectangle({ x, y: metaY, width: metaWidth - 8, height: 34, color: pale, borderColor: border, borderWidth: 0.6 });
+        page.drawRectangle({ x, y: metaY, width: metaWidth - 8, height: 34, color: paper, borderColor: border, borderWidth: 0.6 });
         const fittedLabel = fit(label, metaWidth - 24, 7, bold);
         const fittedValue = fit(value, metaWidth - 24, 9, bold);
         page.drawText(fittedLabel, {
@@ -376,10 +342,10 @@ export async function exportMeterReadingZonePdf(
       const rowHeight = 13;
       let x = margin;
       columns.forEach((column) => {
-        page.drawRectangle({ x, y: headerY, width: column.width, height: headerHeight, color: navy, borderColor: rgb(1, 1, 1), borderWidth: 0.35 });
+        page.drawRectangle({ x, y: headerY, width: column.width, height: headerHeight, color: paper, borderColor: ink, borderWidth: 0.6 });
         const label = fit(column.label, column.width - 6, 7.3, bold);
         const labelWidth = bold.widthOfTextAtSize(label, 7.3);
-        page.drawText(label, { x: x + Math.max(3, (column.width - labelWidth) / 2), y: headerY + 7.2, size: 7.3, font: bold, color: rgb(1, 1, 1) });
+        page.drawText(label, { x: x + Math.max(3, (column.width - labelWidth) / 2), y: headerY + 7.2, size: 7.3, font: bold, color: ink });
         x += column.width;
       });
 
@@ -388,7 +354,7 @@ export async function exportMeterReadingZonePdf(
         x = margin;
         const serialNumber = chunkIndex * rowsPerPage + rowIndex + 1;
         columns.forEach((column, columnIndex) => {
-          page.drawRectangle({ x, y, width: column.width, height: rowHeight, color: rowIndex % 2 ? pale : rgb(1, 1, 1), borderColor: border, borderWidth: 0.5 });
+          page.drawRectangle({ x, y, width: column.width, height: rowHeight, color: paper, borderColor: border, borderWidth: 0.5 });
           const value = columnIndex === 0 ? serialNumber : row[column.key];
           const rendered = fit(value, column.width - 8, 8);
           const valueWidth = regular.widthOfTextAtSize(rendered, 8);

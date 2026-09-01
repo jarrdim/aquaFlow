@@ -431,7 +431,7 @@ export function TariffRegister() {
       actions={
         <>
           <Button
-            tone="green"
+            tone="slate"
             onClick={() =>
               exportExcel(
                 "tariff-register.xlsx",
@@ -1199,7 +1199,7 @@ export function TariffSimulation() {
               )}
               <div className="mt-4 flex justify-end gap-2">
                 <Button
-                  tone="green"
+                  tone="slate"
                   onClick={() =>
                     exportExcel("tariff-simulation.xlsx", "Simulation", [
                       {
@@ -1787,7 +1787,7 @@ export function TariffHistory() {
       subtitle="Review every tariff version retained for a customer category"
       actions={
         <Button
-          tone="green"
+          tone="slate"
           onClick={() =>
             exportExcel(
               "tariff-history.xlsx",
@@ -1907,7 +1907,7 @@ export function TariffComparison() {
       subtitle="Compare rates and percentage changes across tariff versions"
       actions={
         <Button
-          tone="green"
+          tone="slate"
           disabled={!comparisons.length}
           onClick={() =>
             exportExcel("tariff-comparison.xlsx", "Comparison", comparisons)
@@ -2026,7 +2026,7 @@ export function TariffAudit() {
       subtitle="Permanent record of creation, simulation, approval and activation"
       actions={
         <Button
-          tone="green"
+          tone="slate"
           disabled={!tariff?.events?.length}
           onClick={() =>
             exportExcel(

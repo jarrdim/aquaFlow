@@ -389,11 +389,22 @@ accountsRouter.post("/bulk-import", async (req, res, next) => {
 accountsRouter.get("/", async (req, res, next) => {
   try {
     const search = String(req.query.search ?? "").trim();
+    const requestedAccountId = String(req.query.accountId ?? "").trim();
+    let accountId: bigint | undefined;
+    if (requestedAccountId) {
+      try {
+        accountId = BigInt(requestedAccountId);
+      } catch {
+        return res.status(400).json({ error: "Invalid account id" });
+      }
+    }
     // Larger callers such as Customer Statements need the complete account
     // directory; compact autocomplete callers retain their small default.
     const take = Math.min(20_000, Math.max(1, Number(req.query.take) || 8));
     const accounts = await prisma.customerAccount.findMany({
-      where: search
+      where: accountId
+        ? { accountId }
+        : search
         ? {
             OR: [
               {

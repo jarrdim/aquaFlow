@@ -1,7 +1,5 @@
 import { Request, Response, Router } from "express";
 import { Prisma } from "@prisma/client";
-import { existsSync } from "fs";
-import path from "path";
 import PDFDocument from "pdfkit";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
@@ -1023,15 +1021,14 @@ function statementPdf(data: CustomerStatementData & { printedAt: Date }) {
     const chunks: Buffer[] = [];
     const money = (value: number) =>
       `KSh ${value.toLocaleString("en-KE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-    const logoPath = path.resolve(__dirname, "../../assets/samdamte-water-logo-print.png");
     const labelValue = (label: string, value: string, x: number, y: number, width = 225) => {
-      doc.font("Helvetica-Bold").fontSize(8.5).fillColor("#132036").text(label, x, y, { width: 75 });
+      doc.font("Helvetica-Bold").fontSize(8.5).fillColor("#000000").text(label, x, y, { width: 75 });
       doc.font("Helvetica").text(value || "-", x + 78, y, { width: width - 78 });
     };
     const drawTableHeader = () => {
       const y = doc.y;
-      doc.rect(42, y, 511, 20).fill("#1262B3");
-      doc.font("Helvetica-Bold").fontSize(7.5).fillColor("#FFFFFF");
+      doc.rect(42, y, 511, 20).lineWidth(0.8).stroke("#000000");
+      doc.font("Helvetica-Bold").fontSize(7.5).fillColor("#000000");
       doc.text("Date", 47, y + 6, { width: 55 });
       doc.text("Particulars / Reference", 105, y + 6, { width: 166 });
       doc.text("Period", 274, y + 6, { width: 55 });
@@ -1045,22 +1042,18 @@ function statementPdf(data: CustomerStatementData & { printedAt: Date }) {
     doc.on("error", reject);
     doc.on("end", () => resolve(Buffer.concat(chunks)));
 
-    if (existsSync(logoPath)) {
-      doc.image(logoPath, 42, 38, { fit: [260, 78], valign: "center" });
-    } else {
-      doc.fillColor("#1262B3").font("Helvetica-Bold").fontSize(20).text(data.utility.name, 42, 52);
-    }
+    doc.fillColor("#000000").font("Helvetica-Bold").fontSize(20).text(data.utility.name, 42, 52);
     const contactX = 340;
-    doc.font("Helvetica").fontSize(8.5).fillColor("#132036");
+    doc.font("Helvetica").fontSize(8.5).fillColor("#000000");
     const phones = [data.utility.phone, data.utility.secondaryPhone].filter(Boolean).join(" / ");
     doc.text(`Tel: ${phones || "-"}`, contactX, 42, { width: 213 });
     doc.text(`Email: ${data.utility.email || "-"}`, contactX, 57, { width: 213 });
     doc.text(`Address: ${data.utility.address || "-"}`, contactX, 72, { width: 213 });
-    doc.fillColor("#60708A").fontSize(7.5)
+    doc.fillColor("#555555").fontSize(7.5)
       .text(`Printed: ${data.printedAt.toLocaleString("en-KE", { timeZone: "Africa/Nairobi" })}`, contactX, 96, { width: 213 });
-    doc.strokeColor("#1262B3").lineWidth(2).moveTo(42, 122).lineTo(553, 122).stroke();
+    doc.strokeColor("#000000").lineWidth(2).moveTo(42, 122).lineTo(553, 122).stroke();
 
-    doc.fillColor("#132036").font("Helvetica-Bold").fontSize(16)
+    doc.fillColor("#000000").font("Helvetica-Bold").fontSize(16)
       .text("ACCOUNT STATEMENT", 42, 138, { width: 511, align: "center" });
     const leftX = 42;
     const rightX = 310;
@@ -1080,26 +1073,26 @@ function statementPdf(data: CustomerStatementData & { printedAt: Date }) {
     labelValue("Meter number:", data.account.meterNumber || "-", leftX, detailsY, 245);
 
     const periodY = detailsY + 24;
-    doc.strokeColor("#DCE4EF").lineWidth(0.7).moveTo(42, periodY - 6).lineTo(553, periodY - 6).stroke();
-    doc.font("Helvetica-Bold").fontSize(8.5).fillColor("#132036")
+    doc.strokeColor("#BFBFBF").lineWidth(0.7).moveTo(42, periodY - 6).lineTo(553, periodY - 6).stroke();
+    doc.font("Helvetica-Bold").fontSize(8.5).fillColor("#000000")
       .text("Statement period:", 42, periodY, { continued: true })
       .font("Helvetica").text(` ${data.from} - ${data.to}`);
     if (data.account.address) {
       doc.font("Helvetica-Bold").text("Service address:", 310, periodY, { continued: true })
         .font("Helvetica").text(` ${data.account.address}`, { width: 243 });
     }
-    doc.strokeColor("#DCE4EF").moveTo(42, periodY + 16).lineTo(553, periodY + 16).stroke();
+    doc.strokeColor("#BFBFBF").moveTo(42, periodY + 16).lineTo(553, periodY + 16).stroke();
     doc.y = periodY + 28;
 
     drawTableHeader();
     const openingY = doc.y;
-    doc.font("Helvetica-Bold").fontSize(8).fillColor("#132036")
+    doc.font("Helvetica-Bold").fontSize(8).fillColor("#000000")
       .text("Opening balance", 105, openingY + 5, { width: 224 });
     doc.text(money(data.openingBalance), 468, openingY + 5, { width: 80, align: "right" });
-    doc.strokeColor("#B9C6D8").moveTo(42, openingY + 23).lineTo(553, openingY + 23).stroke();
+    doc.strokeColor("#AFAFAF").moveTo(42, openingY + 23).lineTo(553, openingY + 23).stroke();
     doc.y = openingY + 27;
     if (!data.entries.length) {
-      doc.fillColor("#60708A").font("Helvetica-Oblique").fontSize(9)
+      doc.fillColor("#555555").font("Helvetica-Oblique").fontSize(9)
         .text("No posted bills or payments in this period.", 47, doc.y, { width: 500 });
       doc.moveDown(1.5);
     } else {
@@ -1111,33 +1104,33 @@ function statementPdf(data: CustomerStatementData & { printedAt: Date }) {
         const y = doc.y;
         const particulars = `${entry.particulars}\n${entry.reference}`;
         const rowHeight = Math.max(30, doc.heightOfString(`${particulars}\n${entry.details}`, { width: 162 }) + 8);
-        doc.fillColor("#132036").font("Helvetica").fontSize(8);
+        doc.fillColor("#000000").font("Helvetica").fontSize(8);
         doc.text(entry.date.toISOString().slice(0, 10), 47, y + 5, { width: 55 });
         doc.font("Helvetica-Bold").text(entry.particulars, 105, y + 5, { width: 166 });
-        doc.font("Helvetica").fontSize(7).fillColor("#60708A")
+        doc.font("Helvetica").fontSize(7).fillColor("#555555")
           .text(entry.reference, 105, y + 15, { width: 166 })
           .text(entry.details, 105, y + 24, { width: 166 });
-        doc.fontSize(8).fillColor("#132036").text(entry.period || "-", 274, y + 5, { width: 55 });
+        doc.fontSize(8).fillColor("#000000").text(entry.period || "-", 274, y + 5, { width: 55 });
         doc.text(entry.credit ? money(entry.credit) : "-", 332, y + 5, { width: 65, align: "right" });
         doc.text(entry.debit ? money(entry.debit) : "-", 400, y + 5, { width: 65, align: "right" });
         doc.font("Helvetica-Bold").text(money(entry.balance), 468, y + 5, { width: 80, align: "right" });
-        doc.strokeColor("#DCE4EF").moveTo(42, y + rowHeight).lineTo(553, y + rowHeight).stroke();
+        doc.strokeColor("#BFBFBF").moveTo(42, y + rowHeight).lineTo(553, y + rowHeight).stroke();
         doc.y = y + rowHeight + 3;
       }
     }
 
     if (doc.y > 700) doc.addPage();
     const totalsY = doc.y + 6;
-    doc.strokeColor("#132036").lineWidth(1.2).moveTo(42, totalsY).lineTo(553, totalsY).stroke();
-    doc.font("Helvetica-Bold").fontSize(8.5).fillColor("#132036");
+    doc.strokeColor("#000000").lineWidth(1.2).moveTo(42, totalsY).lineTo(553, totalsY).stroke();
+    doc.font("Helvetica-Bold").fontSize(8.5).fillColor("#000000");
     doc.text("Total", 274, totalsY + 7, { width: 55, align: "right" });
     doc.text(money(data.totalPayments), 332, totalsY + 7, { width: 65, align: "right" });
     doc.text(money(data.totalBills), 400, totalsY + 7, { width: 65, align: "right" });
     doc.text(money(data.closingBalance), 468, totalsY + 7, { width: 80, align: "right" });
     doc.y = totalsY + 38;
-    doc.strokeColor("#132036").lineWidth(1.2).moveTo(330, doc.y).lineTo(553, doc.y).stroke();
+    doc.strokeColor("#000000").lineWidth(1.2).moveTo(330, doc.y).lineTo(553, doc.y).stroke();
     const balanceForwardY = doc.y + 8;
-    doc.font("Helvetica-Bold").fontSize(11).fillColor("#132036");
+    doc.font("Helvetica-Bold").fontSize(11).fillColor("#000000");
     doc.text("Balance B/F", 330, balanceForwardY, { width: 100, lineBreak: false });
     doc.text(money(data.closingBalance), 433, balanceForwardY, {
       width: 115,
@@ -1145,7 +1138,7 @@ function statementPdf(data: CustomerStatementData & { printedAt: Date }) {
       lineBreak: false,
     });
     doc.y = balanceForwardY + 30;
-    doc.font("Helvetica-Oblique").fontSize(8).fillColor("#60708A")
+    doc.font("Helvetica-Oblique").fontSize(8).fillColor("#555555")
       .text("Positive balances are amounts owed. Negative balances represent customer credit.");
 
     doc.end();
