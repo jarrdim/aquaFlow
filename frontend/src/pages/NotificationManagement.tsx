@@ -241,6 +241,56 @@ function ChannelVolumeChart({ rows }: { rows: Row[] }) {
   );
 }
 
+function ChannelDeliveryStats({ rows }: { rows: Row[] }) {
+  const channels = ["SMS", "PUSH"].map((channel) =>
+    rows.find((row) => row.channel === channel) ?? {
+      channel,
+      count: 0,
+      queued: 0,
+      sent: 0,
+      delivered: 0,
+      failed: 0,
+    },
+  );
+  const statuses = [
+    ["Queued", "queued", "text-amber-600", "bg-amber-50"],
+    ["Sent", "sent", "text-blue-600", "bg-blue-50"],
+    ["Delivered", "delivered", "text-emerald-600", "bg-emerald-50"],
+    ["Failed", "failed", "text-red-600", "bg-red-50"],
+  ];
+  return (
+    <div className="mt-4 grid gap-4 lg:grid-cols-2">
+      {channels.map((channel) => (
+        <Card key={channel.channel}>
+          <div className="mb-4 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <span className={`grid h-11 w-11 place-items-center rounded-xl text-sm font-extrabold ${channel.channel === "SMS" ? "bg-blue-50 text-blue-700" : "bg-violet-50 text-violet-700"}`}>
+                {channel.channel}
+              </span>
+              <div>
+                <div className="font-bold text-slate-900">{channel.channel} notifications</div>
+                <div className="text-xs text-slate-500">Delivery outcome by channel</div>
+              </div>
+            </div>
+            <div className="text-right">
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">Total</div>
+              <div className="text-2xl font-extrabold text-slate-900">{Number(channel.count).toLocaleString()}</div>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {statuses.map(([label, key, color, background]) => (
+              <div key={key} className={`rounded-xl px-3 py-3 ${background}`}>
+                <div className="text-xs font-medium text-slate-500">{label}</div>
+                <div className={`mt-1 text-xl font-bold ${color}`}>{Number(channel[key]).toLocaleString()}</div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      ))}
+    </div>
+  );
+}
+
 export function NotificationDashboard() {
   const [data, setData] = useState<Row>({});
   const [error, setError] = useState("");
@@ -271,6 +321,7 @@ export function NotificationDashboard() {
           </Card>
         ))}
       </div>
+      <ChannelDeliveryStats rows={data.byChannel ?? []} />
       <div className="mt-4 grid gap-4 xl:grid-cols-[2fr_1fr]">
         <Card title="Recent notification activity">
           <NotificationTable rows={data.recent ?? []} compact />

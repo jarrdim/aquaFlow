@@ -666,10 +666,35 @@ notificationsRouter.get("/dashboard", async (_req, res, next) => {
           take: 8,
         }),
         prisma.notification.groupBy({
-          by: ["channel"],
+          by: ["channel", "deliveryStatus"],
           _count: { _all: true },
         }),
       ]);
+    const channelStats = new Map<string, {
+      channel: string;
+      count: number;
+      queued: number;
+      sent: number;
+      delivered: number;
+      failed: number;
+    }>();
+    for (const row of groups) {
+      const stats = channelStats.get(row.channel) ?? {
+        channel: row.channel,
+        count: 0,
+        queued: 0,
+        sent: 0,
+        delivered: 0,
+        failed: 0,
+      };
+      const count = row._count._all;
+      stats.count += count;
+      if (row.deliveryStatus === "QUEUED") stats.queued += count;
+      else if (row.deliveryStatus === "SENT") stats.sent += count;
+      else if (row.deliveryStatus === "DELIVERED") stats.delivered += count;
+      else if (row.deliveryStatus === "FAILED") stats.failed += count;
+      channelStats.set(row.channel, stats);
+    }
     res.json({
       total,
       queued,
@@ -677,10 +702,12 @@ notificationsRouter.get("/dashboard", async (_req, res, next) => {
       delivered,
       failed,
       recent,
-      byChannel: groups.map((row) => ({
-        channel: row.channel,
-        count: row._count._all,
-      })),
+      byChannel: [...channelStats.values()].sort((a, b) => {
+        const order = ["SMS", "PUSH"];
+        const left = order.indexOf(a.channel);
+        const right = order.indexOf(b.channel);
+        return (left === -1 ? order.length : left) - (right === -1 ? order.length : right) || a.channel.localeCompare(b.channel);
+      }),
     });
   } catch (error) {
     next(error);
