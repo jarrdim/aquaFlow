@@ -72,6 +72,9 @@ import {
   BillApprovals,
   BillGeneration,
   BillInvoice,
+  IndividualBillingWorkspace,
+  AccountAdjustmentApprovals,
+  AccountAdjustments,
   BillingAdjustmentApprovals,
   BillingAdjustments,
   BillingAudit,
@@ -360,16 +363,25 @@ const BILLING_MENU = [
   ["Billing Dashboard", "/billing"],
   ["Billing Periods", "/billing/periods"],
   ["Generate Bills", "/billing/generate"],
+  ["Individual Billing", "/billing/individual"],
   ["Bill Approval", "/billing/approvals"],
   ["Invoices", "/billing/invoices"],
   ["Send Bills", "/billing/notifications"],
   ["Customer Statements", "/billing/statements"],
-  ["Adjustment Requests", "/billing/adjustments"],
-  ["Adjustment Approval", "/billing/adjustments/approvals"],
+  ["Bill Adjustments", "/billing/adjustments"],
+  ["Bill Adjustment Approvals", "/billing/adjustments/approvals"],
+  ["Account Adjustments", "/billing/account-adjustments"],
+  ["Account Adjustment Approvals", "/billing/account-adjustments/approvals"],
   ["Security Alerts", "/billing/alerts"],
   ["Billing History", "/billing/history"],
   ["Billing Audit Trail", "/billing/audit"],
 ] as const;
+
+const NEW_SIDEBAR_ROUTES = new Set([
+  "/billing/individual",
+  "/billing/account-adjustments",
+  "/billing/account-adjustments/approvals",
+]);
 
 const PAYMENT_MENU = [
   ["Revenue Dashboard", "/payments"],
@@ -715,12 +727,18 @@ function Shell({ children }: { children: React.ReactNode }) {
     let active = true;
     async function refreshSidebarCounts() {
       try {
-        const reversals = await api.listPaymentReversals("PENDING");
+        const [reversals, accountAdjustments] = await Promise.all([
+          api.listPaymentReversals("PENDING"),
+          api.listAccountAdjustments("PENDING"),
+        ]);
         if (active) {
           setSidebarCounts((current) => ({
             ...current,
             "/payments/reversals/approvals": Array.isArray(reversals)
               ? reversals.length
+              : 0,
+            "/billing/account-adjustments/approvals": Array.isArray(accountAdjustments)
+              ? accountAdjustments.length
               : 0,
           }));
         }
@@ -959,13 +977,23 @@ function Shell({ children }: { children: React.ReactNode }) {
                         <Link
                           key={itemPath}
                           to={itemPath}
-                          className={`block rounded px-2 py-1.5 text-xs font-medium transition-colors ${
+                          className={`flex items-center justify-between gap-2 rounded px-2 py-1.5 text-xs font-medium transition-colors ${
                             itemActive
                               ? "bg-white/10 text-white"
                               : "text-blue-100/50 hover:bg-white/5 hover:text-white"
                           }`}
                         >
-                          {itemLabel}
+                          <span className="min-w-0 truncate">{itemLabel}</span>
+                          {NEW_SIDEBAR_ROUTES.has(itemPath) && (
+                            <span className="shrink-0 rounded-full border border-cyan-300/30 bg-cyan-400/15 px-1.5 py-0.5 text-[9px] font-extrabold uppercase leading-none tracking-wide text-cyan-200">
+                              New
+                            </span>
+                          )}
+                          {(sidebarCounts[itemPath] ?? 0) > 0 && (
+                            <span className="min-w-5 shrink-0 rounded-full bg-amber-400 px-1.5 py-0.5 text-center text-[10px] font-extrabold leading-none text-amber-950">
+                              {sidebarCounts[itemPath] > 99 ? "99+" : sidebarCounts[itemPath]}
+                            </span>
+                          )}
                         </Link>
                       );
                     })}
@@ -1249,6 +1277,10 @@ function Shell({ children }: { children: React.ReactNode }) {
                       {(sidebarCounts[itemPath] ?? 0) > 0 ? (
                         <span className="min-w-5 shrink-0 rounded-full bg-amber-100 px-1.5 py-0.5 text-center text-[10px] font-extrabold leading-none text-amber-800">
                           {sidebarCounts[itemPath] > 99 ? "99+" : sidebarCounts[itemPath]}
+                        </span>
+                      ) : NEW_SIDEBAR_ROUTES.has(itemPath) ? (
+                        <span className="shrink-0 rounded-full bg-cyan-50 px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wide text-cyan-700">
+                          New
                         </span>
                       ) : itemPath === "/readings/import-current" && (
                         <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wide text-amber-800">
@@ -1688,6 +1720,16 @@ export default function App() {
         }
       />
       <Route
+        path="/billing/individual"
+        element={
+          <Protected>
+            <Shell>
+              <IndividualBillingWorkspace />
+            </Shell>
+          </Protected>
+        }
+      />
+      <Route
         path="/billing/approvals"
         element={
           <Protected>
@@ -1753,6 +1795,26 @@ export default function App() {
           <Protected>
             <Shell>
               <BillingAdjustmentApprovals />
+            </Shell>
+          </Protected>
+        }
+      />
+      <Route
+        path="/billing/account-adjustments"
+        element={
+          <Protected>
+            <Shell>
+              <AccountAdjustments />
+            </Shell>
+          </Protected>
+        }
+      />
+      <Route
+        path="/billing/account-adjustments/approvals"
+        element={
+          <Protected>
+            <Shell>
+              <AccountAdjustmentApprovals />
             </Shell>
           </Protected>
         }

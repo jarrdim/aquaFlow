@@ -1,8 +1,10 @@
-import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, getSessionUser } from "../lib/api";
 import { exportExcel } from "../lib/meterFiles";
 import { SearchableSelect } from "../components/SearchableSelect";
+import { Pagination } from "../components/Pagination";
+import { CheckboxMultiSelect } from "../components/CheckboxMultiSelect";
 import { SweetAlertToast } from "../components/SweetAlertToast";
 import { maskAddress, maskEmail, maskIdentifier, maskName, maskPhone, usePrivacyMode } from "../lib/privacyMode";
 import Swal from "sweetalert2";
@@ -192,7 +194,14 @@ function money(value: any) {
   return `KSh ${Number(value ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 function date(value?: string) {
-  return value ? new Date(value).toLocaleDateString() : "—";
+  return value
+    ? new Date(value).toLocaleDateString("en-GB", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+        timeZone: "UTC",
+      })
+    : "—";
 }
 function dateTime(value?: string) {
   return value ? new Date(value).toLocaleString() : "—";
@@ -564,6 +573,422 @@ export function BillingDashboard() {
           </Card>
         </>
       )}
+    </Page>
+  );
+}
+
+export function IndividualBillingWorkspace() {
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+  const dueDate = new Date(now.getFullYear(), now.getMonth() + 1, 10);
+  const penaltyDate = new Date(now.getFullYear(), now.getMonth() + 1, 15);
+  const iso = (value: Date) => `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
+  const cycleSuffix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const [savedSelection] = useState<{
+    accountIds: string[];
+    readingCycleId: string;
+    billingCycleId: string;
+  }>(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem("aquaflow_individual_billing_selection") ?? "{}");
+      return {
+        accountIds: Array.isArray(stored.accountIds) ? stored.accountIds.map(String) : [],
+        readingCycleId: String(stored.readingCycleId ?? ""),
+        billingCycleId: String(stored.billingCycleId ?? ""),
+      };
+    } catch {
+      return { accountIds: [], readingCycleId: "", billingCycleId: "" };
+    }
+  });
+  const [accounts, setAccounts] = useState<Row[]>([]);
+  const [readingCycles, setReadingCycles] = useState<Row[]>([]);
+  const [billingCycles, setBillingCycles] = useState<Row[]>([]);
+  const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>(savedSelection.accountIds);
+  const [readingCycleId, setReadingCycleId] = useState(savedSelection.readingCycleId);
+  const [billingCycleId, setBillingCycleId] = useState(savedSelection.billingCycleId);
+  const restorePreviewPending = useRef(Boolean(
+    savedSelection.accountIds.length && savedSelection.billingCycleId,
+  ));
+  const [worklist, setWorklist] = useState<Row[]>([]);
+  const [readingValues, setReadingValues] = useState<Record<string, string>>({});
+  const [preview, setPreview] = useState<Row | null>(null);
+  const [bills, setBills] = useState<Row[]>([]);
+  const [showSetup, setShowSetup] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [loadingMeters, setLoadingMeters] = useState(false);
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [readingForm, setReadingForm] = useState<Row>({
+    cycleCode: `RC-${cycleSuffix}`,
+    cycleName: `Meter readings · ${now.toLocaleString(undefined, { month: "long", year: "numeric" })}`,
+    startDate: iso(monthStart), endDate: iso(monthEnd), status: "OPEN", remarks: "Individual billing workspace",
+  });
+  const [billingForm, setBillingForm] = useState<Row>({
+    cycleCode: `BC-${cycleSuffix}`,
+    cycleName: now.toLocaleString(undefined, { month: "long", year: "numeric" }),
+    periodStart: iso(monthStart), periodEnd: iso(monthEnd), dueDate: iso(dueDate), penaltyDate: iso(penaltyDate),
+    frequency: "MONTHLY", status: "OPEN", defaultNotification: "SMS", remarks: "Individual billing workspace",
+  });
+
+  const actor = getSessionUser();
+  const roles = actor?.roles ?? [];
+  const hasRole = (...allowed: string[]) => roles.some((role) => allowed.includes(role));
+  const canCapture = hasRole("SYSTEM_ADMIN", "METER_READER", "METER_SUPERVISOR", "SUPERVISOR");
+  const canManageReadingCycles = hasRole("SYSTEM_ADMIN", "SUPERVISOR", "METER_SUPERVISOR");
+  const canManageBillingPeriods = hasRole("SYSTEM_ADMIN", "BILLING_OFFICER", "BILLING_SUPERVISOR");
+  const canApproveReadings = hasRole("SYSTEM_ADMIN", "SUPERVISOR", "METER_SUPERVISOR", "BILLING_SUPERVISOR");
+  const canGenerate = hasRole("SYSTEM_ADMIN", "BILLING_OFFICER");
+  const canApproveBills = hasRole("SYSTEM_ADMIN", "BILLING_SUPERVISOR", "FINANCE_MANAGER");
+  const canPost = hasRole("SYSTEM_ADMIN", "FINANCE_MANAGER");
+  const canNotify = hasRole("SYSTEM_ADMIN", "BILLING_OFFICER", "BILLING_SUPERVISOR");
+
+  async function loadReferenceData(preferredReadingCycleId = readingCycleId, preferredBillingCycleId = billingCycleId) {
+    const [accountRows, readingRows, billingRows] = await Promise.all([
+      api.listAccounts("", 2_000), api.listReadingCycles(), api.listBillingCycles(),
+    ]);
+    setAccounts(accountRows);
+    setReadingCycles(readingRows);
+    setBillingCycles(billingRows);
+    const validAccountIds = selectedAccountIds.filter((accountId) =>
+      accountRows.some((account: Row) => String(account.accountId) === accountId),
+    );
+    setSelectedAccountIds(validAccountIds);
+    const preferredPeriod = billingRows.find((cycle: Row) => String(cycle.billingCycleId) === preferredBillingCycleId);
+    const preferredReadingCycle = readingRows.find((cycle: Row) => String(cycle.readingCycleId) === preferredReadingCycleId);
+    if (preferredPeriod) {
+      setBillingCycleId(String(preferredPeriod.billingCycleId));
+      const linkedReadingCycle = preferredPeriod.readingCycles?.[0];
+      setReadingCycleId(linkedReadingCycle ? String(linkedReadingCycle.readingCycleId) : preferredReadingCycle ? String(preferredReadingCycle.readingCycleId) : "");
+    } else {
+      setBillingCycleId("");
+      setReadingCycleId(preferredReadingCycle ? String(preferredReadingCycle.readingCycleId) : "");
+    }
+  }
+  async function loadBills(cycleId = billingCycleId) {
+    if (!cycleId) return setBills([]);
+    const rows = await api.listBills({ billingCycleId: cycleId, limit: "10000" });
+    setBills(rows.filter((bill: Row) => selectedAccountIds.includes(String(bill.accountId))));
+  }
+  useEffect(() => {
+    loadReferenceData().catch((e) => setError(e.message)).finally(() => setLoading(false));
+  }, []);
+  useEffect(() => {
+    localStorage.setItem("aquaflow_individual_billing_selection", JSON.stringify({
+      accountIds: selectedAccountIds,
+      readingCycleId,
+      billingCycleId,
+    }));
+  }, [selectedAccountIds.join(","), readingCycleId, billingCycleId]);
+  useEffect(() => {
+    let active = true;
+    setPreview(null);
+    setBills([]);
+    if (!readingCycleId || !selectedAccountIds.length) {
+      setWorklist([]);
+      return () => { active = false; };
+    }
+    setLoadingMeters(true);
+    api.readingWorklist({ cycleId: readingCycleId, accountIds: selectedAccountIds.join(",") })
+      .then((rows) => {
+        if (!active) return;
+        setWorklist(rows);
+        setReadingValues((current) => Object.fromEntries(rows.map((row: Row) => [
+          String(row.meterId), row.cycleReading?.currentReading == null ? current[String(row.meterId)] ?? "" : String(row.cycleReading.currentReading),
+        ])));
+      })
+      .catch((e) => active && setError(e.message))
+      .finally(() => active && setLoadingMeters(false));
+    return () => { active = false; };
+  }, [readingCycleId, selectedAccountIds.join(",")]);
+  useEffect(() => {
+    loadBills().catch((e) => setError(e.message));
+  }, [billingCycleId, selectedAccountIds.join(",")]);
+  useEffect(() => {
+    if (loading || !restorePreviewPending.current) return;
+    restorePreviewPending.current = false;
+    if (!billingCycleId || !selectedAccountIds.length) return;
+    api.previewBills({
+      billingCycleId,
+      accountIds: selectedAccountIds.join(","),
+      includePreviousBalance: true,
+    }).then(setPreview).catch((e) => setError(e.message));
+  }, [loading, billingCycleId, selectedAccountIds.join(",")]);
+
+  const selectedReadingCycle = readingCycles.find((cycle) => String(cycle.readingCycleId) === readingCycleId);
+  const selectedBillingCycle = billingCycles.find((cycle) => String(cycle.billingCycleId) === billingCycleId);
+  const accountOptions = accounts.filter((account) => account.accountStatus === "ACTIVE").map((account) => ({
+    value: String(account.accountId), label: `${account.accountNumber} · ${accountCustomerName(account)}`,
+  }));
+  const selectedAccounts = accounts.filter((account) => selectedAccountIds.includes(String(account.accountId)));
+  const worklistAccountIds = new Set(worklist.map((row) => String(row.accountId)));
+  const missingMeterAccounts = selectedAccounts.filter((account) => !worklistAccountIds.has(String(account.accountId)));
+  const previousReading = (row: Row) => Number(row.cycleReading?.previousReading ?? row.meter?.readings?.[0]?.currentReading ?? row.meter?.openingReading ?? 0);
+  const invalidReadingRows = worklist.filter((row) => {
+    if (row.cycleReading || readingValues[String(row.meterId)] === "") return false;
+    const current = Number(readingValues[String(row.meterId)]);
+    return !Number.isFinite(current) || current < previousReading(row);
+  });
+  const pendingReadingIds = worklist.filter((row) => row.cycleReading?.approvalStatus === "PENDING").map((row) => String(row.cycleReading.readingId));
+  const approvedReadingCount = worklist.filter((row) => row.cycleReading?.approvalStatus === "APPROVED").length;
+  const approvedReadingAccountIds = Array.from(new Set(worklist
+    .filter((row) => row.cycleReading?.approvalStatus === "APPROVED")
+    .map((row) => String(row.accountId))));
+  const uncapturedReadingAccountIds = Array.from(new Set(worklist
+    .filter((row) => !row.cycleReading)
+    .map((row) => String(row.accountId))));
+  const noOpenReadingCycle = !readingCycles.some((cycle) => cycle.status === "OPEN");
+  const closedCycleHasUncapturedReadings = selectedReadingCycle?.status === "CLOSED" && worklist.some((row) => !row.cycleReading);
+  const mixedReadingReadiness = selectedReadingCycle?.status === "CLOSED" && approvedReadingAccountIds.length > 0 && uncapturedReadingAccountIds.length > 0;
+  const needsReadingCycle = selectedAccountIds.length > 0 && (
+    (!readingCycleId && noOpenReadingCycle) || (closedCycleHasUncapturedReadings && !approvedReadingAccountIds.length)
+  );
+  const readingsReadyForBilling = worklist.length > 0 && worklist.every((row) => row.cycleReading?.approvalStatus === "APPROVED");
+  const needsBillingPeriod = !needsReadingCycle && selectedReadingCycle?.status === "CLOSED" && readingsReadyForBilling && !billingCycleId;
+  const cyclesAwaitingBilling = readingCycles.filter((cycle) => {
+    if (cycle.status !== "CLOSED") return false;
+    if (!cycle.billingCycleId) return true;
+    const linkedPeriod = billingCycles.find((period) => String(period.billingCycleId) === String(cycle.billingCycleId));
+    return !linkedPeriod || linkedPeriod.status !== "POSTED";
+  });
+  const earlierCyclesAwaitingBilling = cyclesAwaitingBilling.filter((cycle) =>
+    String(cycle.readingCycleId) !== readingCycleId &&
+    (!selectedReadingCycle || new Date(cycle.endDate) < new Date(selectedReadingCycle.startDate)),
+  );
+  const previewByAccount = new Map((preview?.rows ?? []).map((row: Row) => [String(row.accountId), row]));
+  const selectedBills = billingCycleId
+    ? bills.filter((bill) => selectedAccountIds.includes(String(bill.accountId)))
+    : [];
+  const pendingBillIds = selectedBills.filter((bill) => bill.status === "PENDING_APPROVAL").map((bill) => String(bill.billId));
+  const approvedBillIds = selectedBills.filter((bill) => bill.status === "APPROVED").map((bill) => String(bill.billId));
+  const notifiableBillIds = selectedBills.filter((bill) => ["POSTED", "PARTIALLY_PAID"].includes(bill.status) && !["QUEUED", "SENT"].includes(bill.notificationStatus)).map((bill) => String(bill.billId));
+
+  async function operation(label: string, action: () => Promise<void>) {
+    setBusy(label); setError(""); setMessage("");
+    try { await action(); } catch (e: any) { setError(e.message); } finally { setBusy(""); }
+  }
+  async function createReadingCycle() {
+    if (cyclesAwaitingBilling.length) {
+      const confirmation = await Swal.fire({
+        icon: "warning",
+        title: `${cyclesAwaitingBilling.length} closed cycle(s) still await billing`,
+        text: `${cyclesAwaitingBilling.slice(0, 4).map((cycle) => cycle.cycleCode).join(", ")}${cyclesAwaitingBilling.length > 4 ? " and others" : ""} must be billed before newer bills can be posted. You may create the next reading cycle and capture readings in parallel.`,
+        showCancelButton: true,
+        confirmButtonText: "Create next cycle",
+        confirmButtonColor: "#0369a1",
+      });
+      if (!confirmation.isConfirmed) return;
+    }
+    await operation("creating-reading-cycle", async () => {
+      const created = await api.createReadingCycle(readingForm);
+      await loadReferenceData(String(created.readingCycleId), billingCycleId);
+      setReadingCycleId(String(created.readingCycleId));
+      setBillingCycleId("");
+      setShowSetup(false);
+      setMessage("Reading cycle created and selected. Enter the current meter readings to continue.");
+    });
+  }
+  async function createBillingPeriod() {
+    if (!readingCycleId) return;
+    await operation("creating-billing-period", async () => {
+      const created = await api.createBillingCycle({ ...billingForm, readingCycleId });
+      await loadReferenceData(readingCycleId, String(created.billingCycleId));
+      setBillingCycleId(String(created.billingCycleId));
+      setShowSetup(false);
+      setMessage("Billing period created, linked and selected. You can now preview the selected bills.");
+    });
+  }
+  async function saveReadings() {
+    const rows = worklist.filter((row) => !row.cycleReading && readingValues[String(row.meterId)] !== "");
+    if (!rows.length) return setError("Enter at least one current reading that has not already been captured.");
+    if (invalidReadingRows.length) {
+      return setError("A current reading cannot be lower than its previous reading. Correct the highlighted meter reading before saving.");
+    }
+    await operation("saving-readings", async () => {
+      const result = await api.syncReadings(rows.map((row) => ({
+        meterId: String(row.meterId), readingCycleId, previousReading: previousReading(row),
+        currentReading: Number(readingValues[String(row.meterId)]), readingType: "ACTUAL",
+        readingDate: new Date().toISOString(), meterCondition: "GOOD", evidence: [],
+        remarks: "Captured in individual billing workspace",
+      })));
+      if (result.failed) throw new Error(result.results?.find((item: Row) => !item.ok)?.error ?? `${result.failed} reading(s) failed.`);
+      setMessage(`${result.succeeded} meter reading(s) captured.`);
+      const rowsAfter = await api.readingWorklist({ cycleId: readingCycleId, accountIds: selectedAccountIds.join(",") }); setWorklist(rowsAfter);
+    });
+  }
+  async function approveReadings() {
+    await operation("approving-readings", async () => {
+      const result = await api.bulkDecideReadings(pendingReadingIds, "APPROVED", "Approved in individual billing workspace");
+      setMessage(`${result.updated} reading(s) approved.`);
+      const rows = await api.readingWorklist({ cycleId: readingCycleId, accountIds: selectedAccountIds.join(",") }); setWorklist(rows);
+    });
+  }
+  async function closeReadingCycle() {
+    const confirmation = await Swal.fire({ icon: "warning", title: "Close the reading cycle?", text: "This closes the entire reading cycle, not only the selected accounts. No more readings can be captured in it.", showCancelButton: true, confirmButtonText: "Close cycle", confirmButtonColor: "#475569" });
+    if (!confirmation.isConfirmed) return;
+    await operation("closing-reading-cycle", async () => {
+      await api.updateReadingCycleStatus(readingCycleId, "CLOSED");
+      await loadReferenceData(readingCycleId, billingCycleId); setMessage("Reading cycle closed and ready for billing.");
+    });
+  }
+  async function previewSelectedBills() {
+    await operation("previewing", async () => {
+      const result = await api.previewBills({ billingCycleId, accountIds: selectedAccountIds.join(","), includePreviousBalance: true });
+      setPreview(result); setMessage(`${result.summary.eligible} of ${result.summary.accounts} selected account(s) are ready to bill.`);
+    });
+  }
+  async function generateSelectedBills() {
+    await operation("generating", async () => {
+      const result = await api.generateBills({ billingCycleId, accountIds: selectedAccountIds, includePreviousBalance: true, includePenalties: true, sendForApproval: true });
+      await loadBills(); setPreview(null); setMessage(`${result.generated} bill(s) generated and sent for approval.`);
+    });
+  }
+  async function approveBills() {
+    await operation("approving-bills", async () => {
+      const result = await api.decideBills(pendingBillIds, "APPROVE", "Approved in individual billing workspace");
+      await loadBills(); setMessage(`${result.updated} bill(s) approved.`);
+    });
+  }
+  async function postBills() {
+    const confirmation = await Swal.fire({ icon: "warning", title: `Post ${approvedBillIds.length} bill(s)?`, text: "Posting immediately updates the selected customer account balances.", showCancelButton: true, confirmButtonText: "Post approved bills", confirmButtonColor: "#ea580c" });
+    if (!confirmation.isConfirmed) return;
+    await operation("posting-bills", async () => {
+      const result = await api.postBills(approvedBillIds, "Posted from individual billing workspace");
+      await loadBills(); setMessage(`${result.posted} bill(s) posted to customer accounts.`);
+    });
+  }
+  async function sendSms() {
+    const confirmation = await Swal.fire({ icon: "question", title: `Send ${notifiableBillIds.length} bill SMS?`, text: "Messages will be queued and immediately processed through the active SMS provider.", showCancelButton: true, confirmButtonText: "Send bill SMS", confirmButtonColor: "#059669" });
+    if (!confirmation.isConfirmed) return;
+    await operation("sending-sms", async () => {
+      const queued = await api.sendBillNotifications({ billingCycleId, billIds: notifiableBillIds, channels: ["SMS"] });
+      const processed = queued.notificationIds?.length ? await api.processNotifications(queued.notificationIds) : null;
+      const delivered = (processed?.processed ?? []).filter((item: Row) => ["SENT", "DELIVERED"].includes(item?.deliveryStatus)).length;
+      await loadBills();
+      setMessage(`${queued.notifications} SMS notification(s) queued${processed ? `; ${delivered} processed successfully` : ""}.`);
+    });
+  }
+
+  const actionButton = (label: string, busyKey: string, disabled: boolean, onClick: () => void, tone: "blue" | "green" | "slate" | "orange" = "blue") => (
+    <Button className="flex w-full items-center justify-center" tone={tone} disabled={disabled || Boolean(busy)} onClick={onClick}>
+      {busy === busyKey ? <span className="inline-flex items-center"><span className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />Working…</span> : label}
+    </Button>
+  );
+  const meterStepDone = selectedReadingCycle?.status === "CLOSED" && readingsReadyForBilling;
+  const billsStepDone = selectedBills.length > 0 && selectedBills.every((bill) => ["APPROVED", "POSTED", "PARTIALLY_PAID", "PAID"].includes(bill.status));
+  const postStepDone = selectedBills.length > 0 && selectedBills.every((bill) => ["POSTED", "PARTIALLY_PAID", "PAID"].includes(bill.status)) && notifiableBillIds.length === 0;
+  const currentWorkflowStep = !meterStepDone ? 1 : !billsStepDone ? 2 : 3;
+  const workflowStep = (number: number, title: string, done: boolean, content: ReactNode, last = false) => {
+    const current = currentWorkflowStep === number && !done;
+    return <div className={`relative pl-10 ${last ? "" : "pb-5"}`}>
+      {!last && <div className={`absolute left-[15px] top-8 h-[calc(100%-1rem)] w-0.5 ${done ? "bg-emerald-300" : "bg-slate-200"}`} />}
+      <div className={`absolute left-0 top-0 grid h-8 w-8 place-items-center rounded-full border-2 text-xs font-extrabold ${done ? "border-emerald-500 bg-emerald-500 text-white" : current ? "border-aqua-600 bg-white text-aqua-700 ring-4 ring-aqua-50" : "border-slate-300 bg-white text-slate-400"}`}>{done ? <svg className="h-4 w-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden="true"><path d="m5 10 3 3 7-7" /></svg> : number}</div>
+      <div className="mb-2 flex items-center justify-between gap-2"><div className={`text-xs font-bold uppercase tracking-wide ${current ? "text-aqua-700" : done ? "text-emerald-700" : "text-slate-400"}`}>{title}</div>{current && <span className="rounded-full bg-aqua-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-aqua-700">Current</span>}{done && <span className="text-[10px] font-bold uppercase tracking-wide text-emerald-600">Complete</span>}</div>
+      <div className="space-y-2">{content}</div>
+    </div>;
+  };
+
+  return (
+    <Page title="Individual billing workspace" subtitle="Capture readings, prepare selected bills, post and notify customers from one screen" className="[&_.page-screen-header]:mb-3">
+      {error && <Notice>{error}</Notice>}{message && <Notice tone="green">{message}</Notice>}
+      {selectedReadingCycle?.status === "OPEN" && earlierCyclesAwaitingBilling.length > 0 && <div className="mb-3 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+        <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-amber-100 text-amber-700"><svg className="h-4 w-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="M10 6v4m0 3h.01" /><circle cx="10" cy="10" r="8" /></svg></div>
+        <div><div className="font-bold">Earlier closed cycle{earlierCyclesAwaitingBilling.length === 1 ? "" : "s"} awaiting billing</div><div className="mt-0.5">{earlierCyclesAwaitingBilling.map((cycle) => cycle.cycleCode).join(", ")} can remain open operationally while readings are captured here, but this cycle's bills cannot be posted until the same customers' older readings are billed.</div></div>
+      </div>}
+      <section className="mb-4 rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="grid gap-3 p-4 lg:grid-cols-[minmax(280px,1.3fr)_minmax(220px,1fr)_minmax(220px,1fr)_auto]">
+          <Field label="Accounts / customers" required><CheckboxMultiSelect className={INPUT} maxSelected={500} options={accountOptions} placeholder={loading ? "Loading accounts…" : "Select one or more accounts"} value={selectedAccountIds} onChange={setSelectedAccountIds} /></Field>
+          <Field label="Reading cycle" required><SearchableSelect className={INPUT} value={readingCycleId} onChange={(event) => { setReadingCycleId(event.target.value); const linked = billingCycles.find((cycle) => String(cycle.readingCycles?.[0]?.readingCycleId) === event.target.value); setBillingCycleId(linked ? String(linked.billingCycleId) : ""); }}><option value="">Select reading cycle</option>{readingCycles.filter((cycle) => !["CANCELLED"].includes(cycle.status)).map((cycle) => <option key={cycle.readingCycleId} value={cycle.readingCycleId}>{cycle.cycleCode} · {pretty(cycle.status)}</option>)}</SearchableSelect></Field>
+          <Field label="Billing period"><SearchableSelect className={INPUT} value={billingCycleId} onChange={(event) => { const value = event.target.value; setBillingCycleId(value); const cycle = billingCycles.find((item) => String(item.billingCycleId) === value); if (cycle?.readingCycles?.[0]) setReadingCycleId(String(cycle.readingCycles[0].readingCycleId)); }}><option value="">Select or create period</option>{billingCycles.filter((cycle) => ["DRAFT", "OPEN", "PROCESSING", "RETURNED", "PENDING_APPROVAL"].includes(cycle.status)).map((cycle) => <option key={cycle.billingCycleId} value={cycle.billingCycleId}>{cycle.cycleCode} · {pretty(cycle.status)}</option>)}</SearchableSelect></Field>
+          <div className="flex items-end">{!mixedReadingReadiness && <button type="button" onClick={() => setShowSetup((value) => !value)} className="whitespace-nowrap rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">{showSetup ? "Hide setup" : needsReadingCycle ? "Create reading cycle" : needsBillingPeriod ? "Create billing period" : "Create cycles"}</button>}</div>
+        </div>
+        {mixedReadingReadiness && !showSetup && <div className="border-t border-violet-200 bg-violet-50 px-4 py-3">
+          <div className="flex items-start gap-3"><div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-violet-100 text-violet-700"><svg className="h-4 w-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="M5 5h4v4H5zM11 11h4v4h-4zM9 7h3a2 2 0 0 1 2 2v2M11 13H8a2 2 0 0 1-2-2V9" /></svg></div><div><div className="font-bold text-violet-900">The selected accounts are at different billing stages</div><div className="mt-0.5 text-sm text-violet-800">{approvedReadingAccountIds.length} account(s) have approved readings and are ready for a billing period. {uncapturedReadingAccountIds.length} account(s) have no reading in this closed cycle and need a new open reading cycle.</div></div></div>
+          <div className="mt-3 flex flex-wrap gap-2 pl-11">
+            <button type="button" onClick={() => { setSelectedAccountIds(approvedReadingAccountIds); setShowSetup(true); }} className="rounded-lg bg-violet-700 px-4 py-2 text-sm font-bold text-white shadow-sm hover:bg-violet-800">Continue with {approvedReadingAccountIds.length} ready account(s)</button>
+            <button type="button" onClick={() => { setSelectedAccountIds(uncapturedReadingAccountIds); setBillingCycleId(""); setShowSetup(true); }} className="rounded-lg border border-violet-300 bg-white px-4 py-2 text-sm font-bold text-violet-800 hover:bg-violet-100">Move {uncapturedReadingAccountIds.length} account(s) to a new cycle</button>
+          </div>
+        </div>}
+        {needsReadingCycle && !showSetup && <div className="flex flex-wrap items-center justify-between gap-3 border-t border-blue-200 bg-blue-50 px-4 py-3">
+          <div className="flex items-start gap-3"><div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-100 text-blue-700"><svg className="h-4 w-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="M10 5v10M5 10h10" /><circle cx="10" cy="10" r="8" /></svg></div><div><div className="font-bold text-blue-900">Create an open reading cycle to continue</div><div className="mt-0.5 text-sm text-blue-800">This customer has no reading in {selectedReadingCycle?.cycleCode ?? "an open cycle"}. A closed cycle cannot accept new readings.</div></div></div>
+          <button type="button" onClick={() => setShowSetup(true)} className="rounded-lg bg-blue-700 px-4 py-2 text-sm font-bold text-white shadow-sm hover:bg-blue-800">Create reading cycle</button>
+        </div>}
+        {needsBillingPeriod && !showSetup && <div className="flex flex-wrap items-center justify-between gap-3 border-t border-amber-200 bg-amber-50 px-4 py-3">
+          <div className="flex items-start gap-3"><div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-100 text-amber-700"><svg className="h-4 w-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="M10 6v4m0 3h.01" /><circle cx="10" cy="10" r="8" /></svg></div><div><div className="font-bold text-amber-900">Create a billing period to continue</div><div className="mt-0.5 text-sm text-amber-800">The readings in {selectedReadingCycle?.cycleCode} are approved and closed. Link a billing period before previewing or generating bills.</div></div></div>
+          <button type="button" onClick={() => setShowSetup(true)} className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-bold text-white shadow-sm hover:bg-amber-700">Create billing period</button>
+        </div>}
+        {showSetup && <div className={`grid gap-4 border-t border-slate-100 bg-slate-50/60 p-4 ${needsBillingPeriod || needsReadingCycle ? "" : "xl:grid-cols-2"}`}>
+          {!needsBillingPeriod && <div><div className="mb-3 flex items-center justify-between"><div><h3 className="font-bold text-slate-900">New reading cycle</h3><p className="text-xs text-slate-500">Create it open so readings can be captured</p></div><Badge value={readingForm.status} /></div><div className="grid gap-3 sm:grid-cols-2"><Field label="Cycle code" required><input className={INPUT} value={readingForm.cycleCode} onChange={(e) => setReadingForm({ ...readingForm, cycleCode: e.target.value })} /></Field><Field label="Cycle name" required><input className={INPUT} value={readingForm.cycleName} onChange={(e) => setReadingForm({ ...readingForm, cycleName: e.target.value })} /></Field><Field label="Start date" required><input type="date" className={INPUT} value={readingForm.startDate} onChange={(e) => setReadingForm({ ...readingForm, startDate: e.target.value })} /></Field><Field label="End date" required><input type="date" className={INPUT} value={readingForm.endDate} onChange={(e) => setReadingForm({ ...readingForm, endDate: e.target.value })} /></Field></div><div className="mt-3">{actionButton("Create and select reading cycle", "creating-reading-cycle", !canManageReadingCycles || !readingForm.cycleCode || !readingForm.cycleName, createReadingCycle, "slate")}</div></div>}
+          {!needsReadingCycle && <div>
+            <div className="mb-3 flex items-center justify-between"><div><h3 className="font-bold text-slate-900">New billing period</h3><p className="text-xs text-slate-500">Links to the selected closed reading cycle</p></div><Badge value={billingForm.status} /></div>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <Field label="Period code" required><input className={INPUT} value={billingForm.cycleCode} onChange={(e) => setBillingForm({ ...billingForm, cycleCode: e.target.value })} /></Field>
+              <Field label="Period name" required><input className={INPUT} value={billingForm.cycleName} onChange={(e) => setBillingForm({ ...billingForm, cycleName: e.target.value })} /></Field>
+              <Field label="Period start" required><input type="date" className={INPUT} value={billingForm.periodStart} onChange={(e) => setBillingForm({ ...billingForm, periodStart: e.target.value })} /></Field>
+              <Field label="Period end" required><input type="date" min={billingForm.periodStart} className={INPUT} value={billingForm.periodEnd} onChange={(e) => setBillingForm({ ...billingForm, periodEnd: e.target.value })} /></Field>
+              <Field label="Due date" required><input type="date" min={billingForm.periodEnd} className={INPUT} value={billingForm.dueDate} onChange={(e) => setBillingForm({ ...billingForm, dueDate: e.target.value })} /></Field>
+              <Field label="Penalty date"><input type="date" min={billingForm.dueDate} className={INPUT} value={billingForm.penaltyDate} onChange={(e) => setBillingForm({ ...billingForm, penaltyDate: e.target.value })} /></Field>
+            </div>
+            <p className="mt-2 text-xs text-slate-500">The due date must be on or after the period end. Penalties begin on the optional penalty date, which cannot be before the due date.</p>
+            <div className="mt-3">{actionButton("Create and link billing period", "creating-billing-period", !canManageBillingPeriods || selectedReadingCycle?.status !== "CLOSED" || Boolean(selectedReadingCycle?.billingCycleId) || !billingForm.periodStart || !billingForm.periodEnd || !billingForm.dueDate || billingForm.periodEnd < billingForm.periodStart || billingForm.dueDate < billingForm.periodEnd || Boolean(billingForm.penaltyDate && billingForm.penaltyDate < billingForm.dueDate), createBillingPeriod, "slate")}</div>
+          </div>}
+        </div>}
+      </section>
+
+      <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_330px]">
+        <section className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-4 py-3"><div><div className="flex items-center gap-2"><h2 className="font-bold text-slate-900">Meter readings and bill preview</h2><span className="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">{selectedAccountIds.length}</span></div><p className="text-xs text-slate-500">Previous readings are pulled automatically from active meters</p></div><div className="flex gap-3 text-xs text-slate-500"><span>{approvedReadingCount} approved</span><span>{selectedBills.length} bills</span></div></div>
+          {loadingMeters ? <Spinner /> : <div className="overflow-x-auto"><table className="w-full min-w-[900px]"><thead><tr><th className={TH}>Account / Customer</th><th className={TH}>Meter</th><th className={TH}>Previous</th><th className={TH}>Current reading</th><th className={TH}>Usage</th><th className={TH}>Reading</th><th className={TH}>Bill / Amount</th></tr></thead><tbody>
+            {worklist.map((row) => {
+              const previous = previousReading(row);
+              const rawCurrent = readingValues[String(row.meterId)] ?? "";
+              const current = Number(rawCurrent);
+              const invalid = rawCurrent !== "" && (!Number.isFinite(current) || current < previous);
+              const usage = !invalid && rawCurrent !== "" ? current - previous : null;
+              const billPreview = previewByAccount.get(String(row.accountId)) as Row | undefined;
+              const bill = selectedBills.find((item) => String(item.accountId) === String(row.accountId));
+              return <tr key={row.assignmentId} className={`border-t ${invalid ? "border-red-200 bg-red-50/40" : "border-slate-100"}`}>
+                <td className={TD}><div className="font-semibold text-slate-800">{row.account.accountNumber}</div><div className="text-xs text-slate-400">{row.customerName}</div></td>
+                <td className={TD}><div className="font-medium">{row.meter.meterNumber}</div><div className="text-xs text-slate-400">{pretty(row.meter.technology)}</div></td>
+                <td className={`${TD} font-semibold text-slate-700`}>{previous.toLocaleString()}</td>
+                <td className={TD}>
+                  <input type="number" min={previous} step="0.001" disabled={Boolean(row.cycleReading) || selectedReadingCycle?.status !== "OPEN"} aria-invalid={invalid} className={`${INPUT} w-40 py-2 ${invalid ? "border-red-400 bg-red-50 text-red-700 focus:border-red-500 focus:ring-red-100" : ""}`} value={rawCurrent} onChange={(e) => setReadingValues({ ...readingValues, [String(row.meterId)]: e.target.value })} placeholder={`Minimum ${previous}`} />
+                  {invalid && <div className="mt-1 text-xs font-semibold text-red-600">Must be {previous.toLocaleString()} or higher</div>}
+                </td>
+                <td className={`${TD} font-bold ${invalid ? "text-red-600" : "text-slate-800"}`}>{invalid ? "Invalid" : usage == null ? "—" : usage.toLocaleString()}</td>
+                <td className={TD}>{row.cycleReading ? <Badge value={row.cycleReading.approvalStatus} /> : <span className="text-xs text-slate-400">Not captured</span>}</td>
+                <td className={TD}>{bill ? <><div className="font-bold text-slate-800">{money(bill.totalAmountDue)}</div><Badge value={bill.status} /></> : billPreview ? <><div className="font-bold text-slate-800">{money(billPreview.totalAmountDue)}</div><span className={`text-xs font-semibold ${billPreview.eligible ? "text-emerald-600" : "text-red-600"}`}>{pretty(billPreview.issue)}</span></> : <span className="text-xs text-slate-400">Not prepared</span>}</td>
+              </tr>;
+            })}
+            {missingMeterAccounts.map((account) => <tr key={`missing-${account.accountId}`} className="border-t border-slate-100 bg-red-50/30"><td className={TD}><div className="font-semibold text-slate-800">{account.accountNumber}</div><div className="text-xs text-slate-400">{accountCustomerName(account)}</div></td><td colSpan={6} className={`${TD} text-red-600`}>No active customer meter assignment was found.</td></tr>)}
+            {!selectedAccountIds.length && <tr><td colSpan={7} className="px-6 py-12 text-center text-slate-400">Select one or more customer accounts to begin.</td></tr>}
+          </tbody></table></div>}
+        </section>
+
+        <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm xl:sticky xl:top-4">
+          <div className="border-b border-slate-100 px-4 py-3"><h2 className="font-bold text-slate-900">Workflow actions</h2><p className="text-xs text-slate-500">Complete each available step in order</p></div>
+          <div className="p-4">
+            <div className="mb-5 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs"><div className="flex justify-between"><span className="text-slate-500">Reading cycle</span><Badge value={selectedReadingCycle?.status} /></div><div className="mt-2 flex justify-between"><span className="text-slate-500">Billing period</span><Badge value={selectedBillingCycle?.status} /></div></div>
+            {workflowStep(1, "Meter readings", meterStepDone, <>
+              {actionButton("Save current readings", "saving-readings", !canCapture || selectedReadingCycle?.status !== "OPEN" || invalidReadingRows.length > 0 || !worklist.some((row) => !row.cycleReading && readingValues[String(row.meterId)] !== ""), saveReadings)}
+              {actionButton(`Approve ${pendingReadingIds.length} reading(s)`, "approving-readings", !canApproveReadings || !pendingReadingIds.length, approveReadings, "green")}
+              {actionButton("Close reading cycle", "closing-reading-cycle", !canApproveReadings || selectedReadingCycle?.status !== "OPEN" || !worklist.length || pendingReadingIds.length > 0 || approvedReadingCount < worklist.length, closeReadingCycle, "slate")}
+            </>)}
+            {workflowStep(2, "Prepare bills", billsStepDone, <>
+              {needsBillingPeriod && <Button className="flex w-full items-center justify-center" onClick={() => setShowSetup(true)}>Create billing period</Button>}
+              {actionButton("Preview selected bills", "previewing", !billingCycleId || selectedReadingCycle?.status !== "CLOSED" || !selectedAccountIds.length, previewSelectedBills, "slate")}
+              {actionButton(`Generate ${preview?.summary?.eligible ?? 0} eligible bill(s)`, "generating", !canGenerate || !preview?.summary?.eligible, generateSelectedBills)}
+              {actionButton(`Approve ${pendingBillIds.length} bill(s)`, "approving-bills", !canApproveBills || !pendingBillIds.length, approveBills, "green")}
+            </>)}
+            {workflowStep(3, "Post and notify", postStepDone, <>
+              {actionButton(`Post ${approvedBillIds.length} approved bill(s)`, "posting-bills", !canPost || !approvedBillIds.length, postBills, "orange")}
+              {actionButton(`Send ${notifiableBillIds.length} bill SMS`, "sending-sms", !canNotify || !notifiableBillIds.length || selectedReadingCycle?.status !== "CLOSED", sendSms, "green")}
+            </>, true)}
+            <p className="text-xs leading-5 text-slate-400">Permissions and maker-checker rules still apply. A non-admin generator cannot approve their own bills.</p>
+          </div>
+        </section>
+      </div>
     </Page>
   );
 }
@@ -2453,10 +2878,8 @@ export function CustomerStatements() {
     `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
   const [accounts, setAccounts] = useState<Row[]>([]);
   const [accountId, setAccountId] = useState("");
-  const [from, setFrom] = useState(
-    localDate(new Date(now.getFullYear(), now.getMonth(), 1)),
-  );
-  const [to, setTo] = useState(localDate(now));
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
   const [statement, setStatement] = useState<Row | null>(null);
   const [loadingAccounts, setLoadingAccounts] = useState(true);
   const [loadingStatement, setLoadingStatement] = useState(false);
@@ -2551,6 +2974,22 @@ export function CustomerStatements() {
         .filter(Boolean)
         .join(", ")
     : "";
+  const balanceVariance = statement
+    ? Number(statement.closingBalance) - Number(statement.currentBalance)
+    : 0;
+  const statementPeriodLabel = !from && !to
+    ? "Complete account history"
+    : `${from ? date(`${from}T00:00:00.000Z`) : "Account opening"} - ${to ? date(`${to}T00:00:00.000Z`) : "Present"}`;
+  function useThisMonth() {
+    setFrom(localDate(new Date(now.getFullYear(), now.getMonth(), 1)));
+    setTo(localDate(now));
+  }
+  function useLastThirtyDays() {
+    const start = new Date(now);
+    start.setDate(start.getDate() - 30);
+    setFrom(localDate(start));
+    setTo(localDate(now));
+  }
 
   return (
     <Page
@@ -2633,7 +3072,21 @@ export function CustomerStatements() {
             </Button>
           </div>
         </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3 text-xs">
+          <span className="mr-1 font-semibold text-slate-500">Quick range:</span>
+          <button type="button" disabled={loadingStatement} onClick={() => { setFrom(""); setTo(""); }} className={`rounded-lg border px-3 py-1.5 font-semibold ${!from && !to ? "border-aqua-200 bg-aqua-50 text-aqua-700" : "border-slate-200 text-slate-600 hover:bg-slate-50"}`}>Full history</button>
+          <button type="button" disabled={loadingStatement} onClick={useThisMonth} className="rounded-lg border border-slate-200 px-3 py-1.5 font-semibold text-slate-600 hover:bg-slate-50">This month</button>
+          <button type="button" disabled={loadingStatement} onClick={useLastThirtyDays} className="rounded-lg border border-slate-200 px-3 py-1.5 font-semibold text-slate-600 hover:bg-slate-50">Last 30 days</button>
+          <span className="ml-auto text-slate-400">Leave either date blank for an open-ended range.</span>
+        </div>
       </Card>
+
+      {statement && Math.abs(balanceVariance) >= 0.01 && (
+        <div className="statement-screen-filters mb-4 flex items-start gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900" role="alert">
+          <svg className="mt-0.5 h-5 w-5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M12 3 2.5 20h19z" /><path d="M12 9v5m0 3h.01" /></svg>
+          <div><div className="font-bold">Account balance reconciliation required</div><div className="mt-0.5">The statement ledger closes at {money(statement.closingBalance)}, while the stored account balance is {money(statement.currentBalance)}. Variance: {money(balanceVariance)}.</div></div>
+        </div>
+      )}
 
       {loadingStatement && !statement ? (
         <Card>
@@ -2721,7 +3174,7 @@ export function CustomerStatements() {
             <div className="statement-period mb-3 flex flex-wrap justify-between gap-2 border-y border-slate-200 py-2 text-xs">
               <span>
                 <strong>Statement period:</strong>{" "}
-                {date(`${from}T00:00:00.000Z`)} - {date(`${to}T00:00:00.000Z`)}
+                {statementPeriodLabel}
               </span>
               {statement.account.address && (
                 <span>
@@ -3547,6 +4000,483 @@ export function BillingAdjustmentApprovals() {
             </div>
           )}
         </Card>
+      </div>
+    </Page>
+  );
+}
+
+function accountCustomerName(account?: Row) {
+  const customer = account?.customer;
+  return customer?.organizationName ||
+    [customer?.firstName, customer?.middleName, customer?.lastName].filter(Boolean).join(" ") ||
+    "Unknown customer";
+}
+
+export function AccountAdjustments() {
+  const [accounts, setAccounts] = useState<Row[]>([]);
+  const [accountSearch, setAccountSearch] = useState("");
+  const [items, setItems] = useState<Row[]>([]);
+  const [historySearch, setHistorySearch] = useState("");
+  const [historyStatus, setHistoryStatus] = useState("ALL");
+  const [historyPage, setHistoryPage] = useState(1);
+  const [historyPageSize, setHistoryPageSize] = useState(10);
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [approvingId, setApprovingId] = useState("");
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [file, setFile] = useState<File>();
+  const [form, setForm] = useState<Row>({
+    accountId: "",
+    adjustmentType: "DEBIT",
+    amount: "",
+    reason: "",
+  });
+
+  const loadHistory = () => api.listAccountAdjustments().then(setItems);
+  useEffect(() => {
+    Promise.all([api.listAccounts("", 50).then(setAccounts), loadHistory()])
+      .catch((e) => setError(e.message))
+      .finally(() => setLoading(false));
+  }, []);
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      api.listAccounts(accountSearch, 50).then((rows) => {
+        setAccounts((current) => {
+          const chosen = current.find((account) => String(account.accountId) === form.accountId);
+          return chosen && !rows.some((account: Row) => String(account.accountId) === form.accountId)
+            ? [chosen, ...rows]
+            : rows;
+        });
+      }).catch((e) => setError(e.message));
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [accountSearch, form.accountId]);
+
+  const account = accounts.find((row) => String(row.accountId) === form.accountId);
+  const amount = Number(form.amount) || 0;
+  const projectedBalance = account
+    ? Number(account.currentBalance) + (form.adjustmentType === "DEBIT" ? amount : -amount)
+    : 0;
+  const visibleItems = useMemo(() => {
+    const query = historySearch.trim().toLocaleLowerCase();
+    return items.filter((adjustment) => {
+      const matchesStatus = historyStatus === "ALL" || adjustment.status === historyStatus;
+      const matchesSearch = !query || [
+        adjustment.adjustmentNumber,
+        adjustment.account?.accountNumber,
+        accountCustomerName(adjustment.account),
+        person(adjustment.requester),
+      ].some((value) => String(value ?? "").toLocaleLowerCase().includes(query));
+      return matchesStatus && matchesSearch;
+    });
+  }, [historySearch, historyStatus, items]);
+  const historyTotalPages = Math.max(1, Math.ceil(visibleItems.length / historyPageSize));
+  const pagedHistoryItems = visibleItems.slice(
+    (historyPage - 1) * historyPageSize,
+    historyPage * historyPageSize,
+  );
+  useEffect(() => { setHistoryPage(1); }, [historySearch, historyStatus, historyPageSize]);
+  useEffect(() => {
+    if (historyPage > historyTotalPages) setHistoryPage(historyTotalPages);
+  }, [historyPage, historyTotalPages]);
+  const pendingCount = items.filter((item) => item.status === "PENDING").length;
+  const actor = getSessionUser();
+  const isAdmin = Boolean(actor?.roles.includes("SYSTEM_ADMIN"));
+  const canApprove = Boolean(actor?.roles.some((role) =>
+    ["BILLING_SUPERVISOR", "FINANCE_MANAGER", "SYSTEM_ADMIN"].includes(role),
+  ));
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setSubmitting(true);
+    setError("");
+    try {
+      await api.createAccountAdjustment({
+        ...form,
+        amount: Number(form.amount),
+        ...(await fileData(file)),
+      });
+      setMessage("Account adjustment submitted for independent approval. The balance has not changed yet.");
+      setForm({ accountId: "", adjustmentType: "DEBIT", amount: "", reason: "" });
+      setFile(undefined);
+      await loadHistory();
+      window.dispatchEvent(new Event("sidebar-counts:refresh"));
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function approveInline(adjustment: Row) {
+    const isOwnRequest = String(adjustment.requestedBy) === String(actor?.userId);
+    if (!canApprove || (isOwnRequest && !isAdmin)) return;
+    const projected = Number(adjustment.account.currentBalance) +
+      (adjustment.adjustmentType === "DEBIT" ? Number(adjustment.amount) : -Number(adjustment.amount));
+    const confirmation = await Swal.fire({
+      icon: "question",
+      title: `Approve ${adjustment.adjustmentNumber}?`,
+      text: `${adjustment.account.accountNumber} · ${accountCustomerName(adjustment.account)} — ${pretty(adjustment.adjustmentType)} ${money(adjustment.amount)}. Balance after approval: ${money(projected)}.`,
+      input: "textarea",
+      inputLabel: "Approval comments",
+      inputPlaceholder: "Enter the reason for approving this adjustment",
+      inputAttributes: { maxlength: "2000" },
+      showCancelButton: true,
+      confirmButtonText: "Approve adjustment",
+      confirmButtonColor: "#059669",
+      preConfirm: (value) => {
+        if (String(value ?? "").trim().length < 3) {
+          Swal.showValidationMessage("Enter at least 3 characters for the approval comments.");
+          return false;
+        }
+        return String(value).trim();
+      },
+    });
+    if (!confirmation.isConfirmed) return;
+    setApprovingId(String(adjustment.accountAdjustmentId));
+    setError("");
+    try {
+      await api.decideAccountAdjustments(
+        [String(adjustment.accountAdjustmentId)],
+        "APPROVE",
+        String(confirmation.value),
+      );
+      setMessage(`${adjustment.adjustmentNumber} approved. The account balance has been updated.`);
+      await loadHistory();
+      window.dispatchEvent(new Event("sidebar-counts:refresh"));
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setApprovingId("");
+    }
+  }
+
+  return (
+    <Page
+      title="Account adjustments"
+      subtitle="Adjust a customer account without changing or linking to an individual bill"
+      actions={<LinkButton to="/billing/account-adjustments/approvals">Approval queue{pendingCount ? ` (${pendingCount})` : ""}</LinkButton>}
+      className="account-adjustments-page [&_.page-screen-header]:mb-3"
+    >
+      {error && <Notice>{error}</Notice>}
+      {message && <Notice tone="green">{message}</Notice>}
+      <div className="grid items-start gap-4 lg:grid-cols-[410px_minmax(0,1fr)]">
+        <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm shadow-slate-200/50">
+          <div className="border-b border-slate-100 px-4 py-3">
+            <div className="flex items-center gap-3">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-600">
+                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="M12 3v18M16.5 7.5C16.5 5.6 14.5 4 12 4S7.5 5.3 7.5 7.5 9.5 11 12 11s4.5 1.6 4.5 3.5S14.5 18 12 18s-4.5-1.6-4.5-3.5" /></svg>
+              </div>
+              <div><h2 className="text-base font-bold text-slate-900">New adjustment</h2><p className="text-xs text-slate-500">Balance changes require independent approval</p></div>
+            </div>
+          </div>
+          <form onSubmit={submit} className="space-y-3 p-4">
+            <Field label="Customer account" required>
+              <SearchableSelect
+                required
+                className={INPUT}
+                value={form.accountId}
+                onSearchQuery={setAccountSearch}
+                onChange={(e) => setForm({ ...form, accountId: e.target.value })}
+              >
+                <option value="">Search account number or customer</option>
+                {accounts.map((row) => (
+                  <option key={row.accountId} value={row.accountId}>
+                    {row.accountNumber} · {accountCustomerName(row)}
+                  </option>
+                ))}
+              </SearchableSelect>
+            </Field>
+            {account && (
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
+                <div className="flex items-start justify-between gap-3">
+                  <div><div className="font-semibold text-slate-900">{accountCustomerName(account)}</div><div className="mt-0.5 text-slate-500">{account.accountNumber}</div></div>
+                  <Badge value={account.accountStatus} />
+                </div>
+                <div className="mt-2 grid grid-cols-2 gap-3 border-t border-slate-200 pt-2">
+                  <div><div className="text-xs text-slate-500">Current balance</div><div className="mt-0.5 font-bold text-slate-900">{money(account.currentBalance)}</div></div>
+                  <div><div className="text-xs text-slate-500">After approval</div><div className={`mt-0.5 font-bold ${form.adjustmentType === "DEBIT" ? "text-orange-600" : "text-emerald-600"}`}>{money(projectedBalance)}</div></div>
+                </div>
+              </div>
+            )}
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Adjustment type" required>
+                <SearchableSelect
+                  className={INPUT}
+                  value={form.adjustmentType}
+                  onChange={(e) => setForm({ ...form, adjustmentType: e.target.value })}
+                >
+                  <option value="DEBIT">Debit — increase balance</option>
+                  <option value="CREDIT">Credit — reduce balance</option>
+                </SearchableSelect>
+              </Field>
+              <Field label="Amount" required>
+                <input
+                  required min="0.01" step="0.01" type="number" className={INPUT}
+                  placeholder="0.00"
+                  value={form.amount}
+                  onChange={(e) => setForm({ ...form, amount: e.target.value })}
+                />
+              </Field>
+            </div>
+            <Field label="Reason" required>
+              <textarea
+                required minLength={5} rows={3} className={INPUT}
+                placeholder="Explain why this account-level adjustment is required"
+                value={form.reason}
+                onChange={(e) => setForm({ ...form, reason: e.target.value })}
+              />
+            </Field>
+            <Field label="Supporting document">
+              <input type="file" className={`${INPUT} p-1.5 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-100 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-slate-700 hover:file:bg-slate-200`} onChange={(e) => setFile(e.target.files?.[0])} />
+            </Field>
+            <div className="flex items-start gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-600">
+              <span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${form.adjustmentType === "DEBIT" ? "bg-orange-500" : "bg-emerald-500"}`} />
+              <span><strong className="text-slate-700">{pretty(form.adjustmentType)}:</strong> {form.adjustmentType === "DEBIT" ? "increases the amount the customer owes." : "reduces the amount owed and may create a credit balance."}</span>
+            </div>
+            <Button className="flex w-full items-center justify-center gap-2" disabled={submitting || !form.accountId || !amount}>
+              {submitting ? "Submitting…" : "Submit for approval"}
+              {!submitting && <svg className="h-4 w-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="m7 4 6 6-6 6" /></svg>}
+            </Button>
+          </form>
+        </section>
+
+        <section className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm shadow-slate-200/50">
+          <div className="border-b border-slate-100 px-4 py-3">
+            <div className="flex items-center gap-2"><h2 className="text-base font-bold text-slate-900">Adjustment history</h2><span className="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">{items.length}</span>{pendingCount > 0 && <span className="text-xs text-slate-500">{pendingCount} pending</span>}</div>
+            <div className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_160px_120px]">
+              <div className="relative min-w-0">
+                <svg className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" /><path d="m12.5 12.5 4 4" /></svg>
+                <input className={`${INPUT} py-1.5 pl-9 pr-9`} value={historySearch} onChange={(event) => setHistorySearch(event.target.value)} placeholder="Search by reference, account, customer or requester" aria-label="Search adjustment history" />
+                {historySearch && <button type="button" onClick={() => setHistorySearch("")} className="absolute right-2 top-1/2 grid h-6 w-6 -translate-y-1/2 place-items-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label="Clear history search"><svg className="h-3.5 w-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="m4 4 8 8m0-8-8 8" /></svg></button>}
+              </div>
+              <select className={`${INPUT} py-1.5`} value={historyStatus} onChange={(event) => setHistoryStatus(event.target.value)} aria-label="Filter adjustment status">
+                <option value="ALL">All statuses</option><option value="PENDING">Pending</option><option value="APPROVED">Approved</option><option value="RETURNED">Returned</option><option value="REJECTED">Rejected</option>
+              </select>
+              <select className={`${INPUT} py-1.5`} value={historyPageSize} onChange={(event) => setHistoryPageSize(Number(event.target.value))} aria-label="Adjustments per page">
+                <option value="10">10 per page</option><option value="25">25 per page</option><option value="50">50 per page</option>
+              </select>
+            </div>
+          </div>
+          {loading ? <Spinner /> : <>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead><tr>
+                  <th className={TH}>Reference</th><th className={TH}>Account / Customer</th>
+                  <th className={TH}>Type</th><th className={TH}>Amount</th>
+                  <th className={TH}>Requested by</th><th className={TH}>Status</th><th className={TH}>Action</th>
+                </tr></thead>
+                <tbody>
+                  {pagedHistoryItems.map((adjustment) => (
+                    <tr key={adjustment.accountAdjustmentId} className="border-t border-slate-100">
+                      <td className={TD}><div className="font-semibold text-slate-800">{adjustment.adjustmentNumber}</div><div className="mt-0.5 text-xs text-slate-400">{date(adjustment.createdAt)}</div></td>
+                      <td className={TD}><div className="font-medium text-slate-700">{adjustment.account.accountNumber}</div><div className="mt-0.5 max-w-52 truncate text-xs text-slate-400">{accountCustomerName(adjustment.account)}</div></td>
+                      <td className={TD}><span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-bold ${adjustment.adjustmentType === "DEBIT" ? "bg-orange-50 text-orange-700" : "bg-emerald-50 text-emerald-700"}`}><span className={`h-1.5 w-1.5 rounded-full ${adjustment.adjustmentType === "DEBIT" ? "bg-orange-500" : "bg-emerald-500"}`} />{pretty(adjustment.adjustmentType)}</span></td>
+                      <td className={`${TD} whitespace-nowrap font-bold text-slate-800`}>{money(adjustment.amount)}</td>
+                      <td className={TD}>{person(adjustment.requester)}</td>
+                      <td className={TD}><Badge value={adjustment.status} /></td>
+                      <td className={TD}>
+                        {adjustment.status === "PENDING" ? (() => {
+                          const isOwnRequest = String(adjustment.requestedBy) === String(actor?.userId);
+                          const blocked = !canApprove || (isOwnRequest && !isAdmin);
+                          return blocked ? (
+                            <Link to="/billing/account-adjustments/approvals" className="whitespace-nowrap text-xs font-semibold text-aqua-700 hover:text-aqua-800">Review queue</Link>
+                          ) : (
+                            <button type="button" disabled={Boolean(approvingId)} onClick={() => approveInline(adjustment)} className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-emerald-700 disabled:cursor-wait disabled:opacity-60">
+                              {approvingId === String(adjustment.accountAdjustmentId) && <span className="h-3 w-3 animate-spin rounded-full border-2 border-white/40 border-t-white" />}
+                              {approvingId === String(adjustment.accountAdjustmentId) ? "Approving…" : "Review & approve"}
+                            </button>
+                          );
+                        })() : <span className="text-xs text-slate-400">Completed</span>}
+                      </td>
+                    </tr>
+                  ))}
+                  {!visibleItems.length && <tr><td colSpan={7} className="px-6 py-12 text-center"><div className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-slate-400"><svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M6 3h9l3 3v15H6z" /><path d="M14 3v4h4M9 12h6M9 16h4" /></svg></div><div className="mt-2 font-semibold text-slate-700">{items.length ? "No matching adjustments" : "No adjustments yet"}</div><div className="mt-0.5 text-sm text-slate-400">{items.length ? "Try a different search or status filter." : "Submitted requests will appear here for tracking."}</div></td></tr>}
+                </tbody>
+              </table>
+            </div>
+            {visibleItems.length > 0 && (
+              <div className="border-t border-slate-100 px-4 py-3">
+                <Pagination page={historyPage} totalPages={historyTotalPages} total={visibleItems.length} pageSize={historyPageSize} onPageChange={setHistoryPage} label="adjustments" />
+              </div>
+            )}
+          </>}
+        </section>
+      </div>
+    </Page>
+  );
+}
+
+export function AccountAdjustmentApprovals() {
+  const [items, setItems] = useState<Row[]>([]);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [focus, setFocus] = useState<Row | null>(null);
+  const [search, setSearch] = useState("");
+  const [typeFilter, setTypeFilter] = useState("ALL");
+  const [requesterFilter, setRequesterFilter] = useState("ALL");
+  const [dateFilter, setDateFilter] = useState("ALL");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const [comments, setComments] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [decisionAction, setDecisionAction] = useState("");
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  async function load(initial = false) {
+    if (initial) setLoading(true);
+    else setRefreshing(true);
+    try {
+      const rows = await api.listAccountAdjustments("PENDING");
+      setItems(rows);
+      setSelected([]);
+      setFocus(null);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }
+  useEffect(() => {
+    load(true).catch((e) => setError(e.message));
+  }, []);
+  const visibleItems = useMemo(() => {
+    const query = search.trim().toLocaleLowerCase();
+    const now = Date.now();
+    return items.filter((adjustment) => {
+      const matchesType = typeFilter === "ALL" || adjustment.adjustmentType === typeFilter;
+      const matchesRequester = requesterFilter === "ALL" || String(adjustment.requestedBy) === requesterFilter;
+      const ageInDays = (now - new Date(adjustment.createdAt).getTime()) / 86_400_000;
+      const matchesDate = dateFilter === "ALL" || ageInDays <= Number(dateFilter);
+      const matchesSearch = !query || [
+        adjustment.adjustmentNumber,
+        adjustment.account?.accountNumber,
+        accountCustomerName(adjustment.account),
+        person(adjustment.requester),
+        adjustment.reason,
+      ].some((value) => String(value ?? "").toLocaleLowerCase().includes(query));
+      return matchesType && matchesRequester && matchesDate && matchesSearch;
+    });
+  }, [dateFilter, items, requesterFilter, search, typeFilter]);
+  const requesters = useMemo(() => Array.from(new Map(
+    items.map((item) => [String(item.requestedBy), person(item.requester)]),
+  ).entries()).sort((a, b) => a[1].localeCompare(b[1])), [items]);
+  const totalPages = Math.max(1, Math.ceil(visibleItems.length / pageSize));
+  const pagedItems = visibleItems.slice((page - 1) * pageSize, page * pageSize);
+  useEffect(() => { setPage(1); }, [dateFilter, requesterFilter, search, typeFilter, pageSize]);
+  useEffect(() => { if (page > totalPages) setPage(totalPages); }, [page, totalPages]);
+  const actor = getSessionUser();
+  const isAdmin = Boolean(actor?.roles.includes("SYSTEM_ADMIN"));
+  const canDecide = Boolean(actor?.roles.some((role) => ["BILLING_SUPERVISOR", "FINANCE_MANAGER", "SYSTEM_ADMIN"].includes(role)));
+  const selectedIncludesOwn = !isAdmin && selected.some((adjustmentId) => {
+    const adjustment = items.find((item) => String(item.accountAdjustmentId) === adjustmentId);
+    return adjustment && String(adjustment.requestedBy) === String(actor?.userId);
+  });
+
+  async function decide(decision: "APPROVE" | "REJECT" | "RETURN") {
+    if (!selected.length || comments.trim().length < 3) {
+      return setError("Select at least one adjustment and enter decision comments.");
+    }
+    const approved = await Swal.fire({
+      icon: decision === "APPROVE" ? "question" : "warning",
+      title: `${pretty(decision)} ${selected.length} account adjustment(s)?`,
+      text: decision === "APPROVE"
+        ? "Approved debits and credits will immediately change the customer account balances."
+        : `The selected requests will be marked ${pretty(decision)} without changing account balances.`,
+      showCancelButton: true,
+      confirmButtonText: `${pretty(decision)} selected`,
+      confirmButtonColor: decision === "APPROVE" ? "#059669" : decision === "REJECT" ? "#dc2626" : "#f97316",
+    });
+    if (!approved.isConfirmed) return;
+    setDecisionAction(decision); setError("");
+    try {
+      const result = await api.decideAccountAdjustments(selected, decision, comments);
+      setMessage(`${result.updated} account adjustment(s) changed to ${pretty(result.status)}.`);
+      setComments("");
+      await load();
+      window.dispatchEvent(new Event("sidebar-counts:refresh"));
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setDecisionAction("");
+    }
+  }
+
+  const decisionDisabled = Boolean(decisionAction) || !selected.length || !canDecide || selectedIncludesOwn;
+  const visibleIds = pagedItems.map((item) => String(item.accountAdjustmentId));
+  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selected.includes(id));
+  const focusedProjectedBalance = focus
+    ? Number(focus.account.currentBalance) + (focus.adjustmentType === "DEBIT" ? Number(focus.amount) : -Number(focus.amount))
+    : 0;
+  return (
+    <Page title="Account adjustment approval" subtitle="Review pending debit and credit requests before customer balances change" className="[&_.page-screen-header]:mb-3">
+      {error && <Notice>{error}</Notice>}
+      {message && <Notice tone="green">{message}</Notice>}
+      {!canDecide && <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">Decisions require Billing Supervisor, Finance Manager or System Administrator access.</div>}
+      {selectedIncludesOwn && <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">Your selection contains your own request. Maker-checker control requires an independent approver.</div>}
+      <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_390px]">
+        <section className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm shadow-slate-200/50">
+          <div className="border-b border-slate-100 px-4 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2"><h2 className="text-base font-bold text-slate-900">Pending requests</h2><span className="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">{items.length}</span>{selected.length > 0 && <span className="text-xs font-medium text-aqua-700">{selected.length} selected</span>}</div>
+              <button type="button" onClick={() => load().catch((e) => setError(e.message))} disabled={loading || refreshing} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:cursor-wait disabled:opacity-60">
+                <svg className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="M16 6V2m0 0h-4m4 0-3 3a6 6 0 1 0 1.5 6" /></svg>{refreshing ? "Refreshing…" : "Refresh"}
+              </button>
+            </div>
+            <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-[minmax(220px,1fr)_130px_170px_145px_120px]">
+              <div className="relative min-w-0">
+                <svg className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" /><path d="m12.5 12.5 4 4" /></svg>
+                <input className={`${INPUT} py-1.5 pl-9`} value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search reference, account, customer or requester" aria-label="Search pending adjustments" />
+              </div>
+              <select className={`${INPUT} py-1.5`} value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)} aria-label="Filter by adjustment type"><option value="ALL">All types</option><option value="DEBIT">Debit</option><option value="CREDIT">Credit</option></select>
+              <select className={`${INPUT} py-1.5`} value={requesterFilter} onChange={(event) => setRequesterFilter(event.target.value)} aria-label="Filter by requester"><option value="ALL">All requesters</option>{requesters.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select>
+              <select className={`${INPUT} py-1.5`} value={dateFilter} onChange={(event) => setDateFilter(event.target.value)} aria-label="Filter by request date"><option value="ALL">Any date</option><option value="1">Last 24 hours</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option></select>
+              <select className={`${INPUT} py-1.5`} value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))} aria-label="Requests per page"><option value="10">10 per page</option><option value="25">25 per page</option><option value="50">50 per page</option></select>
+            </div>
+          </div>
+          {loading ? <Spinner /> : <><div className="overflow-x-auto"><table className="w-full">
+            <thead><tr>
+              <th className={TH}><input aria-label="Select all visible account adjustments" type="checkbox" checked={allVisibleSelected} onChange={(e) => setSelected(e.target.checked ? Array.from(new Set([...selected, ...visibleIds])) : selected.filter((id) => !visibleIds.includes(id)))} /></th>
+              <th className={TH}>Reference</th><th className={TH}>Account / Customer</th><th className={TH}>Type</th><th className={TH}>Amount</th><th className={TH}>Requested by</th><th className={TH}>Action</th>
+            </tr></thead>
+            <tbody>
+              {pagedItems.map((adjustment) => (
+                <tr key={adjustment.accountAdjustmentId} className={`border-t border-slate-100 ${focus?.accountAdjustmentId === adjustment.accountAdjustmentId ? "bg-aqua-50/60" : ""}`}>
+                  <td className={TD}><input aria-label={`Select ${adjustment.adjustmentNumber}`} type="checkbox" checked={selected.includes(String(adjustment.accountAdjustmentId))} onChange={(e) => { const adjustmentId = String(adjustment.accountAdjustmentId); setSelected(e.target.checked ? Array.from(new Set([...selected, adjustmentId])) : selected.filter((id) => id !== adjustmentId)); if (e.target.checked) setFocus(adjustment); }} /></td>
+                  <td className={TD}><div className="font-semibold text-slate-800">{adjustment.adjustmentNumber}</div><div className="mt-0.5 text-xs text-slate-400">{date(adjustment.createdAt)}</div></td>
+                  <td className={TD}><div className="font-medium text-slate-700">{adjustment.account.accountNumber}</div><div className="mt-0.5 max-w-48 truncate text-xs text-slate-400">{accountCustomerName(adjustment.account)}</div></td>
+                  <td className={TD}><span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-bold ${adjustment.adjustmentType === "DEBIT" ? "bg-orange-50 text-orange-700" : "bg-emerald-50 text-emerald-700"}`}>{pretty(adjustment.adjustmentType)}</span></td>
+                  <td className={`${TD} whitespace-nowrap font-bold text-slate-800`}>{money(adjustment.amount)}</td>
+                  <td className={TD}>{person(adjustment.requester)}</td>
+                  <td className={TD}><button type="button" className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:border-aqua-300 hover:bg-aqua-50 hover:text-aqua-700" onClick={() => { const adjustmentId = String(adjustment.accountAdjustmentId); setFocus(adjustment); setSelected((current) => current.includes(adjustmentId) ? current : [...current, adjustmentId]); }}>Review</button></td>
+                </tr>
+              ))}
+              {!visibleItems.length && <tr><td colSpan={7} className="px-6 py-12 text-center"><div className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-slate-400"><svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M5 12.5 9 16l10-10" /><circle cx="12" cy="12" r="9" /></svg></div><div className="mt-2 font-semibold text-slate-700">{items.length ? "No matching requests" : "Approval queue is clear"}</div><div className="mt-0.5 text-sm text-slate-400">{items.length ? "Try a different search or type filter." : "There are no account adjustments awaiting review."}</div></td></tr>}
+            </tbody>
+          </table></div>{visibleItems.length > 0 && <div className="px-4 pb-4"><Pagination page={page} totalPages={totalPages} total={visibleItems.length} pageSize={pageSize} onPageChange={setPage} disabled={refreshing} label="requests" /></div>}</>}
+        </section>
+        <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm shadow-slate-200/50 xl:sticky xl:top-4">
+          <div className="border-b border-slate-100 px-4 py-3"><div className="flex items-center justify-between gap-3"><div><h2 className="text-base font-bold text-slate-900">Approval decision</h2><p className="text-xs text-slate-500">Review the selected request details</p></div><span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">{selected.length} selected</span></div></div>
+          <div className="p-4">
+          {focus ? <>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
+              <div className="flex items-start justify-between gap-3"><div><h3 className="font-bold text-slate-900">{focus.adjustmentNumber}</h3><p className="mt-0.5 text-xs text-slate-500">Requested {date(focus.createdAt)}</p></div><Badge value="PENDING" /></div>
+              <div className="mt-3 border-t border-slate-200 pt-3"><div className="font-semibold text-slate-800">{accountCustomerName(focus.account)}</div><div className="text-xs text-slate-500">{focus.account.accountNumber}</div></div>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <div className="rounded-lg border border-slate-200 bg-white p-2.5"><div className="text-xs text-slate-500">Current balance</div><div className="mt-0.5 font-bold text-slate-800">{money(focus.account.currentBalance)}</div></div>
+                <div className="rounded-lg border border-slate-200 bg-white p-2.5"><div className="text-xs text-slate-500">After approval</div><div className={`mt-0.5 font-bold ${focus.adjustmentType === "DEBIT" ? "text-orange-600" : "text-emerald-600"}`}>{money(focusedProjectedBalance)}</div></div>
+              </div>
+              <div className="mt-3 flex items-center justify-between border-b border-slate-200 pb-3"><span className={`rounded-full px-2.5 py-1 text-xs font-bold ${focus.adjustmentType === "DEBIT" ? "bg-orange-50 text-orange-700" : "bg-emerald-50 text-emerald-700"}`}>{pretty(focus.adjustmentType)}</span><span className="text-lg font-bold text-slate-900">{money(focus.amount)}</span></div>
+              <dl className="mt-3 space-y-2"><div><dt className="text-xs font-medium uppercase tracking-wide text-slate-400">Reason</dt><dd className="mt-0.5 leading-5 text-slate-700">{focus.reason}</dd></div><div className="grid grid-cols-2 gap-3"><div><dt className="text-xs font-medium uppercase tracking-wide text-slate-400">Requested by</dt><dd className="mt-0.5 text-slate-700">{person(focus.requester)}</dd></div>{focus.supportingFileName && <div><dt className="text-xs font-medium uppercase tracking-wide text-slate-400">Document</dt><dd className="mt-0.5 truncate text-slate-700" title={focus.supportingFileName}>{focus.supportingFileName}</dd></div>}</div></dl>
+            </div>
+            <Field label="Decision comments" required><textarea rows={3} className={`${INPUT} mt-3`} placeholder="Add a clear reason for this decision" value={comments} onChange={(e) => setComments(e.target.value)} /></Field>
+            <div className="mt-3 grid grid-cols-3 gap-2">
+              <Button disabled={decisionDisabled} tone="red" onClick={() => decide("REJECT")}>{decisionAction === "REJECT" ? <span className="inline-flex items-center gap-1.5"><span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white border-t-transparent" />Rejecting</span> : "Reject"}</Button>
+              <Button disabled={decisionDisabled} tone="orange" onClick={() => decide("RETURN")}>{decisionAction === "RETURN" ? <span className="inline-flex items-center gap-1.5"><span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white border-t-transparent" />Returning</span> : "Return"}</Button>
+              <Button disabled={decisionDisabled} tone="green" onClick={() => decide("APPROVE")}>{decisionAction === "APPROVE" ? <span className="inline-flex items-center gap-1.5"><span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white border-t-transparent" />Approving</span> : "Approve"}</Button>
+            </div>
+          </> : <div className="py-12 text-center"><div className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-slate-400"><svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M8 4h8M9 2h6v4H9zM6 4h12v17H6zM9 11h6M9 15h4" /></svg></div><div className="mt-2 font-semibold text-slate-700">No request selected</div><div className="mt-0.5 text-sm text-slate-400">Choose Review from the approval queue.</div></div>}
+          </div>
+        </section>
       </div>
     </Page>
   );

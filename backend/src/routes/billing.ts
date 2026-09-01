@@ -44,8 +44,59 @@ function batchesOf<T>(values: T[], size: number): T[][] {
   }
   return batches;
 }
+const postedBillStatuses = ["POSTED", "PARTIALLY_PAID", "PAID"];
+
+async function ensureEarlierReadingsAreBilled(billingCycleId: bigint, accountIds: bigint[]) {
+  const currentPeriod = await prisma.billingCycle.findUnique({
+    where: { billingCycleId },
+    include: { readingCycles: { orderBy: { endDate: "desc" }, take: 1 } },
+  });
+  const currentReadingCycle = currentPeriod?.readingCycles[0];
+  if (!currentPeriod || !currentReadingCycle || !accountIds.length) return;
+
+  const earlierReadings = await prisma.meterReading.findMany({
+    where: {
+      accountId: { in: accountIds },
+      approvalStatus: "APPROVED",
+      cycle: { status: "CLOSED", endDate: { lt: currentReadingCycle.endDate } },
+    },
+    select: {
+      accountId: true,
+      cycle: { select: { readingCycleId: true, cycleCode: true, billingCycleId: true } },
+      account: { select: { accountNumber: true } },
+    },
+  });
+  const linkedBillingCycleIds = Array.from(new Set(earlierReadings
+    .map((reading) => reading.cycle?.billingCycleId)
+    .filter((value): value is bigint => value != null)));
+  const postedBills = linkedBillingCycleIds.length ? await prisma.bill.findMany({
+    where: {
+      accountId: { in: accountIds },
+      billingCycleId: { in: linkedBillingCycleIds },
+      status: { in: postedBillStatuses },
+    },
+    select: { accountId: true, billingCycleId: true },
+  }) : [];
+  const postedKeys = new Set(postedBills.map((bill) => `${bill.accountId}:${bill.billingCycleId}`));
+  const blockers = earlierReadings.filter((reading) =>
+    !reading.cycle?.billingCycleId || !postedKeys.has(`${reading.accountId}:${reading.cycle.billingCycleId}`),
+  );
+  if (!blockers.length) return;
+
+  const examples = Array.from(new Set(blockers.map((reading) =>
+    `${reading.account?.accountNumber ?? `account ${reading.accountId}`} (${reading.cycle?.cycleCode ?? "older cycle"})`,
+  ))).slice(0, 5);
+  throw Object.assign(new Error(
+    `Posting blocked: older approved readings are still unbilled for ${examples.join(", ")}${blockers.length > examples.length ? " and others" : ""}. Post the older bills first.`,
+  ), { status: 409 });
+}
 function smsDate(value: Date) {
-  return `${String(value.getUTCDate()).padStart(2, "0")}/${String(value.getUTCMonth() + 1).padStart(2, "0")}/${value.getUTCFullYear()}`;
+  return value.toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC",
+  });
 }
 function smsNumber(value: number, places = 2) {
   return value.toLocaleString("en-KE", {
@@ -158,6 +209,7 @@ async function cycleCandidates(cycleId: bigint, filters: any = {}) {
   const accounts = await prisma.customerAccount.findMany({
     where: {
       accountStatus: "ACTIVE",
+      ...(filters.accountIds?.length ? { accountId: { in: filters.accountIds.map((value: bigint | string) => BigInt(value)) } } : {}),
       ...(filters.zoneId ? { property: { zoneId: BigInt(filters.zoneId) } } : {}),
       ...(filters.routeId ? { OR: [{ routeId: BigInt(filters.routeId) }, { property: { routeId: BigInt(filters.routeId) } }] } : {}),
       ...(filters.categoryId ? { categoryId: BigInt(filters.categoryId) } : {}),
@@ -323,8 +375,11 @@ billingRouter.get("/preview", async (req, res, next) => {
   const cycleId = parse(id, req.query.billingCycleId, res);
   if (!cycleId) return;
   try {
+    const rawAccountIds = String(req.query.accountIds ?? "").split(",").map((value) => value.trim()).filter(Boolean);
+    if (rawAccountIds.some((value) => !/^\d+$/.test(value))) return res.status(400).json({ error: "accountIds must contain valid account IDs" });
     const result = await cycleCandidates(cycleId, {
       zoneId: req.query.zoneId, routeId: req.query.routeId, categoryId: req.query.categoryId,
+      accountIds: Array.from(new Set(rawAccountIds)).map((value) => BigInt(value)),
       includePreviousBalance: String(req.query.includePreviousBalance ?? "true") === "true",
     });
     res.json({
@@ -369,11 +424,12 @@ billingRouter.get("/preview", async (req, res, next) => {
 });
 
 billingRouter.post("/generate", requireRole("SYSTEM_ADMIN", "BILLING_OFFICER"), async (req, res, next) => {
-  const data = parse(z.object({ billingCycleId: id, includePreviousBalance: z.boolean().default(true), includePenalties: z.boolean().default(true), sendForApproval: z.boolean().default(true), zoneId: optionalId, routeId: optionalId, categoryId: optionalId }), req.body, res);
+  const data = parse(z.object({ billingCycleId: id, includePreviousBalance: z.boolean().default(true), includePenalties: z.boolean().default(true), sendForApproval: z.boolean().default(true), zoneId: optionalId, routeId: optionalId, categoryId: optionalId, accountIds: z.array(id).min(1).max(500).optional() }), req.body, res);
   if (!data) return;
   try {
     const result = await cycleCandidates(data.billingCycleId, data);
-    if (!["DRAFT", "OPEN", "PROCESSING", "RETURNED"].includes(result.cycle.status)) return res.status(409).json({ error: "This billing period no longer accepts bill generation" });
+    const acceptsTargetedGeneration = data.accountIds?.length && result.cycle.status === "PENDING_APPROVAL";
+    if (!["DRAFT", "OPEN", "PROCESSING", "RETURNED"].includes(result.cycle.status) && !acceptsTargetedGeneration) return res.status(409).json({ error: "This billing period no longer accepts bill generation" });
     const eligible = result.rows.filter((row) => row.eligible);
     if (!eligible.length) return res.status(409).json({ error: "No eligible accounts. Review missing tariffs, readings, account status and duplicate bills in the preview." });
     const generated: any[] = [];
@@ -481,6 +537,7 @@ billingRouter.post("/cycles/:id/post", requireRole("FINANCE_MANAGER", "SYSTEM_AD
     const approved = cycle.bills.filter((bill: any) => bill.status === "APPROVED");
     if (!approved.length) return res.status(409).json({ error: "No approved bills are ready for posting" });
     if (cycle.bills.some((bill: any) => ["DRAFT", "PENDING_APPROVAL", "RETURNED"].includes(bill.status))) return res.status(409).json({ error: "Resolve all draft, pending or returned bills before posting the period" });
+    await ensureEarlierReadingsAreBilled(cycleId, Array.from(new Set(approved.map((bill: any) => bill.accountId))));
     const postedAt = new Date();
     await prisma.$transaction(async (tx) => {
       await tx.$executeRaw`
@@ -501,7 +558,58 @@ billingRouter.post("/cycles/:id/post", requireRole("FINANCE_MANAGER", "SYSTEM_AD
       await tx.billingEvent.create({ data: { billingCycleId: cycleId, eventType: "PERIOD_POSTED", previousStatus: cycle.status, newStatus: "POSTED", details: `${approved.length} bill(s) posted. ${data.reason}`, performedBy: uid(req) } });
     });
     res.json({ posted: approved.length });
-  } catch (error) { next(error); }
+  } catch (error: any) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    next(error);
+  }
+});
+
+billingRouter.post("/bills/post", requireRole("FINANCE_MANAGER", "SYSTEM_ADMIN"), async (req, res, next) => {
+  const data = parse(z.object({
+    billIds: z.array(id).min(1).max(500),
+    reason: z.string().trim().min(3).max(1000),
+  }), req.body, res);
+  if (!data) return;
+  try {
+    const bills = await prisma.bill.findMany({
+      where: { billId: { in: data.billIds } },
+      select: { billId: true, accountId: true, billingCycleId: true, status: true },
+    });
+    if (bills.length !== data.billIds.length) return res.status(404).json({ error: "One or more bills were not found" });
+    if (bills.some((bill) => bill.status !== "APPROVED")) return res.status(409).json({ error: "Only approved bills can be posted" });
+    const cycleIds = [...new Set(bills.map((bill) => bill.billingCycleId.toString()))];
+    if (cycleIds.length !== 1) return res.status(409).json({ error: "Selected bills must belong to the same billing period" });
+    const cycleId = bills[0].billingCycleId;
+    await ensureEarlierReadingsAreBilled(cycleId, Array.from(new Set(bills.map((bill) => bill.accountId))));
+    const postedAt = new Date();
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw(Prisma.sql`
+        UPDATE aquaflow.customer_accounts AS account
+        SET current_balance = account.current_balance + charges.total,
+            updated_at = ${postedAt}
+        FROM (
+          SELECT account_id, SUM(total_current_charges) AS total
+          FROM aquaflow.bills
+          WHERE bill_id IN (${Prisma.join(data.billIds)}) AND status = 'APPROVED'
+          GROUP BY account_id
+        ) AS charges
+        WHERE account.account_id = charges.account_id
+      `);
+      const updated = await tx.bill.updateMany({
+        where: { billId: { in: data.billIds }, status: "APPROVED" },
+        data: { status: "POSTED", postedBy: uid(req), postedAt, updatedAt: postedAt },
+      });
+      if (updated.count !== data.billIds.length) throw Object.assign(new Error("Some bills changed before posting. Refresh and try again."), { status: 409 });
+      await tx.billingEvent.createMany({
+        data: bills.map((bill) => ({ billingCycleId: bill.billingCycleId, billId: bill.billId, eventType: "BILL_POSTED", previousStatus: "APPROVED", newStatus: "POSTED", details: data.reason, performedBy: uid(req), createdAt: postedAt })),
+      });
+      await tx.billingCycle.update({ where: { billingCycleId: cycleId }, data: { status: "PROCESSING", updatedAt: postedAt } });
+    }, { maxWait: 10_000, timeout: 30_000 });
+    res.json({ posted: bills.length, billingCycleId: cycleId });
+  } catch (error: any) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    next(error);
+  }
 });
 
 billingRouter.post("/notifications", requireRole("SYSTEM_ADMIN", "BILLING_OFFICER", "BILLING_SUPERVISOR"), async (req, res, next) => {
@@ -647,7 +755,8 @@ billingRouter.get("/statements/:accountId", async (req, res, next) => {
       return res.status(400).json({ error: "Statement start date cannot be after the end date." });
     }
     const [bills, payments, otherServicePayments, priorBills, priorPayments, latestBill, settings,
-      disconnectionPostings, priorDisconnectionPostings, meterReplacements] = await Promise.all([
+      disconnectionPostings, priorDisconnectionPostings, meterReplacements, accountAdjustments,
+      priorAccountAdjustments] = await Promise.all([
       prisma.bill.findMany({
         where: { accountId, status: { in: ["POSTED", "PARTIALLY_PAID", "PAID"] }, issueDate: { gte: from, lte: to } },
         include: { billingCycle: true, tariff: true, reading: true },
@@ -714,6 +823,14 @@ billingRouter.get("/statements/:accountId", async (req, res, next) => {
         WHERE mr.account_id=${accountId} AND mr.request_status='APPROVED'
           AND mr.replacement_date>=${from} AND mr.replacement_date<=${to}
         ORDER BY mr.replacement_date,mr.replacement_id`,
+      prisma.accountAdjustment.findMany({
+        where: { accountId, status: "APPROVED", approvedAt: { gte: from, lte: to } },
+        orderBy: { approvedAt: "asc" },
+      }),
+      prisma.accountAdjustment.findMany({
+        where: { accountId, status: "APPROVED", approvedAt: { lt: from } },
+        select: { adjustmentType: true, amount: true },
+      }),
     ]);
     const entries = [
       ...bills.map((bill: any) => ({
@@ -808,9 +925,25 @@ billingRouter.get("/statements/:accountId", async (req, res, next) => {
         debit: 0,
         credit: 0,
       })),
+      ...accountAdjustments.map((adjustment: any) => ({
+        id: `A${adjustment.accountAdjustmentId}`,
+        date: adjustment.approvedAt,
+        particulars: adjustment.adjustmentType === "DEBIT" ? "Account debit adjustment" : "Account credit adjustment",
+        reference: adjustment.adjustmentNumber,
+        period: adjustment.approvedAt.toISOString().slice(0, 7),
+        details: adjustment.reason,
+        description: `${adjustment.adjustmentType === "DEBIT" ? "Debit" : "Credit"} adjustment ${adjustment.adjustmentNumber}`,
+        debit: adjustment.adjustmentType === "DEBIT" ? Number(adjustment.amount) : 0,
+        credit: adjustment.adjustmentType === "CREDIT" ? Number(adjustment.amount) : 0,
+      })),
     ].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    const priorAccountAdjustmentTotal = priorAccountAdjustments.reduce(
+      (total, adjustment) => total + (adjustment.adjustmentType === "DEBIT" ? Number(adjustment.amount) : -Number(adjustment.amount)),
+      0,
+    );
     const openingBalance = round(Number(account.openingBalance) + Number(priorBills._sum.totalCurrentCharges ?? 0)
-      + Number(priorDisconnectionPostings[0]?.total ?? 0) - Number(priorPayments._sum.amount ?? 0));
+      + Number(priorDisconnectionPostings[0]?.total ?? 0) + priorAccountAdjustmentTotal
+      - Number(priorPayments._sum.amount ?? 0));
     let balance = openingBalance;
     const statement = entries.map((entry) => { balance = round(balance + entry.debit - entry.credit); return { ...entry, balance }; });
     const totalDebits = round(entries.reduce((sum, entry) => sum + entry.debit, 0));
@@ -865,6 +998,161 @@ billingRouter.get("/statements/:accountId", async (req, res, next) => {
     });
   } catch (error) { next(error); }
 });
+
+const accountAdjustmentSelect = {
+  accountAdjustmentId: true,
+  adjustmentNumber: true,
+  accountId: true,
+  adjustmentType: true,
+  amount: true,
+  reason: true,
+  status: true,
+  requestedBy: true,
+  approvedBy: true,
+  adjustmentDate: true,
+  supportingFileName: true,
+  decisionComments: true,
+  approvedAt: true,
+  createdAt: true,
+  updatedAt: true,
+  account: { include: { customer: true, category: true } },
+  requester: true,
+  approver: true,
+} satisfies Prisma.AccountAdjustmentSelect;
+
+billingRouter.get("/account-adjustments", async (req, res, next) => {
+  try {
+    const status = String(req.query.status ?? "").trim().toUpperCase();
+    const search = String(req.query.search ?? "").trim();
+    const accountId = req.query.accountId ? BigInt(String(req.query.accountId)) : undefined;
+    const adjustments = await prisma.accountAdjustment.findMany({
+      where: {
+        ...(status ? { status } : {}),
+        ...(accountId ? { accountId } : {}),
+        ...(search ? {
+          OR: [
+            { adjustmentNumber: { contains: search, mode: "insensitive" as const } },
+            { account: { accountNumber: { contains: search, mode: "insensitive" as const } } },
+            { account: { customer: { firstName: { contains: search, mode: "insensitive" as const } } } },
+            { account: { customer: { lastName: { contains: search, mode: "insensitive" as const } } } },
+            { account: { customer: { organizationName: { contains: search, mode: "insensitive" as const } } } },
+          ],
+        } : {}),
+      },
+      select: accountAdjustmentSelect,
+      orderBy: { createdAt: "desc" },
+      take: 2_000,
+    });
+    res.json(adjustments);
+  } catch (error) { next(error); }
+});
+
+billingRouter.post(
+  "/account-adjustments",
+  requireRole("SYSTEM_ADMIN", "BILLING_OFFICER", "BILLING_SUPERVISOR", "FINANCE_MANAGER"),
+  async (req, res, next) => {
+    const data = parse(z.object({
+      accountId: id,
+      adjustmentType: z.enum(["DEBIT", "CREDIT"]),
+      amount: money,
+      reason: z.string().trim().min(5).max(2000),
+      supportingFileName: z.string().trim().max(255).optional(),
+      supportingContent: z.string().max(6_000_000).optional(),
+    }), req.body, res);
+    if (!data) return;
+    try {
+      const account = await prisma.customerAccount.findUnique({ where: { accountId: data.accountId } });
+      if (!account) return res.status(404).json({ error: "Customer account not found" });
+      if (account.accountStatus === "CLOSED") {
+        return res.status(409).json({ error: "A closed customer account cannot be adjusted" });
+      }
+      const adjustmentNumber = `AADJ-${Date.now()}-${String(data.accountId).slice(-5)}`;
+      const adjustment = await prisma.accountAdjustment.create({
+        data: { ...data, adjustmentNumber, requestedBy: uid(req)!, status: "PENDING" },
+        select: accountAdjustmentSelect,
+      });
+      res.status(201).json(adjustment);
+    } catch (error) { next(error); }
+  },
+);
+
+billingRouter.patch(
+  "/account-adjustments/decision",
+  requireRole("BILLING_SUPERVISOR", "FINANCE_MANAGER", "SYSTEM_ADMIN"),
+  async (req, res, next) => {
+    const data = parse(z.object({
+      adjustmentIds: z.array(id).min(1).max(500),
+      decision: z.enum(["APPROVE", "REJECT", "RETURN"]),
+      comments: z.string().trim().min(3).max(2000),
+    }), req.body, res);
+    if (!data) return;
+    const actorId = uid(req)!;
+    try {
+      const selected = await prisma.accountAdjustment.findMany({
+        where: { accountAdjustmentId: { in: data.adjustmentIds } },
+        select: { accountAdjustmentId: true, requestedBy: true, status: true },
+      });
+      if (selected.length !== data.adjustmentIds.length) {
+        return res.status(404).json({ error: "One or more account adjustment requests were not found" });
+      }
+      if (selected.some((adjustment) => adjustment.status !== "PENDING")) {
+        return res.status(409).json({ error: "Only pending account adjustment requests can be decided" });
+      }
+      if (!isSystemAdmin(req) && selected.some((adjustment) => adjustment.requestedBy === actorId)) {
+        return res.status(403).json({
+          error: "Maker-checker control: a requester cannot decide their own account adjustment. No selected requests were changed.",
+        });
+      }
+
+      const nextStatus = data.decision === "APPROVE" ? "APPROVED" : data.decision === "RETURN" ? "RETURNED" : "REJECTED";
+      await prisma.$transaction(async (tx) => {
+        const locked = await tx.$queryRaw<Array<{
+          account_adjustment_id: bigint;
+          account_id: bigint;
+          adjustment_type: string;
+          amount: Prisma.Decimal;
+          status: string;
+        }>>(Prisma.sql`
+          SELECT account_adjustment_id, account_id, adjustment_type, amount, status
+          FROM aquaflow.account_adjustments
+          WHERE account_adjustment_id IN (${Prisma.join(data.adjustmentIds)})
+          FOR UPDATE
+        `);
+        if (locked.length !== data.adjustmentIds.length || locked.some((adjustment) => adjustment.status !== "PENDING")) {
+          const conflict = new Error("One or more account adjustments changed while you were reviewing them. Refresh and try again.");
+          (conflict as any).statusCode = 409;
+          throw conflict;
+        }
+        const decidedAt = new Date();
+        for (const adjustment of locked) {
+          if (data.decision === "APPROVE") {
+            const signedAmount = adjustment.adjustment_type === "DEBIT"
+              ? Number(adjustment.amount)
+              : -Number(adjustment.amount);
+            await tx.customerAccount.update({
+              where: { accountId: adjustment.account_id },
+              data: { currentBalance: { increment: signedAmount }, updatedAt: decidedAt },
+            });
+          }
+          await tx.accountAdjustment.update({
+            where: { accountAdjustmentId: adjustment.account_adjustment_id },
+            data: {
+              status: nextStatus,
+              approvedBy: actorId,
+              approvedAt: decidedAt,
+              decisionComments: data.comments,
+              updatedAt: decidedAt,
+            },
+          });
+        }
+      }, { maxWait: 10_000, timeout: 30_000 });
+      res.json({ updated: data.adjustmentIds.length, status: nextStatus });
+    } catch (error: any) {
+      if (error?.statusCode) return res.status(error.statusCode).json({ error: error.message });
+      next(error);
+    }
+  },
+);
 
 billingRouter.get("/adjustments", async (req, res, next) => {
   try {

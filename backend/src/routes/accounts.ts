@@ -13,7 +13,7 @@ const nonLedgerPaymentTypes = ["RECONNECTION_FEE", "NEW_CONNECTION_FEE"];
 const roundMoney = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
 
 async function accountLedgerBalance(client: any, accountId: bigint, openingBalance: number) {
-  const [bills, payments, disconnectionPostings] = await Promise.all([
+  const [bills, payments, disconnectionPostings, accountAdjustments] = await Promise.all([
     client.bill.aggregate({
       where: { accountId, status: { in: ledgerBillStatuses } },
       _sum: { totalCurrentCharges: true },
@@ -31,16 +31,30 @@ async function accountLedgerBalance(client: any, accountId: bigint, openingBalan
        FROM aquaflow.disconnection_postings WHERE account_id=$1`,
       accountId,
     ),
+    client.accountAdjustment.findMany({
+      where: { accountId, status: "APPROVED" },
+      select: { adjustmentType: true, amount: true },
+    }),
   ]);
   const postedBillTotal = roundMoney(Number(bills._sum.totalCurrentCharges ?? 0));
   const postedServiceChargeTotal = roundMoney(Number(disconnectionPostings[0]?.total ?? 0));
   const postedPaymentTotal = roundMoney(Number(payments._sum.amount ?? 0));
+  const approvedAccountAdjustmentTotal = roundMoney(
+    accountAdjustments.reduce(
+      (total: number, adjustment: { adjustmentType: string; amount: unknown }) =>
+        total + (adjustment.adjustmentType === "DEBIT" ? Number(adjustment.amount) : -Number(adjustment.amount)),
+      0,
+    ),
+  );
   return {
     openingBalance: roundMoney(openingBalance),
     postedBillTotal,
     postedServiceChargeTotal,
     postedPaymentTotal,
-    calculatedBalance: roundMoney(openingBalance + postedBillTotal + postedServiceChargeTotal - postedPaymentTotal),
+    approvedAccountAdjustmentTotal,
+    calculatedBalance: roundMoney(
+      openingBalance + postedBillTotal + postedServiceChargeTotal + approvedAccountAdjustmentTotal - postedPaymentTotal,
+    ),
   };
 }
 

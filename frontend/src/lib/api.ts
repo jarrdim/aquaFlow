@@ -551,6 +551,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ reason }),
     }),
+  postBills: (billIds: string[], reason: string) =>
+    request("/billing/bills/post", {
+      method: "POST",
+      body: JSON.stringify({ billIds, reason }),
+    }),
   sendBillNotifications: (data: Record<string, unknown>) =>
     request("/billing/notifications", {
       method: "POST",
@@ -584,6 +589,26 @@ export const api = {
     comments: string,
   ) =>
     request("/billing/adjustments/decision", {
+      method: "PATCH",
+      body: JSON.stringify({ adjustmentIds, decision, comments }),
+    }),
+  listAccountAdjustments: (status = "", search = "") => {
+    const query = new URLSearchParams(
+      Object.entries({ status, search }).filter(([, value]) => value),
+    ).toString();
+    return request(`/billing/account-adjustments${query ? `?${query}` : ""}`);
+  },
+  createAccountAdjustment: (data: Record<string, unknown>) =>
+    request("/billing/account-adjustments", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  decideAccountAdjustments: (
+    adjustmentIds: string[],
+    decision: "APPROVE" | "REJECT" | "RETURN",
+    comments: string,
+  ) =>
+    request("/billing/account-adjustments/decision", {
       method: "PATCH",
       body: JSON.stringify({ adjustmentIds, decision, comments }),
     }),

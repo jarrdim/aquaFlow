@@ -208,6 +208,7 @@ model CustomerAccount {
   serviceRequests      ServiceRequest[]
   portalAccess         CustomerAccountAccess[]
   balanceReconciliations AccountBalanceReconciliation[]
+  accountAdjustments   AccountAdjustment[]
 
   @@map("customer_accounts")
   @@schema("aquaflow")
@@ -273,6 +274,8 @@ model User {
   postedBills                    Bill[]                       @relation("BillPoster")
   requestedBillingAdjustments    BillingAdjustment[]          @relation("BillingAdjustmentRequester")
   approvedBillingAdjustments     BillingAdjustment[]          @relation("BillingAdjustmentApprover")
+  requestedAccountAdjustments    AccountAdjustment[]          @relation("AccountAdjustmentRequester")
+  approvedAccountAdjustments     AccountAdjustment[]          @relation("AccountAdjustmentApprover")
   billingEvents                  BillingEvent[]               @relation("BillingEventUser")
   sentBillNotifications          BillNotification[]           @relation("BillNotificationSender")
   attemptedBillingAlerts         BillingSecurityAlert[]       @relation("BillingAlertAttemptUser")
@@ -998,6 +1001,34 @@ model BillingAdjustment {
   events    BillingEvent[]
 
   @@map("billing_adjustments")
+  @@schema("aquaflow")
+}
+
+model AccountAdjustment {
+  accountAdjustmentId BigInt    @id @default(autoincrement()) @map("account_adjustment_id")
+  adjustmentNumber    String    @unique @map("adjustment_number")
+  accountId           BigInt    @map("account_id")
+  adjustmentType      String    @map("adjustment_type")
+  amount              Decimal   @db.Decimal(18, 2)
+  reason              String
+  status              String    @default("PENDING")
+  requestedBy         BigInt    @map("requested_by")
+  approvedBy          BigInt?   @map("approved_by")
+  adjustmentDate      DateTime  @default(now()) @map("adjustment_date") @db.Date
+  supportingFileName  String?   @map("supporting_file_name")
+  supportingContent   String?   @map("supporting_content")
+  decisionComments    String?   @map("decision_comments")
+  approvedAt          DateTime? @map("approved_at")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @default(now()) @map("updated_at")
+
+  account   CustomerAccount @relation(fields: [accountId], references: [accountId])
+  requester User            @relation("AccountAdjustmentRequester", fields: [requestedBy], references: [userId])
+  approver  User?           @relation("AccountAdjustmentApprover", fields: [approvedBy], references: [userId])
+
+  @@index([accountId, approvedAt])
+  @@index([status, createdAt])
+  @@map("account_adjustments")
   @@schema("aquaflow")
 }
 

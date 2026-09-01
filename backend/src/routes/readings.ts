@@ -96,6 +96,7 @@ async function getEligibleAssignments(
   search = "",
   meterId?: bigint,
   allowedRouteIds?: bigint[],
+  accountIds?: bigint[],
 ) {
   const accountFilters: Prisma.CustomerAccountWhereInput[] = [
     { accountStatus: "ACTIVE" },
@@ -121,7 +122,7 @@ async function getEligibleAssignments(
     ...(meterId ? { meterId } : {}),
     assignmentStatus: "ACTIVE",
     removalDate: null,
-    accountId: { not: null },
+    accountId: accountIds?.length ? { in: accountIds } : { not: null },
     meter: { status: "ACTIVE" },
     account: { AND: accountFilters },
   };
@@ -416,6 +417,11 @@ readingsRouter.get("/worklist", async (req, res, next) => {
     const routeIds = Array.from(new Set(rawRouteIds)).map((value) => BigInt(value));
     const zoneId = req.query.zoneId ? BigInt(String(req.query.zoneId)) : undefined;
     const meterId = req.query.meterId ? BigInt(String(req.query.meterId)) : undefined;
+    const rawAccountIds = String(req.query.accountIds ?? "").split(",").map((value) => value.trim()).filter(Boolean);
+    if (rawAccountIds.some((value) => !/^\d+$/.test(value))) {
+      return res.status(400).json({ error: "accountIds must contain valid account IDs" });
+    }
+    const accountIds = Array.from(new Set(rawAccountIds)).map((value) => BigInt(value));
     const search = String(req.query.search ?? "").trim();
     let allowedRouteIds: bigint[] | undefined;
     if (req.user?.roles.includes("METER_READER")) {
@@ -451,6 +457,7 @@ readingsRouter.get("/worklist", async (req, res, next) => {
       search,
       meterId,
       allowedRouteIds,
+      accountIds,
     );
     const currentReadings = await prisma.meterReading.findMany({
       where: { readingCycleId: cycleId, meterId: { in: items.map((a) => a.meterId) } },
@@ -531,6 +538,12 @@ async function capture(input: any, req: any) {
   const previous = Number(meter.readings[0]?.currentReading ?? meter.openingReading);
   if (input.previousReading != null && Math.abs(input.previousReading - previous) > 0.001) throw Object.assign(new Error(`Previous reading changed to ${previous}. Refresh before submitting.`), { status: 409 });
   const consumption = input.currentReading - previous;
+  if (consumption < 0) {
+    throw Object.assign(
+      new Error(`Current reading cannot be below the previous reading of ${previous}. Check the meter value before submitting.`),
+      { status: 400 },
+    );
+  }
   let exceptionType: string = input.exceptionType ?? "NONE";
   if (exceptionType === "NONE") {
     if (consumption < 0) exceptionType = "NEGATIVE";
@@ -566,7 +579,7 @@ async function capture(input: any, req: any) {
 
 readingsRouter.post(
   "/",
-  requireRole("METER_READER", "METER_SUPERVISOR", "SUPERVISOR"),
+  requireRole("SYSTEM_ADMIN", "METER_READER", "METER_SUPERVISOR", "SUPERVISOR"),
   async (req, res, next) => {
   const data = parse(captureSchema, req.body, res);
   if (!data) return;
@@ -583,7 +596,7 @@ readingsRouter.post(
 
 readingsRouter.post(
   "/sync",
-  requireRole("METER_READER", "METER_SUPERVISOR", "SUPERVISOR"),
+  requireRole("SYSTEM_ADMIN", "METER_READER", "METER_SUPERVISOR", "SUPERVISOR"),
   async (req, res, next) => {
   const body = parse(z.object({ readings: z.array(captureSchema).min(1).max(100) }), req.body, res);
   if (!body) return;
