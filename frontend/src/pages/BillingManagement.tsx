@@ -401,16 +401,19 @@ function CycleSelect({
   value,
   onChange,
   includeBlank = true,
+  disabled = false,
 }: {
   cycles: Row[];
   value: string;
   onChange: (value: string) => void;
   includeBlank?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <SearchableSelect
       className={INPUT}
       value={value}
+      disabled={disabled}
       onChange={(e) => onChange(e.target.value)}
     >
       {includeBlank && <option value="">Select billing period</option>}
@@ -2852,24 +2855,48 @@ export function BillNotifications() {
   const [message, setMessage] = useState("");
   const [search, setSearch] = useState("");
   const [billStatus, setBillStatus] = useState("");
-  const [notificationStatus, setNotificationStatus] = useState("");
+  const [notificationStatus, setNotificationStatus] = useState("NOT_SENT");
   const [batchSize, setBatchSize] = useState("2000");
   const [selectedBillIds, setSelectedBillIds] = useState<string[]>([]);
+  const [loadingCycles, setLoadingCycles] = useState(true);
+  const [loadingBills, setLoadingBills] = useState(false);
+  const [queueing, setQueueing] = useState(false);
   useEffect(() => {
-    api.listBillingCycles().then((rows) => {
-      setCycles(rows);
-      if (rows[0]) setCycleId(String(rows[0].billingCycleId));
-    });
+    let active = true;
+    setLoadingCycles(true);
+    api.listBillingCycles()
+      .then((rows) => {
+        if (!active) return;
+        setCycles(rows);
+        if (rows[0]) setCycleId(String(rows[0].billingCycleId));
+      })
+      .catch((e) => active && setError(e.message))
+      .finally(() => active && setLoadingCycles(false));
+    return () => { active = false; };
   }, []);
   useEffect(() => {
+    let active = true;
     setSelectedBillIds([]);
-    if (cycleId) api.listBills({ billingCycleId: cycleId, limit: "10000" }).then(setBills);
+    if (!cycleId) {
+      setBills([]);
+      setLoadingBills(false);
+      return () => { active = false; };
+    }
+    setLoadingBills(true);
+    setError("");
+    api.listBills({ billingCycleId: cycleId, limit: "10000" })
+      .then((rows) => active && setBills(rows))
+      .catch((e) => active && setError(e.message))
+      .finally(() => active && setLoadingBills(false));
+    return () => { active = false; };
   }, [cycleId]);
   async function send() {
     if (!selectedBillIds.length) return;
     if (!window.confirm(`Queue ${selectedBillIds.length} selected bill(s) for ${channels.join(" + ")} delivery? No messages will be sent until the delivery queue is processed.`)) return;
     try {
       setError("");
+      setMessage("");
+      setQueueing(true);
       const result = await api.sendBillNotifications({
         billingCycleId: cycleId,
         billIds: selectedBillIds,
@@ -2879,9 +2906,13 @@ export function BillNotifications() {
         `${result.notifications} notification(s) queued for ${result.bills} bill(s). Open the delivery queue when you are ready to send them.`,
       );
       setSelectedBillIds([]);
+      setLoadingBills(true);
       setBills(await api.listBills({ billingCycleId: cycleId, limit: "10000" }));
     } catch (e: any) {
       setError(e.message);
+    } finally {
+      setQueueing(false);
+      setLoadingBills(false);
     }
   }
   const selected = bills.filter(
@@ -2935,12 +2966,13 @@ export function BillNotifications() {
                 cycles={cycles}
                 value={cycleId}
                 onChange={setCycleId}
+                disabled={loadingCycles || loadingBills || queueing}
               />
             </Field>
             <Field label="Notification channels">
               <div className="grid grid-cols-2 gap-2 rounded-lg border p-3">
                 {["SMS", "APP", "EMAIL", "WHATSAPP"].map((channel) => {
-                  const disabled = channel === "EMAIL" || channel === "WHATSAPP";
+                  const disabled = channel === "EMAIL" || channel === "WHATSAPP" || queueing;
                   return <label key={channel} className={`flex gap-2 ${disabled ? "text-slate-400" : ""}`}>
                     <input
                       type="checkbox"
@@ -2960,17 +2992,19 @@ export function BillNotifications() {
               </div>
             </Field>
             <div className="rounded-lg bg-blue-50 p-3 text-sm text-blue-700">
-              {selectedBillIds.length} bill(s) selected from {selectableBills.length} unsent matching bill(s). Queueing does not send SMS.
+              {loadingBills
+                ? "Loading eligible bills…"
+                : `${selectedBillIds.length} bill(s) selected from ${selectableBills.length} unsent matching bill(s). Queueing does not send SMS.`}
             </div>
             <Field label="Selection batch size">
               <div className="flex gap-2">
-                <SearchableSelect className={INPUT} value={batchSize} onChange={(e) => setBatchSize(e.target.value)}>
+                <SearchableSelect className={INPUT} value={batchSize} disabled={loadingBills || queueing} onChange={(e) => setBatchSize(e.target.value)}>
                   <option value="100">100 bills</option>
                   <option value="500">500 bills</option>
                   <option value="1000">1,000 bills</option>
                   <option value="2000">2,000 bills</option>
                 </SearchableSelect>
-                <button type="button" className="whitespace-nowrap rounded-xl border border-aqua-600 px-3 py-2 text-sm font-semibold text-aqua-700 hover:bg-aqua-50" onClick={selectNextBatch}>
+                <button type="button" disabled={loadingBills || queueing || !selectableBills.length} className="whitespace-nowrap rounded-xl border border-aqua-600 px-3 py-2 text-sm font-semibold text-aqua-700 hover:bg-aqua-50 disabled:cursor-not-allowed disabled:opacity-50" onClick={selectNextBatch}>
                   Select next batch
                 </button>
               </div>
@@ -2983,10 +3017,15 @@ export function BillNotifications() {
             </div>
             <Button
               className="w-full"
-              disabled={!cycleId || !channels.length || !selectedBillIds.length || !readingCycleClosed}
+              disabled={!cycleId || !channels.length || !selectedBillIds.length || !readingCycleClosed || loadingBills || queueing}
               onClick={send}
             >
-              {readingCycleClosed ? `Queue ${selectedBillIds.length} selected bill(s)` : "Close reading cycle first"}
+              {queueing ? (
+                <span className="inline-flex items-center justify-center">
+                  <span className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden />
+                  Queueing notifications…
+                </span>
+              ) : readingCycleClosed ? `Queue ${selectedBillIds.length} selected bill(s)` : "Close reading cycle first"}
             </Button>
             <Link
               to="/notifications/queue"
@@ -3003,10 +3042,10 @@ export function BillNotifications() {
           </div>
           <div className="mt-4 grid gap-3 md:grid-cols-3">
             <Field label="Search bill, customer or account">
-              <input className={INPUT} value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search records" />
+              <input className={INPUT} disabled={loadingBills || queueing} value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search records" />
             </Field>
             <Field label="Bill status">
-              <SearchableSelect className={INPUT} value={billStatus} onChange={(e) => setBillStatus(e.target.value)}>
+              <SearchableSelect className={INPUT} disabled={loadingBills || queueing} value={billStatus} onChange={(e) => setBillStatus(e.target.value)}>
                 <option value="">All eligible statuses</option>
                 <option value="APPROVED">Approved</option>
                 <option value="POSTED">Posted</option>
@@ -3015,7 +3054,7 @@ export function BillNotifications() {
               </SearchableSelect>
             </Field>
             <Field label="Notification status">
-              <SearchableSelect className={INPUT} value={notificationStatus} onChange={(e) => setNotificationStatus(e.target.value)}>
+              <SearchableSelect className={INPUT} disabled={loadingBills || queueing} value={notificationStatus} onChange={(e) => setNotificationStatus(e.target.value)}>
                 <option value="">All notification statuses</option>
                 <option value="NOT_SENT">Not sent</option>
                 <option value="QUEUED">Queued</option>
@@ -3026,9 +3065,17 @@ export function BillNotifications() {
           </div>
           <div className="mt-3 flex items-center justify-between text-sm text-slate-500">
             <span>Showing {filteredBills.length} of {selected.length} eligible bills</span>
-            {(search || billStatus || notificationStatus) && <button type="button" className="font-semibold text-aqua-700 hover:text-aqua-600" onClick={() => { setSearch(""); setBillStatus(""); setNotificationStatus(""); }}>Clear filters</button>}
+            {(search || billStatus || notificationStatus !== "NOT_SENT") && <button type="button" className="font-semibold text-aqua-700 hover:text-aqua-600" onClick={() => { setSearch(""); setBillStatus(""); setNotificationStatus("NOT_SENT"); }}>Reset filters</button>}
           </div>
-          <div className="mt-4 overflow-x-auto">
+          <div className="relative mt-4 min-h-[260px] overflow-x-auto">
+            {loadingBills && (
+              <div className="absolute inset-0 z-20 flex items-start justify-center rounded-xl bg-white/85 pt-20 backdrop-blur-[1px]">
+                <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-5 py-3 font-semibold text-slate-700 shadow-lg">
+                  <span className="h-5 w-5 animate-spin rounded-full border-2 border-aqua-200 border-t-aqua-700" aria-hidden />
+                  Loading billing records…
+                </div>
+              </div>
+            )}
             <table className="w-full">
               <thead>
                 <tr>
