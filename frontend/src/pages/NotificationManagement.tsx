@@ -1525,13 +1525,16 @@ function NotificationRegister({ queueOnly = false }: { queueOnly?: boolean }) {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(1000);
   const [processingBatchSize, setProcessingBatchSize] = useState(1000);
   const [total, setTotal] = useState(0);
   const [pages, setPages] = useState(1);
-  const load = (pageValue = page) =>
-    api
+  const load = (pageValue = page) => {
+    setLoading(true);
+    setError("");
+    return api
       .listNotifications({ status, channel, search, page: String(pageValue), pageSize: String(pageSize) })
       .then((result) => {
         setRows(result.items ?? []);
@@ -1539,7 +1542,9 @@ function NotificationRegister({ queueOnly = false }: { queueOnly?: boolean }) {
         setPages(Math.max(1, Number(result.pages ?? 1)));
         if (pageValue > Number(result.pages ?? 1)) setPage(Math.max(1, Number(result.pages ?? 1)));
       })
-      .catch((e) => setError(errorText(e)));
+      .catch((e) => setError(errorText(e)))
+      .finally(() => setLoading(false));
+  };
   useEffect(() => {
     void load();
   }, [status, channel, page, pageSize]);
@@ -1571,12 +1576,16 @@ function NotificationRegister({ queueOnly = false }: { queueOnly?: boolean }) {
     }
   }
   async function retry(id: string) {
+    setBusy(true);
+    setError("");
     try {
       await api.retryNotification(id);
       setSuccess("Notification retry processed.");
-      load();
+      await load();
     } catch (e) {
       setError(errorText(e));
+    } finally {
+      setBusy(false);
     }
   }
   return (
@@ -1589,7 +1598,7 @@ function NotificationRegister({ queueOnly = false }: { queueOnly?: boolean }) {
       }
       actions={
         queueOnly ? (
-          <Button tone="green" disabled={busy} onClick={processQueue} className="inline-flex items-center gap-2">
+          <Button tone="green" disabled={busy || loading} onClick={processQueue} className="inline-flex items-center gap-2">
             <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`h-4 w-4 ${busy ? "animate-spin" : ""}`}><path d="M20 12a8 8 0 1 1-2.3-5.7L20 8" /><path d="M20 3v5h-5" /></svg>
             {busy
               ? "Processing…"
@@ -1610,6 +1619,7 @@ function NotificationRegister({ queueOnly = false }: { queueOnly?: boolean }) {
           <SearchableSelect
             className={`${INPUT} pl-10`}
             value={status}
+            disabled={loading || busy}
             onChange={(e) => { setStatus(e.target.value); setPage(1); setSelected([]); }}
           >
             <option value="">All statuses</option>
@@ -1624,6 +1634,7 @@ function NotificationRegister({ queueOnly = false }: { queueOnly?: boolean }) {
           <SearchableSelect
             className={`${INPUT} pl-10`}
             value={channel}
+            disabled={loading || busy}
             onChange={(e) => { setChannel(e.target.value); setPage(1); setSelected([]); }}
           >
             <option value="">All channels</option>
@@ -1638,12 +1649,13 @@ function NotificationRegister({ queueOnly = false }: { queueOnly?: boolean }) {
               <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-emerald-600"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
             <input
               className={`${INPUT} pl-10`}
+              disabled={loading || busy}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Recipient, account or subject"
             />
             </label>
-            <Button onClick={() => { setPage(1); setSelected([]); void load(1); }}><span className="inline-flex items-center gap-1.5"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>Search</span></Button>
+            <Button disabled={loading || busy} onClick={() => { setPage(1); setSelected([]); void load(1); }}><span className="inline-flex items-center gap-1.5"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`h-4 w-4 ${loading ? "animate-spin" : ""}`}><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>{loading ? "Loading…" : "Search"}</span></Button>
           </div>
         </div>
         {queueOnly && (
@@ -1659,7 +1671,7 @@ function NotificationRegister({ queueOnly = false }: { queueOnly?: boolean }) {
               <select
                 className="rounded-lg border border-emerald-200 bg-white px-2.5 py-1.5 text-sm text-emerald-900 outline-none"
                 value={processingBatchSize}
-                disabled={busy || selected.length > 0}
+                disabled={loading || busy || selected.length > 0}
                 onChange={(event) => setProcessingBatchSize(Number(event.target.value))}
               >
                 {[200, 500, 1000].map((size) => <option key={size} value={size}>{size.toLocaleString()}</option>)}
@@ -1671,7 +1683,7 @@ function NotificationRegister({ queueOnly = false }: { queueOnly?: boolean }) {
           <button
             type="button"
             className="inline-flex h-9 items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-600 transition hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-white"
-            disabled={page <= 1}
+            disabled={loading || busy || page <= 1}
             onClick={() => { setPage((current) => Math.max(1, current - 1)); setSelected([]); }}
           >
             <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="m15 18-6-6 6-6" /></svg>
@@ -1681,20 +1693,39 @@ function NotificationRegister({ queueOnly = false }: { queueOnly?: boolean }) {
           <button
             type="button"
             className="inline-flex h-9 items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-600 transition hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-white"
-            disabled={page >= pages}
+            disabled={loading || busy || page >= pages}
             onClick={() => { setPage((current) => Math.min(pages, current + 1)); setSelected([]); }}
           >
             Next
             <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="m9 18 6-6-6-6" /></svg>
           </button>
         </nav>
-        <NotificationTable
-          rows={rows}
-          onRetry={retry}
-          selected={queueOnly ? selected : undefined}
-          onSelectionChange={queueOnly ? setSelected : undefined}
-          queueMode={queueOnly}
-        />
+        <div className="relative min-h-[280px]">
+          {(loading || busy) && (
+            <div className="absolute inset-0 z-20 flex items-start justify-center rounded-2xl bg-white/85 pt-20 backdrop-blur-[1px]">
+              <div className="max-w-sm rounded-2xl border border-slate-200 bg-white px-6 py-4 text-center shadow-xl">
+                <span className="mx-auto block h-8 w-8 animate-spin rounded-full border-[3px] border-emerald-100 border-t-emerald-600" aria-hidden />
+                <div className="mt-3 font-bold text-slate-800">
+                  {busy ? "Processing delivery batch…" : "Loading notifications…"}
+                </div>
+                <div className="mt-1 text-xs leading-5 text-slate-500">
+                  {busy
+                    ? `Processing up to ${(selected.length || processingBatchSize).toLocaleString()} notification(s). Keep this page open.`
+                    : "Fetching the latest queue and delivery statuses."}
+                </div>
+              </div>
+            </div>
+          )}
+          <div className={loading || busy ? "pointer-events-none opacity-45" : ""}>
+            <NotificationTable
+              rows={rows}
+              onRetry={retry}
+              selected={queueOnly ? selected : undefined}
+              onSelectionChange={queueOnly ? setSelected : undefined}
+              queueMode={queueOnly}
+            />
+          </div>
+        </div>
         <div className="mt-5 flex flex-col gap-3 border-t border-slate-100 pt-5 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex flex-wrap items-center gap-3 text-sm text-slate-500">
             <span>
@@ -1707,6 +1738,7 @@ function NotificationRegister({ queueOnly = false }: { queueOnly?: boolean }) {
               <select
                 className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/10"
                 value={pageSize}
+                disabled={loading || busy}
                 onChange={(event) => { setPageSize(Number(event.target.value)); setPage(1); setSelected([]); }}
               >
                 {[10, 25, 50, 100, 250, 500, 1000].map((size) => <option key={size} value={size}>{size}</option>)}
@@ -1717,7 +1749,7 @@ function NotificationRegister({ queueOnly = false }: { queueOnly?: boolean }) {
             <button
               type="button"
               className="inline-flex h-9 items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-600 transition hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-white"
-              disabled={page <= 1}
+              disabled={loading || busy || page <= 1}
               onClick={() => { setPage((current) => Math.max(1, current - 1)); setSelected([]); }}
             >
               <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="m15 18-6-6 6-6" /></svg>
@@ -1727,7 +1759,7 @@ function NotificationRegister({ queueOnly = false }: { queueOnly?: boolean }) {
             <button
               type="button"
               className="inline-flex h-9 items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-600 transition hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-white"
-              disabled={page >= pages}
+              disabled={loading || busy || page >= pages}
               onClick={() => { setPage((current) => Math.min(pages, current + 1)); setSelected([]); }}
             >
               Next
