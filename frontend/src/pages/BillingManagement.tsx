@@ -5,6 +5,7 @@ import { exportExcel } from "../lib/meterFiles";
 import { SearchableSelect } from "../components/SearchableSelect";
 import { SweetAlertToast } from "../components/SweetAlertToast";
 import { maskAddress, maskEmail, maskIdentifier, maskName, maskPhone, usePrivacyMode } from "../lib/privacyMode";
+import Swal from "sweetalert2";
 
 type Row = Record<string, any>;
 const INPUT =
@@ -2892,7 +2893,36 @@ export function BillNotifications() {
   }, [cycleId]);
   async function send() {
     if (!selectedBillIds.length) return;
-    if (!window.confirm(`Queue ${selectedBillIds.length} selected bill(s) for ${channels.join(" + ")} delivery? No messages will be sent until the delivery queue is processed.`)) return;
+    const confirmation = await Swal.fire({
+      icon: "question",
+      title: "Queue bill notifications?",
+      html: `
+        <div style="margin-top:4px;text-align:left;color:#475569">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
+            <div style="border:1px solid #e2e8f0;border-radius:12px;background:#f8fafc;padding:12px">
+              <div style="font-size:12px;color:#64748b">SELECTED BILLS</div>
+              <div style="margin-top:3px;font-size:21px;font-weight:700;color:#0f172a">${selectedBillIds.length.toLocaleString()}</div>
+            </div>
+            <div style="border:1px solid #bae6fd;border-radius:12px;background:#f0f9ff;padding:12px">
+              <div style="font-size:12px;color:#0369a1">CHANNELS</div>
+              <div style="margin-top:3px;font-size:16px;font-weight:700;color:#075985">${channels.join(" + ")}</div>
+            </div>
+          </div>
+          <div style="border:1px solid #a7f3d0;border-radius:12px;background:#ecfdf5;padding:12px;color:#047857">
+            <strong>Queue only:</strong> No SMS or app message will be sent now. Delivery starts only when you process the delivery queue.
+          </div>
+        </div>
+      `,
+      showCancelButton: true,
+      confirmButtonText: "Queue notifications",
+      cancelButtonText: "Go back",
+      confirmButtonColor: "#0369a1",
+      cancelButtonColor: "#64748b",
+      reverseButtons: true,
+      focusCancel: true,
+      width: 520,
+    });
+    if (!confirmation.isConfirmed) return;
     try {
       setError("");
       setMessage("");
