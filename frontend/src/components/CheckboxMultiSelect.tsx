@@ -12,6 +12,7 @@ type Props = {
   disabled?: boolean;
   emptyMessage?: string;
   maxSelected?: number;
+  onSearchQuery?: (query: string) => void;
   options: CheckboxMultiSelectOption[];
   placement?: "auto" | "top" | "bottom";
   placeholder: string;
@@ -26,6 +27,7 @@ export function CheckboxMultiSelect({
   disabled,
   emptyMessage = "No options found",
   maxSelected,
+  onSearchQuery,
   options,
   placement = "auto",
   placeholder,
@@ -119,7 +121,7 @@ export function CheckboxMultiSelect({
       {open && !disabled && position && createPortal(
         <div ref={menuRef} style={position} className="fixed z-[1000] overflow-hidden rounded-lg border border-slate-200 bg-white shadow-xl">
           <div className="border-b border-slate-100 p-2">
-            <input ref={searchRef} type="search" value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") setOpen(false); }} className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm outline-none focus:border-aqua-500 focus:ring-2 focus:ring-aqua-500/20" placeholder="Search options..." />
+            <input ref={searchRef} type="search" value={query} onChange={(event) => { setQuery(event.target.value); onSearchQuery?.(event.target.value); }} onKeyDown={(event) => { if (event.key === "Escape") setOpen(false); }} className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm outline-none focus:border-aqua-500 focus:ring-2 focus:ring-aqua-500/20" placeholder="Search account number or customer..." />
             {selectableFiltered.length > 0 && (
               <button type="button" className="mt-2 flex w-full items-center justify-between rounded-md bg-slate-50 px-3 py-2 text-left text-sm font-semibold text-aqua-700 hover:bg-sky-50" onClick={toggleAllFiltered}>
                 <span>{allFilteredSelected ? "Deselect all results" : selectAllFits ? "Select all results" : `Select up to ${maxSelected?.toLocaleString()} total`}</span>

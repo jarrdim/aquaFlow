@@ -647,7 +647,7 @@ export function IndividualBillingWorkspace() {
 
   async function loadReferenceData(preferredReadingCycleId = readingCycleId, preferredBillingCycleId = billingCycleId) {
     const [accountRows, readingRows, billingRows] = await Promise.all([
-      api.listAccounts("", 2_000), api.listReadingCycles(), api.listBillingCycles(),
+      api.listActiveAccounts(), api.listReadingCycles(), api.listBillingCycles(),
     ]);
     setAccounts(accountRows);
     setReadingCycles(readingRows);
@@ -931,7 +931,7 @@ export function IndividualBillingWorkspace() {
       </div>}
       <section className="mb-4 rounded-xl border border-slate-200 bg-white shadow-sm">
         <div className="grid gap-3 p-4 lg:grid-cols-[minmax(280px,1.3fr)_minmax(220px,1fr)_minmax(220px,1fr)_auto]">
-          <Field label="Accounts / customers" required><CheckboxMultiSelect className={INPUT} maxSelected={500} options={accountOptions} placeholder={loading ? "Loading accounts…" : "Select one or more accounts"} value={selectedAccountIds} onChange={setSelectedAccountIds} /></Field>
+          <Field label="Accounts / customers" required><CheckboxMultiSelect className={INPUT} maxSelected={500} options={accountOptions} emptyMessage="No matching active accounts" placeholder={loading ? "Loading all active accounts…" : "Select one or more accounts"} value={selectedAccountIds} onChange={setSelectedAccountIds} /></Field>
           <Field label="Reading cycle" required><SearchableSelect className={INPUT} value={readingCycleId} onChange={(event) => { const value = event.target.value; setReadingCycleId(value); const readingCycle = readingCycles.find((cycle) => String(cycle.readingCycleId) === value); const linked = readingCycle?.billingCycleId ? billingCycles.find((cycle) => String(cycle.billingCycleId) === String(readingCycle.billingCycleId)) : billingCycles.find((cycle) => cycle.readingCycles?.some((item: Row) => String(item.readingCycleId) === value)); setBillingCycleId(linked ? String(linked.billingCycleId) : ""); }}><option value="">Select reading cycle</option>{readingCycles.filter((cycle) => !["CANCELLED"].includes(cycle.status)).map((cycle) => <option key={cycle.readingCycleId} value={cycle.readingCycleId}>{cycle.cycleCode} · {pretty(cycle.status)}</option>)}</SearchableSelect></Field>
           <Field label="Billing period"><SearchableSelect className={INPUT} value={billingCycleId} onChange={(event) => { const value = event.target.value; setBillingCycleId(value); const cycle = billingCycles.find((item) => String(item.billingCycleId) === value); if (cycle?.readingCycles?.[0]) setReadingCycleId(String(cycle.readingCycles[0].readingCycleId)); }}><option value="">Select or create period</option>{billingCycles.filter((cycle) => cycle.status !== "CANCELLED").map((cycle) => <option key={cycle.billingCycleId} value={cycle.billingCycleId}>{cycle.cycleCode} · {pretty(cycle.status)}</option>)}</SearchableSelect></Field>
           <div className="flex items-end">{!mixedReadingReadiness && <button type="button" onClick={() => setShowSetup((value) => !value)} className="whitespace-nowrap rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">{showSetup ? "Hide setup" : needsReadingCycle ? "Create reading cycle" : needsBillingPeriod ? "Create billing period" : "Create cycles"}</button>}</div>

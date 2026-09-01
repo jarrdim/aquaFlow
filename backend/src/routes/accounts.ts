@@ -390,7 +390,15 @@ accountsRouter.get("/", async (req, res, next) => {
   try {
     const search = String(req.query.search ?? "").trim();
     const requestedAccountId = String(req.query.accountId ?? "").trim();
+    const requestedAccountIds = String(req.query.accountIds ?? "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
+    if (requestedAccountIds.length > 500) {
+      return res.status(400).json({ error: "A maximum of 500 account ids may be requested" });
+    }
     let accountId: bigint | undefined;
+    let accountIds: bigint[] = [];
     if (requestedAccountId) {
       try {
         accountId = BigInt(requestedAccountId);
@@ -398,51 +406,45 @@ accountsRouter.get("/", async (req, res, next) => {
         return res.status(400).json({ error: "Invalid account id" });
       }
     }
-    // Larger callers such as Customer Statements need the complete account
-    // directory; compact autocomplete callers retain their small default.
+    if (requestedAccountIds.length) {
+      try {
+        accountIds = requestedAccountIds.map((value) => BigInt(value));
+      } catch {
+        return res.status(400).json({ error: "One or more account ids are invalid" });
+      }
+    }
+    const statusResult = z.enum(["PENDING", "ACTIVE", "SUSPENDED", "CLOSED"])
+      .optional()
+      .safeParse(req.query.status ? String(req.query.status) : undefined);
+    if (!statusResult.success) {
+      return res.status(400).json({ error: "Invalid account status" });
+    }
+    const loadAll = String(req.query.all ?? "").toLowerCase() === "true";
     const take = Math.min(20_000, Math.max(1, Number(req.query.take) || 8));
+    const identityWhere: any = accountIds.length
+      ? { accountId: { in: accountIds } }
+      : accountId
+      ? { accountId }
+      : search
+      ? {
+          OR: [
+            { accountNumber: { contains: search, mode: "insensitive" } },
+            { customer: { firstName: { contains: search, mode: "insensitive" } } },
+            { customer: { middleName: { contains: search, mode: "insensitive" } } },
+            { customer: { lastName: { contains: search, mode: "insensitive" } } },
+            { customer: { organizationName: { contains: search, mode: "insensitive" } } },
+            { customer: { phoneNumber: { contains: search } } },
+          ],
+        }
+      : undefined;
+    const where = statusResult.data
+      ? { AND: [...(identityWhere ? [identityWhere] : []), { accountStatus: statusResult.data }] }
+      : identityWhere;
     const accounts = await prisma.customerAccount.findMany({
-      where: accountId
-        ? { accountId }
-        : search
-        ? {
-            OR: [
-              {
-                accountNumber: {
-                  contains: search,
-                  mode: "insensitive",
-                },
-              },
-              {
-                customer: {
-                  firstName: { contains: search, mode: "insensitive" },
-                },
-              },
-              {
-                customer: {
-                  middleName: { contains: search, mode: "insensitive" },
-                },
-              },
-              {
-                customer: {
-                  lastName: { contains: search, mode: "insensitive" },
-                },
-              },
-              {
-                customer: {
-                  organizationName: {
-                    contains: search,
-                    mode: "insensitive",
-                  },
-                },
-              },
-              { customer: { phoneNumber: { contains: search } } },
-            ],
-          }
-        : undefined,
+      where,
       include: { customer: true, category: true },
       orderBy: { accountNumber: "asc" },
-      take,
+      take: loadAll ? undefined : take,
     });
     res.json(accounts);
   } catch (error) {

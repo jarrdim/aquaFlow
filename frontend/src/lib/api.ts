@@ -249,10 +249,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ reason }),
     }),
-  listAccounts: (search = "", take = 8, accountId = "") =>
+  listAccounts: (search = "", take = 8, accountId = "", accountIds: string[] = []) =>
     request(
-      `/accounts?search=${encodeURIComponent(search)}&take=${encodeURIComponent(String(take))}${accountId ? `&accountId=${encodeURIComponent(accountId)}` : ""}`,
+      `/accounts?search=${encodeURIComponent(search)}&take=${encodeURIComponent(String(take))}${accountId ? `&accountId=${encodeURIComponent(accountId)}` : ""}${accountIds.length ? `&accountIds=${encodeURIComponent(accountIds.join(","))}` : ""}`,
     ),
+  listActiveAccounts: () => request("/accounts?status=ACTIVE&all=true"),
 
   meterDashboard: (filters: Record<string, string> = {}) => {
     const query = new URLSearchParams(
