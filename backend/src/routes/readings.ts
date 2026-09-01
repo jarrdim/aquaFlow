@@ -786,6 +786,7 @@ readingsRouter.get("/", async (req, res, next) => {
     const approvalStatus = String(req.query.approvalStatus ?? "");
     const exceptionOnly = String(req.query.exceptionOnly ?? "") === "true";
     const readingType = String(req.query.readingType ?? "");
+    const readingValue = String(req.query.readingValue ?? "").toUpperCase();
     const search = String(req.query.search ?? "");
     const paginated = req.query.page !== undefined;
     const page = Math.max(1, Number(req.query.page) || 1);
@@ -795,6 +796,10 @@ readingsRouter.get("/", async (req, res, next) => {
       ...(approvalStatus ? { approvalStatus } : {}),
       ...(exceptionOnly ? { abnormalFlag: true } : {}),
       ...(readingType ? { readingType } : {}),
+      ...(readingValue === "ZERO_CONSUMPTION" ? { consumption: { equals: 0 } } : {}),
+      ...(readingValue === "ZERO_CURRENT" ? { currentReading: { equals: 0 } } : {}),
+      ...(readingValue === "POSITIVE_CONSUMPTION" ? { consumption: { gt: 0 } } : {}),
+      ...(readingValue === "NEGATIVE_CONSUMPTION" ? { consumption: { lt: 0 } } : {}),
       ...(routeId ? { account: { OR: [{ routeId }, { property: { routeId } }] } } : {}),
       ...(search ? { OR: [
         { meter: { meterNumber: { contains: search, mode: "insensitive" } } },

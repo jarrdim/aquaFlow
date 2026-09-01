@@ -3934,6 +3934,7 @@ export function ReadingRegister({
     cycleId: "",
     approvalStatus: "",
     readingType: "",
+    readingValue: "",
     search: params.get("search") ?? "",
   });
   useEffect(() => {
@@ -4074,7 +4075,7 @@ export function ReadingRegister({
     >
       {error && <Notice>{error}</Notice>}
       <section className="mb-4 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_16px_42px_-30px_rgba(15,32,56,0.45)]">
-        <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-5">
           <Field label="Cycle">
             <SearchableSelect
               className={INPUT}
@@ -4117,6 +4118,21 @@ export function ReadingRegister({
               <option>ACTUAL</option>
               <option>ESTIMATED</option>
               <option>SMART</option>
+            </SearchableSelect>
+          </Field>
+          <Field label="Usage / reading">
+            <SearchableSelect
+              className={INPUT}
+              value={filters.readingValue}
+              onChange={(e) =>
+                updateFilters({ ...filters, readingValue: e.target.value })
+              }
+            >
+              <option value="">All readings</option>
+              <option value="ZERO_CONSUMPTION">Zero consumption</option>
+              <option value="ZERO_CURRENT">Current reading is 0</option>
+              <option value="POSITIVE_CONSUMPTION">Positive consumption</option>
+              <option value="NEGATIVE_CONSUMPTION">Negative consumption</option>
             </SearchableSelect>
           </Field>
           <Field label="Search">
