@@ -134,6 +134,11 @@ const billInclude = {
   poster: true,
   adjustments: { include: { requester: true, approver: true }, orderBy: { createdAt: "desc" as const } },
   notifications: { include: { sender: true }, orderBy: { sentAt: "desc" as const } },
+  generalNotifications: {
+    where: { notificationType: "BILL_ISSUED", channel: "SMS" },
+    select: { deliveryStatus: true, sentAt: true, deliveredAt: true, createdAt: true },
+    orderBy: { createdAt: "desc" as const },
+  },
   events: { include: { performer: true }, orderBy: { createdAt: "desc" as const } },
 } as const;
 

@@ -617,6 +617,7 @@ export function IndividualBillingWorkspace() {
   const [showSetup, setShowSetup] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadingMeters, setLoadingMeters] = useState(false);
+  const [loadingBills, setLoadingBills] = useState(false);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -667,9 +668,18 @@ export function IndividualBillingWorkspace() {
     }
   }
   async function loadBills(cycleId = billingCycleId) {
-    if (!cycleId) return setBills([]);
-    const rows = await api.listBills({ billingCycleId: cycleId, limit: "10000" });
-    setBills(rows.filter((bill: Row) => selectedAccountIds.includes(String(bill.accountId))));
+    if (!cycleId) {
+      setBills([]);
+      setLoadingBills(false);
+      return;
+    }
+    setLoadingBills(true);
+    try {
+      const rows = await api.listBills({ billingCycleId: cycleId, limit: "10000" });
+      setBills(rows.filter((bill: Row) => selectedAccountIds.includes(String(bill.accountId))));
+    } finally {
+      setLoadingBills(false);
+    }
   }
   useEffect(() => {
     loadReferenceData().catch((e) => setError(e.message)).finally(() => setLoading(false));
@@ -762,7 +772,24 @@ export function IndividualBillingWorkspace() {
     : [];
   const pendingBillIds = selectedBills.filter((bill) => bill.status === "PENDING_APPROVAL").map((bill) => String(bill.billId));
   const approvedBillIds = selectedBills.filter((bill) => bill.status === "APPROVED").map((bill) => String(bill.billId));
-  const notifiableBillIds = selectedBills.filter((bill) => ["POSTED", "PARTIALLY_PAID"].includes(bill.status) && !["QUEUED", "SENT"].includes(bill.notificationStatus)).map((bill) => String(bill.billId));
+  const billHasExistingSms = (bill: Row) =>
+    ["QUEUED", "SENT", "DELIVERED"].includes(String(bill.notificationStatus ?? "")) ||
+    (bill.generalNotifications ?? []).some((notification: Row) =>
+      ["QUEUED", "SENT", "DELIVERED"].includes(String(notification.deliveryStatus ?? "")),
+    );
+  const outstandingPostedBills = selectedBills.filter((bill) =>
+    ["POSTED", "PARTIALLY_PAID"].includes(bill.status) &&
+    Number(bill.totalAmountDue ?? 0) - Number(bill.paidAmount ?? 0) > 0,
+  );
+  const notifiableBillIds = outstandingPostedBills
+    .filter((bill) => !billHasExistingSms(bill))
+    .map((bill) => String(bill.billId));
+  const smsAlreadyRequestedCount = outstandingPostedBills.filter(billHasExistingSms).length;
+  const smsActionLabel = notifiableBillIds.length
+    ? `Send ${notifiableBillIds.length} bill SMS`
+    : smsAlreadyRequestedCount
+      ? "Bill SMS already sent"
+      : "No bill SMS due";
 
   async function operation(label: string, action: () => Promise<void>) {
     setBusy(label); setError(""); setMessage("");
@@ -900,7 +927,7 @@ export function IndividualBillingWorkspace() {
         <div className="grid gap-3 p-4 lg:grid-cols-[minmax(280px,1.3fr)_minmax(220px,1fr)_minmax(220px,1fr)_auto]">
           <Field label="Accounts / customers" required><CheckboxMultiSelect className={INPUT} maxSelected={500} options={accountOptions} placeholder={loading ? "Loading accounts…" : "Select one or more accounts"} value={selectedAccountIds} onChange={setSelectedAccountIds} /></Field>
           <Field label="Reading cycle" required><SearchableSelect className={INPUT} value={readingCycleId} onChange={(event) => { setReadingCycleId(event.target.value); const linked = billingCycles.find((cycle) => String(cycle.readingCycles?.[0]?.readingCycleId) === event.target.value); setBillingCycleId(linked ? String(linked.billingCycleId) : ""); }}><option value="">Select reading cycle</option>{readingCycles.filter((cycle) => !["CANCELLED"].includes(cycle.status)).map((cycle) => <option key={cycle.readingCycleId} value={cycle.readingCycleId}>{cycle.cycleCode} · {pretty(cycle.status)}</option>)}</SearchableSelect></Field>
-          <Field label="Billing period"><SearchableSelect className={INPUT} value={billingCycleId} onChange={(event) => { const value = event.target.value; setBillingCycleId(value); const cycle = billingCycles.find((item) => String(item.billingCycleId) === value); if (cycle?.readingCycles?.[0]) setReadingCycleId(String(cycle.readingCycles[0].readingCycleId)); }}><option value="">Select or create period</option>{billingCycles.filter((cycle) => ["DRAFT", "OPEN", "PROCESSING", "RETURNED", "PENDING_APPROVAL"].includes(cycle.status)).map((cycle) => <option key={cycle.billingCycleId} value={cycle.billingCycleId}>{cycle.cycleCode} · {pretty(cycle.status)}</option>)}</SearchableSelect></Field>
+          <Field label="Billing period"><SearchableSelect className={INPUT} value={billingCycleId} onChange={(event) => { const value = event.target.value; setBillingCycleId(value); const cycle = billingCycles.find((item) => String(item.billingCycleId) === value); if (cycle?.readingCycles?.[0]) setReadingCycleId(String(cycle.readingCycles[0].readingCycleId)); }}><option value="">Select or create period</option>{billingCycles.filter((cycle) => cycle.status !== "CANCELLED").map((cycle) => <option key={cycle.billingCycleId} value={cycle.billingCycleId}>{cycle.cycleCode} · {pretty(cycle.status)}</option>)}</SearchableSelect></Field>
           <div className="flex items-end">{!mixedReadingReadiness && <button type="button" onClick={() => setShowSetup((value) => !value)} className="whitespace-nowrap rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">{showSetup ? "Hide setup" : needsReadingCycle ? "Create reading cycle" : needsBillingPeriod ? "Create billing period" : "Create cycles"}</button>}</div>
         </div>
         {mixedReadingReadiness && !showSetup && <div className="border-t border-violet-200 bg-violet-50 px-4 py-3">
@@ -958,7 +985,7 @@ export function IndividualBillingWorkspace() {
                 </td>
                 <td className={`${TD} font-bold ${invalid ? "text-red-600" : "text-slate-800"}`}>{invalid ? "Invalid" : usage == null ? "—" : usage.toLocaleString()}</td>
                 <td className={TD}>{row.cycleReading ? <Badge value={row.cycleReading.approvalStatus} /> : <span className="text-xs text-slate-400">Not captured</span>}</td>
-                <td className={TD}>{bill ? <><div className="font-bold text-slate-800">{money(bill.totalAmountDue)}</div><Badge value={bill.status} /></> : billPreview ? <><div className="font-bold text-slate-800">{money(billPreview.totalAmountDue)}</div><span className={`text-xs font-semibold ${billPreview.eligible ? "text-emerald-600" : "text-red-600"}`}>{pretty(billPreview.issue)}</span></> : <span className="text-xs text-slate-400">Not prepared</span>}</td>
+                <td className={TD}>{loadingBills && billingCycleId ? <div className="space-y-2" aria-label="Loading bill amount"><div className="h-4 w-24 animate-pulse rounded bg-slate-200" /><div className="h-5 w-16 animate-pulse rounded-full bg-slate-100" /></div> : bill ? <><div className="font-bold text-slate-800">{money(bill.totalAmountDue)}</div><Badge value={bill.status} /></> : billPreview ? <><div className="font-bold text-slate-800">{money(billPreview.totalAmountDue)}</div><span className={`text-xs font-semibold ${billPreview.eligible ? "text-emerald-600" : "text-red-600"}`}>{pretty(billPreview.issue)}</span></> : <span className="text-xs text-slate-400">Not prepared</span>}</td>
               </tr>;
             })}
             {missingMeterAccounts.map((account) => <tr key={`missing-${account.accountId}`} className="border-t border-slate-100 bg-red-50/30"><td className={TD}><div className="font-semibold text-slate-800">{account.accountNumber}</div><div className="text-xs text-slate-400">{accountCustomerName(account)}</div></td><td colSpan={6} className={`${TD} text-red-600`}>No active customer meter assignment was found.</td></tr>)}
@@ -983,7 +1010,7 @@ export function IndividualBillingWorkspace() {
             </>)}
             {workflowStep(3, "Post and notify", postStepDone, <>
               {actionButton(`Post ${approvedBillIds.length} approved bill(s)`, "posting-bills", !canPost || !approvedBillIds.length, postBills, "orange")}
-              {actionButton(`Send ${notifiableBillIds.length} bill SMS`, "sending-sms", !canNotify || !notifiableBillIds.length || selectedReadingCycle?.status !== "CLOSED", sendSms, "green")}
+              {actionButton(smsActionLabel, "sending-sms", !canNotify || !notifiableBillIds.length || selectedReadingCycle?.status !== "CLOSED", sendSms, "green")}
             </>, true)}
             <p className="text-xs leading-5 text-slate-400">Permissions and maker-checker rules still apply. A non-admin generator cannot approve their own bills.</p>
           </div>
