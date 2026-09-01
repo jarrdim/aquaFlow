@@ -128,6 +128,23 @@ function calculateTariff(tariff: any, consumption: number) {
   return { consumptionCharge, minimumChargeAdjustment, standingCharge, meterRent, fixedCharges, totalCurrentCharges: round(consumptionCharge + fixedCharges), items };
 }
 
+function hasValidBillAmounts(calculation: ReturnType<typeof calculateTariff>) {
+  return [
+    calculation.consumptionCharge,
+    calculation.minimumChargeAdjustment,
+    calculation.standingCharge,
+    calculation.meterRent,
+    calculation.fixedCharges,
+    calculation.totalCurrentCharges,
+    ...calculation.items.flatMap((item) => [item.quantity, item.unitRate, item.amount]),
+  ].every((value) => Number.isFinite(value) && value >= 0);
+}
+
+function isSkippableBillRowError(error: any) {
+  const text = `${error?.message ?? ""} ${error?.meta?.message ?? ""}`;
+  return error?.code === "P2002" || text.includes("23514") || text.includes("ck_bill_amounts");
+}
+
 async function cycleCandidates(cycleId: bigint, filters: any = {}) {
   const cycle = await prisma.billingCycle.findUnique({
     where: { billingCycleId: cycleId },
@@ -194,6 +211,11 @@ async function cycleCandidates(cycleId: bigint, filters: any = {}) {
       ? cycleReadings.reduce((sum: number, value: any) => sum + Number(value.consumption), 0)
       : Number(reading?.consumption ?? 0);
     const calculation = tariff ? calculateTariff(tariff, consumption) : null;
+    if (!["DUPLICATE_BILL", "MISSING_TARIFF", "MISSING_READING"].includes(issue)) {
+      if (!Number.isFinite(consumption)) issue = "INVALID_READING";
+      else if (consumption < 0) issue = "NEGATIVE";
+      else if (calculation && !hasValidBillAmounts(calculation)) issue = "INVALID_CALCULATION";
+    }
     const previousBalance = filters.includePreviousBalance === false ? 0 : Number(account.currentBalance);
     const penalties = 0;
     // A negative account balance is customer credit. It can offset the new
@@ -212,7 +234,7 @@ async function cycleCandidates(cycleId: bigint, filters: any = {}) {
       previousBalance,
       penalties,
       issue,
-      eligible: !["DUPLICATE_BILL", "MISSING_TARIFF", "MISSING_READING"].includes(issue),
+      eligible: !["DUPLICATE_BILL", "MISSING_TARIFF", "MISSING_READING", "NEGATIVE", "INVALID_READING", "INVALID_CALCULATION"].includes(issue),
       totalAmountDue,
     };
   });
@@ -355,6 +377,7 @@ billingRouter.post("/generate", requireRole("SYSTEM_ADMIN", "BILLING_OFFICER"), 
     const eligible = result.rows.filter((row) => row.eligible);
     if (!eligible.length) return res.status(409).json({ error: "No eligible accounts. Review missing tariffs, readings, account status and duplicate bills in the preview." });
     const generated: any[] = [];
+    const generationSkipped: Array<{ accountNumber: string; issue: string }> = [];
     for (const row of eligible) {
       try {
         const tariff = row.tariff!;
@@ -375,13 +398,22 @@ billingRouter.post("/generate", requireRole("SYSTEM_ADMIN", "BILLING_OFFICER"), 
         });
         generated.push(bill);
       } catch (error: any) {
-        if (error.code !== "P2002") throw error;
+        if (!isSkippableBillRowError(error)) throw error;
+        const issue = error.code === "P2002" ? "DUPLICATE_BILL" : "INVALID_BILL_AMOUNTS";
+        generationSkipped.push({ accountNumber: row.account.accountNumber, issue });
+        console.warn(`Skipped bill generation for ${row.account.accountNumber}: ${issue}`);
       }
     }
     const nextStatus = data.sendForApproval ? "PENDING_APPROVAL" : "PROCESSING";
     await prisma.billingCycle.update({ where: { billingCycleId: data.billingCycleId }, data: { status: nextStatus, updatedAt: new Date() } });
     await event({ billingCycleId: data.billingCycleId, eventType: "BATCH_GENERATED", previousStatus: result.cycle.status, newStatus: nextStatus, details: `${generated.length} bill(s) generated`, performedBy: uid(req) });
-    res.status(201).json({ generated: generated.length, skipped: eligible.length - generated.length, issues: result.rows.filter((row) => !row.eligible).length });
+    const validationIssues = result.rows.filter((row) => !row.eligible).length;
+    res.status(201).json({
+      generated: generated.length,
+      skipped: validationIssues + generationSkipped.length,
+      issues: validationIssues,
+      generationSkipped,
+    });
   } catch (error: any) {
     if (error.status) return res.status(error.status).json({ error: error.message });
     next(error);
@@ -394,6 +426,7 @@ billingRouter.get("/bills", async (req, res, next) => {
     const accountId = req.query.accountId ? BigInt(String(req.query.accountId)) : undefined;
     const status = String(req.query.status ?? "");
     const search = String(req.query.search ?? "");
+    const take = Math.min(10_000, Math.max(1, Number(req.query.limit) || 2_000));
     const rows = await prisma.bill.findMany({
       where: {
         ...(cycleId ? { billingCycleId: cycleId } : {}),
@@ -402,7 +435,7 @@ billingRouter.get("/bills", async (req, res, next) => {
         ...(search ? { OR: [{ billNumber: { contains: search, mode: "insensitive" } }, { account: { accountNumber: { contains: search, mode: "insensitive" } } }, { account: { customer: { firstName: { contains: search, mode: "insensitive" } } } }, { account: { customer: { lastName: { contains: search, mode: "insensitive" } } } }] } : {}),
       },
       include: billInclude,
-      orderBy: { createdAt: "desc" }, take: 2000,
+      orderBy: { createdAt: "desc" }, take,
     });
     res.json(rows.map((row: any) => ({ ...row, customerName: customerName(row.account.customer) })));
   } catch (error) { next(error); }
@@ -484,15 +517,28 @@ billingRouter.post("/notifications", requireRole("SYSTEM_ADMIN", "BILLING_OFFICE
     if (!readingCycle) return res.status(409).json({ error: "This billing period has no linked reading cycle" });
     if (readingCycle.status !== "CLOSED") return res.status(409).json({ error: "Close the linked reading cycle before sending bill notifications" });
 
-    const bills = await prisma.bill.findMany({ where: { billingCycleId: data.billingCycleId, status: { in: ["APPROVED", "POSTED", "PARTIALLY_PAID", "PAID"] }, ...(data.billIds ? { billId: { in: data.billIds } } : {}) }, include: { account: { include: { customer: true } }, billingCycle: true, reading: true } });
+    const candidateBills = await prisma.bill.findMany({ where: { billingCycleId: data.billingCycleId, status: { in: ["APPROVED", "POSTED", "PARTIALLY_PAID", "PAID"] }, totalAmountDue: { gt: 0 }, ...(data.billIds ? { billId: { in: data.billIds } } : {}) }, include: { account: { include: { customer: true } }, billingCycle: true, reading: true } });
+    const bills = candidateBills.filter((bill) => Number(bill.totalAmountDue) - Number(bill.paidAmount) > 0);
     const settings = await prisma.systemSetting.findUnique({
       where: { settingId: 1n },
       select: { reconnectionFee: true },
     });
     const requestedBy = uid(req);
+    const existingNotifications = bills.length ? await prisma.notification.findMany({
+      where: {
+        billId: { in: bills.map((bill) => bill.billId) },
+        notificationType: "BILL_ISSUED",
+        deliveryStatus: { in: ["QUEUED", "SENT", "DELIVERED"] },
+      },
+      select: { billId: true, channel: true },
+    }) : [];
+    const existingNotificationKeys = new Set(
+      existingNotifications.map((notification) => `${notification.billId}:${notification.channel}`),
+    );
     const notificationRows: Prisma.NotificationCreateManyInput[] = [];
     const billNotificationRows: Prisma.BillNotificationCreateManyInput[] = [];
     const billingEventRows: Prisma.BillingEventCreateManyInput[] = [];
+    const queuedBillIds = new Set<bigint>();
     const updatedAt = new Date();
 
     for (const bill of bills) {
@@ -511,6 +557,7 @@ billingRouter.post("/notifications", requireRole("SYSTEM_ADMIN", "BILLING_OFFICE
       const message = `Dear ${name} A/C ${accountNumber} your bill as at ${smsDate(bill.issueDate)}. Prev Read ${smsReading(previousReading)} Curr Read ${smsReading(currentReading)} Consumption ${smsReading(Number(bill.consumptionUnits))} Arrears ${smsNumber(Number(bill.previousBalance))} Amount Paid ${smsNumber(amountPaid)} Current Bill ${smsNumber(Number(bill.totalCurrentCharges))} Total Amount ${smsNumber(totalAmount)}. Due date is ${smsDate(bill.dueDate)}. Reconnection Fee is ${smsNumber(Number(settings?.reconnectionFee ?? 1155), 0)}. Bills payable through PayBill No 823496 using ${accountNumber} as the account number. WE MAKE IT SAFE BECAUSE WATER IS LIFE. THANK YOU.\n\nPay now: ${paymentUrl}`;
       for (const channel of data.channels) {
         const deliveryChannel = channel === "APP" ? "PUSH" : "SMS";
+        if (existingNotificationKeys.has(`${bill.billId}:${deliveryChannel}`)) continue;
         const recipient = channel === "SMS" ? bill.account.customer.phoneNumber : bill.account.customer.customerNumber;
         if (!recipient) continue;
         notificationRows.push({
@@ -526,15 +573,18 @@ billingRouter.post("/notifications", requireRole("SYSTEM_ADMIN", "BILLING_OFFICE
           metadata: { source: "BILLING", billingCycleId: bill.billingCycleId.toString(), requestedChannel: channel },
         });
         billNotificationRows.push({ billId: bill.billId, channel, recipient, message, status: "QUEUED", sentBy: requestedBy });
+        queuedBillIds.add(bill.billId);
       }
-      billingEventRows.push({
-        billingCycleId: bill.billingCycleId,
-        billId: bill.billId,
-        eventType: "NOTIFICATION_QUEUED",
-        details: data.channels.join(", "),
-        performedBy: requestedBy,
-        createdAt: updatedAt,
-      });
+      if (queuedBillIds.has(bill.billId)) {
+        billingEventRows.push({
+          billingCycleId: bill.billingCycleId,
+          billId: bill.billId,
+          eventType: "NOTIFICATION_QUEUED",
+          details: data.channels.join(", "),
+          performedBy: requestedBy,
+          createdAt: updatedAt,
+        });
+      }
 
       // console.log(billNotificationRows, notificationRows, billingEventRows);
     }
@@ -551,9 +601,9 @@ billingRouter.post("/notifications", requireRole("SYSTEM_ADMIN", "BILLING_OFFICE
       for (const batch of batchesOf(billNotificationRows, 500)) {
         await tx.billNotification.createMany({ data: batch });
       }
-      if (bills.length) {
+      if (queuedBillIds.size) {
         await tx.bill.updateMany({
-          where: { billId: { in: bills.map((bill) => bill.billId) } },
+          where: { billId: { in: [...queuedBillIds] } },
           data: { notificationStatus: "QUEUED", updatedAt },
         });
       }
@@ -561,7 +611,7 @@ billingRouter.post("/notifications", requireRole("SYSTEM_ADMIN", "BILLING_OFFICE
         await tx.billingEvent.createMany({ data: batch });
       }
     }, { maxWait: 10_000, timeout: 120_000 });
-    res.json({ bills: bills.length, notifications: notificationRows.length, notificationIds });
+    res.json({ bills: queuedBillIds.size, notifications: notificationRows.length, notificationIds });
   } catch (error) { next(error); }
 });
 

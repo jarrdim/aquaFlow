@@ -957,7 +957,7 @@ export function BillGeneration() {
       );
       const result = await api.generateBills(payload);
       setMessage(
-        `${result.generated} bill(s) generated; ${result.issues} account issue(s) require review.`,
+        `${result.generated} bill(s) generated; ${result.skipped} account(s) safely skipped.${result.issues ? ` ${result.issues} validation issue(s) require review.` : ""}`,
       );
       await runPreview();
     } catch (e: any) {
@@ -2853,6 +2853,8 @@ export function BillNotifications() {
   const [search, setSearch] = useState("");
   const [billStatus, setBillStatus] = useState("");
   const [notificationStatus, setNotificationStatus] = useState("");
+  const [batchSize, setBatchSize] = useState("2000");
+  const [selectedBillIds, setSelectedBillIds] = useState<string[]>([]);
   useEffect(() => {
     api.listBillingCycles().then((rows) => {
       setCycles(rows);
@@ -2860,33 +2862,32 @@ export function BillNotifications() {
     });
   }, []);
   useEffect(() => {
-    if (cycleId) api.listBills({ billingCycleId: cycleId }).then(setBills);
+    setSelectedBillIds([]);
+    if (cycleId) api.listBills({ billingCycleId: cycleId, limit: "10000" }).then(setBills);
   }, [cycleId]);
   async function send() {
+    if (!selectedBillIds.length) return;
+    if (!window.confirm(`Queue ${selectedBillIds.length} selected bill(s) for ${channels.join(" + ")} delivery? No messages will be sent until the delivery queue is processed.`)) return;
     try {
+      setError("");
       const result = await api.sendBillNotifications({
         billingCycleId: cycleId,
-        billIds: filteredBills.map((bill) => bill.billId),
+        billIds: selectedBillIds,
         channels,
       });
-      const notificationIds = (result.notificationIds ?? []).map(String);
-      const processed: Row[] = [];
-      for (let offset = 0; offset < notificationIds.length; offset += 1000) {
-        const delivery = await api.processNotifications(notificationIds.slice(offset, offset + 1000), 1000);
-        processed.push(...(delivery.processed ?? []));
-      }
-      const successful = processed.filter((item: Row) => ["SENT", "DELIVERED"].includes(item?.deliveryStatus)).length;
-      const failed = processed.filter((item: Row) => item?.deliveryStatus === "FAILED").length;
       setMessage(
-        `${successful} notification(s) delivered or accepted for ${result.bills} bill(s).${failed ? ` ${failed} failed; review the delivery queue.` : ""}`,
+        `${result.notifications} notification(s) queued for ${result.bills} bill(s). Open the delivery queue when you are ready to send them.`,
       );
-      setBills(await api.listBills({ billingCycleId: cycleId }));
+      setSelectedBillIds([]);
+      setBills(await api.listBills({ billingCycleId: cycleId, limit: "10000" }));
     } catch (e: any) {
       setError(e.message);
     }
   }
-  const selected = bills.filter((b) =>
-    ["APPROVED", "POSTED", "PARTIALLY_PAID", "PAID"].includes(b.status),
+  const selected = bills.filter(
+    (b) =>
+      ["APPROVED", "POSTED", "PARTIALLY_PAID"].includes(b.status) &&
+      Number(b.totalAmountDue) - Number(b.paidAmount ?? 0) > 0,
   );
   const filteredBills = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -2901,6 +2902,21 @@ export function BillNotifications() {
         (!notificationStatus || bill.notificationStatus === notificationStatus);
     });
   }, [selected, search, billStatus, notificationStatus]);
+  const selectableBills = filteredBills.filter(
+    (bill) => !["QUEUED", "SENT"].includes(String(bill.notificationStatus)),
+  );
+  const selectedBillIdSet = new Set(selectedBillIds);
+  function selectNextBatch() {
+    setSelectedBillIds(
+      selectableBills.slice(0, Number(batchSize)).map((bill) => String(bill.billId)),
+    );
+  }
+  function toggleBill(billId: unknown, checked: boolean) {
+    const value = String(billId);
+    setSelectedBillIds((current) => checked
+      ? [...new Set([...current, value])]
+      : current.filter((id) => id !== value));
+  }
   const selectedCycle = cycles.find((cycle) => String(cycle.billingCycleId) === cycleId);
   const readingCycle = selectedCycle?.readingCycles?.[0];
   const readingCycleClosed = readingCycle?.status === "CLOSED";
@@ -2944,8 +2960,22 @@ export function BillNotifications() {
               </div>
             </Field>
             <div className="rounded-lg bg-blue-50 p-3 text-sm text-blue-700">
-              {filteredBills.length} matching bill(s) will be sent from {selected.length} eligible bill(s).
+              {selectedBillIds.length} bill(s) selected from {selectableBills.length} unsent matching bill(s). Queueing does not send SMS.
             </div>
+            <Field label="Selection batch size">
+              <div className="flex gap-2">
+                <SearchableSelect className={INPUT} value={batchSize} onChange={(e) => setBatchSize(e.target.value)}>
+                  <option value="100">100 bills</option>
+                  <option value="500">500 bills</option>
+                  <option value="1000">1,000 bills</option>
+                  <option value="2000">2,000 bills</option>
+                </SearchableSelect>
+                <button type="button" className="whitespace-nowrap rounded-xl border border-aqua-600 px-3 py-2 text-sm font-semibold text-aqua-700 hover:bg-aqua-50" onClick={selectNextBatch}>
+                  Select next batch
+                </button>
+              </div>
+              {!!selectedBillIds.length && <button type="button" className="mt-2 text-sm font-semibold text-slate-600 hover:text-slate-900" onClick={() => setSelectedBillIds([])}>Clear selection</button>}
+            </Field>
             <div className={`rounded-lg p-3 text-sm ${readingCycleClosed ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-800"}`}>
               {readingCycle
                 ? `Reading cycle: ${readingCycle.cycleName} · ${readingCycle.status}`
@@ -2953,10 +2983,10 @@ export function BillNotifications() {
             </div>
             <Button
               className="w-full"
-              disabled={!cycleId || !channels.length || !filteredBills.length || !readingCycleClosed}
+              disabled={!cycleId || !channels.length || !selectedBillIds.length || !readingCycleClosed}
               onClick={send}
             >
-              {readingCycleClosed ? "Send bill notifications" : "Close reading cycle first"}
+              {readingCycleClosed ? `Queue ${selectedBillIds.length} selected bill(s)` : "Close reading cycle first"}
             </Button>
             <Link
               to="/notifications/queue"
@@ -2987,7 +3017,8 @@ export function BillNotifications() {
             <Field label="Notification status">
               <SearchableSelect className={INPUT} value={notificationStatus} onChange={(e) => setNotificationStatus(e.target.value)}>
                 <option value="">All notification statuses</option>
-                <option value="PENDING">Pending</option>
+                <option value="NOT_SENT">Not sent</option>
+                <option value="QUEUED">Queued</option>
                 <option value="SENT">Sent</option>
                 <option value="FAILED">Failed</option>
               </SearchableSelect>
@@ -3001,6 +3032,7 @@ export function BillNotifications() {
             <table className="w-full">
               <thead>
                 <tr>
+                  <th className={TH}>Select</th>
                   <th className={TH}>Bill</th>
                   <th className={TH}>Customer</th>
                   <th className={TH}>Amount</th>
@@ -3010,6 +3042,15 @@ export function BillNotifications() {
               <tbody>
                 {filteredBills.map((bill) => (
                   <tr key={bill.billId} className="border-t">
+                    <td className={TD}>
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${bill.billNumber}`}
+                        disabled={["QUEUED", "SENT"].includes(String(bill.notificationStatus))}
+                        checked={selectedBillIdSet.has(String(bill.billId))}
+                        onChange={(event) => toggleBill(bill.billId, event.target.checked)}
+                      />
+                    </td>
                     <td className={TD}>{bill.billNumber}</td>
                     <td className={TD}>{bill.customerName}</td>
                     <td className={TD}>{money(bill.totalAmountDue)}</td>
@@ -3018,7 +3059,7 @@ export function BillNotifications() {
                     </td>
                   </tr>
                 ))}
-                {!filteredBills.length && <tr><td colSpan={4} className="px-4 py-12 text-center text-sm text-slate-400">No eligible bills match these filters.</td></tr>}
+                {!filteredBills.length && <tr><td colSpan={5} className="px-4 py-12 text-center text-sm text-slate-400">No eligible bills match these filters.</td></tr>}
               </tbody>
             </table>
           </div>
