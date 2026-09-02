@@ -1499,23 +1499,47 @@ export function UnmatchedPayments() {
     [message, setMessage] = useState("");
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
+  const [paymentsLoaded, setPaymentsLoaded] = useState(false);
+  const [availableAccountCount, setAvailableAccountCount] = useState(0);
+  const [accountsLoading, setAccountsLoading] = useState(false);
   const [allocating, setAllocating] = useState(false);
   const load = () => {
     setLoading(true);
-    return Promise.all([api.listPayments(), api.listPaymentAccounts()]).then(
-      ([p, a]) => {
-        setRows(
-          p.filter(
-            (x: Row) =>
-              x.paymentStatus === "RECEIVED" &&
-              x.matchingStatus === "UNMATCHED" &&
-              !x.accountId,
-          ),
-        );
-        setAccounts(a);
-      },
-    ).catch((e) => setError(e.message)).finally(() => setLoading(false));
+    setPaymentsLoaded(false);
+    setError("");
+    return Promise.allSettled([
+      api.listUnmatchedPayments(),
+      api.paymentAccountCount(),
+    ]).then(([paymentsResult, accountsResult]) => {
+      const failures: string[] = [];
+      if (paymentsResult.status === "fulfilled") {
+        setRows(paymentsResult.value);
+        setPaymentsLoaded(true);
+      } else {
+        failures.push(`Could not load unmatched payments: ${paymentsResult.reason?.message ?? "Request failed"}`);
+      }
+      if (accountsResult.status === "fulfilled") {
+        setAvailableAccountCount(Number(accountsResult.value.count ?? 0));
+      } else {
+        failures.push(`Could not count active customer accounts: ${accountsResult.reason?.message ?? "Request failed"}`);
+      }
+      setError(failures.join(" "));
+    }).finally(() => setLoading(false));
   };
+  async function selectPayment(payment: Row) {
+    setFocus(payment);
+    setAllocationRows([{ accountId: payment.suggestedAccount?.accountId ? String(payment.suggestedAccount.accountId) : "", amount: Number(payment.amount).toFixed(2) }]);
+    setReason("");
+    if (accounts.length || accountsLoading) return;
+    setAccountsLoading(true);
+    try {
+      setAccounts(await api.listPaymentAccounts());
+    } catch (e: any) {
+      setError(`Could not load customer accounts for allocation: ${e.message}`);
+    } finally {
+      setAccountsLoading(false);
+    }
+  }
   useEffect(() => {
     load();
   }, []);
@@ -1525,9 +1549,7 @@ export function UnmatchedPayments() {
     if (!requestedPaymentId) return;
     const payment = rows.find((row) => String(row.paymentId) === requestedPaymentId);
     if (!payment) return;
-    setFocus(payment);
-    setAllocationRows([{ accountId: payment.suggestedAccount?.accountId ? String(payment.suggestedAccount.accountId) : "", amount: Number(payment.amount).toFixed(2) }]);
-    setReason("");
+    void selectPayment(payment);
   }, [focus, loading, rows, unmatchedSearchParams]);
   async function allocate() {
     if (!focus) return;
@@ -1541,6 +1563,7 @@ export function UnmatchedPayments() {
       setAllocationRows([]);
       setReason("");
       await load();
+      window.dispatchEvent(new Event("sidebar-counts:refresh"));
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -1573,7 +1596,7 @@ export function UnmatchedPayments() {
       <div className="mb-5 grid gap-3 sm:grid-cols-3">
         <div className="rounded-2xl border border-amber-100 bg-amber-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-amber-700">Unmatched payments</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{rows.length}</div></div>
         <div className="rounded-2xl border border-rose-100 bg-rose-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-rose-700">Value awaiting allocation</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{money(unmatchedTotal)}</div></div>
-        <div className="rounded-2xl border border-sky-100 bg-sky-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-sky-700">Available accounts</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{accounts.length}</div></div>
+        <div className="rounded-2xl border border-sky-100 bg-sky-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-sky-700">Available accounts</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{availableAccountCount.toLocaleString()}</div></div>
       </div>
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_480px] xl:items-start">
         <Card title="Payments awaiting reconciliation" className="overflow-hidden shadow-md shadow-slate-200/50">
@@ -1594,10 +1617,11 @@ export function UnmatchedPayments() {
                     <td className={TD}>{payment.suggestedAccount ? <div className="min-w-[190px]"><div className="font-bold text-slate-800">{payment.suggestedAccount.customerName}</div><div className="mt-1 text-xs text-slate-500">Account: <strong>{payment.suggestedAccount.accountNumber}</strong></div><div className="text-xs text-slate-500">Customer: {payment.suggestedAccount.customer?.customerNumber || "—"}</div><div className="text-xs text-slate-500">Phone: {payment.suggestedAccount.customer?.phoneNumber || "—"}</div><span className="mt-1.5 inline-flex rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-bold text-amber-700">Verify before allocating</span></div> : <span className="text-sm text-slate-400">No account suggestion</span>}</td>
                     <td className={TD}><span className="inline-flex items-center gap-1.5 rounded-full bg-sky-50 px-2.5 py-1 text-xs font-semibold text-sky-700"><span className="h-1.5 w-1.5 shrink-0 rounded-full bg-sky-500" />{payment.channel?.channelName || "Unknown"}</span><div className="mt-2 break-words text-xs leading-5 text-slate-500">{dateTime(payment.paymentDate)}</div></td>
                     <td className={`${TD} font-bold text-slate-900`}>{money(payment.amount)}</td>
-                    <td className={TD}><button type="button" onClick={() => { setFocus(payment); setAllocationRows([{ accountId: payment.suggestedAccount?.accountId ? String(payment.suggestedAccount.accountId) : "", amount: Number(payment.amount).toFixed(2) }]); setReason(""); }} className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-2 text-xs font-bold transition hover:-translate-y-0.5 ${selected ? "bg-emerald-600 text-white shadow-sm" : "bg-slate-100 text-slate-700 hover:bg-emerald-600 hover:text-white"}`}><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-3.5 w-3.5 shrink-0"><path d="M5 12h14M13 6l6 6-6 6" /></svg>{selected ? "Selected" : "Allocate"}</button></td>
+                    <td className={TD}><button type="button" onClick={() => void selectPayment(payment)} className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-2 text-xs font-bold transition hover:-translate-y-0.5 ${selected ? "bg-emerald-600 text-white shadow-sm" : "bg-slate-100 text-slate-700 hover:bg-emerald-600 hover:text-white"}`}><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-3.5 w-3.5 shrink-0"><path d="M5 12h14M13 6l6 6-6 6" /></svg>{selected ? "Selected" : "Allocate"}</button></td>
                   </tr>;
                 })}
-                {!loading && !filteredRows.length && <tr><td colSpan={6} className="px-4 py-16 text-center"><div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-emerald-50 text-emerald-600"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-7 w-7"><path d="M5 12l4 4L19 6" /></svg></div><div className="mt-4 font-bold text-slate-700">{rows.length ? "No payments match your search" : "All payments are reconciled"}</div><div className="mt-1 text-sm text-slate-400">{rows.length ? "Try a different reference, payer or phone number." : "There are no unmatched transactions requiring attention."}</div></td></tr>}
+                {!loading && paymentsLoaded && !filteredRows.length && <tr><td colSpan={6} className="px-4 py-16 text-center"><div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-emerald-50 text-emerald-600"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-7 w-7"><path d="M5 12l4 4L19 6" /></svg></div><div className="mt-4 font-bold text-slate-700">{rows.length ? "No payments match your search" : "All payments are reconciled"}</div><div className="mt-1 text-sm text-slate-400">{rows.length ? "Try a different reference, payer or phone number." : "There are no unmatched transactions requiring attention."}</div></td></tr>}
+                {!loading && !paymentsLoaded && <tr><td colSpan={6} className="px-4 py-16 text-center"><div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-rose-50 text-rose-500"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-7 w-7"><path d="M12 8v5M12 17h.01" /><circle cx="12" cy="12" r="9" /></svg></div><div className="mt-4 font-bold text-slate-700">Unmatched payments could not be loaded</div><div className="mt-1 text-sm text-slate-400">Refresh the page or try again after the server is available.</div></td></tr>}
               </tbody>
             </table>
           </div>
@@ -1623,6 +1647,7 @@ export function UnmatchedPayments() {
                 <p className="mt-3 text-xs leading-5 text-amber-800">Suggested from the payment account reference. Confirm these details before allocating.</p>
               </div>}
               <div className="rounded-xl border border-sky-100 bg-sky-50 px-3.5 py-3 text-xs leading-5 text-sky-700">Allocate the full transaction to one account, or add rows to split it across multiple accounts. Each account receives its own payment and receipt.</div>
+              {accountsLoading && <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3 text-xs font-semibold text-slate-600"><span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-200 border-t-aqua-700" />Loading active customer accountsâ€¦</div>}
               <div>
                 <div className="mb-2 flex items-center justify-between gap-3">
                   <div><div className="text-sm font-semibold text-slate-700">Account allocations</div><div className="text-xs text-slate-400">Each account can be selected once.</div></div>

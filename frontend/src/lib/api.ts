@@ -628,6 +628,8 @@ export const api = {
     return request(`/payments/dashboard/summary${query ? `?${query}` : ""}`);
   },
   listPaymentChannels: () => request("/payments/channels"),
+  unmatchedPaymentCount: () => request("/payments/unmatched/count"),
+  listUnmatchedPayments: () => request("/payments/unmatched"),
   createPaymentChannel: (data: Record<string, unknown>) =>
     request("/payments/channels", {
       method: "POST",
@@ -640,6 +642,7 @@ export const api = {
     }),
   listPaymentAccounts: (q = "") =>
     request(`/payments/accounts${q ? `?q=${encodeURIComponent(q)}` : ""}`),
+  paymentAccountCount: () => request("/payments/accounts/count"),
   listPayments: (filters: Record<string, string> = {}) => {
     const query = new URLSearchParams(
       Object.entries(filters).filter(([, value]) => value),

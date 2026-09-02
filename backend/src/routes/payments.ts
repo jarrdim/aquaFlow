@@ -823,6 +823,43 @@ paymentsRouter.get("/channels", async (_req, res, next) => {
     next(e);
   }
 });
+
+paymentsRouter.get("/unmatched/count", async (_req, res, next) => {
+  try {
+    const count = await prisma.payment.count({
+      where: {
+        paymentStatus: "RECEIVED",
+        matchingStatus: "UNMATCHED",
+        accountId: null,
+      },
+    });
+    res.json({ count });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// The allocation screen only needs unresolved receipts. Do not make it load the
+// complete payment register (with allocations, reversals and audit events) and
+// then filter thousands of records in the browser.
+paymentsRouter.get("/unmatched", async (_req, res, next) => {
+  try {
+    const rows = await prisma.payment.findMany({
+      where: {
+        paymentStatus: "RECEIVED",
+        matchingStatus: "UNMATCHED",
+        accountId: null,
+      },
+      include: {
+        channel: true,
+      },
+      orderBy: [{ paymentDate: "desc" }, { paymentId: "desc" }],
+    });
+    res.json(await addSuggestedAccounts(rows));
+  } catch (error) {
+    next(error);
+  }
+});
 paymentsRouter.post(
   "/channels",
   requireRole("SYSTEM_ADMIN", "FINANCE_MANAGER"),
@@ -891,6 +928,18 @@ paymentsRouter.patch(
     }
   },
 );
+
+paymentsRouter.get("/accounts/count", async (_req, res, next) => {
+  try {
+    res.json({
+      count: await prisma.customerAccount.count({
+        where: { accountStatus: "ACTIVE" },
+      }),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
 
 paymentsRouter.get("/accounts", async (req, res, next) => {
   try {

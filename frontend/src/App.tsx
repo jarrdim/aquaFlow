@@ -727,9 +727,10 @@ function Shell({ children }: { children: React.ReactNode }) {
     let active = true;
     async function refreshSidebarCounts() {
       try {
-        const [reversals, accountAdjustments] = await Promise.all([
+        const [reversals, accountAdjustments, unmatchedPayments] = await Promise.all([
           api.listPaymentReversals("PENDING"),
           api.listAccountAdjustments("PENDING"),
+          api.unmatchedPaymentCount(),
         ]);
         if (active) {
           setSidebarCounts((current) => ({
@@ -740,6 +741,7 @@ function Shell({ children }: { children: React.ReactNode }) {
             "/billing/account-adjustments/approvals": Array.isArray(accountAdjustments)
               ? accountAdjustments.length
               : 0,
+            "/payments/unmatched": Number(unmatchedPayments?.count ?? 0),
           }));
         }
       } catch {
