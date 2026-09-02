@@ -1289,7 +1289,18 @@ billingRouter.get("/dashboard", async (req, res, next) => {
         })
       : Promise.resolve(null);
     const [bills, alerts, adjustments, recent, candidates] = await Promise.all([
-      prisma.bill.findMany({ where, select: { status: true, totalCurrentCharges: true, notificationStatus: true, readingId: true } }),
+      prisma.bill.findMany({
+        where,
+        select: {
+          status: true,
+          previousBalance: true,
+          totalCurrentCharges: true,
+          penalties: true,
+          paidAmount: true,
+          notificationStatus: true,
+          readingId: true,
+        },
+      }),
       prisma.billingSecurityAlert.count({ where: { status: "OPEN", ...(cycle ? { bill: { billingCycleId: cycle.billingCycleId } } : {}) } }),
       prisma.billingAdjustment.count({ where: { status: "PENDING", ...(cycle ? { bill: { billingCycleId: cycle.billingCycleId } } : {}) } }),
       prisma.billingEvent.findMany({ where: cycle ? { billingCycleId: cycle.billingCycleId } : undefined, include: { bill: { include: { account: { include: { customer: true } } } }, performer: true }, orderBy: { createdAt: "desc" }, take: 8 }),
@@ -1303,6 +1314,11 @@ billingRouter.get("/dashboard", async (req, res, next) => {
       ["APPROVED", "POSTED", "PARTIALLY_PAID", "PAID"].includes(bill.status) &&
       !["QUEUED", "SENT"].includes(bill.notificationStatus),
     ).length;
-    res.json({ cycle, customersToBill: bills.length + eligibleNotBilled, billsGenerated: bills.length, eligibleNotBilled, eligibleNotNotified, pending: bills.filter((bill) => bill.status === "PENDING_APPROVAL").length, approved, readyToPost, totalBilling: round(bills.reduce((sum, bill) => sum + Number(bill.totalCurrentCharges), 0)), notified: bills.filter((bill) => bill.notificationStatus === "SENT").length, cancelled: bills.filter((bill) => bill.status === "CANCELLED").length, alerts, adjustments, recent: recent.map((row: any) => ({ ...row, customerName: customerName(row.bill?.account?.customer) })) });
+    const totalAmount = round(bills.reduce((sum, bill) => sum +
+      Number(bill.previousBalance) +
+      Number(bill.totalCurrentCharges) +
+      Number(bill.penalties) -
+      Number(bill.paidAmount), 0));
+    res.json({ cycle, customersToBill: bills.length + eligibleNotBilled, billsGenerated: bills.length, eligibleNotBilled, eligibleNotNotified, pending: bills.filter((bill) => bill.status === "PENDING_APPROVAL").length, approved, readyToPost, totalBilling: totalAmount, notified: bills.filter((bill) => bill.notificationStatus === "SENT").length, cancelled: bills.filter((bill) => bill.status === "CANCELLED").length, alerts, adjustments, recent: recent.map((row: any) => ({ ...row, customerName: customerName(row.bill?.account?.customer) })) });
   } catch (error) { next(error); }
 });

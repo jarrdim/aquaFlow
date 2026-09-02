@@ -516,7 +516,7 @@ export function BillingDashboard() {
               to={`/billing/invoices?billingCycleId=${cycleId}`}
             />
             <Kpi
-              label="Total current billing"
+              label="Total amount"
               value={money(data.totalBilling)}
               tone="text-aqua-700"
               to={`/billing/invoices?billingCycleId=${cycleId}`}
