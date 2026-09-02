@@ -326,6 +326,14 @@ export const api = {
     }),
   listMeterReplacements: (status = "") =>
     request(`/meters/replacements${status ? `?status=${status}` : ""}`),
+  getDirectReplacementOptions: (filters: Record<string, string> = {}) => {
+    const query = new URLSearchParams(Object.entries(filters).filter(([, value]) => value)).toString();
+    return request(`/meters/replacements/direct/options${query ? `?${query}` : ""}`);
+  },
+  createDirectMeterReplacement: (data: Record<string, unknown>) =>
+    request("/meters/replacements/direct", { method: "POST", body: JSON.stringify(data) }),
+  previewDirectMeterReplacement: (data: Record<string, unknown>) =>
+    request("/meters/replacements/direct/preview", { method: "POST", body: JSON.stringify(data) }),
   getMeterReplacement: (id: string) => request(`/meters/replacements/${id}`),
   createMeterReplacement: (data: Record<string, unknown>) =>
     request("/meters/replacements", {

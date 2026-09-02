@@ -18,7 +18,7 @@ import {
   openEvidence,
   parseMeterWorkbook,
 } from "../lib/meterFiles";
-import { DateInput } from "../components/DateInput";
+import { DateInput, formatDmyDate } from "../components/DateInput";
 
 type AnyRecord = Record<string, any>;
 
@@ -2799,6 +2799,216 @@ export function UpdateMeterStatus() {
       )}
     </Page>
   );
+}
+
+export function DirectMeterReplacement() {
+  const today = new Date().toISOString().slice(0, 10);
+  const [installed, setInstalled] = useState<AnyRecord[]>([]);
+  const [available, setAvailable] = useState<AnyRecord[]>([]);
+  const [installedSearch, setInstalledSearch] = useState("");
+  const [availableSearch, setAvailableSearch] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [billPreview, setBillPreview] = useState<AnyRecord | null>(null);
+  const [previewError, setPreviewError] = useState("");
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+  const [form, setForm] = useState({
+    oldMeterId: "", newMeterId: "", replacementDate: today,
+    oldFinalReading: "", newOpeningReading: "0", replacementReason: "",
+    remarks: "", confirmed: false,
+  });
+
+  async function loadOptions(filters: Record<string, string> = {}, background = false) {
+    if (!background) setLoading(true);
+    try {
+      const result = await api.getDirectReplacementOptions(filters);
+      setInstalled(result.installed ?? []);
+      setAvailable(result.available ?? []);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      if (!background) setLoading(false);
+    }
+  }
+  useEffect(() => { void loadOptions(); }, []);
+  useEffect(() => {
+    if (!installedSearch.trim()) return;
+    const timer = window.setTimeout(() => void loadOptions({ installedSearch, availableSearch }, true), 300);
+    return () => window.clearTimeout(timer);
+  }, [installedSearch]);
+  useEffect(() => {
+    if (!availableSearch.trim()) return;
+    const timer = window.setTimeout(() => void loadOptions({ installedSearch, availableSearch }, true), 300);
+    return () => window.clearTimeout(timer);
+  }, [availableSearch]);
+
+  const oldMeter = installed.find((meter) => String(meter.meterId) === form.oldMeterId);
+  const newMeter = available.find((meter) => String(meter.meterId) === form.newMeterId);
+  const account = oldMeter?.assignment?.account;
+  const previousReading = Number(oldMeter?.latestReading?.currentReading ?? oldMeter?.openingReading ?? 0);
+  const latestReadingDate = oldMeter?.latestReading?.readingDate ? String(oldMeter.latestReading.readingDate).slice(0, 10) : "";
+  const money = (value: any) => Number(value ?? 0).toLocaleString("en-KE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  useEffect(() => {
+    if (!account?.accountId || !form.oldMeterId || !form.replacementDate || form.oldFinalReading === "" || Number(form.oldFinalReading) < previousReading) {
+      setBillPreview(null);
+      setPreviewError("");
+      return;
+    }
+    const timer = window.setTimeout(async () => {
+      setPreviewLoading(true);
+      setBillPreview(null);
+      setPreviewError("");
+      try {
+        const result = await api.previewDirectMeterReplacement({
+          accountId: String(account.accountId), oldMeterId: form.oldMeterId,
+          replacementDate: form.replacementDate, oldFinalReading: Number(form.oldFinalReading),
+        });
+        setBillPreview(result);
+      } catch (err: any) {
+        setBillPreview(null);
+        setPreviewError(err.message);
+      } finally {
+        setPreviewLoading(false);
+      }
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [account?.accountId, form.oldMeterId, form.replacementDate, form.oldFinalReading, previousReading]);
+
+  function chooseOldMeter(meterId: string) {
+    const meter = installed.find((item) => String(item.meterId) === meterId);
+    const latest = Number(meter?.latestReading?.currentReading ?? meter?.openingReading ?? 0);
+    const latestDate = meter?.latestReading?.readingDate ? String(meter.latestReading.readingDate).slice(0, 10) : "";
+    setForm((current) => ({ ...current, oldMeterId: meterId,
+      oldFinalReading: meterId ? String(latest) : "",
+      replacementDate: latestDate && current.replacementDate < latestDate ? latestDate : current.replacementDate,
+      confirmed: false }));
+  }
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!account?.accountId || !oldMeter || !newMeter) return setError("Select both the installed meter and its in-store replacement.");
+    if (!form.confirmed) return setError("Confirm that the physical meter change has already been completed.");
+    if (!billPreview) return setError("Wait for a valid bill preview before replacing the meter.");
+    if (!window.confirm(`Replace ${oldMeter.meterNumber} with ${newMeter.meterNumber} and post KSh ${money(billPreview.totalCurrentCharges)} to account ${account.accountNumber}?`)) return;
+    setSaving(true); setError(""); setSuccess("");
+    try {
+      const result = await api.createDirectMeterReplacement({
+        accountId: String(account.accountId), oldMeterId: form.oldMeterId, newMeterId: form.newMeterId,
+        replacementDate: form.replacementDate, oldFinalReading: Number(form.oldFinalReading),
+        newOpeningReading: Number(form.newOpeningReading), replacementReason: form.replacementReason,
+        remarks: form.remarks || undefined, confirmed: true,
+      });
+      setSuccess(`Meter replaced and billed successfully. Replacement REP-${String(result.replacementId).padStart(4, "0")}; bill ${result.bill?.billNumber ?? "created"} for KSh ${Number(result.bill?.totalCurrentCharges ?? 0).toLocaleString("en-KE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}.`);
+      setForm({ oldMeterId: "", newMeterId: "", replacementDate: today, oldFinalReading: "",
+        newOpeningReading: "0", replacementReason: "", remarks: "", confirmed: false });
+      setInstalledSearch(""); setAvailableSearch("");
+      await loadOptions();
+    } catch (err: any) { setError(err.message); }
+    finally { setSaving(false); }
+  }
+
+  return <Page title="Direct meter replacement"
+    actions={<>
+      <span className="inline-flex items-center rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
+        Physical change must be complete. Saving closes the old assignment, approves the final reading and posts the bill immediately—no work order or approval item.
+      </span>
+      <LinkButton to="/meters/replacements" tone="orange">Replacement reviews</LinkButton>
+    </>}>
+    {error && <Notice>{error}</Notice>}{success && <Notice kind="success">{success}</Notice>}
+    <form onSubmit={submit} className="grid gap-3 xl:grid-cols-[minmax(0,1.5fr)_minmax(380px,.75fr)]">
+      <div className="space-y-3">
+        <Card title="1. Customer and old meter">
+          <Field label="Installed customer meter" required>
+            <SearchableSelect className={INPUT} value={form.oldMeterId} onSearchQuery={setInstalledSearch}
+              onChange={(event) => chooseOldMeter(event.target.value)} disabled={loading} required>
+              <option value="">{loading ? "Loading installed meters..." : "Select installed meter"}</option>
+              {installed.map((meter) => <option key={meter.meterId} value={meter.meterId}>
+                {meter.assignment?.account?.accountNumber} - {meter.assignedTo || "Customer"} - {meter.meterNumber}
+              </option>)}
+            </SearchableSelect>
+          </Field>
+          {oldMeter && <div className="mt-3 grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2 lg:grid-cols-5">
+            <div><p className="text-xs font-semibold uppercase text-slate-400">Account</p><p className="mt-1 font-bold text-slate-800">{account?.accountNumber}</p></div>
+            <div><p className="text-xs font-semibold uppercase text-slate-400">Customer</p><p className="mt-1 font-bold text-slate-800">{oldMeter.assignedTo || "-"}</p></div>
+            <div><p className="text-xs font-semibold uppercase text-slate-400">Category</p><p className="mt-1 font-bold text-slate-800">{previewLoading ? <span className="inline-flex items-center gap-1.5 text-slate-500"><span className="h-3 w-3 animate-spin rounded-full border-2 border-aqua-600 border-t-transparent" />Checking</span> : billPreview?.categoryName || "-"}</p></div>
+            <div><p className="text-xs font-semibold uppercase text-slate-400">Current meter</p><p className="mt-1 font-bold text-slate-800">{oldMeter.meterNumber}</p></div>
+            <div><p className="text-xs font-semibold uppercase text-slate-400">Latest approved reading</p><p className="mt-1 font-bold text-slate-800">{previousReading.toLocaleString()}</p></div>
+          </div>}
+        </Card>
+        <Card title="2. Replacement meter">
+          <Field label="Available in-store meter" required><SearchableSelect className={INPUT} value={form.newMeterId}
+            onSearchQuery={setAvailableSearch}
+            onChange={(e) => setForm({ ...form, newMeterId: e.target.value, confirmed: false })} disabled={loading} required>
+            <option value="">Select replacement meter</option>
+            {available.map((meter) => <option key={meter.meterId} value={meter.meterId}>{meter.meterNumber} {meter.serialNumber ? `- Serial ${meter.serialNumber}` : ""} - {displaySize(meter.meterSizeMm)}</option>)}
+          </SearchableSelect></Field>
+        </Card>
+        <Card title="3. Replacement readings and details"><div className="grid gap-3 lg:grid-cols-4">
+          <Field label="Replacement date" required><DateInput className={INPUT} value={form.replacementDate} min={latestReadingDate || undefined} max={today} onChange={(e) => setForm({ ...form, replacementDate: e.target.value, confirmed: false })} required /></Field>
+          <Field label="Old meter final reading" required><input type="number" min={previousReading} step="0.001" className={INPUT} value={form.oldFinalReading} onChange={(e) => setForm({ ...form, oldFinalReading: e.target.value, confirmed: false })} required /></Field>
+          <Field label="New meter opening reading" required><input type="number" min="0" step="0.001" className={INPUT} value={form.newOpeningReading} onChange={(e) => setForm({ ...form, newOpeningReading: e.target.value, confirmed: false })} required /></Field>
+          <Field label="Reason for replacement" required><input className={INPUT} value={form.replacementReason} onChange={(e) => setForm({ ...form, replacementReason: e.target.value, confirmed: false })} placeholder="Faulty, damaged, inaccurate..." required /></Field>
+          <div className="lg:col-span-4"><Field label="Remarks"><input className={INPUT} value={form.remarks} onChange={(e) => setForm({ ...form, remarks: e.target.value, confirmed: false })} placeholder="Optional replacement notes" /></Field></div>
+        </div></Card>
+      </div>
+      <div className="xl:sticky xl:top-24 xl:self-start"><Card title="Confirm immediate replacement">
+        <div className="mb-4 grid grid-cols-[1fr_auto_1fr] items-center gap-2 rounded-xl bg-slate-50 p-3 text-center">
+          <div><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Remove</p><p className="mt-1 text-sm font-extrabold text-slate-800">{oldMeter?.meterNumber || "Not selected"}</p></div>
+          <span className="grid h-8 w-8 place-items-center rounded-full bg-white text-aqua-700 shadow-sm">→</span>
+          <div><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Install</p><p className="mt-1 text-sm font-extrabold text-slate-800">{newMeter?.meterNumber || "Not selected"}</p></div>
+        </div>
+        <div className="overflow-hidden rounded-xl border border-aqua-200">
+          <div className="bg-gradient-to-br from-aqua-700 to-cyan-600 px-4 py-2.5 text-white">
+            <div className="flex items-center justify-between gap-3"><p className="text-xs font-bold uppercase tracking-wider text-white/75">Immediate bill amount</p><span className="rounded-full bg-white/15 px-2 py-1 text-[10px] font-bold">POSTED ON SAVE</span></div>
+            {previewLoading ? <div className="mt-2 flex items-center gap-2">
+              <span className="h-5 w-5 shrink-0 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+              <div><p className="text-sm font-extrabold">Calculating bill...</p><p className="text-[10px] text-white/75">Checking tariff and minimum charge</p></div>
+            </div> : <div className="mt-1.5 flex flex-wrap items-baseline gap-x-3 gap-y-0.5"><p className="text-2xl font-black leading-none">KSh {billPreview ? money(billPreview.totalCurrentCharges) : "0.00"}</p><p className="text-[11px] text-white/75">{billPreview ? `${billPreview.consumption.toLocaleString()} units · ${billPreview.tariffCode} · ${billPreview.tariffName}` : "Enter the final reading to calculate"}</p></div>}
+          </div>
+          {previewLoading && <div className="space-y-3 bg-white p-4">
+            <div className="h-12 animate-pulse rounded-lg bg-slate-100" />
+            <div className="grid grid-cols-2 gap-2"><div className="h-4 animate-pulse rounded bg-slate-100" /><div className="h-4 animate-pulse rounded bg-slate-100" /><div className="h-4 animate-pulse rounded bg-slate-100" /><div className="h-4 animate-pulse rounded bg-slate-100" /></div>
+          </div>}
+          {billPreview && <dl className="space-y-2 bg-white p-4 text-sm">
+            <div className="mb-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Tariff applied</p><p className="mt-0.5 font-extrabold text-slate-900">{billPreview.tariffCode} · {billPreview.tariffName}</p><p className="mt-0.5 text-xs text-slate-500">{billPreview.categoryCode} · {billPreview.categoryName}</p></div>
+                <span className="rounded-full bg-aqua-100 px-2 py-1 text-[10px] font-bold text-aqua-800">{pretty(billPreview.billingMethod)}</span>
+              </div>
+              <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 border-t border-slate-200 pt-2 text-xs">
+                <span className="text-slate-500">Effective</span><span className="text-right font-semibold text-slate-700">{formatDmyDate(billPreview.effectiveFrom)}{billPreview.effectiveTo ? ` – ${formatDmyDate(billPreview.effectiveTo)}` : " onward"}</span>
+                {billPreview.billingMethod === "FLAT" && <><span className="text-slate-500">Flat amount</span><span className="text-right font-semibold">KSh {money(billPreview.flatAmount)}</span></>}
+                {billPreview.billingMethod !== "FLAT" && billPreview.billingMethod !== "TIERED" && <><span className="text-slate-500">Rate per unit</span><span className="text-right font-semibold">KSh {money(billPreview.ratePerUnit)}</span></>}
+                <span className="text-slate-500">Minimum charge</span><span className="text-right font-semibold">KSh {money(billPreview.minimumCharge)}</span>
+                <span className="text-slate-500">Standing charge</span><span className="text-right font-semibold">KSh {money(billPreview.configuredStandingCharge)}</span>
+                <span className="text-slate-500">Meter rent</span><span className="text-right font-semibold">KSh {money(billPreview.configuredMeterRent)}</span>
+              </div>
+              {billPreview.billingMethod === "TIERED" && <div className="mt-2 border-t border-slate-200 pt-2">
+                <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">Active bands</p>
+                <div className="flex flex-wrap gap-1">{billPreview.bands.map((band: AnyRecord) => <span key={band.bandSequence} className="rounded bg-white px-2 py-1 text-[11px] font-semibold text-slate-600 ring-1 ring-slate-200">{Number(band.lowerLimit).toLocaleString()}–{band.upperLimit == null ? "above" : Number(band.upperLimit).toLocaleString()} @ KSh {money(band.ratePerUnit)}</span>)}</div>
+              </div>}
+            </div>
+            <div className="flex justify-between"><dt className="text-slate-500">Consumption charge</dt><dd className="font-semibold text-slate-800">KSh {money(billPreview.consumptionCharge)}</dd></div>
+            <div className="flex justify-between"><dt className="text-slate-500">Minimum adjustment</dt><dd className={`font-bold ${billPreview.minimumApplied ? "text-amber-700" : "text-emerald-700"}`}>KSh {money(billPreview.minimumChargeAdjustment)}</dd></div>
+            <div className={`rounded-lg px-3 py-2 text-xs font-medium ${billPreview.minimumApplied ? "bg-amber-50 text-amber-800" : "bg-emerald-50 text-emerald-800"}`}>
+              <span className="font-extrabold">Minimum {billPreview.minimumApplied ? "applied" : "not applied"}:</span> {billPreview.minimumDecision}
+            </div>
+            <div className="flex justify-between"><dt className="text-slate-500">Standing charge & meter rent</dt><dd className="font-semibold text-slate-800">KSh {money(Number(billPreview.standingCharge) + Number(billPreview.meterRent))}</dd></div>
+            <div className="border-t border-dashed border-slate-200 pt-2"><div className="flex justify-between"><dt className="text-slate-500">Previous balance</dt><dd className="font-semibold text-slate-800">KSh {money(billPreview.previousBalance)}</dd></div></div>
+            <div className="flex justify-between rounded-lg bg-emerald-50 px-3 py-2"><dt className="font-bold text-emerald-800">Total account due</dt><dd className="font-black text-emerald-800">KSh {money(billPreview.totalAmountDue)}</dd></div>
+            <div className="flex justify-between text-xs"><dt className="text-slate-400">Due date</dt><dd className="font-semibold text-slate-600">{formatDmyDate(billPreview.dueDate)}</dd></div>
+          </dl>}
+          {previewError && <p className="bg-red-50 px-4 py-3 text-xs font-medium text-red-700">{previewError}</p>}
+        </div>
+        <label className="mt-5 flex cursor-pointer gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm"><input type="checkbox" className="mt-0.5 h-4 w-4" checked={form.confirmed} onChange={(e) => setForm({ ...form, confirmed: e.target.checked })} />
+          <span>I confirm the physical replacement is complete, these readings are correct, and the customer should be billed immediately.</span></label>
+        <Button type="submit" tone="green" className="mt-4 w-full" disabled={saving || loading || previewLoading || !billPreview || !form.confirmed || !oldMeter || !newMeter}>{saving ? "Replacing and billing..." : "Replace and bill now"}</Button>
+      </Card></div>
+    </form>
+  </Page>;
 }
 
 export function MeterReplacement() {

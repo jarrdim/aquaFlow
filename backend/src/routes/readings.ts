@@ -123,7 +123,6 @@ async function getEligibleAssignments(
     assignmentStatus: "ACTIVE",
     removalDate: null,
     accountId: accountIds?.length ? { in: accountIds } : { not: null },
-    meter: { status: "ACTIVE" },
     account: { AND: accountFilters },
   };
   const terms = search.trim().split(/\s+/).filter(Boolean);

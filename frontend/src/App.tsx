@@ -32,6 +32,7 @@ import {
   AssignMeter,
   BulkMeterAssignmentImport,
   BulkMeterImport,
+  DirectMeterReplacement,
   ExceptionReport,
   InstallationDetails,
   MeterDashboard,
@@ -328,6 +329,7 @@ const METER_MENU = [
   ["Network Assignment", "/meters/assign/non-customer"],
   ["Import Meters", "/meters/import"],
   ["Import Assignments", "/meters/import-assignments"],
+  ["Direct Replacement", "/meters/direct-replacement"],
   ["Replacement Reviews", "/meters/replacements"],
   ["Exception Register", "/meters/reports/exceptions"],
   ["Alert Queue", "/meters/alerts"],
@@ -381,6 +383,7 @@ const NEW_SIDEBAR_ROUTES = new Set([
   "/billing/individual",
   "/billing/account-adjustments",
   "/billing/account-adjustments/approvals",
+  "/meters/direct-replacement",
 ]);
 
 const PAYMENT_MENU = [
@@ -1080,13 +1083,18 @@ function Shell({ children }: { children: React.ReactNode }) {
                         <Link
                           key={itemPath}
                           to={itemPath}
-                          className={`block rounded px-2 py-1.5 text-xs font-medium transition-colors ${
+                          className={`flex items-center justify-between gap-2 rounded px-2 py-1.5 text-xs font-medium transition-colors ${
                             itemActive
                               ? "bg-white/10 text-white"
                               : "text-blue-100/50 hover:bg-white/5 hover:text-white"
                           }`}
                         >
-                          {itemLabel}
+                          <span className="min-w-0 truncate">{itemLabel}</span>
+                          {NEW_SIDEBAR_ROUTES.has(itemPath) && (
+                            <span className="shrink-0 rounded-full border border-cyan-300/30 bg-cyan-400/15 px-1.5 py-0.5 text-[9px] font-extrabold uppercase leading-none tracking-wide text-cyan-200">
+                              New
+                            </span>
+                          )}
                         </Link>
                       );
                     })}
@@ -2465,6 +2473,14 @@ export default function App() {
             <Shell>
               <AssignMeter nonCustomer />
             </Shell>
+          </Protected>
+        }
+      />
+      <Route
+        path="/meters/direct-replacement"
+        element={
+          <Protected>
+            <Shell><DirectMeterReplacement /></Shell>
           </Protected>
         }
       />

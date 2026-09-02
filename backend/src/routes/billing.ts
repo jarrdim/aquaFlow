@@ -61,9 +61,11 @@ async function ensureEarlierReadingsAreBilled(billingCycleId: bigint, accountIds
       cycle: { status: "CLOSED", endDate: { lt: currentReadingCycle.endDate } },
     },
     select: {
+      readingId: true,
       accountId: true,
       cycle: { select: { readingCycleId: true, cycleCode: true, billingCycleId: true } },
       account: { select: { accountNumber: true } },
+      bills: { where: { status: { in: postedBillStatuses } }, select: { billId: true } },
     },
   });
   const linkedBillingCycleIds = Array.from(new Set(earlierReadings
@@ -79,7 +81,7 @@ async function ensureEarlierReadingsAreBilled(billingCycleId: bigint, accountIds
   }) : [];
   const postedKeys = new Set(postedBills.map((bill) => `${bill.accountId}:${bill.billingCycleId}`));
   const blockers = earlierReadings.filter((reading) =>
-    !reading.cycle?.billingCycleId || !postedKeys.has(`${reading.accountId}:${reading.cycle.billingCycleId}`),
+    !reading.bills.length && (!reading.cycle?.billingCycleId || !postedKeys.has(`${reading.accountId}:${reading.cycle.billingCycleId}`)),
   );
   if (!blockers.length) return;
 
@@ -217,7 +219,7 @@ async function cycleCandidates(cycleId: bigint, filters: any = {}) {
       ...(filters.zoneId ? { property: { zoneId: BigInt(filters.zoneId) } } : {}),
       ...(filters.routeId ? { OR: [{ routeId: BigInt(filters.routeId) }, { property: { routeId: BigInt(filters.routeId) } }] } : {}),
       ...(filters.categoryId ? { categoryId: BigInt(filters.categoryId) } : {}),
-      meterAssignments: { some: { assignmentStatus: "ACTIVE", removalDate: null, meter: { status: "ACTIVE" } } },
+      meterAssignments: { some: { assignmentStatus: "ACTIVE", removalDate: null } },
     },
     include: {
       customer: true,
@@ -225,12 +227,12 @@ async function cycleCandidates(cycleId: bigint, filters: any = {}) {
       property: { include: { zone: true, route: true } },
       route: true,
       meterAssignments: {
-        where: { assignmentStatus: "ACTIVE", removalDate: null, meter: { status: "ACTIVE" } },
+        where: { assignmentStatus: "ACTIVE", removalDate: null },
         take: 1,
-        include: { meter: { include: { readings: { where: { readingCycleId: readingCycle.readingCycleId, approvalStatus: "APPROVED" }, take: 1 } } } },
+        include: { meter: { include: { readings: { where: { readingCycleId: readingCycle.readingCycleId, approvalStatus: "APPROVED", bills: { none: {} } }, take: 1 } } } },
       },
       meterReadings: {
-        where: { readingCycleId: readingCycle.readingCycleId, approvalStatus: "APPROVED" },
+        where: { readingCycleId: readingCycle.readingCycleId, approvalStatus: "APPROVED", bills: { none: {} } },
         include: { meter: true },
         orderBy: [{ readingDate: "asc" }, { readingId: "asc" }],
       },

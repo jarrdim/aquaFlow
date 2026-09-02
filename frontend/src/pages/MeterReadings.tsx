@@ -3778,8 +3778,29 @@ export function ReadingWorklist() {
                     <div className="font-bold text-slate-800">
                       {a.meter?.meterNumber}
                     </div>
-                    <div className="mt-0.5 text-xs text-slate-400">
-                      {a.meter?.meterType ?? "Customer meter"}
+                    <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-400">
+                      <span>{a.meter?.meterType ?? "Customer meter"}</span>
+                      <span
+                        className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wide ring-1 ring-inset ${
+                          a.meter?.status === "ACTIVE"
+                            ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
+                            : a.meter?.status === "INACTIVE"
+                              ? "bg-slate-100 text-slate-600 ring-slate-200"
+                              : "bg-amber-50 text-amber-700 ring-amber-200"
+                        }`}
+                        title="Meter lifecycle status"
+                      >
+                        <span
+                          className={`h-1.5 w-1.5 rounded-full ${
+                            a.meter?.status === "ACTIVE"
+                              ? "bg-emerald-500"
+                              : a.meter?.status === "INACTIVE"
+                                ? "bg-slate-400"
+                                : "bg-amber-500"
+                          }`}
+                        />
+                        {pretty(a.meter?.status ?? "UNKNOWN")}
+                      </span>
                     </div>
                   </td>
                   <td className="px-4 py-3.5">

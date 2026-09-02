@@ -121,6 +121,89 @@ function userId(req: Express.Request) {
   return req.user ? BigInt(req.user.userId) : null;
 }
 
+type ReplacementChargeItem = {
+  chargeType: string;
+  description: string;
+  quantity: number;
+  unitRate: number;
+  amount: number;
+  tariffBandId?: bigint;
+};
+
+function roundMoney(value: number) {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+function calculateReplacementBill(tariff: any, consumption: number) {
+  const items: ReplacementChargeItem[] = [];
+  let consumptionCharge = 0;
+  if (tariff.billingMethod === "FLAT") {
+    consumptionCharge = Number(tariff.flatAmount);
+    items.push({ chargeType: "FLAT_CHARGE", description: "Flat water charge", quantity: 1, unitRate: consumptionCharge, amount: consumptionCharge });
+  } else if (tariff.billingMethod === "TIERED") {
+    for (const band of tariff.bands) {
+      const lower = Number(band.lowerLimit);
+      const upper = band.upperLimit == null ? consumption : Number(band.upperLimit);
+      const units = Math.max(0, Math.min(consumption, upper) - lower);
+      if (units <= 0) continue;
+      const rate = Number(band.ratePerUnit);
+      const amount = roundMoney(units * rate);
+      consumptionCharge += amount;
+      items.push({ chargeType: "CONSUMPTION_BAND", description: `Band ${band.bandSequence}: ${lower}-${band.upperLimit ?? "above"} units`, quantity: units, unitRate: rate, amount, tariffBandId: band.tariffBandId });
+    }
+  } else {
+    const rate = Number(tariff.ratePerUnit);
+    consumptionCharge = roundMoney(consumption * rate);
+    items.push({ chargeType: "CONSUMPTION", description: "Water consumption", quantity: consumption, unitRate: rate, amount: consumptionCharge });
+  }
+  consumptionCharge = roundMoney(consumptionCharge);
+  const minimumChargeAdjustment = roundMoney(Math.max(0, Number(tariff.minimumCharge) - consumptionCharge));
+  const standingCharge = roundMoney(Number(tariff.standingCharge));
+  const meterRent = roundMoney(Number(tariff.meterRent));
+  if (minimumChargeAdjustment) items.push({ chargeType: "MINIMUM_ADJUSTMENT", description: "Minimum charge adjustment", quantity: 1, unitRate: minimumChargeAdjustment, amount: minimumChargeAdjustment });
+  if (standingCharge) items.push({ chargeType: "STANDING_CHARGE", description: "Standing charge", quantity: 1, unitRate: standingCharge, amount: standingCharge });
+  if (meterRent) items.push({ chargeType: "METER_RENT", description: "Meter rent", quantity: 1, unitRate: meterRent, amount: meterRent });
+  const fixedCharges = roundMoney(minimumChargeAdjustment + standingCharge + meterRent);
+  return { consumptionCharge, minimumChargeAdjustment, standingCharge, meterRent, fixedCharges, totalCurrentCharges: roundMoney(consumptionCharge + fixedCharges), items };
+}
+
+async function prepareReplacementBill(
+  tx: Prisma.TransactionClient,
+  accountId: bigint,
+  replacementDate: Date,
+  consumption: number,
+) {
+  const account = await tx.customerAccount.findUnique({
+    where: { accountId },
+    select: {
+      accountId: true, accountNumber: true, categoryId: true, currentBalance: true,
+      category: { select: { categoryCode: true, categoryName: true } },
+    },
+  });
+  if (!account) throw Object.assign(new Error("Customer account was not found for immediate billing"), { status: 404 });
+  const tariff = await tx.tariff.findFirst({
+    where: {
+      categoryId: account.categoryId, status: "ACTIVE", effectiveFrom: { lte: replacementDate },
+      OR: [{ effectiveTo: null }, { effectiveTo: { gte: replacementDate } }],
+    },
+    include: { bands: { where: { status: "ACTIVE" }, orderBy: { bandSequence: "asc" } } },
+    orderBy: { effectiveFrom: "desc" },
+  });
+  if (!tariff) throw Object.assign(new Error("No active tariff covers this account on the replacement date. Replacement cannot continue."), { status: 409 });
+  const calculation = calculateReplacementBill(tariff, consumption);
+  if (![consumption, calculation.totalCurrentCharges, ...calculation.items.flatMap((item) => [item.quantity, item.unitRate, item.amount])].every((value) => Number.isFinite(value) && value >= 0)) {
+    throw Object.assign(new Error("The replacement bill calculation produced invalid amounts. Replacement cannot continue."), { status: 409 });
+  }
+  const settings = await tx.systemSetting.findUnique({ where: { settingId: 1n }, select: { billingDueDays: true } });
+  const dueDate = new Date(replacementDate);
+  dueDate.setUTCDate(dueDate.getUTCDate() + (settings?.billingDueDays ?? 14));
+  const previousBalance = Number(account.currentBalance);
+  return {
+    account, tariff, calculation, dueDate, previousBalance,
+    totalAmountDue: roundMoney(Math.max(0, previousBalance + calculation.totalCurrentCharges)),
+  };
+}
+
 async function addEvidence(tx: Prisma.TransactionClient, meterId: bigint, items: z.infer<typeof evidenceSchema>[], uploadedBy: bigint | null, assignmentId?: bigint, replacementId?: bigint) {
   for (const item of items) {
     await tx.meterEvidence.create({ data: {
@@ -284,6 +367,37 @@ metersRouter.get("/replacements", async (req, res) => {
     customerName: customerName(item.account.customer),
     workOrder: item.workOrderId ? workOrderById.get(String(item.workOrderId)) ?? null : null,
   })));
+});
+
+metersRouter.get("/replacements/direct/options", requireRole("ADMIN", "SYSTEM_ADMIN", "METER_MANAGER", "METER_SUPERVISOR", "SUPERVISOR"), async (req, res) => {
+  const installedSearch = String(req.query.installedSearch ?? "").trim();
+  const availableSearch = String(req.query.availableSearch ?? "").trim();
+  const [installed, available] = await Promise.all([
+    prisma.meter.findMany({
+      where: {
+        status: { in: ["ACTIVE", "FAULTY", "TAMPERED", "INACTIVE"] },
+        assignments: { some: { assignmentStatus: "ACTIVE", removalDate: null, accountId: { not: null } } },
+        ...(installedSearch ? { OR: [
+          { meterNumber: { contains: installedSearch, mode: "insensitive" as const } },
+          { serialNumber: { contains: installedSearch, mode: "insensitive" as const } },
+          { assignments: { some: { assignmentStatus: "ACTIVE", account: { accountNumber: { contains: installedSearch, mode: "insensitive" as const } } } } },
+          { assignments: { some: { assignmentStatus: "ACTIVE", account: { customer: { firstName: { contains: installedSearch, mode: "insensitive" as const } } } } } },
+          { assignments: { some: { assignmentStatus: "ACTIVE", account: { customer: { lastName: { contains: installedSearch, mode: "insensitive" as const } } } } } },
+          { assignments: { some: { assignmentStatus: "ACTIVE", account: { customer: { organizationName: { contains: installedSearch, mode: "insensitive" as const } } } } } },
+        ] } : {}),
+      }, include: meterListInclude, orderBy: { meterNumber: "asc" }, take: 100,
+    }),
+    prisma.meter.findMany({
+      where: {
+        status: "IN_STOCK", assignments: { none: { assignmentStatus: "ACTIVE" } },
+        ...(availableSearch ? { OR: [
+          { meterNumber: { contains: availableSearch, mode: "insensitive" as const } },
+          { serialNumber: { contains: availableSearch, mode: "insensitive" as const } },
+        ] } : {}),
+      }, include: meterListInclude, orderBy: { meterNumber: "asc" }, take: 100,
+    }),
+  ]);
+  res.json({ installed: installed.map(presentMeter), available: available.map(presentMeter) });
 });
 
 metersRouter.get("/replacements/:id", async (req, res) => {
@@ -539,6 +653,21 @@ const replacementInputSchema = z.object({
   path: ["newMeterId"], message: "Choose a different replacement meter",
 });
 
+const directReplacementInputSchema = z.object({
+  accountId: z.string().min(1), oldMeterId: z.string().min(1), newMeterId: z.string().min(1),
+  replacementDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), oldFinalReading: z.coerce.number().min(0),
+  newOpeningReading: z.coerce.number().min(0), replacementReason: z.string().trim().min(2).max(1000),
+  gpsLatitude: optNumber, gpsLongitude: optNumber, remarks: optText, confirmed: z.literal(true),
+}).refine((data) => data.oldMeterId !== data.newMeterId, {
+  path: ["newMeterId"], message: "Choose a different replacement meter",
+});
+
+const directReplacementPreviewSchema = z.object({
+  accountId: z.string().min(1), oldMeterId: z.string().min(1),
+  replacementDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  oldFinalReading: z.coerce.number().min(0),
+});
+
 async function validateReplacementMeters(
   tx: Prisma.TransactionClient,
   data: z.infer<typeof replacementInputSchema>,
@@ -581,7 +710,10 @@ async function validateReplacementMeters(
       AND (${replacementId ?? null}::bigint IS NULL OR replacement_id<>${replacementId ?? null}::bigint)
     LIMIT 1`;
   if (conflicts[0]) throw Object.assign(new Error("An open replacement already uses the old or incoming meter"), { status: 409 });
-  return { accountId, oldMeterId, newMeterId, previousReading };
+  return {
+    accountId, oldMeterId, newMeterId, previousReading,
+    assignmentId: BigInt(assignments[0].assignment_id), oldMeterStatus: String(assignments[0].status),
+  };
 }
 
 async function createReplacementWorkOrder(tx: Prisma.TransactionClient, replacement: any, createdBy: bigint) {
@@ -659,6 +791,165 @@ metersRouter.post("/replacements", async (req, res, next) => {
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   try { res.status(201).json(await saveReplacement(req, parsed.data)); }
   catch (error: any) { if (error.status) return res.status(error.status).json({ error: error.message }); next(error); }
+});
+
+metersRouter.post("/replacements/direct/preview", requireRole("ADMIN", "SYSTEM_ADMIN", "METER_MANAGER", "METER_SUPERVISOR", "SUPERVISOR"), async (req, res, next) => {
+  const parsed = directReplacementPreviewSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      const accountId = BigInt(parsed.data.accountId);
+      const oldMeterId = BigInt(parsed.data.oldMeterId);
+      const replacementDate = new Date(`${parsed.data.replacementDate}T00:00:00.000Z`);
+      const assignment = await tx.meterAssignment.findFirst({
+        where: { accountId, meterId: oldMeterId, assignmentStatus: "ACTIVE", removalDate: null },
+        include: { meter: { include: { readings: {
+          where: { approvalStatus: "APPROVED" }, orderBy: [{ readingDate: "desc" }, { readingId: "desc" }], take: 1,
+        } } } },
+      });
+      if (!assignment) throw Object.assign(new Error("The old meter is not actively assigned to this customer account"), { status: 409 });
+      const latest = assignment.meter.readings[0];
+      const previousReading = Number(latest?.currentReading ?? assignment.meter.openingReading);
+      if (latest && new Date(`${parsed.data.replacementDate}T23:59:59.999Z`) < latest.readingDate) {
+        throw Object.assign(new Error("Replacement date cannot be before the latest approved meter reading"), { status: 409 });
+      }
+      if (parsed.data.oldFinalReading < previousReading) {
+        throw Object.assign(new Error(`Old final reading cannot be below the latest approved reading of ${previousReading}`), { status: 409 });
+      }
+      const consumption = roundMoney(parsed.data.oldFinalReading - previousReading);
+      const bill = await prepareReplacementBill(tx, accountId, replacementDate, consumption);
+      return {
+        previousReading, finalReading: parsed.data.oldFinalReading, consumption,
+        categoryCode: bill.account.category.categoryCode, categoryName: bill.account.category.categoryName,
+        tariffId: bill.tariff.tariffId, tariffCode: bill.tariff.tariffCode,
+        tariffName: bill.tariff.tariffName, billingMethod: bill.tariff.billingMethod,
+        effectiveFrom: bill.tariff.effectiveFrom, effectiveTo: bill.tariff.effectiveTo,
+        ratePerUnit: bill.tariff.ratePerUnit, flatAmount: bill.tariff.flatAmount,
+        minimumCharge: bill.tariff.minimumCharge, configuredStandingCharge: bill.tariff.standingCharge,
+        configuredMeterRent: bill.tariff.meterRent,
+        bands: bill.tariff.bands.map((band) => ({
+          bandSequence: band.bandSequence, lowerLimit: band.lowerLimit,
+          upperLimit: band.upperLimit, ratePerUnit: band.ratePerUnit,
+        })),
+        consumptionCharge: bill.calculation.consumptionCharge,
+        minimumChargeAdjustment: bill.calculation.minimumChargeAdjustment,
+        standingCharge: bill.calculation.standingCharge, meterRent: bill.calculation.meterRent,
+        fixedCharges: bill.calculation.fixedCharges, totalCurrentCharges: bill.calculation.totalCurrentCharges,
+        minimumApplied: bill.calculation.minimumChargeAdjustment > 0,
+        minimumDecision: Number(bill.tariff.minimumCharge) <= 0
+          ? "This tariff has no minimum charge."
+          : bill.calculation.minimumChargeAdjustment > 0
+            ? `Applied because the consumption charge of KSh ${bill.calculation.consumptionCharge.toFixed(2)} is below the tariff minimum of KSh ${Number(bill.tariff.minimumCharge).toFixed(2)}.`
+            : `Not applied because the consumption charge of KSh ${bill.calculation.consumptionCharge.toFixed(2)} meets or exceeds the tariff minimum of KSh ${Number(bill.tariff.minimumCharge).toFixed(2)}.`,
+        previousBalance: bill.previousBalance, totalAmountDue: bill.totalAmountDue, dueDate: bill.dueDate,
+      };
+    });
+    res.json(result);
+  } catch (error: any) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    next(error);
+  }
+});
+
+metersRouter.post("/replacements/direct", requireRole("ADMIN", "SYSTEM_ADMIN", "METER_MANAGER", "METER_SUPERVISOR", "SUPERVISOR"), async (req, res, next) => {
+  const parsed = directReplacementInputSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      const data = parsed.data;
+      const ids = await validateReplacementMeters(tx, { ...data, requestStatus: "PENDING", evidence: [] });
+      const replacementDate = new Date(`${data.replacementDate}T00:00:00.000Z`);
+      const replacement = await tx.meterReplacement.create({ data: {
+        accountId: ids.accountId, oldMeterId: ids.oldMeterId, newMeterId: ids.newMeterId,
+        replacementDate, oldFinalReading: data.oldFinalReading, newOpeningReading: data.newOpeningReading,
+        replacementReason: data.replacementReason, requestStatus: "APPROVED", requestedBy: userId(req),
+        replacedBy: userId(req), approvedBy: userId(req), decidedAt: new Date(),
+        decisionComments: "Completed directly without a work order", gpsLatitude: data.gpsLatitude,
+        gpsLongitude: data.gpsLongitude, remarks: data.remarks,
+      } });
+      const replacementReadingCycle = await tx.readingCycle.create({ data: {
+        cycleCode: `MR-REP-${replacement.replacementId}`,
+        cycleName: `Meter replacement REP-${replacement.replacementId}`,
+        startDate: replacementDate, endDate: replacementDate, status: "CLOSED",
+        createdBy: userId(req), remarks: `Dedicated final-reading cycle for direct meter replacement REP-${replacement.replacementId}`,
+      } });
+      const finalReading = await tx.meterReading.create({ data: {
+        meterId: ids.oldMeterId, accountId: ids.accountId, readingCycleId: replacementReadingCycle.readingCycleId,
+        previousReading: ids.previousReading, currentReading: data.oldFinalReading, readingType: "ACTUAL",
+        readingDate: replacementDate, gpsLatitude: data.gpsLatitude, gpsLongitude: data.gpsLongitude,
+        abnormalFlag: false, exceptionType: "NONE", approvalStatus: "APPROVED", approvedBy: userId(req),
+        approvedAt: new Date(), approvalComments: `Final reading from direct replacement REP-${replacement.replacementId}`,
+        syncId: `METER_REPLACEMENT:${replacement.replacementId}`,
+      } });
+      const oldAssignment = await tx.meterAssignment.update({
+        where: { assignmentId: ids.assignmentId }, data: { assignmentStatus: "ENDED", removalDate: replacementDate },
+      });
+      await tx.meter.update({ where: { meterId: ids.oldMeterId }, data: { status: "REPLACED", installationStatus: "REMOVED" } });
+      await tx.meter.update({ where: { meterId: ids.newMeterId }, data: {
+        status: "ACTIVE", installationStatus: "INSTALLED", installationDate: replacementDate,
+        openingReading: data.newOpeningReading, gpsLatitude: data.gpsLatitude, gpsLongitude: data.gpsLongitude,
+      } });
+      const newAssignment = await tx.meterAssignment.create({ data: {
+        meterId: ids.newMeterId, accountId: ids.accountId, assignmentDate: replacementDate,
+        installedBy: userId(req), installationPoint: oldAssignment.installationPoint,
+        installationStatus: "COMPLETED", remarks: data.remarks,
+      } });
+      await tx.meterEvent.createMany({ data: [
+        { meterId: ids.oldMeterId, assignmentId: ids.assignmentId, replacementId: replacement.replacementId,
+          eventType: "REPLACEMENT_APPROVED", previousStatus: ids.oldMeterStatus, newStatus: "REPLACED",
+          reading: data.oldFinalReading, reason: data.replacementReason, remarks: data.remarks,
+          gpsLatitude: data.gpsLatitude, gpsLongitude: data.gpsLongitude, performedBy: userId(req),
+          metadata: { newMeterId: ids.newMeterId.toString(), direct: true } },
+        { meterId: ids.newMeterId, assignmentId: newAssignment.assignmentId, replacementId: replacement.replacementId,
+          eventType: "ASSIGNED", previousStatus: "IN_STOCK", newStatus: "ACTIVE",
+          reading: data.newOpeningReading, reason: data.replacementReason, remarks: data.remarks,
+          gpsLatitude: data.gpsLatitude, gpsLongitude: data.gpsLongitude, performedBy: userId(req),
+          metadata: { oldMeterId: ids.oldMeterId.toString(), direct: true } },
+      ] });
+
+      const consumption = roundMoney(data.oldFinalReading - ids.previousReading);
+      const preparedBill = await prepareReplacementBill(tx, ids.accountId, replacementDate, consumption);
+      const { account, tariff, calculation, dueDate, previousBalance, totalAmountDue } = preparedBill;
+      const postedAt = new Date();
+      const billingCycle = await tx.billingCycle.create({ data: {
+        cycleCode: `MR-${replacement.replacementId}`,
+        cycleName: `Meter replacement ${account.accountNumber}`,
+        periodStart: replacementDate, periodEnd: replacementDate, dueDate, frequency: "CUSTOM",
+        status: "POSTED", defaultNotification: "SMS_APP",
+        remarks: `Immediate final bill for direct meter replacement REP-${replacement.replacementId}`,
+        createdBy: userId(req), postedBy: userId(req), postedAt,
+      } });
+      await tx.readingCycle.update({
+        where: { readingCycleId: replacementReadingCycle.readingCycleId },
+        data: { billingCycleId: billingCycle.billingCycleId, updatedAt: postedAt },
+      });
+      const bill = await tx.bill.create({ data: {
+        billNumber: `BILL-MR-${replacement.replacementId}`,
+        accountId: ids.accountId, billingCycleId: billingCycle.billingCycleId, tariffId: tariff.tariffId,
+        readingId: finalReading.readingId, previousBalance, consumptionUnits: consumption,
+        consumptionCharge: calculation.consumptionCharge, minimumChargeAdjustment: calculation.minimumChargeAdjustment,
+        standingCharge: calculation.standingCharge, meterRent: calculation.meterRent, fixedCharges: calculation.fixedCharges,
+        penalties: 0, totalCurrentCharges: calculation.totalCurrentCharges, totalAmountDue,
+        issueDate: replacementDate, dueDate, status: "POSTED", generatedBy: userId(req), approvedBy: userId(req),
+        approvedAt: postedAt, approvalComments: "Automatically approved during direct meter replacement",
+        postedBy: userId(req), postedAt, exceptionType: "NONE", items: { create: calculation.items },
+      } });
+      await tx.customerAccount.update({
+        where: { accountId: ids.accountId },
+        data: { currentBalance: { increment: calculation.totalCurrentCharges }, updatedAt: postedAt },
+      });
+      await tx.billingEvent.createMany({ data: [
+        { billingCycleId: billingCycle.billingCycleId, eventType: "PERIOD_CREATED", newStatus: "POSTED", details: `Created and posted automatically for REP-${replacement.replacementId}`, performedBy: userId(req), createdAt: postedAt },
+        { billingCycleId: billingCycle.billingCycleId, billId: bill.billId, eventType: "BILL_GENERATED", newStatus: "POSTED", details: "Generated from the replacement final reading", performedBy: userId(req), createdAt: postedAt },
+        { billingCycleId: billingCycle.billingCycleId, billId: bill.billId, eventType: "BILL_POSTED", previousStatus: "APPROVED", newStatus: "POSTED", details: "Posted immediately during direct meter replacement", performedBy: userId(req), createdAt: postedAt },
+      ] });
+      return { ...replacement, bill };
+    }, { maxWait: 10_000, timeout: 30_000 });
+    res.status(201).json(result);
+  } catch (error: any) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    next(error);
+  }
 });
 
 metersRouter.put("/replacements/:id", async (req, res, next) => {
