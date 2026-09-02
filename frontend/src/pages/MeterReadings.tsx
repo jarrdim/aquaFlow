@@ -2410,8 +2410,12 @@ export function ReadingWorklist() {
   const search = params.get("search") ?? "";
   const readingStatus = params.get("status") ?? "";
   const missedCycleId = params.get("missedCycleId") ?? "";
+  const quickSearch = params.get("quickSearch") ?? "";
   const page = Math.max(1, Number(params.get("page") ?? "1") || 1);
-  const pageSize = 25;
+  const requestedPageSize = Number(params.get("pageSize") ?? "50");
+  const pageSize = [10, 50, 200].includes(requestedPageSize)
+    ? requestedPageSize
+    : 50;
   const selectedCycle = cycles.find(
     (cycle) => String(cycle.readingCycleId) === cycleId,
   );
@@ -2530,12 +2534,26 @@ export function ReadingWorklist() {
   const captured = items.filter((item) => item.cycleReading).length;
   const unread = items.length - captured;
   const filteredItems = useMemo(() => {
+    const quickTerm = quickSearch.trim().toLowerCase();
     const matchingItems = items.filter((item) => {
         if (readingStatus === "UNREAD") return !item.cycleReading;
         if (readingStatus === "MISSED_CLOSED")
           return !item.cycleReading && item.missedCycleUnread;
         if (readingStatus === "CAPTURED") return Boolean(item.cycleReading);
         return true;
+      }).filter((item) => {
+        if (!quickTerm) return true;
+        return [
+          item.account?.accountNumber,
+          item.account?.customer?.customerNumber,
+          item.customerName,
+          item.meter?.meterNumber,
+          item.meter?.serialNumber,
+          item.route?.routeName,
+          item.account?.customer?.phoneNumber,
+        ]
+          .filter(Boolean)
+          .some((value) => String(value).toLowerCase().includes(quickTerm));
       });
     return matchingItems.sort((left, right) => {
       const byAccount = String(
@@ -2551,7 +2569,7 @@ export function ReadingWorklist() {
           { numeric: true, sensitivity: "base" },
         );
     });
-  }, [items, readingStatus]);
+  }, [items, readingStatus, quickSearch]);
 
   async function exportWorklist(format: "excel" | "pdf") {
     if (!filteredItems.length || operation) return;
@@ -2996,6 +3014,99 @@ export function ReadingWorklist() {
       setInlineSavingId("");
     }
   }
+
+  async function saveAllInlineReadings() {
+    if (!canCaptureReadings || inlineSavingId) return;
+    const enteredItems = items.filter((item) =>
+      Boolean((inlineReadings[String(item.meterId)] ?? "").trim()),
+    );
+    const invalidItems = enteredItems.filter(
+      (item) => !inlineReadingIsValid(item),
+    );
+    if (!enteredItems.length) return;
+    if (invalidItems.length) {
+      setError(
+        `Correct ${invalidItems.length.toLocaleString()} invalid reading${invalidItems.length === 1 ? "" : "s"} before saving all.`,
+      );
+      return;
+    }
+
+    const pendingRows = enteredItems.map((item) => {
+      const meterKey = String(item.meterId);
+      return {
+        item,
+        meterKey,
+        payload: {
+          meterId: meterKey,
+          readingCycleId: cycleId,
+          previousReading: previousReadingFor(item),
+          currentReading: Number(inlineReadings[meterKey]),
+          readingType: "ACTUAL",
+          readingDate: new Date().toISOString(),
+          exceptionType: "NONE",
+          syncId: `inline-bulk-${cycleId}-${meterKey}-${Date.now()}`,
+          evidence: [],
+        },
+      };
+    });
+    const savedReadings = new Map<string, Row>();
+    const failures: string[] = [];
+    setInlineSavingId("ALL");
+    setError("");
+    setInlineMessage("");
+    try {
+      for (let offset = 0; offset < pendingRows.length; offset += 100) {
+        const chunk = pendingRows.slice(offset, offset + 100);
+        const result = await api.syncReadings(
+          chunk.map((row) => row.payload),
+        );
+        result.results.forEach((rowResult: Row) => {
+          const source = chunk[Number(rowResult.index)];
+          if (!source) return;
+          if (rowResult.ok && rowResult.reading) {
+            savedReadings.set(source.meterKey, rowResult.reading);
+          } else {
+            failures.push(
+              `${source.item.meter?.meterNumber ?? source.meterKey}: ${rowResult.error ?? "Save failed"}`,
+            );
+          }
+        });
+      }
+    } catch (e: any) {
+      failures.push(e.message || "Batch saving stopped unexpectedly");
+    } finally {
+      if (savedReadings.size) {
+        setItems((current) =>
+          current.map((row) => {
+            const reading = savedReadings.get(String(row.meterId));
+            return reading ? { ...row, cycleReading: reading } : row;
+          }),
+        );
+        setInlineReadings((current) => {
+          const next = { ...current };
+          savedReadings.forEach((_reading, meterKey) => delete next[meterKey]);
+          return next;
+        });
+        setInlineMessage(
+          `${savedReadings.size.toLocaleString()} reading${savedReadings.size === 1 ? "" : "s"} saved and sent for approval.`,
+        );
+        window.dispatchEvent(new Event("sidebar-counts:refresh"));
+      }
+      if (failures.length) {
+        setError(
+          `${failures.length.toLocaleString()} reading${failures.length === 1 ? "" : "s"} could not be saved. ${failures.slice(0, 3).join("; ")}`,
+        );
+      }
+      setInlineSavingId("");
+    }
+  }
+
+  const enteredInlineItems = items.filter((item) =>
+    Boolean((inlineReadings[String(item.meterId)] ?? "").trim()),
+  );
+  const invalidInlineCount = enteredInlineItems.filter(
+    (item) => !inlineReadingIsValid(item),
+  ).length;
   const totalPages = Math.max(1, Math.ceil(filteredItems.length / pageSize));
   const pageItems = filteredItems.slice(
     (page - 1) * pageSize,
@@ -3071,6 +3182,20 @@ export function ReadingWorklist() {
     setParams(next);
   };
 
+  const updateQuickSearch = (value: string) => {
+    const next = new URLSearchParams(params);
+    value ? next.set("quickSearch", value) : next.delete("quickSearch");
+    next.delete("page");
+    setParams(next, { replace: true });
+  };
+
+  const updatePageSize = (value: number) => {
+    const next = new URLSearchParams(params);
+    next.set("pageSize", String(value));
+    next.delete("page");
+    setParams(next);
+  };
+
   const updateRoutes = (values: string[]) => {
     const next = new URLSearchParams(params);
     next.delete("routeId");
@@ -3115,6 +3240,19 @@ export function ReadingWorklist() {
           : "No meters to display"}
       </p>
       <div className="flex items-center gap-1">
+        <label className="mr-2 flex items-center gap-2 text-xs font-semibold text-slate-500">
+          <span className="hidden sm:inline">Rows</span>
+          <select
+            value={pageSize}
+            onChange={(event) => updatePageSize(Number(event.target.value))}
+            className="h-9 rounded-lg border border-slate-200 bg-white px-2 text-xs font-bold text-slate-700 shadow-sm outline-none transition focus:border-sky-400 focus:ring-2 focus:ring-sky-100"
+            aria-label="Rows per page"
+          >
+            <option value={10}>10</option>
+            <option value={50}>50</option>
+            <option value={200}>200</option>
+          </select>
+        </label>
         <button
           type="button"
           disabled={page <= 1}
@@ -3188,6 +3326,39 @@ export function ReadingWorklist() {
     >
       {error && <Notice>{error}</Notice>}
       {inlineMessage && <Notice tone="green">{inlineMessage}</Notice>}
+      {canCaptureReadings && filteredItems.some((item) => !item.cycleReading) && (
+        <div className="fixed bottom-6 right-6 z-50 flex max-w-[calc(100vw-3rem)] items-center gap-4 rounded-2xl border border-emerald-200 bg-white p-3 shadow-[0_20px_60px_-18px_rgba(15,118,110,0.55)]">
+          <div className="min-w-0 pl-1">
+            <div className="text-sm font-extrabold text-slate-900">
+              {enteredInlineItems.length.toLocaleString()} reading
+              {enteredInlineItems.length === 1 ? "" : "s"} entered
+            </div>
+            <div className={`text-xs font-semibold ${invalidInlineCount ? "text-red-600" : "text-emerald-700"}`}>
+              {invalidInlineCount
+                ? `${invalidInlineCount.toLocaleString()} need correction`
+                : enteredInlineItems.length
+                  ? "Ready to save and send for approval"
+                  : "Enter readings in the rows above"}
+            </div>
+          </div>
+          <button
+            type="button"
+            disabled={
+              Boolean(inlineSavingId) ||
+              invalidInlineCount > 0 ||
+              enteredInlineItems.length === 0
+            }
+            onClick={() => void saveAllInlineReadings()}
+            className="inline-flex min-w-32 flex-none items-center justify-center rounded-xl bg-emerald-600 px-4 py-3 text-sm font-extrabold text-white shadow-sm transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:bg-slate-300"
+          >
+            {inlineSavingId === "ALL"
+              ? "Saving all…"
+              : enteredInlineItems.length
+                ? `Save all ${enteredInlineItems.length.toLocaleString()}`
+                : "Save all"}
+          </button>
+        </div>
+      )}
       {selectedCycleIsLocked && (
         <section className="mb-4 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-amber-300 bg-amber-50 px-5 py-4 text-amber-950 shadow-sm">
           <div>
@@ -3422,14 +3593,37 @@ export function ReadingWorklist() {
 
       <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_16px_42px_-30px_rgba(15,32,56,0.45)]">
         <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 px-5 py-4">
-          <div>
-            <h2 className="text-base font-bold text-slate-900">Route worklist</h2>
-            <p className="mt-0.5 text-xs text-slate-500">
-              {filteredItems.length.toLocaleString()} {readingStatus === "MISSED_CLOSED"
-                ? `meter${filteredItems.length === 1 ? "" : "s"} unread in ${selectedMissedCycle?.cycleName ?? "the selected closed cycle"}`
-                : `eligible meter${filteredItems.length === 1 ? "" : "s"}`} · Page {page} of{" "}
-              {totalPages}
-            </p>
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-4">
+            <div>
+              <h2 className="text-base font-bold text-slate-900">Route worklist</h2>
+              <p className="mt-0.5 text-xs text-slate-500">
+                {filteredItems.length.toLocaleString()} {readingStatus === "MISSED_CLOSED"
+                  ? `meter${filteredItems.length === 1 ? "" : "s"} unread in ${selectedMissedCycle?.cycleName ?? "the selected closed cycle"}`
+                  : `eligible meter${filteredItems.length === 1 ? "" : "s"}`} · Page {page} of{" "}
+                {totalPages}
+              </p>
+            </div>
+            <div className="relative w-full sm:w-72">
+              <svg
+                aria-hidden="true"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
+              >
+                <circle cx="11" cy="11" r="7" />
+                <path d="m20 20-3.5-3.5" />
+              </svg>
+              <input
+                type="search"
+                value={quickSearch}
+                onChange={(event) => updateQuickSearch(event.target.value)}
+                placeholder="Quick search this worklist"
+                aria-label="Quick search route worklist"
+                className="h-10 w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-3 text-sm text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-400 focus:bg-white focus:ring-2 focus:ring-sky-100"
+              />
+            </div>
           </div>
           <Pagination position="top" />
         </div>
@@ -3641,7 +3835,9 @@ export function ReadingWorklist() {
                 <tr>
                   <td colSpan={7} className="px-4 py-16 text-center">
                     <div className="font-semibold text-slate-700">
-                      {!cycleId
+                      {quickSearch
+                        ? `No meters match “${quickSearch}”`
+                        : !cycleId
                         ? "Select a reading cycle"
                         : readingStatus === "UNREAD"
                         ? "No unread meters found"
@@ -3652,7 +3848,9 @@ export function ReadingWorklist() {
                           : "No eligible meters found"}
                     </div>
                     <p className="mt-1 text-sm text-slate-500">
-                      {!cycleId
+                      {quickSearch
+                        ? "Clear the quick search or try an account, meter, customer, phone or route."
+                        : !cycleId
                         ? "Choose a cycle above to load its route worklist."
                         : "Change the status, cycle, route or search criteria and try again."}
                     </p>
