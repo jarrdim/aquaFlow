@@ -1,4 +1,4 @@
-import { Fragment, FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
+import { Fragment, FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, getSessionUser } from "../lib/api";
 import {
@@ -2391,6 +2391,8 @@ export function ReadingWorklist() {
   const [inlineReadings, setInlineReadings] = useState<Record<string, string>>({});
   const [inlineSavingId, setInlineSavingId] = useState("");
   const [inlineMessage, setInlineMessage] = useState("");
+  const [floatingRoute, setFloatingRoute] = useState("");
+  const worklistTableRef = useRef<HTMLDivElement>(null);
   const [operation, setOperation] = useState("");
   const [operationProgress, setOperationProgress] = useState(0);
   const cycleId = params.get("cycleId") ?? "";
@@ -3119,6 +3121,45 @@ export function ReadingWorklist() {
     (page - 1) * pageSize,
     page * pageSize,
   );
+  useEffect(() => {
+    const container = worklistTableRef.current;
+    const scrollRoot = container?.closest(".app-content") as HTMLElement | null;
+    if (!container || !scrollRoot) return;
+    let frame = 0;
+    const updateFloatingRoute = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        const rootTop = scrollRoot.getBoundingClientRect().top;
+        const tableRect = container.getBoundingClientRect();
+        if (tableRect.top >= rootTop || tableRect.bottom <= rootTop + 44) {
+          setFloatingRoute("");
+          return;
+        }
+        const headers = Array.from(
+          container.querySelectorAll<HTMLElement>("[data-worklist-route]"),
+        );
+        let activeRoute = headers[0]?.dataset.worklistRoute ?? "";
+        for (const header of headers) {
+          if (header.getBoundingClientRect().top <= rootTop + 1) {
+            activeRoute = header.dataset.worklistRoute ?? activeRoute;
+          } else {
+            break;
+          }
+        }
+        setFloatingRoute((current) =>
+          current === activeRoute ? current : activeRoute,
+        );
+      });
+    };
+    updateFloatingRoute();
+    scrollRoot.addEventListener("scroll", updateFloatingRoute, { passive: true });
+    window.addEventListener("resize", updateFloatingRoute);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      scrollRoot.removeEventListener("scroll", updateFloatingRoute);
+      window.removeEventListener("resize", updateFloatingRoute);
+    };
+  }, [page, pageSize, quickSearch, readingStatus, routeIdsParam, filteredItems.length]);
   const pageNumbers = useMemo(() => {
     const start = Math.max(1, Math.min(page - 2, totalPages - 4));
     const end = Math.min(totalPages, start + 4);
@@ -3601,6 +3642,19 @@ export function ReadingWorklist() {
         </div>
       </section>
 
+      {floatingRoute && (
+        <div className="pointer-events-none sticky top-0 z-40 h-0 overflow-visible">
+          <div className="flex h-11 items-center gap-2 border-y border-sky-200 bg-sky-50 px-5 shadow-[0_10px_24px_-16px_rgba(15,32,56,0.75)]">
+            <span className="rounded-md bg-aqua-700 px-2 py-1 text-[10px] font-extrabold uppercase tracking-wider text-white">
+              Route
+            </span>
+            <span className="truncate text-sm font-extrabold text-aqua-900">
+              {floatingRoute}
+            </span>
+          </div>
+        </div>
+      )}
+
       <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_16px_42px_-30px_rgba(15,32,56,0.45)]">
         <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 px-5 py-4">
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-4">
@@ -3637,9 +3691,9 @@ export function ReadingWorklist() {
           </div>
           <Pagination position="top" />
         </div>
-        <div className="relative max-h-[calc(100vh-7rem)] overflow-auto">
+        <div ref={worklistTableRef} className="overflow-x-auto xl:overflow-visible">
           <table className="w-full min-w-[1100px]">
-            <thead className="sticky top-0 z-30 bg-slate-50 shadow-sm">
+            <thead className="bg-slate-50/80">
               <tr>
                 {[
                   "Account / Customer",
@@ -3675,32 +3729,18 @@ export function ReadingWorklist() {
                 {(index === 0 ||
                   String(pageItems[index - 1]?.route?.routeName ?? "Unassigned route") !==
                     String(a.route?.routeName ?? "Unassigned route")) && (
-                  <tr>
+                  <tr data-worklist-route={a.route?.routeName ?? "Unassigned route"}>
                     <td
                       colSpan={6}
-                      className="sticky top-10 z-20 border-y border-sky-200 bg-sky-50 px-5 py-2.5 shadow-[0_8px_16px_-12px_rgba(15,32,56,0.65)]"
+                      className="border-y border-sky-200 bg-sky-50 px-5 py-2.5"
                     >
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="flex min-w-0 items-center gap-2">
-                          <span className="rounded-md bg-aqua-700 px-2 py-1 text-[10px] font-extrabold uppercase tracking-wider text-white">
-                            Route
-                          </span>
-                          <span className="truncate text-sm font-extrabold text-aqua-900">
-                            {a.route?.routeName ?? "Unassigned route"}
-                          </span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            document
-                              .getElementById("reading-worklist-filters")
-                              ?.scrollIntoView({ behavior: "smooth", block: "start" })
-                          }
-                          className="inline-flex flex-none items-center gap-1 rounded-lg border border-sky-200 bg-white px-3 py-1.5 text-xs font-bold text-aqua-700 shadow-sm transition hover:border-sky-300 hover:bg-sky-100"
-                        >
-                          <span aria-hidden="true">↑</span>
-                          Back to filters
-                        </button>
+                      <div className="flex items-center gap-2">
+                        <span className="rounded-md bg-aqua-700 px-2 py-1 text-[10px] font-extrabold uppercase tracking-wider text-white">
+                          Route
+                        </span>
+                        <span className="text-sm font-extrabold text-aqua-900">
+                          {a.route?.routeName ?? "Unassigned route"}
+                        </span>
                       </div>
                     </td>
                   </tr>
