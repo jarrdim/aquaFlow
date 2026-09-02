@@ -2409,6 +2409,35 @@ export function ReadingWorklist() {
   const missedCycleId = params.get("missedCycleId") ?? "";
   const page = Math.max(1, Number(params.get("page") ?? "1") || 1);
   const pageSize = 25;
+  const selectedCycle = cycles.find(
+    (cycle) => String(cycle.readingCycleId) === cycleId,
+  );
+  const canCaptureReadings = selectedCycle?.status === "OPEN";
+  const selectedCycleIsLocked = Boolean(
+    selectedCycle && !canCaptureReadings,
+  );
+  const closedSourceCycles = cycles
+    .filter((cycle) => {
+      if (cycle.status !== "CLOSED" || String(cycle.readingCycleId) === cycleId)
+        return false;
+      if (!selectedCycle?.startDate || !cycle.endDate) return true;
+      return new Date(cycle.endDate) <= new Date(selectedCycle.startDate);
+    })
+    .sort((left, right) => {
+      const byEndDate =
+        new Date(right.endDate).getTime() - new Date(left.endDate).getTime();
+      return byEndDate ||
+        String(right.readingCycleId).localeCompare(
+          String(left.readingCycleId),
+          undefined,
+          { numeric: true },
+        );
+    });
+  const previousClosedCycle = closedSourceCycles[0];
+  const effectiveMissedCycleId = String(
+    previousClosedCycle?.readingCycleId ?? "",
+  );
+  const selectedMissedCycle = previousClosedCycle;
   useEffect(() => {
     Promise.all([api.listReadingCycles(), api.listRoutes()])
       .then(([c, r]) => {
@@ -2423,13 +2452,23 @@ export function ReadingWorklist() {
       .catch((e) => setError(e.message));
   }, []);
   useEffect(() => {
+    if (readingStatus !== "MISSED_CLOSED" || !cycles.length) return;
+    if (missedCycleId === effectiveMissedCycleId) return;
+    const next = new URLSearchParams(params);
+    effectiveMissedCycleId
+      ? next.set("missedCycleId", effectiveMissedCycleId)
+      : next.delete("missedCycleId");
+    next.delete("page");
+    setParams(next, { replace: true });
+  }, [
+    readingStatus,
+    cycles.length,
+    missedCycleId,
+    effectiveMissedCycleId,
+  ]);
+  useEffect(() => {
     if (!cycleId) {
       setRouteAssignments([]);
-      return;
-    }
-    if (readingStatus === "MISSED_CLOSED" && !missedCycleId) {
-      setItems([]);
-      setLoading(false);
       return;
     }
     api
@@ -2443,6 +2482,11 @@ export function ReadingWorklist() {
       setLoading(false);
       return;
     }
+    if (readingStatus === "MISSED_CLOSED" && !effectiveMissedCycleId) {
+      setItems([]);
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
     setLoading(true);
     const timer = window.setTimeout(() => {
@@ -2452,7 +2496,7 @@ export function ReadingWorklist() {
           routeIds: routeIds.join(","),
           search: search.trim(),
           missedCycleId:
-            readingStatus === "MISSED_CLOSED" ? missedCycleId : "",
+            readingStatus === "MISSED_CLOSED" ? effectiveMissedCycleId : "",
         })
         .then((nextItems) => {
           if (cancelled) return;
@@ -2470,24 +2514,7 @@ export function ReadingWorklist() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [cycleId, routeIdsParam, search, readingStatus, missedCycleId]);
-
-  const selectedCycle = cycles.find(
-    (cycle) => String(cycle.readingCycleId) === cycleId,
-  );
-  const canCaptureReadings = selectedCycle?.status === "OPEN";
-  const selectedCycleIsLocked = Boolean(
-    selectedCycle && !canCaptureReadings,
-  );
-  const closedSourceCycles = cycles.filter((cycle) => {
-    if (cycle.status !== "CLOSED" || String(cycle.readingCycleId) === cycleId)
-      return false;
-    if (!selectedCycle?.startDate || !cycle.endDate) return true;
-    return new Date(cycle.endDate) <= new Date(selectedCycle.startDate);
-  });
-  const selectedMissedCycle = closedSourceCycles.find(
-    (cycle) => String(cycle.readingCycleId) === missedCycleId,
-  );
+  }, [cycleId, routeIdsParam, search, readingStatus, effectiveMissedCycleId]);
   const selectedRoutes = routes.filter((route) =>
     routeIds.includes(String(route.routeId)),
   );
@@ -2518,13 +2545,20 @@ export function ReadingWorklist() {
     setOperationProgress(10);
     try {
       await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
-      const exportItems = [...filteredItems].sort((left, right) =>
-        String(left.meter?.meterNumber ?? "").localeCompare(
-          String(right.meter?.meterNumber ?? ""),
-          undefined,
-          { numeric: true, sensitivity: "base" },
-        ),
-      );
+      const exportItems = [...filteredItems].sort((left, right) => {
+        const byAccount = String(
+          left.account?.accountNumber ?? "",
+        ).localeCompare(String(right.account?.accountNumber ?? ""), undefined, {
+          numeric: true,
+          sensitivity: "base",
+        });
+        return byAccount ||
+          String(left.meter?.meterNumber ?? "").localeCompare(
+            String(right.meter?.meterNumber ?? ""),
+            undefined,
+            { numeric: true, sensitivity: "base" },
+          );
+      });
       const rows = exportItems.map((item, index) => ({
         "Serial Number": index + 1,
         "Account Number": item.account?.accountNumber ?? "",
@@ -2903,8 +2937,7 @@ export function ReadingWorklist() {
     const next = new URLSearchParams(params);
     value ? next.set("status", value) : next.delete("status");
     if (value === "MISSED_CLOSED") {
-      const sourceId =
-        missedCycleId || String(closedSourceCycles[0]?.readingCycleId ?? "");
+      const sourceId = effectiveMissedCycleId;
       sourceId
         ? next.set("missedCycleId", sourceId)
         : next.delete("missedCycleId");
@@ -2922,21 +2955,28 @@ export function ReadingWorklist() {
       const target = cycles.find(
         (cycle) => String(cycle.readingCycleId) === value,
       );
-      const sources = cycles.filter(
-        (cycle) =>
-          cycle.status === "CLOSED" &&
-          String(cycle.readingCycleId) !== value &&
-          (!target?.startDate ||
-            !cycle.endDate ||
-            new Date(cycle.endDate) <= new Date(target.startDate)),
-      );
-      const retainedSource = sources.some(
-        (cycle) => String(cycle.readingCycleId) === missedCycleId,
-      )
-        ? missedCycleId
-        : String(sources[0]?.readingCycleId ?? "");
-      retainedSource
-        ? next.set("missedCycleId", retainedSource)
+      const sources = cycles
+        .filter(
+          (cycle) =>
+            cycle.status === "CLOSED" &&
+            String(cycle.readingCycleId) !== value &&
+            (!target?.startDate ||
+              !cycle.endDate ||
+              new Date(cycle.endDate) <= new Date(target.startDate)),
+        )
+        .sort(
+          (left, right) =>
+            new Date(right.endDate).getTime() -
+              new Date(left.endDate).getTime() ||
+            String(right.readingCycleId).localeCompare(
+              String(left.readingCycleId),
+              undefined,
+              { numeric: true },
+            ),
+        );
+      const previousSourceId = String(sources[0]?.readingCycleId ?? "");
+      previousSourceId
+        ? next.set("missedCycleId", previousSourceId)
         : next.delete("missedCycleId");
     }
     next.delete("page");
@@ -3241,21 +3281,18 @@ export function ReadingWorklist() {
             </SearchableSelect>
           </Field>
           {readingStatus === "MISSED_CLOSED" && (
-            <Field label="Source closed cycle">
+            <Field label="Previous closed cycle (automatic)">
               <SearchableSelect
                 className={INPUT}
-                value={missedCycleId}
-                onChange={(e) => update("missedCycleId", e.target.value)}
+                value={effectiveMissedCycleId}
+                disabled
               >
-                <option value="">Select closed cycle</option>
-                {closedSourceCycles.map((cycle) => (
-                  <option
-                    key={cycle.readingCycleId}
-                    value={cycle.readingCycleId}
-                  >
-                    {cycle.cycleName}
+                <option value="">No previous closed cycle</option>
+                {previousClosedCycle && (
+                  <option value={previousClosedCycle.readingCycleId}>
+                    {previousClosedCycle.cycleName}
                   </option>
-                ))}
+                )}
               </SearchableSelect>
             </Field>
           )}
