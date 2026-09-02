@@ -727,10 +727,11 @@ function Shell({ children }: { children: React.ReactNode }) {
     let active = true;
     async function refreshSidebarCounts() {
       try {
-        const [reversals, accountAdjustments, unmatchedPayments] = await Promise.all([
+        const [reversals, accountAdjustments, unmatchedPayments, pendingReadings] = await Promise.all([
           api.listPaymentReversals("PENDING"),
           api.listAccountAdjustments("PENDING"),
           api.unmatchedPaymentCount(),
+          api.pendingReadingCount(),
         ]);
         if (active) {
           setSidebarCounts((current) => ({
@@ -742,6 +743,7 @@ function Shell({ children }: { children: React.ReactNode }) {
               ? accountAdjustments.length
               : 0,
             "/payments/unmatched": Number(unmatchedPayments?.count ?? 0),
+            "/readings/approvals": Number(pendingReadings?.count ?? 0),
           }));
         }
       } catch {
@@ -1110,6 +1112,11 @@ function Shell({ children }: { children: React.ReactNode }) {
                         >
                           <span className="flex items-center justify-between gap-2">
                             <span>{itemLabel}</span>
+                            {(sidebarCounts[itemPath] ?? 0) > 0 && (
+                              <span className="min-w-5 shrink-0 rounded-full bg-amber-400 px-1.5 py-0.5 text-center text-[10px] font-extrabold leading-none text-amber-950">
+                                {sidebarCounts[itemPath] > 99 ? "99+" : sidebarCounts[itemPath]}
+                              </span>
+                            )}
                             {itemPath === "/readings/import-current" && (
                               <span className="shrink-0 rounded-full border border-amber-300/40 bg-amber-400/15 px-1.5 py-0.5 text-[9px] font-extrabold uppercase tracking-wide text-amber-200">
                                 Migration

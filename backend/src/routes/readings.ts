@@ -173,6 +173,17 @@ readingsRouter.get("/cycles", async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+readingsRouter.get("/pending-count", async (_req, res, next) => {
+  try {
+    const count = await prisma.meterReading.count({
+      where: { approvalStatus: "PENDING" },
+    });
+    res.json({ count });
+  } catch (error) {
+    next(error);
+  }
+});
+
 readingsRouter.post("/cycles", requireRole("SYSTEM_ADMIN", "SUPERVISOR", "METER_SUPERVISOR"), async (req, res, next) => {
   const data = parse(z.object({
     cycleCode: z.string().trim().min(2).max(30),

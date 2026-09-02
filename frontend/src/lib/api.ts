@@ -407,6 +407,7 @@ export const api = {
     ).toString();
     return request(`/readings${query ? `?${query}` : ""}`);
   },
+  pendingReadingCount: () => request("/readings/pending-count"),
   captureReading: (data: Record<string, unknown>) =>
     request("/readings", { method: "POST", body: JSON.stringify(data) }),
   syncReadings: (readings: Record<string, unknown>[]) =>

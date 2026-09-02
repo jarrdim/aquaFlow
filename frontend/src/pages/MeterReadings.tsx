@@ -2388,6 +2388,9 @@ export function ReadingWorklist() {
   const [bulkTotal, setBulkTotal] = useState(0);
   const [bulkSkipped, setBulkSkipped] = useState(0);
   const [bulkMessage, setBulkMessage] = useState("");
+  const [inlineReadings, setInlineReadings] = useState<Record<string, string>>({});
+  const [inlineSavingId, setInlineSavingId] = useState("");
+  const [inlineMessage, setInlineMessage] = useState("");
   const [operation, setOperation] = useState("");
   const [operationProgress, setOperationProgress] = useState(0);
   const cycleId = params.get("cycleId") ?? "";
@@ -2895,6 +2898,9 @@ export function ReadingWorklist() {
       setBulkMessage(
         `${succeeded.toLocaleString()} reading${succeeded === 1 ? "" : "s"} imported and sent for approval${runtimeErrors.length ? `; ${runtimeErrors.length.toLocaleString()} failed` : ""}.`,
       );
+      if (succeeded > 0) {
+        window.dispatchEvent(new Event("sidebar-counts:refresh"));
+      }
       const refreshed = await api.readingWorklist({
         cycleId,
         routeIds: routeIds.join(","),
@@ -2906,6 +2912,76 @@ export function ReadingWorklist() {
     } finally {
       setOperation("");
       setOperationProgress(0);
+    }
+  }
+
+  function previousReadingFor(item: Row) {
+    return Number(
+      item.meter?.readings?.[0]?.currentReading ??
+        item.meter?.openingReading ??
+        0,
+    );
+  }
+
+  function inlineReadingIsValid(item: Row) {
+    const rawValue = inlineReadings[String(item.meterId)] ?? "";
+    const currentReading = Number(rawValue);
+    return Boolean(rawValue.trim()) &&
+      Number.isFinite(currentReading) &&
+      currentReading >= previousReadingFor(item);
+  }
+
+  async function saveInlineReading(item: Row) {
+    if (!canCaptureReadings || inlineSavingId) return;
+    const meterKey = String(item.meterId);
+    const rawValue = inlineReadings[meterKey] ?? "";
+    const currentReading = Number(rawValue);
+    const previousReading = previousReadingFor(item);
+    if (!rawValue.trim() || !Number.isFinite(currentReading)) {
+      setError("Enter a valid current reading before saving.");
+      return;
+    }
+    if (currentReading < previousReading) {
+      setError(
+        `Current reading cannot be below the previous reading of ${number(previousReading)}.`,
+      );
+      return;
+    }
+    setInlineSavingId(meterKey);
+    setError("");
+    setInlineMessage("");
+    try {
+      const result = await api.captureReading({
+        meterId: meterKey,
+        readingCycleId: cycleId,
+        previousReading,
+        currentReading,
+        readingType: "ACTUAL",
+        readingDate: new Date().toISOString(),
+        exceptionType: "NONE",
+        syncId: `inline-${cycleId}-${meterKey}-${Date.now()}`,
+        evidence: [],
+      });
+      window.dispatchEvent(new Event("sidebar-counts:refresh"));
+      setItems((current) =>
+        current.map((row) =>
+          String(row.meterId) === meterKey
+            ? { ...row, cycleReading: result.reading }
+            : row,
+        ),
+      );
+      setInlineReadings((current) => {
+        const next = { ...current };
+        delete next[meterKey];
+        return next;
+      });
+      setInlineMessage(
+        `Reading ${number(currentReading)} saved for meter ${item.meter?.meterNumber ?? meterKey} and sent for approval.`,
+      );
+    } catch (e: any) {
+      setError(e.message || "The reading could not be saved.");
+    } finally {
+      setInlineSavingId("");
     }
   }
   const totalPages = Math.max(1, Math.ceil(filteredItems.length / pageSize));
@@ -3008,6 +3084,11 @@ export function ReadingWorklist() {
     setBulkMessage("");
   }, [selectedCycleIsLocked, cycleId]);
 
+  useEffect(() => {
+    setInlineReadings({});
+    setInlineMessage("");
+  }, [cycleId]);
+
   const Pagination = ({ position }: { position: "top" | "bottom" }) => (
     <nav
       className="flex flex-wrap items-center justify-between gap-3"
@@ -3094,6 +3175,7 @@ export function ReadingWorklist() {
       }
     >
       {error && <Notice>{error}</Notice>}
+      {inlineMessage && <Notice tone="green">{inlineMessage}</Notice>}
       {selectedCycleIsLocked && (
         <section className="mb-4 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-amber-300 bg-amber-50 px-5 py-4 text-amber-950 shadow-sm">
           <div>
@@ -3340,7 +3422,7 @@ export function ReadingWorklist() {
           <Pagination position="top" />
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[1050px]">
+          <table className="w-full min-w-[1220px]">
             <thead className="bg-slate-50/80">
               <tr>
                 {[
@@ -3348,7 +3430,7 @@ export function ReadingWorklist() {
                   "Account / Customer",
                   "Meter",
                   "Previous reading",
-                  "Current approved reading",
+                  "Current reading",
                   "Status",
                   "Action",
                 ].map((heading) => (
@@ -3445,6 +3527,39 @@ export function ReadingWorklist() {
                           {a.cycleReading.approvalStatus === "APPROVED" ? "Approved" : "Awaiting approval"}
                         </div>
                       </div>
+                    ) : canCaptureReadings ? (
+                      <div className="w-36">
+                        <input
+                          type="number"
+                          min={previousReadingFor(a)}
+                          step="0.001"
+                          inputMode="decimal"
+                          aria-label={`Current reading for meter ${a.meter?.meterNumber ?? a.meterId}`}
+                          placeholder={`Min ${number(previousReadingFor(a))}`}
+                          value={inlineReadings[String(a.meterId)] ?? ""}
+                          disabled={Boolean(inlineSavingId)}
+                          onChange={(event) => {
+                            setError("");
+                            setInlineMessage("");
+                            setInlineReadings((current) => ({
+                              ...current,
+                              [String(a.meterId)]: event.target.value,
+                            }));
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" && inlineReadingIsValid(a)) {
+                              event.preventDefault();
+                              void saveInlineReading(a);
+                            }
+                          }}
+                          className={`h-10 w-full rounded-xl border bg-white px-3 text-sm font-bold tabular-nums text-slate-900 outline-none transition focus:ring-2 ${
+                            Boolean(inlineReadings[String(a.meterId)] ?? "") &&
+                            !inlineReadingIsValid(a)
+                              ? "border-red-300 focus:border-red-400 focus:ring-red-100"
+                              : "border-slate-200 focus:border-sky-400 focus:ring-sky-100"
+                          } disabled:cursor-wait disabled:bg-slate-50`}
+                        />
+                      </div>
                     ) : (
                       <span className="text-slate-400">—</span>
                     )}
@@ -3483,12 +3598,22 @@ export function ReadingWorklist() {
                         </Link>
                       </div>
                     ) : canCaptureReadings ? (
-                      <Link
-                        className="inline-flex rounded-lg bg-emerald-600 px-3.5 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-500"
-                        to={`/readings/capture?cycleId=${cycleId}&meterId=${a.meterId}`}
-                      >
-                        Capture
-                      </Link>
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          type="button"
+                          disabled={Boolean(inlineSavingId) || !inlineReadingIsValid(a)}
+                          onClick={() => void saveInlineReading(a)}
+                          className="inline-flex min-w-20 items-center justify-center rounded-lg bg-emerald-600 px-3.5 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:bg-emerald-200"
+                        >
+                          {inlineSavingId === String(a.meterId) ? "Saving…" : "Save"}
+                        </button>
+                        <Link
+                          className="inline-flex rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm font-bold text-aqua-700 shadow-sm transition hover:border-sky-200 hover:bg-sky-50"
+                          to={`/readings/capture?cycleId=${cycleId}&meterId=${a.meterId}`}
+                        >
+                          Full form
+                        </Link>
+                      </div>
                     ) : (
                       <span
                         className="inline-flex cursor-not-allowed rounded-lg bg-slate-100 px-3.5 py-2 text-sm font-bold text-slate-400 ring-1 ring-inset ring-slate-200"
@@ -3662,6 +3787,7 @@ export function CaptureReading() {
     };
     try {
       await api.captureReading(payload);
+      window.dispatchEvent(new Event("sidebar-counts:refresh"));
       navigate(`/readings/worklist?cycleId=${cycleId}`);
     } catch (e: any) {
       if (/fetch|network|offline/i.test(e.message)) {
@@ -4522,6 +4648,7 @@ export function ReadingApprovals() {
     setMessage("");
     try {
       await api.bulkDecideReadings(readingIds, decision, comments);
+      window.dispatchEvent(new Event("sidebar-counts:refresh"));
       setMessage(
         `${readingIds.length} reading${readingIds.length === 1 ? "" : "s"} ${
           decision === "APPROVED" ? "approved" : "rejected"
