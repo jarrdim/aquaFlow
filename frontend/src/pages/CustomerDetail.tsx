@@ -24,12 +24,22 @@ interface Customer {
   status: string;
   registrationDate: string;
   accounts?: Account[];
+  documents?: CustomerDocument[];
   portalAccess?: {
     username: string;
     phoneNumber?: string;
     status: string;
     updatedAt: string;
   } | null;
+}
+interface CustomerDocument {
+  customerDocumentId: string;
+  documentReference?: string;
+  title: string;
+  fileName?: string;
+  mimeType?: string;
+  fileSize?: number;
+  createdAt: string;
 }
 interface Account {
   accountId: string;
@@ -134,7 +144,7 @@ function Field({ label, error, children }: { label: string; error?: string; chil
   );
 }
 
-type Tab = "properties" | "billing" | "payments" | "service_requests" | "meters" | "notes";
+type Tab = "properties" | "billing" | "payments" | "service_requests" | "meters" | "documents" | "notes";
 
 // ── Component ──────────────────────────────────────────────────────────────────
 export default function CustomerDetail() {
@@ -153,6 +163,8 @@ export default function CustomerDetail() {
   const [historyLoading, setHistoryLoading] = useState(true);
   const [error, setError]         = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>("billing");
+  const [documentLoadingId, setDocumentLoadingId] = useState<string | null>(null);
+  const [documentPreview, setDocumentPreview] = useState<{ url: string; document: CustomerDocument } | null>(null);
 
   const [editing, setEditing] = useState(false);
   const [editForm, setEditForm] = useState<Record<string, string>>({});
@@ -232,6 +244,25 @@ export default function CustomerDetail() {
   }
 
   useEffect(() => { loadAll().catch((e) => setError(e.message)); }, [rawId]);
+
+  useEffect(() => () => {
+    if (documentPreview) URL.revokeObjectURL(documentPreview.url);
+  }, [documentPreview]);
+
+  async function previewDocument(document: CustomerDocument) {
+    setDocumentLoadingId(String(document.customerDocumentId));
+    setError(null);
+    try {
+      const url = await api.getProtectedBlobUrl(
+        `/customers/${rawId}/documents/${document.customerDocumentId}/content`,
+      );
+      setDocumentPreview({ url, document });
+    } catch (previewError: any) {
+      setError(previewError.message ?? "The document could not be opened.");
+    } finally {
+      setDocumentLoadingId(null);
+    }
+  }
 
   async function saveEdit(e: FormEvent) {
     e.preventDefault();
@@ -399,6 +430,7 @@ export default function CustomerDetail() {
     { key: "service_requests", label: "Service Requests" },
     { key: "meters",           label: "Meters" },
     { key: "properties",       label: "Properties & Accounts" },
+    { key: "documents",        label: `Documents (${customer.documents?.length ?? 0})` },
     { key: "notes",            label: "Notes" },
   ];
 
@@ -965,6 +997,56 @@ export default function CustomerDetail() {
         </div>
       )}
 
+      {/* Tab: Documents */}
+      {activeTab === "documents" && (
+        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="border-b border-slate-100 px-5 py-4">
+            <h2 className="font-semibold text-slate-900">Customer documents</h2>
+            <p className="mt-0.5 text-xs text-slate-500">Forms and identity documents attached during customer registration</p>
+          </div>
+          {!customer.documents?.length ? (
+            <div className="p-10 text-center text-sm text-slate-500">No documents are attached to this customer.</div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[720px] text-sm">
+                <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                  <tr>
+                    <th className="px-5 py-3 text-left">Document ID</th>
+                    <th className="px-5 py-3 text-left">Title</th>
+                    <th className="px-5 py-3 text-left">File</th>
+                    <th className="px-5 py-3 text-left">Uploaded</th>
+                    <th className="px-5 py-3 text-right">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {customer.documents.map((document) => (
+                    <tr key={document.customerDocumentId} className="hover:bg-slate-50/80">
+                      <td className="px-5 py-4 font-semibold text-slate-800">{document.documentReference ?? "—"}</td>
+                      <td className="px-5 py-4 text-slate-700">{document.title}</td>
+                      <td className="px-5 py-4 text-slate-500">
+                        {document.fileName ?? "Document"}
+                        {document.fileSize ? <span className="ml-1 text-xs">({Math.ceil(document.fileSize / 1024)} KB)</span> : null}
+                      </td>
+                      <td className="px-5 py-4 text-slate-500">{date(document.createdAt)}</td>
+                      <td className="px-5 py-4 text-right">
+                        <button
+                          type="button"
+                          disabled={documentLoadingId === String(document.customerDocumentId)}
+                          onClick={() => void previewDocument(document)}
+                          className="font-semibold text-aqua-700 hover:underline disabled:cursor-wait disabled:opacity-50"
+                        >
+                          {documentLoadingId === String(document.customerDocumentId) ? "Opening…" : "Preview"}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      )}
+
       {/* Tab: Service Requests */}
       {activeTab === "service_requests" && (
         <section className="rounded-xl border border-slate-200 bg-white p-8 text-center shadow-sm">
@@ -993,6 +1075,21 @@ export default function CustomerDetail() {
       {activeTab === "notes" && (
         <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-8 text-center text-sm text-slate-400">
           Customer notes will be available in a future update.
+        </div>
+      )}
+
+      {documentPreview && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4" role="dialog" aria-modal="true" aria-label={`Preview ${documentPreview.document.title}`}>
+          <div className="flex h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-center justify-between gap-4 border-b border-slate-200 px-5 py-3">
+              <div className="min-w-0">
+                <h2 className="truncate font-semibold text-slate-900">{documentPreview.document.title}</h2>
+                <p className="truncate text-xs text-slate-500">{documentPreview.document.fileName ?? documentPreview.document.documentReference ?? "Customer document"}</p>
+              </div>
+              <button type="button" onClick={() => setDocumentPreview(null)} className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Close</button>
+            </div>
+            <iframe title={documentPreview.document.title} src={documentPreview.url} className="min-h-0 flex-1 bg-slate-100" />
+          </div>
         </div>
       )}
     </div>

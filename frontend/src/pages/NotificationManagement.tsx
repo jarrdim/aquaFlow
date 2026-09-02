@@ -774,7 +774,7 @@ function BulkNotificationSend({ modeSwitch }: { modeSwitch: ReactNode }) {
                 value={filters.accountStatuses}
                 onChange={(accountStatuses) => setFilters({ ...filters, accountStatuses })}
                 placeholder="All statuses"
-                options={[{ value: "ACTIVE", label: "Active" }, { value: "SUSPENDED", label: "Suspended" }, { value: "INACTIVE", label: "Inactive" }, { value: "PENDING", label: "Pending" }, { value: "CLOSED", label: "Closed" }]}
+                options={[{ value: "ACTIVE", label: "Active" }, { value: "DISCONNECTED", label: "Disconnected" }, { value: "SUSPENDED", label: "Suspended" }, { value: "INACTIVE", label: "Inactive" }, { value: "PENDING", label: "Pending" }, { value: "CLOSED", label: "Closed" }]}
               />
             </label>
             <label className="text-sm font-medium">

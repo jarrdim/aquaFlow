@@ -170,6 +170,36 @@ customersRouter.get("/:id", async (req, res) => {
   });
 });
 
+customersRouter.get("/:id/documents/:documentId/content", async (req, res, next) => {
+  try {
+    if (!/^\d+$/.test(req.params.id) || !/^\d+$/.test(req.params.documentId)) {
+      return res.status(400).json({ error: "Invalid customer document reference" });
+    }
+    const document = await prisma.customerDocument.findFirst({
+      where: {
+        customerDocumentId: BigInt(req.params.documentId),
+        customerId: BigInt(req.params.id),
+      },
+      select: { fileName: true, mimeType: true, fileData: true },
+    });
+    if (!document) return res.status(404).json({ error: "Customer document not found" });
+
+    const match = document.fileData.match(/^data:(application\/pdf|image\/(?:jpeg|png));base64,([A-Za-z0-9+/=\r\n]+)$/);
+    if (!match) return res.status(422).json({ error: "Document content is unavailable" });
+    const mimeType = document.mimeType && ["application/pdf", "image/jpeg", "image/png"].includes(document.mimeType)
+      ? document.mimeType
+      : match[1];
+    const fileName = (document.fileName || "customer-document")
+      .replace(/[\r\n"]/g, "_");
+    res.setHeader("Content-Type", mimeType);
+    res.setHeader("Content-Disposition", `inline; filename="${fileName}"`);
+    res.setHeader("Cache-Control", "private, no-store");
+    res.send(Buffer.from(match[2], "base64"));
+  } catch (error) {
+    next(error);
+  }
+});
+
 const customerPortalAccessSchema = z.object({
   password: z.string().min(8, "Password must contain at least 8 characters").max(200),
   phoneNumber: z.preprocess(

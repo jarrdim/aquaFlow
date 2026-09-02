@@ -13,6 +13,13 @@ const defaultSource = path.resolve(
 );
 const source = path.resolve(process.argv[2] ?? defaultSource);
 
+function normalizeMeterStatus(sourceStatus: string) {
+  const status = sourceStatus.trim().toUpperCase();
+  if (status === "CONNECTED") return "ACTIVE";
+  if (status === "VACATED") return "INACTIVE";
+  return status || "IN_STOCK";
+}
+
 function parseCsv(input: string): string[][] {
   const rows: string[][] = [];
   let row: string[] = [];
@@ -137,7 +144,7 @@ async function main() {
     const installationDate = optionalDate(installationValue);
     const installationStatus =
       cell(record, "installation_status").toUpperCase() || "IN_STORE";
-    const status = cell(record, "status").toUpperCase() || "IN_STOCK";
+    const status = normalizeMeterStatus(cell(record, "status"));
     const meterSizeMm = cell(record, "meter_size_mm");
     const openingReading = cell(record, "opening_reading") || "0";
 

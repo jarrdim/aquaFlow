@@ -146,6 +146,7 @@ async function getEligibleAssignments(
     removalDate: null,
     accountId: accountIds?.length ? { in: accountIds } : { not: null },
     account: { AND: accountFilters },
+    meter: { status: "ACTIVE" },
   };
   const terms = search.trim().split(/\s+/).filter(Boolean);
   let searchWhere: Prisma.MeterAssignmentWhereInput | undefined;
@@ -771,6 +772,11 @@ readingsRouter.post(
   },
 );
 
+const requiredReadingNumber = z.preprocess(
+  (value) => value === null || value === undefined || (typeof value === "string" && value.trim() === "") ? undefined : value,
+  z.coerce.number().finite().min(0),
+);
+
 const legacyCurrentImportSchema = z.object({
   items: z.array(z.object({
     meterNumber: z.string().trim().min(1),
@@ -778,8 +784,8 @@ const legacyCurrentImportSchema = z.object({
     cycleCode: z.string().trim().min(1).max(50),
     cycleStartDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     cycleEndDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-    previousReading: z.coerce.number().min(0),
-    currentReading: z.coerce.number().min(0),
+    previousReading: requiredReadingNumber,
+    currentReading: requiredReadingNumber,
     readingDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   })).min(1).max(1000),
 });

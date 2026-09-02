@@ -214,12 +214,13 @@ async function cycleCandidates(cycleId: bigint, filters: any = {}) {
 
   const accounts = await prisma.customerAccount.findMany({
     where: {
-      accountStatus: "ACTIVE",
       ...(filters.accountIds?.length ? { accountId: { in: filters.accountIds.map((value: bigint | string) => BigInt(value)) } } : {}),
       ...(filters.zoneId ? { property: { zoneId: BigInt(filters.zoneId) } } : {}),
       ...(filters.routeId ? { OR: [{ routeId: BigInt(filters.routeId) }, { property: { routeId: BigInt(filters.routeId) } }] } : {}),
       ...(filters.categoryId ? { categoryId: BigInt(filters.categoryId) } : {}),
-      meterAssignments: { some: { assignmentStatus: "ACTIVE", removalDate: null } },
+      // Billing follows the approved cycle reading, even if the account or
+      // assignment status changed after that reading was captured.
+      meterReadings: { some: { readingCycleId: readingCycle.readingCycleId, approvalStatus: "APPROVED", bills: { none: {} } } },
     },
     include: {
       customer: true,
@@ -260,7 +261,7 @@ async function cycleCandidates(cycleId: bigint, filters: any = {}) {
     let issue = "NONE";
     if (account.bills.length) issue = "DUPLICATE_BILL";
     else if (!tariff) issue = "MISSING_TARIFF";
-    else if (tariff.billingMethod !== "FLAT" && !reading) issue = "MISSING_READING";
+    else if (!reading) issue = "MISSING_READING";
     else {
       const exception = cycleReadings.find((value: any) => value.exceptionType && value.exceptionType !== "NONE")?.exceptionType;
       if (exception) issue = exception === "HIGH" ? "HIGH_USAGE" : exception;
@@ -409,7 +410,7 @@ billingRouter.get("/preview", async (req, res, next) => {
         category: row.account.category.categoryName,
         zone: row.account.property.zone.zoneName,
         route: row.account.route?.routeName ?? row.account.property.route?.routeName,
-        meterNumber: row.assignment?.meter?.meterNumber,
+        meterNumber: row.assignment?.meter?.meterNumber ?? row.reading?.meter?.meterNumber,
         readingId: row.reading?.readingId,
         consumption: row.consumption,
         tariffName: row.tariff?.tariffName,
@@ -434,8 +435,10 @@ billingRouter.post("/generate", requireRole("SYSTEM_ADMIN", "BILLING_OFFICER"), 
   if (!data) return;
   try {
     const result = await cycleCandidates(data.billingCycleId, data);
+    const isPostedBackfill = result.cycle.status === "POSTED";
     const acceptsTargetedGeneration = data.accountIds?.length && result.cycle.status === "PENDING_APPROVAL";
-    if (!["DRAFT", "OPEN", "PROCESSING", "RETURNED"].includes(result.cycle.status) && !acceptsTargetedGeneration) return res.status(409).json({ error: "This billing period no longer accepts bill generation" });
+    if (!["DRAFT", "OPEN", "PROCESSING", "RETURNED"].includes(result.cycle.status) && !acceptsTargetedGeneration && !isPostedBackfill) return res.status(409).json({ error: "This billing period no longer accepts bill generation" });
+    if (isPostedBackfill && !data.sendForApproval) return res.status(409).json({ error: "Bills backfilled into a posted period must be sent for approval" });
     const eligible = result.rows.filter((row) => row.eligible);
     if (!eligible.length) return res.status(409).json({ error: "No eligible accounts. Review missing tariffs, readings, account status and duplicate bills in the preview." });
     const generated: any[] = [];
@@ -466,9 +469,11 @@ billingRouter.post("/generate", requireRole("SYSTEM_ADMIN", "BILLING_OFFICER"), 
         console.warn(`Skipped bill generation for ${row.account.accountNumber}: ${issue}`);
       }
     }
-    const nextStatus = data.sendForApproval ? "PENDING_APPROVAL" : "PROCESSING";
+    // A posted period may receive a controlled missing-bill backfill. Keep the
+    // period posted while the new bills follow their own approval/posting flow.
+    const nextStatus = isPostedBackfill ? "POSTED" : data.sendForApproval ? "PENDING_APPROVAL" : "PROCESSING";
     await prisma.billingCycle.update({ where: { billingCycleId: data.billingCycleId }, data: { status: nextStatus, updatedAt: new Date() } });
-    await event({ billingCycleId: data.billingCycleId, eventType: "BATCH_GENERATED", previousStatus: result.cycle.status, newStatus: nextStatus, details: `${generated.length} bill(s) generated`, performedBy: uid(req) });
+    await event({ billingCycleId: data.billingCycleId, eventType: "BATCH_GENERATED", previousStatus: result.cycle.status, newStatus: nextStatus, details: `${generated.length} bill(s) generated${isPostedBackfill ? " as a posted-period backfill" : ""}`, performedBy: uid(req) });
     const validationIssues = result.rows.filter((row) => !row.eligible).length;
     res.status(201).json({
       generated: generated.length,
@@ -586,6 +591,8 @@ billingRouter.post("/bills/post", requireRole("FINANCE_MANAGER", "SYSTEM_ADMIN")
     const cycleIds = [...new Set(bills.map((bill) => bill.billingCycleId.toString()))];
     if (cycleIds.length !== 1) return res.status(409).json({ error: "Selected bills must belong to the same billing period" });
     const cycleId = bills[0].billingCycleId;
+    const cycle = await prisma.billingCycle.findUnique({ where: { billingCycleId: cycleId }, select: { status: true } });
+    if (!cycle) return res.status(404).json({ error: "Billing period not found" });
     await ensureEarlierReadingsAreBilled(cycleId, Array.from(new Set(bills.map((bill) => bill.accountId))));
     const postedAt = new Date();
     await prisma.$transaction(async (tx) => {
@@ -609,7 +616,10 @@ billingRouter.post("/bills/post", requireRole("FINANCE_MANAGER", "SYSTEM_ADMIN")
       await tx.billingEvent.createMany({
         data: bills.map((bill) => ({ billingCycleId: bill.billingCycleId, billId: bill.billId, eventType: "BILL_POSTED", previousStatus: "APPROVED", newStatus: "POSTED", details: data.reason, performedBy: uid(req), createdAt: postedAt })),
       });
-      await tx.billingCycle.update({ where: { billingCycleId: cycleId }, data: { status: "PROCESSING", updatedAt: postedAt } });
+      await tx.billingCycle.update({
+        where: { billingCycleId: cycleId },
+        data: { status: cycle.status === "POSTED" ? "POSTED" : "PROCESSING", updatedAt: postedAt },
+      });
     }, { maxWait: 10_000, timeout: 30_000 });
     res.json({ posted: bills.length, billingCycleId: cycleId });
   } catch (error: any) {
@@ -631,8 +641,9 @@ billingRouter.post("/notifications", requireRole("SYSTEM_ADMIN", "BILLING_OFFICE
     if (!readingCycle) return res.status(409).json({ error: "This billing period has no linked reading cycle" });
     if (readingCycle.status !== "CLOSED") return res.status(409).json({ error: "Close the linked reading cycle before sending bill notifications" });
 
-    const candidateBills = await prisma.bill.findMany({ where: { billingCycleId: data.billingCycleId, status: { in: ["APPROVED", "POSTED", "PARTIALLY_PAID", "PAID"] }, totalAmountDue: { gt: 0 }, ...(data.billIds ? { billId: { in: data.billIds } } : {}) }, include: { account: { include: { customer: true } }, billingCycle: true, reading: true } });
-    const bills = candidateBills.filter((bill) => Number(bill.totalAmountDue) - Number(bill.paidAmount) > 0);
+    // A bill notification is also the customer's reading statement. Send it
+    // for zero balances as long as the bill came from an approved reading.
+    const bills = await prisma.bill.findMany({ where: { billingCycleId: data.billingCycleId, status: { in: ["APPROVED", "POSTED", "PARTIALLY_PAID", "PAID"] }, readingId: { not: null }, ...(data.billIds ? { billId: { in: data.billIds } } : {}) }, include: { account: { include: { customer: true } }, billingCycle: true, reading: true } });
     const settings = await prisma.systemSetting.findUnique({
       where: { settingId: 1n },
       select: { reconnectionFee: true },

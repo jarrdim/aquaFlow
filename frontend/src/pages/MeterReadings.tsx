@@ -5669,6 +5669,8 @@ export function BulkCurrentReadingImport() {
         const cycleStartDate = String(row.cycleStartDate ?? "").trim();
         const cycleEndDate = String(row.cycleEndDate ?? "").trim();
         const readingDate = String(row.readingDate ?? "").trim();
+        const previousReadingIsBlank = row.previousReading === "" || row.previousReading === null || row.previousReading === undefined;
+        const currentReadingIsBlank = row.currentReading === "" || row.currentReading === null || row.currentReading === undefined;
         const previousReading = Number(row.previousReading);
         const currentReading = Number(row.currentReading);
         if (!meterNumber) issues.push(`Row ${index + 2}: meterNumber is required.`);
@@ -5677,8 +5679,8 @@ export function BulkCurrentReadingImport() {
         if (!/^\d{4}-\d{2}-\d{2}$/.test(cycleStartDate)) issues.push(`Row ${index + 2}: cycleStartDate must be YYYY-MM-DD.`);
         if (!/^\d{4}-\d{2}-\d{2}$/.test(cycleEndDate)) issues.push(`Row ${index + 2}: cycleEndDate must be YYYY-MM-DD.`);
         if (!/^\d{4}-\d{2}-\d{2}$/.test(readingDate)) issues.push(`Row ${index + 2}: readingDate must be YYYY-MM-DD.`);
-        if (!Number.isFinite(previousReading) || previousReading < 0) issues.push(`Row ${index + 2}: previousReading is invalid.`);
-        if (!Number.isFinite(currentReading) || currentReading < 0) issues.push(`Row ${index + 2}: currentReading is invalid.`);
+        if (previousReadingIsBlank || !Number.isFinite(previousReading) || previousReading < 0) issues.push(`Row ${index + 2}: previousReading is required and must be zero or greater.`);
+        if (currentReadingIsBlank || !Number.isFinite(currentReading) || currentReading < 0) issues.push(`Row ${index + 2}: currentReading is required and must be zero or greater.`);
         return { meterNumber, accountNumber, cycleCode, cycleStartDate, cycleEndDate, previousReading, currentReading, readingDate };
       });
       if (!rows.length) issues.push("The selected file has no reading rows.");

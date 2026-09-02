@@ -306,6 +306,12 @@ export function MeterDashboard() {
           "text-violet-700",
           "bg-violet-50",
         ],
+        [
+          "Disconnected",
+          data.status.DISCONNECTED ?? 0,
+          "text-slate-700",
+          "bg-slate-100",
+        ],
       ]
     : [];
   return (

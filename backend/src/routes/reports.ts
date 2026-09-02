@@ -70,7 +70,12 @@ reportsRouter.get("/meter-reading-coverage", async (req, res, next) => {
     if (!cycle) return res.status(404).json({ error: "Reading cycle was not found" });
 
     const assignments = await prisma.meterAssignment.findMany({
-      where: { assignmentStatus: "ACTIVE", removalDate: null, meter: { status: "ACTIVE" } },
+      where: {
+        assignmentStatus: "ACTIVE",
+        removalDate: null,
+        meter: { status: "ACTIVE" },
+        account: { accountStatus: "ACTIVE" },
+      },
       include: {
         meter: true,
         zone: true,

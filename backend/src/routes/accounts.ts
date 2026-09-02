@@ -10,6 +10,10 @@ accountsRouter.use(requireAuth);
 
 const ledgerBillStatuses = ["POSTED", "PARTIALLY_PAID", "PAID"];
 const nonLedgerPaymentTypes = ["RECONNECTION_FEE", "NEW_CONNECTION_FEE"];
+const accountStatuses = ["PENDING", "ACTIVE", "SUSPENDED", "CLOSED", "DISCONNECTED"] as const;
+const importedAccountStatus = z
+  .enum([...accountStatuses, "CONNECTED", "VACATED"])
+  .transform((status) => status === "CONNECTED" ? "ACTIVE" : status === "VACATED" ? "CLOSED" : status);
 const roundMoney = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
 
 async function accountLedgerBalance(client: any, accountId: bigint, openingBalance: number) {
@@ -87,7 +91,7 @@ const bulkAccountSchema = z.object({
     openingBalance: z.coerce.number().finite().min(-999_999_999_999_999.99).max(999_999_999_999_999.99).default(0),
     currentBalance: z.coerce.number().finite().min(-999_999_999_999_999.99).max(999_999_999_999_999.99).default(0),
     connectionDate: z.preprocess((value) => value === "" ? undefined : value, z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()),
-    accountStatus: z.enum(["PENDING", "ACTIVE", "SUSPENDED", "CLOSED"]),
+    accountStatus: importedAccountStatus,
     closureDate: z.preprocess((value) => value === "" ? undefined : value, z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()),
   })).min(1).max(1000),
 });
@@ -413,7 +417,7 @@ accountsRouter.get("/", async (req, res, next) => {
         return res.status(400).json({ error: "One or more account ids are invalid" });
       }
     }
-    const statusResult = z.enum(["PENDING", "ACTIVE", "SUSPENDED", "CLOSED"])
+    const statusResult = z.enum(accountStatuses)
       .optional()
       .safeParse(req.query.status ? String(req.query.status) : undefined);
     if (!statusResult.success) {

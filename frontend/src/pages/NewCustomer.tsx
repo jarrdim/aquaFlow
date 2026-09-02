@@ -155,6 +155,12 @@ export default function NewCustomer() {
     updateDocument(key, { file, data });
   }
 
+  function previewDocument(file: File) {
+    const url = URL.createObjectURL(file);
+    window.open(url, "_blank", "noopener,noreferrer");
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }
+
   // Reuse applicant and proposed-property details captured by the connection
   // application. All copied values remain editable in this wizard.
   useEffect(() => {
@@ -589,7 +595,12 @@ export default function NewCustomer() {
                       <input type="file" accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png" className={FIELD_CLS} onChange={(event) => void chooseDocument(document.key, event.target.files?.[0])} />
                     </Field>
                   </div>
-                  {document.file && <p className="mt-2 text-xs text-slate-500">{document.file.name} · {(document.file.size / 1024).toFixed(0)} KB</p>}
+                  {document.file && (
+                    <div className="mt-2 flex items-center justify-between gap-3">
+                      <p className="min-w-0 truncate text-xs text-slate-500">{document.file.name} · {(document.file.size / 1024).toFixed(0)} KB</p>
+                      <button type="button" onClick={() => previewDocument(document.file!)} className="shrink-0 text-xs font-semibold text-aqua-700 hover:underline">Preview</button>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -638,12 +649,29 @@ export default function NewCustomer() {
               </div>
             )}
 
+            {form.physicalAddress && form.categoryId && (
+              <div className="mb-5">
+                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Assigned Account</h3>
+                <div className="rounded-lg bg-slate-50 px-4 py-1">
+                  <ReviewRow label="Account Number" value="Assigned automatically when saved" />
+                  <ReviewRow label="Account Status" value="Active" />
+                  <ReviewRow label="Customer Category" value={categories.find((category) => String(category.categoryId) === form.categoryId)?.categoryName} />
+                  <ReviewRow label="Route" value={routes.find((route) => String(route.routeId) === form.routeId)?.routeName} />
+                  <ReviewRow label="Opening Balance" value="KSh 0.00" />
+                </div>
+              </div>
+            )}
+
             {documents.some((document) => document.file) && (
               <div className="mb-5">
                 <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Documents</h3>
-                <div className="bg-slate-50 rounded-lg px-4 py-1">
+                <div className="divide-y divide-slate-100 rounded-lg bg-slate-50 px-4">
                   {documents.filter((document) => document.file).map((document) => (
-                    <ReviewRow key={document.key} label={document.documentReference} value={`${document.title} · ${document.file!.name}`} />
+                    <div key={document.key} className="flex items-center gap-4 py-3 text-sm">
+                      <span className="w-44 shrink-0 text-slate-400">{document.documentReference}</span>
+                      <span className="min-w-0 flex-1 truncate font-medium text-slate-700">{document.title} · {document.file!.name}</span>
+                      <button type="button" onClick={() => previewDocument(document.file!)} className="shrink-0 font-semibold text-aqua-700 hover:underline">Preview</button>
+                    </div>
                   ))}
                 </div>
               </div>

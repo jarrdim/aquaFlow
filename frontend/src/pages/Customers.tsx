@@ -471,12 +471,17 @@ export default function Customers() {
         const customerNumber = cell(row, "customerNumber");
         const propertyCode = cell(row, "propertyCode");
         const categoryCode = cell(row, "categoryCode");
-        const accountStatus = cell(row, "accountStatus").toUpperCase();
+        const sourceAccountStatus = cell(row, "accountStatus").toUpperCase();
+        const accountStatus = sourceAccountStatus === "CONNECTED"
+          ? "ACTIVE"
+          : sourceAccountStatus === "VACATED"
+            ? "CLOSED"
+            : sourceAccountStatus;
         if (!accountNumber) errors.push(`Row ${index + 2}: accountNumber is required.`);
         if (!customerNumber) errors.push(`Row ${index + 2}: customerNumber is required.`);
         if (!propertyCode) errors.push(`Row ${index + 2}: propertyCode is required.`);
         if (!categoryCode) errors.push(`Row ${index + 2}: categoryCode is required.`);
-        if (!["PENDING", "ACTIVE", "SUSPENDED", "CLOSED"].includes(accountStatus)) errors.push(`Row ${index + 2}: accountStatus is invalid.`);
+        if (!["PENDING", "ACTIVE", "SUSPENDED", "CLOSED", "DISCONNECTED"].includes(accountStatus)) errors.push(`Row ${index + 2}: accountStatus is invalid.`);
         const openingBalance = Number(cell(row, "openingBalance") || 0);
         const currentBalance = Number(cell(row, "currentBalance") || 0);
         const connectionDate = cell(row, "connectionDate");

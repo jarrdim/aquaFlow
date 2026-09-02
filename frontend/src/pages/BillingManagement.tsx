@@ -735,7 +735,7 @@ export function IndividualBillingWorkspace() {
 
   const selectedReadingCycle = readingCycles.find((cycle) => String(cycle.readingCycleId) === readingCycleId);
   const selectedBillingCycle = billingCycles.find((cycle) => String(cycle.billingCycleId) === billingCycleId);
-  const accountOptions = accounts.filter((account) => account.accountStatus === "ACTIVE").map((account) => ({
+  const accountOptions = accounts.filter((account) => ["ACTIVE", "SUSPENDED"].includes(account.accountStatus)).map((account) => ({
     value: String(account.accountId), label: `${account.accountNumber} · ${accountCustomerName(account)}`,
   }));
   const selectedAccounts = accounts.filter((account) => selectedAccountIds.includes(String(account.accountId)));
@@ -784,14 +784,14 @@ export function IndividualBillingWorkspace() {
     (bill.generalNotifications ?? []).some((notification: Row) =>
       ["QUEUED", "SENT", "DELIVERED"].includes(String(notification.deliveryStatus ?? "")),
     );
-  const outstandingPostedBills = selectedBills.filter((bill) =>
-    ["POSTED", "PARTIALLY_PAID"].includes(bill.status) &&
-    Number(bill.totalAmountDue ?? 0) - Number(bill.paidAmount ?? 0) > 0,
+  const notifiablePostedBills = selectedBills.filter((bill) =>
+    ["POSTED", "PARTIALLY_PAID", "PAID"].includes(bill.status) &&
+    Boolean(bill.readingId ?? bill.reading),
   );
-  const notifiableBillIds = outstandingPostedBills
+  const notifiableBillIds = notifiablePostedBills
     .filter((bill) => !billHasExistingSms(bill))
     .map((bill) => String(bill.billId));
-  const smsAlreadyRequestedCount = outstandingPostedBills.filter(billHasExistingSms).length;
+  const smsAlreadyRequestedCount = notifiablePostedBills.filter(billHasExistingSms).length;
   const smsActionLabel = notifiableBillIds.length
     ? `Send ${notifiableBillIds.length} bill SMS`
     : smsAlreadyRequestedCount
@@ -1427,10 +1427,11 @@ export function BillGeneration() {
   }
   const canGenerate =
     Boolean(preview?.summary.eligible) && previewForm === JSON.stringify(form);
+  const selectedCycle = cycles.find((cycle) => String(cycle.billingCycleId) === String(form.billingCycleId));
   return (
     <Page
       title="Generate customer bills"
-      subtitle="Validate approved readings and active tariffs before bill generation"
+      subtitle="Validate approved readings and active tariffs before bill generation or a missing-bill backfill"
       actions={
         <>
           <Button
@@ -1446,12 +1447,13 @@ export function BillGeneration() {
     >
       {error && <Notice>{error}</Notice>}
       {message && <Notice tone="green">{message}</Notice>}
+      {selectedCycle?.status === "POSTED" && <Notice tone="blue">This period is already posted. Only accounts without an existing bill are eligible; generated backfill bills will be sent through approval and posting before notification.</Notice>}
       <Card title="Generation filters" className="mb-4">
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
           <Field label="Billing period" required>
             <CycleSelect
               cycles={cycles.filter((c) =>
-                ["DRAFT", "OPEN", "PROCESSING", "RETURNED"].includes(c.status),
+                ["DRAFT", "OPEN", "PROCESSING", "RETURNED", "POSTED"].includes(c.status),
               )}
               value={form.billingCycleId}
               onChange={(value) => setForm({ ...form, billingCycleId: value })}
@@ -3594,10 +3596,9 @@ export function BillNotifications() {
       setLoadingBills(false);
     }
   }
-  const selected = bills.filter(
-    (b) =>
-      ["APPROVED", "POSTED", "PARTIALLY_PAID"].includes(b.status) &&
-      Number(b.totalAmountDue) - Number(b.paidAmount ?? 0) > 0,
+  const selected = bills.filter((bill) =>
+    ["APPROVED", "POSTED", "PARTIALLY_PAID", "PAID"].includes(bill.status) &&
+    Boolean(bill.readingId ?? bill.reading),
   );
   const filteredBills = useMemo(() => {
     const query = search.trim().toLowerCase();
