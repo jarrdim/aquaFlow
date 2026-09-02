@@ -1,4 +1,4 @@
-import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
+import { Fragment, FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, getSessionUser } from "../lib/api";
 import {
@@ -2556,13 +2556,20 @@ export function ReadingWorklist() {
           .some((value) => String(value).toLowerCase().includes(quickTerm));
       });
     return matchingItems.sort((left, right) => {
+      const byRoute = String(
+        left.route?.routeName ?? "Unassigned route",
+      ).localeCompare(
+        String(right.route?.routeName ?? "Unassigned route"),
+        undefined,
+        { numeric: true, sensitivity: "base" },
+      );
       const byAccount = String(
         left.account?.accountNumber ?? "",
       ).localeCompare(String(right.account?.accountNumber ?? ""), undefined, {
         numeric: true,
         sensitivity: "base",
       });
-      return byAccount ||
+      return byRoute || byAccount ||
         String(left.meter?.meterNumber ?? "").localeCompare(
           String(right.meter?.meterNumber ?? ""),
           undefined,
@@ -3497,7 +3504,10 @@ export function ReadingWorklist() {
           )}
         </section>
       )}
-      <section className="mb-4 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_16px_42px_-30px_rgba(15,32,56,0.45)]">
+      <section
+        id="reading-worklist-filters"
+        className="mb-4 scroll-mt-3 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_16px_42px_-30px_rgba(15,32,56,0.45)]"
+      >
         <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-5">
           <Field label="Reading cycle">
             <SearchableSelect
@@ -3512,26 +3522,6 @@ export function ReadingWorklist() {
                 </option>
               ))}
             </SearchableSelect>
-          </Field>
-          <Field label="Route">
-            <CheckboxMultiSelect
-              className={INPUT}
-              value={routeIds}
-              onChange={updateRoutes}
-              placeholder="All routes"
-              options={routes.map((route) => ({
-                value: String(route.routeId),
-                label: route.routeName,
-              }))}
-            />
-          </Field>
-          <Field label="Search">
-            <input
-              className={INPUT}
-              value={search}
-              onChange={(e) => update("search", e.target.value)}
-              placeholder="Exact meter/account, customer no., name or phone"
-            />
           </Field>
           <Field label="Status">
             <SearchableSelect
@@ -3561,6 +3551,26 @@ export function ReadingWorklist() {
               </SearchableSelect>
             </Field>
           )}
+          <Field label="Route">
+            <CheckboxMultiSelect
+              className={INPUT}
+              value={routeIds}
+              onChange={updateRoutes}
+              placeholder="All routes"
+              options={routes.map((route) => ({
+                value: String(route.routeId),
+                label: route.routeName,
+              }))}
+            />
+          </Field>
+          <Field label="Search">
+            <input
+              className={INPUT}
+              value={search}
+              onChange={(e) => update("search", e.target.value)}
+              placeholder="Exact meter/account, customer no., name or phone"
+            />
+          </Field>
         </div>
         <div className="grid border-t border-slate-100 bg-slate-50/70 sm:grid-cols-3 sm:divide-x sm:divide-slate-200">
           <div className="px-4 py-3">
@@ -3627,12 +3637,11 @@ export function ReadingWorklist() {
           </div>
           <Pagination position="top" />
         </div>
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[1220px]">
-            <thead className="bg-slate-50/80">
+        <div className="relative max-h-[calc(100vh-7rem)] overflow-auto">
+          <table className="w-full min-w-[1100px]">
+            <thead className="sticky top-0 z-30 bg-slate-50 shadow-sm">
               <tr>
                 {[
-                  "Route",
                   "Account / Customer",
                   "Meter",
                   "Previous reading",
@@ -3644,7 +3653,7 @@ export function ReadingWorklist() {
                     key={heading}
                     className={`px-4 py-3 text-[11px] font-bold uppercase tracking-[0.08em] text-slate-500 ${
                       heading === "Action" ? "text-right" : "text-left"
-                    } ${heading === "Route" ? "pl-5" : ""}`}
+                    } ${heading === "Account / Customer" ? "pl-5" : ""}`}
                   >
                     {heading}
                   </th>
@@ -3654,20 +3663,52 @@ export function ReadingWorklist() {
             <tbody className="divide-y divide-slate-100">
               {loading ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-16 text-center text-slate-500">
+                  <td colSpan={6} className="px-4 py-16 text-center text-slate-500">
                     <span className="inline-flex items-center gap-2">
                       <span className="h-4 w-4 animate-spin rounded-full border-2 border-sky-200 border-t-sky-600" />
                       Loading route worklist…
                     </span>
                   </td>
                 </tr>
-              ) : pageItems.map((a) => (
+              ) : pageItems.map((a, index) => (
+                <Fragment key={a.assignmentId}>
+                {(index === 0 ||
+                  String(pageItems[index - 1]?.route?.routeName ?? "Unassigned route") !==
+                    String(a.route?.routeName ?? "Unassigned route")) && (
+                  <tr>
+                    <td
+                      colSpan={6}
+                      className="sticky top-10 z-20 border-y border-sky-200 bg-sky-50 px-5 py-2.5 shadow-[0_8px_16px_-12px_rgba(15,32,56,0.65)]"
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <span className="rounded-md bg-aqua-700 px-2 py-1 text-[10px] font-extrabold uppercase tracking-wider text-white">
+                            Route
+                          </span>
+                          <span className="truncate text-sm font-extrabold text-aqua-900">
+                            {a.route?.routeName ?? "Unassigned route"}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            document
+                              .getElementById("reading-worklist-filters")
+                              ?.scrollIntoView({ behavior: "smooth", block: "start" })
+                          }
+                          className="inline-flex flex-none items-center gap-1 rounded-lg border border-sky-200 bg-white px-3 py-1.5 text-xs font-bold text-aqua-700 shadow-sm transition hover:border-sky-300 hover:bg-sky-100"
+                        >
+                          <span aria-hidden="true">↑</span>
+                          Back to filters
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )}
                 <tr
-                  key={a.assignmentId}
                   className="group transition hover:bg-sky-50/40"
                 >
-                  <td className={TD}>{a.route?.routeName ?? "—"}</td>
-                  <td className="px-4 py-3.5">
+                  <td className="px-5 py-3.5">
                     <div className="flex items-center gap-3">
                       <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-sky-50 to-violet-100 text-xs font-extrabold text-violet-700 ring-1 ring-violet-100">
                         {String(a.customerName || "Customer")
@@ -3830,10 +3871,11 @@ export function ReadingWorklist() {
                     )}
                   </td>
                 </tr>
+                </Fragment>
               ))}
               {!loading && !filteredItems.length && (
                 <tr>
-                  <td colSpan={7} className="px-4 py-16 text-center">
+                  <td colSpan={6} className="px-4 py-16 text-center">
                     <div className="font-semibold text-slate-700">
                       {quickSearch
                         ? `No meters match “${quickSearch}”`
