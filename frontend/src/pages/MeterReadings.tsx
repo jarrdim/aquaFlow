@@ -4598,6 +4598,7 @@ export function ReadingRegister({
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [exporting, setExporting] = useState(false);
   const pageSize = 25;
   const [error, setError] = useState("");
   const [evidenceReading, setEvidenceReading] = useState<Row | null>(null);
@@ -4664,6 +4665,39 @@ export function ReadingRegister({
     setPage(1);
     setFilters(next);
   };
+  const exportAllReadings = async () => {
+    setExporting(true);
+    setError("");
+    try {
+      const exportItems = await api.listReadings({
+        ...filters,
+        search: filters.search.trim(),
+        exceptionOnly: exceptions ? "true" : "",
+        export: "true",
+      });
+      exportExcel(
+        exceptions ? "reading-exceptions.xlsx" : "meter-readings.xlsx",
+        "Meter Readings",
+        exportItems.map((r: Row) => ({
+          Cycle: r.cycle?.cycleName,
+          "Reading Date": formatDmyDate(r.readingDate),
+          Meter: r.meter?.meterNumber,
+          Account: r.account?.accountNumber,
+          Customer: customerName(r),
+          Previous: Number(r.previousReading),
+          Current: Number(r.currentReading),
+          Consumption: Number(r.consumption),
+          Type: r.readingType,
+          Exception: r.exceptionType,
+          Approval: r.approvalStatus,
+        })),
+      );
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setExporting(false);
+    }
+  };
   const Pagination = ({ position }: { position: "top" | "bottom" }) => (
     <nav
       className="flex flex-wrap items-center justify-between gap-3"
@@ -4722,27 +4756,10 @@ export function ReadingRegister({
       actions={
         <Button
           tone="slate"
-          onClick={() =>
-            exportExcel(
-              exceptions ? "reading-exceptions.xlsx" : "meter-readings.xlsx",
-              "Meter Readings",
-              items.map((r) => ({
-                Cycle: r.cycle?.cycleName,
-                "Reading Date": formatDmyDate(r.readingDate),
-                Meter: r.meter?.meterNumber,
-                Account: r.account?.accountNumber,
-                Customer: customerName(r),
-                Previous: Number(r.previousReading),
-                Current: Number(r.currentReading),
-                Consumption: Number(r.consumption),
-                Type: r.readingType,
-                Exception: r.exceptionType,
-                Approval: r.approvalStatus,
-              })),
-            )
-          }
+          disabled={exporting || loading}
+          onClick={() => void exportAllReadings()}
         >
-          Export Excel
+          {exporting ? `Exporting ${total.toLocaleString()}…` : "Export Excel"}
         </Button>
       }
     >

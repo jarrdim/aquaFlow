@@ -856,6 +856,7 @@ readingsRouter.get("/", async (req, res, next) => {
     const fromDate = String(req.query.fromDate ?? "");
     const toDate = String(req.query.toDate ?? "");
     const search = String(req.query.search ?? "");
+    const exportMode = String(req.query.export ?? "") === "true";
     const paginated = req.query.page !== undefined;
     const page = Math.max(1, Number(req.query.page) || 1);
     const pageSize = Math.min(200, Math.max(10, Number(req.query.pageSize) || 50));
@@ -889,6 +890,38 @@ readingsRouter.get("/", async (req, res, next) => {
         { account: { customer: { organizationName: { contains: search, mode: "insensitive" } } } },
       ] } : {}),
     };
+    if (exportMode) {
+      return res.json(await prisma.meterReading.findMany({
+        where,
+        select: {
+          readingId: true,
+          readingDate: true,
+          previousReading: true,
+          currentReading: true,
+          consumption: true,
+          readingType: true,
+          exceptionType: true,
+          approvalStatus: true,
+          cycle: { select: { cycleName: true } },
+          meter: { select: { meterNumber: true } },
+          account: {
+            select: {
+              accountNumber: true,
+              customer: {
+                select: {
+                  customerType: true,
+                  firstName: true,
+                  middleName: true,
+                  lastName: true,
+                  organizationName: true,
+                },
+              },
+            },
+          },
+        },
+        orderBy: [{ readingDate: "desc" }, { readingId: "desc" }],
+      }));
+    }
     if (paginated) {
       const [items, total] = await Promise.all([
         prisma.meterReading.findMany({
