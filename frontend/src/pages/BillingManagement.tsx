@@ -3845,6 +3845,7 @@ export function BillNotifications() {
                     </label>
                   </th>
                   <th className={TH}>Bill</th>
+                  <th className={TH}>Account number</th>
                   <th className={TH}>Customer</th>
                   <th className={TH}>Amount</th>
                   <th className={TH}>Status</th>
@@ -3864,6 +3865,7 @@ export function BillNotifications() {
                       />
                     </td>
                     <td className={TD}>{bill.billNumber}</td>
+                    <td className={`${TD} font-semibold text-slate-700`}>{bill.account?.accountNumber ?? "—"}</td>
                     <td className={TD}>{bill.customerName}</td>
                     <td className={TD}>{money(bill.totalAmountDue)}</td>
                     <td className={TD}>
@@ -3889,7 +3891,7 @@ export function BillNotifications() {
                     </td>
                   </tr>
                 ))}
-                {!filteredBills.length && <tr><td colSpan={6} className="px-4 py-12 text-center text-sm text-slate-400">No eligible bills match these filters.</td></tr>}
+                {!filteredBills.length && <tr><td colSpan={7} className="px-4 py-12 text-center text-sm text-slate-400">No eligible bills match these filters.</td></tr>}
               </tbody>
             </table>
           </div>
