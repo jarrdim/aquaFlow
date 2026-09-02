@@ -672,14 +672,22 @@ billingRouter.post("/notifications", requireRole("SYSTEM_ADMIN", "BILLING_OFFICE
       const previousReading = bill.reading ? Number(bill.reading.previousReading) : null;
       const currentReading = bill.reading ? Number(bill.reading.currentReading) : null;
       const amountPaid = Number(bill.paidAmount);
-      const totalAmount = Math.max(0, Number(bill.totalAmountDue) - amountPaid);
+      // Preserve account credits in the customer-facing balance. The persisted
+      // amount due is floored at zero for collection controls, but the bill SMS
+      // must still show the true balance carried forward (for example, -300).
+      const totalAmount = round(
+        Number(bill.previousBalance) +
+        Number(bill.totalCurrentCharges) +
+        Number(bill.penalties) -
+        amountPaid,
+      );
       const expiresAt = new Date(Date.now() + 30 * 86_400_000);
       const paymentToken = createPaymentLinkToken({
         accountId: bill.accountId.toString(),
         expiresAt: expiresAt.toISOString(),
       });
       const paymentUrl = `${publicAppUrl()}/pay/${paymentToken}`;
-      const message = `Dear ${name} A/C ${accountNumber} your bill as at ${smsDate(bill.issueDate)}. Prev Read ${smsReading(previousReading)} Curr Read ${smsReading(currentReading)} Consumption ${smsReading(Number(bill.consumptionUnits))} Arrears ${smsNumber(Number(bill.previousBalance))} Amount Paid ${smsNumber(amountPaid)} Current Bill ${smsNumber(Number(bill.totalCurrentCharges))} Total Amount ${smsNumber(totalAmount)}. Due date is ${smsDate(bill.dueDate)}. Reconnection Fee is ${smsNumber(Number(settings?.reconnectionFee ?? 1155), 0)}. Bills payable through PayBill No 823496 using ${accountNumber} as the account number. WE MAKE IT SAFE BECAUSE WATER IS LIFE. THANK YOU.\n\nPay now: ${paymentUrl}`;
+      const message = `Dear ${name} A/C ${accountNumber} your bill as at ${smsDate(bill.issueDate)}. Prev Read ${smsReading(previousReading)} Curr Read ${smsReading(currentReading)} Consumption ${smsReading(Number(bill.consumptionUnits))} Arrears KSh ${smsNumber(Number(bill.previousBalance))} Amount Paid KSh ${smsNumber(amountPaid)} Current Bill KSh ${smsNumber(Number(bill.totalCurrentCharges))} Total Amount KSh ${smsNumber(totalAmount)}. Due date is ${smsDate(bill.dueDate)}. Reconnection Fee is KSh ${smsNumber(Number(settings?.reconnectionFee ?? 1155), 0)}. Bills payable through PayBill No 823496 using ${accountNumber} as the account number. WE MAKE IT SAFE BECAUSE WATER IS LIFE. THANK YOU.\n\nPay now: ${paymentUrl}`;
       for (const channel of data.channels) {
         const deliveryChannel = channel === "APP" ? "PUSH" : "SMS";
         if (!data.resend && existingNotificationKeys.has(`${bill.billId}:${deliveryChannel}`)) continue;

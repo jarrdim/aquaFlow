@@ -3683,6 +3683,11 @@ export function BillNotifications() {
   const selectedBillIdSet = new Set(selectedBillIds);
   const selectableBillIds = selectableBills.map((bill) => String(bill.billId));
   const allSelectableSelected = selectableBillIds.length > 0 && selectableBillIds.every((billId) => selectedBillIdSet.has(billId));
+  const totalAmount = (bill: Row) =>
+    Number(bill.previousBalance ?? 0) +
+    Number(bill.totalCurrentCharges ?? 0) +
+    Number(bill.penalties ?? 0) -
+    Number(bill.paidAmount ?? 0);
   function toggleSelectAll() {
     setSelectedBillIds((current) => {
       const selectableSet = new Set(selectableBillIds);
@@ -3790,7 +3795,7 @@ export function BillNotifications() {
         </Card>
         <Card title="Message preview">
           <div className="rounded-xl bg-slate-50 p-5 text-slate-700">
-            Dear <strong>[Customer Name]</strong> A/C <strong>[Account Number without ACC-]</strong> your bill as at <strong>[Bill Date]</strong>. Prev Read <strong>[Previous Reading]</strong> Curr Read <strong>[Current Reading]</strong> Consumption <strong>[Units]</strong> Arrears <strong>[Arrears]</strong> Amount Paid <strong>[Amount Paid]</strong> Current Bill <strong>[Current Bill]</strong> Total Amount <strong>[Total Amount]</strong>. Due date is <strong>[Due Date]</strong>. Reconnection Fee is <strong>1155</strong>. Bills payable through PayBill No <strong>823496</strong> using <strong>[Account Number without ACC-]</strong> as the account number. WE MAKE IT SAFE BECAUSE WATER IS LIFE. THANK YOU.
+            Dear <strong>[Customer Name]</strong> A/C <strong>[Account Number without ACC-]</strong> your bill as at <strong>[Bill Date]</strong>. Prev Read <strong>[Previous Reading]</strong> Curr Read <strong>[Current Reading]</strong> Consumption <strong>[Units]</strong> Arrears <strong>KSh [Arrears]</strong> Amount Paid <strong>KSh [Amount Paid]</strong> Current Bill <strong>KSh [Current Bill]</strong> Total Amount <strong>KSh [Total Amount]</strong>. Due date is <strong>[Due Date]</strong>. Reconnection Fee is <strong>KSh 1,155</strong>. Bills payable through PayBill No <strong>823496</strong> using <strong>[Account Number without ACC-]</strong> as the account number. WE MAKE IT SAFE BECAUSE WATER IS LIFE. THANK YOU.
             <div className="mt-3 font-semibold text-aqua-700">Pay now: [Secure Payment Link]</div>
           </div>
           <div className="mt-4 grid gap-3 md:grid-cols-3">
@@ -3841,13 +3846,13 @@ export function BillNotifications() {
                         disabled={!selectableBillIds.length || Boolean(sendingBillId) || queueing}
                         onChange={toggleSelectAll}
                       />
-                      <span>Select all</span>
+                      <span>All</span>
                     </label>
                   </th>
                   <th className={TH}>Bill</th>
                   <th className={TH}>Account number</th>
                   <th className={TH}>Customer</th>
-                  <th className={TH}>Amount</th>
+                  <th className={TH}>Total amount</th>
                   <th className={TH}>Status</th>
                   <th className={TH}>Action</th>
                 </tr>
@@ -3867,7 +3872,7 @@ export function BillNotifications() {
                     <td className={TD}>{bill.billNumber}</td>
                     <td className={`${TD} font-semibold text-slate-700`}>{bill.account?.accountNumber ?? "—"}</td>
                     <td className={TD}>{bill.customerName}</td>
-                    <td className={TD}>{money(bill.totalAmountDue)}</td>
+                    <td className={TD}>{money(totalAmount(bill))}</td>
                     <td className={TD}>
                       <Badge value={bill.notificationStatus} />
                     </td>
