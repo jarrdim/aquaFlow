@@ -1,5 +1,5 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, getSessionUser } from "../lib/api";
 import { exportExcel } from "../lib/meterFiles";
 import { SearchableSelect } from "../components/SearchableSelect";
@@ -225,17 +225,26 @@ function Kpi({
   label,
   value,
   tone = "text-slate-900",
+  to,
 }: {
   label: string;
   value: ReactNode;
   tone?: string;
+  to?: string;
 }) {
-  return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+  const content = (
+    <>
       <div className="text-sm text-slate-500">{label}</div>
-      <div className={`mt-1 text-2xl font-bold ${tone}`}>{value}</div>
-    </div>
+      <div className="mt-1 flex items-center justify-between gap-3">
+        <div className={`text-2xl font-bold ${tone}`}>{value}</div>
+        {to && <span className="text-lg text-slate-300 transition group-hover:translate-x-0.5 group-hover:text-aqua-600" aria-hidden>→</span>}
+      </div>
+    </>
   );
+  const className = `rounded-xl border border-slate-200 bg-white p-4 shadow-sm ${to ? "group cursor-pointer transition hover:-translate-y-0.5 hover:border-aqua-300 hover:shadow-md focus:outline-none focus:ring-4 focus:ring-aqua-500/10" : ""}`;
+  return to
+    ? <Link to={to} className={className} aria-label={`${label}: ${String(value)}. Open details`}>{content}</Link>
+    : <div className={className}>{content}</div>;
 }
 
 function BillingStatusChart({
@@ -464,6 +473,8 @@ export function BillingDashboard() {
   const approved = Number(data?.approved ?? 0);
   const readyToPost = Number(data?.readyToPost ?? 0);
   const notified = Number(data?.notified ?? 0);
+  const eligibleNotBilled = Number(data?.eligibleNotBilled ?? 0);
+  const eligibleNotNotified = Number(data?.eligibleNotNotified ?? 0);
   return (
     <Page
       title="Billing management dashboard"
@@ -473,7 +484,7 @@ export function BillingDashboard() {
           <LinkButton to="/billing/periods" tone="green">
             Create billing period
           </LinkButton>
-          <LinkButton to="/billing/generate">Generate bills</LinkButton>
+          <LinkButton to="/billing/generate">Generate bills ({eligibleNotBilled.toLocaleString()})</LinkButton>
           <LinkButton to="/billing/approvals" tone="orange">
             Post approved batch ({readyToPost.toLocaleString()})
           </LinkButton>
@@ -491,34 +502,51 @@ export function BillingDashboard() {
       ) : (
         <>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <Kpi label="Bills generated" value={generated} />
+            <Kpi label="Bills generated" value={generated} to={`/billing/invoices?billingCycleId=${cycleId}`} />
             <Kpi
               label="Pending approval"
               value={data.pending}
               tone="text-amber-600"
+              to={`/billing/approvals?billingCycleId=${cycleId}`}
             />
             <Kpi
               label="Approved / posted"
               value={approved}
               tone="text-emerald-700"
+              to={`/billing/invoices?billingCycleId=${cycleId}`}
             />
             <Kpi
               label="Total current billing"
               value={money(data.totalBilling)}
               tone="text-aqua-700"
+              to={`/billing/invoices?billingCycleId=${cycleId}`}
             />
-            <Kpi label="Notifications sent" value={notified} />
+            <Kpi label="Notifications sent" value={notified} to={`/billing/notifications?billingCycleId=${cycleId}&notificationStatus=SENT`} />
+            <Kpi
+              label="Eligible readings not billed"
+              value={eligibleNotBilled}
+              tone="text-amber-600"
+              to={`/billing/generate?billingCycleId=${cycleId}`}
+            />
+            <Kpi
+              label="Eligible bills not notified"
+              value={eligibleNotNotified}
+              tone="text-orange-600"
+              to={`/billing/notifications?billingCycleId=${cycleId}&notificationStatus=NOT_SENT`}
+            />
             <Kpi
               label="Pending adjustments"
               value={data.adjustments}
               tone="text-orange-600"
+              to="/billing/adjustments/approvals"
             />
             <Kpi
               label="Security alerts"
               value={data.alerts}
               tone="text-red-600"
+              to="/billing/alerts"
             />
-            <Kpi label="Cancelled bills" value={data.cancelled} />
+            <Kpi label="Cancelled bills" value={data.cancelled} to={`/billing/invoices?billingCycleId=${cycleId}&status=CANCELLED`} />
           </div>
           <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
             <BillingStatusChart
@@ -1345,6 +1373,8 @@ export function BillingPeriods() {
 }
 
 export function BillGeneration() {
+  const [searchParams] = useSearchParams();
+  const requestedCycleId = searchParams.get("billingCycleId") ?? "";
   const [cycles, setCycles] = useState<Row[]>([]);
   const [zones, setZones] = useState<Row[]>([]);
   const [routes, setRoutes] = useState<Row[]>([]);
@@ -1377,13 +1407,15 @@ export function BillGeneration() {
         setZones(z);
         setRoutes(r);
         setCategories(cat);
+        const requested = c.find((x: Row) => String(x.billingCycleId) === requestedCycleId);
         const open = c.find((x: Row) =>
           ["DRAFT", "OPEN", "PROCESSING", "RETURNED"].includes(x.status),
         );
-        if (open)
+        const target = requested ?? open;
+        if (target)
           setForm((f: Row) => ({
             ...f,
-            billingCycleId: String(open.billingCycleId),
+            billingCycleId: String(target.billingCycleId),
           }));
       })
       .catch((e) => setError(e.message))
@@ -1648,8 +1680,9 @@ export function BillGeneration() {
 }
 
 export function BillApprovals() {
+  const [searchParams] = useSearchParams();
   const [cycles, setCycles] = useState<Row[]>([]);
-  const [cycleId, setCycleId] = useState("");
+  const [cycleId, setCycleId] = useState(searchParams.get("billingCycleId") ?? "");
   const [search, setSearch] = useState("");
   const [bills, setBills] = useState<Row[]>([]);
   const [processed, setProcessed] = useState<Row[]>([]);
@@ -1692,7 +1725,7 @@ export function BillApprovals() {
     }
   };
   useEffect(() => {
-    refreshCycles("").catch((e) => {
+    refreshCycles(cycleId).catch((e) => {
       setError(e.message);
       setLoading(false);
     });
@@ -2123,9 +2156,10 @@ export function BillApprovals() {
 }
 
 export function InvoiceRegister() {
+  const [searchParams] = useSearchParams();
   const [cycles, setCycles] = useState<Row[]>([]);
-  const [cycleId, setCycleId] = useState("");
-  const [status, setStatus] = useState("");
+  const [cycleId, setCycleId] = useState(searchParams.get("billingCycleId") ?? "");
+  const [status, setStatus] = useState(searchParams.get("status") ?? "");
   const [search, setSearch] = useState("");
   const [rows, setRows] = useState<Row[]>([]);
   const [error, setError] = useState("");
@@ -3499,20 +3533,22 @@ export function CustomerStatements() {
 }
 
 export function BillNotifications() {
+  const [searchParams] = useSearchParams();
   const [cycles, setCycles] = useState<Row[]>([]);
-  const [cycleId, setCycleId] = useState("");
+  const [cycleId, setCycleId] = useState(searchParams.get("billingCycleId") ?? "");
   const [channels, setChannels] = useState<string[]>(["SMS", "APP"]);
   const [bills, setBills] = useState<Row[]>([]);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [search, setSearch] = useState("");
   const [billStatus, setBillStatus] = useState("");
-  const [notificationStatus, setNotificationStatus] = useState("NOT_SENT");
+  const [notificationStatus, setNotificationStatus] = useState(searchParams.get("notificationStatus") ?? "NOT_SENT");
   const [batchSize, setBatchSize] = useState("2000");
   const [selectedBillIds, setSelectedBillIds] = useState<string[]>([]);
   const [loadingCycles, setLoadingCycles] = useState(true);
   const [loadingBills, setLoadingBills] = useState(false);
   const [queueing, setQueueing] = useState(false);
+  const [sendingBillId, setSendingBillId] = useState("");
   useEffect(() => {
     let active = true;
     setLoadingCycles(true);
@@ -3520,7 +3556,7 @@ export function BillNotifications() {
       .then((rows) => {
         if (!active) return;
         setCycles(rows);
-        if (rows[0]) setCycleId(String(rows[0].billingCycleId));
+        if (!cycleId && rows[0]) setCycleId(String(rows[0].billingCycleId));
       })
       .catch((e) => active && setError(e.message))
       .finally(() => active && setLoadingCycles(false));
@@ -3594,6 +3630,34 @@ export function BillNotifications() {
     } finally {
       setQueueing(false);
       setLoadingBills(false);
+    }
+  }
+  async function sendNow(bill: Row) {
+    if (!channels.length || sendingBillId) return;
+    const billId = String(bill.billId);
+    setSendingBillId(billId);
+    setError("");
+    setMessage("");
+    try {
+      const queued = await api.sendBillNotifications({
+        billingCycleId: cycleId,
+        billIds: [billId],
+        channels,
+        resend: String(bill.notificationStatus) !== "NOT_SENT",
+      });
+      if (!queued.notificationIds?.length) throw new Error("No notification was created. Check that the customer has a valid recipient for the selected channel.");
+      const result = await api.processNotifications(queued.notificationIds, queued.notificationIds.length);
+      const processed = result.processed ?? [];
+      const delivered = processed.filter((item: Row) => ["SENT", "DELIVERED"].includes(String(item?.deliveryStatus))).length;
+      const failed = processed.filter((item: Row) => item?.deliveryStatus === "FAILED");
+      if (!delivered) throw new Error(failed[0]?.failureReason ?? "The notification could not be delivered.");
+      setMessage(`${delivered} notification(s) sent immediately for ${bill.billNumber}.`);
+      setBills(await api.listBills({ billingCycleId: cycleId, limit: "10000" }));
+    } catch (e: any) {
+      setError(e.message);
+      setBills(await api.listBills({ billingCycleId: cycleId, limit: "10000" }));
+    } finally {
+      setSendingBillId("");
     }
   }
   const selected = bills.filter((bill) =>
@@ -3764,6 +3828,7 @@ export function BillNotifications() {
                   <th className={TH}>Customer</th>
                   <th className={TH}>Amount</th>
                   <th className={TH}>Status</th>
+                  <th className={TH}>Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -3784,9 +3849,27 @@ export function BillNotifications() {
                     <td className={TD}>
                       <Badge value={bill.notificationStatus} />
                     </td>
+                    <td className={TD}>
+                      <button
+                        type="button"
+                        disabled={!channels.length || Boolean(sendingBillId) || String(bill.notificationStatus) === "QUEUED"}
+                        className="rounded-lg border border-aqua-600 bg-white px-3 py-1.5 text-sm font-bold text-aqua-700 transition hover:bg-aqua-700 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                        onClick={() => sendNow(bill)}
+                      >
+                        {sendingBillId === String(bill.billId)
+                          ? "Sending…"
+                          : String(bill.notificationStatus) === "QUEUED"
+                            ? "Already queued"
+                          : String(bill.notificationStatus) === "NOT_SENT"
+                            ? "Send now"
+                            : String(bill.notificationStatus) === "FAILED"
+                              ? "Retry now"
+                            : "Resend"}
+                      </button>
+                    </td>
                   </tr>
                 ))}
-                {!filteredBills.length && <tr><td colSpan={5} className="px-4 py-12 text-center text-sm text-slate-400">No eligible bills match these filters.</td></tr>}
+                {!filteredBills.length && <tr><td colSpan={6} className="px-4 py-12 text-center text-sm text-slate-400">No eligible bills match these filters.</td></tr>}
               </tbody>
             </table>
           </div>

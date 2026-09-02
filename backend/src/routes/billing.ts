@@ -629,7 +629,7 @@ billingRouter.post("/bills/post", requireRole("FINANCE_MANAGER", "SYSTEM_ADMIN")
 });
 
 billingRouter.post("/notifications", requireRole("SYSTEM_ADMIN", "BILLING_OFFICER", "BILLING_SUPERVISOR"), async (req, res, next) => {
-  const data = parse(z.object({ billingCycleId: id, channels: z.array(z.enum(["SMS", "APP"])).min(1), billIds: z.array(id).optional() }), req.body, res);
+  const data = parse(z.object({ billingCycleId: id, channels: z.array(z.enum(["SMS", "APP"])).min(1), billIds: z.array(id).optional(), resend: z.boolean().default(false) }), req.body, res);
   if (!data) return;
   try {
     const billingCycle = await prisma.billingCycle.findUnique({
@@ -682,7 +682,7 @@ billingRouter.post("/notifications", requireRole("SYSTEM_ADMIN", "BILLING_OFFICE
       const message = `Dear ${name} A/C ${accountNumber} your bill as at ${smsDate(bill.issueDate)}. Prev Read ${smsReading(previousReading)} Curr Read ${smsReading(currentReading)} Consumption ${smsReading(Number(bill.consumptionUnits))} Arrears ${smsNumber(Number(bill.previousBalance))} Amount Paid ${smsNumber(amountPaid)} Current Bill ${smsNumber(Number(bill.totalCurrentCharges))} Total Amount ${smsNumber(totalAmount)}. Due date is ${smsDate(bill.dueDate)}. Reconnection Fee is ${smsNumber(Number(settings?.reconnectionFee ?? 1155), 0)}. Bills payable through PayBill No 823496 using ${accountNumber} as the account number. WE MAKE IT SAFE BECAUSE WATER IS LIFE. THANK YOU.\n\nPay now: ${paymentUrl}`;
       for (const channel of data.channels) {
         const deliveryChannel = channel === "APP" ? "PUSH" : "SMS";
-        if (existingNotificationKeys.has(`${bill.billId}:${deliveryChannel}`)) continue;
+        if (!data.resend && existingNotificationKeys.has(`${bill.billId}:${deliveryChannel}`)) continue;
         const recipient = channel === "SMS" ? bill.account.customer.phoneNumber : bill.account.customer.customerNumber;
         if (!recipient) continue;
         notificationRows.push({
@@ -695,7 +695,7 @@ billingRouter.post("/notifications", requireRole("SYSTEM_ADMIN", "BILLING_OFFICE
           subject: `Water bill - ${bill.billingCycle.cycleName}`,
           messageBody: message,
           requestedBy,
-          metadata: { source: "BILLING", billingCycleId: bill.billingCycleId.toString(), requestedChannel: channel },
+          metadata: { source: "BILLING", billingCycleId: bill.billingCycleId.toString(), requestedChannel: channel, resend: data.resend },
         });
         billNotificationRows.push({ billId: bill.billId, channel, recipient, message, status: "QUEUED", sentBy: requestedBy });
         queuedBillIds.add(bill.billId);
@@ -704,7 +704,7 @@ billingRouter.post("/notifications", requireRole("SYSTEM_ADMIN", "BILLING_OFFICE
         billingEventRows.push({
           billingCycleId: bill.billingCycleId,
           billId: bill.billId,
-          eventType: "NOTIFICATION_QUEUED",
+          eventType: data.resend ? "NOTIFICATION_REQUEUED" : "NOTIFICATION_QUEUED",
           details: data.channels.join(", "),
           performedBy: requestedBy,
           createdAt: updatedAt,
@@ -1272,14 +1272,27 @@ billingRouter.get("/dashboard", async (req, res, next) => {
     const cycleId = req.query.billingCycleId ? BigInt(String(req.query.billingCycleId)) : undefined;
     const cycle = cycleId ? await prisma.billingCycle.findUnique({ where: { billingCycleId: cycleId } }) : await prisma.billingCycle.findFirst({ orderBy: { periodStart: "desc" } });
     const where = cycle ? { billingCycleId: cycle.billingCycleId } : { billingCycleId: -1n };
-    const [bills, alerts, adjustments, recent] = await Promise.all([
-      prisma.bill.findMany({ where, select: { status: true, totalCurrentCharges: true, notificationStatus: true } }),
+    const candidatesPromise = cycle
+      ? cycleCandidates(cycle.billingCycleId, { includePreviousBalance: true }).catch((error: any) => {
+          if (error.status === 409) return null;
+          throw error;
+        })
+      : Promise.resolve(null);
+    const [bills, alerts, adjustments, recent, candidates] = await Promise.all([
+      prisma.bill.findMany({ where, select: { status: true, totalCurrentCharges: true, notificationStatus: true, readingId: true } }),
       prisma.billingSecurityAlert.count({ where: { status: "OPEN", ...(cycle ? { bill: { billingCycleId: cycle.billingCycleId } } : {}) } }),
       prisma.billingAdjustment.count({ where: { status: "PENDING", ...(cycle ? { bill: { billingCycleId: cycle.billingCycleId } } : {}) } }),
       prisma.billingEvent.findMany({ where: cycle ? { billingCycleId: cycle.billingCycleId } : undefined, include: { bill: { include: { account: { include: { customer: true } } } }, performer: true }, orderBy: { createdAt: "desc" }, take: 8 }),
+      candidatesPromise,
     ]);
     const approved = bills.filter((bill) => ["APPROVED", "POSTED", "PARTIALLY_PAID", "PAID"].includes(bill.status)).length;
     const readyToPost = bills.filter((bill) => bill.status === "APPROVED").length;
-    res.json({ cycle, customersToBill: bills.length, billsGenerated: bills.length, pending: bills.filter((bill) => bill.status === "PENDING_APPROVAL").length, approved, readyToPost, totalBilling: round(bills.reduce((sum, bill) => sum + Number(bill.totalCurrentCharges), 0)), notified: bills.filter((bill) => bill.notificationStatus === "SENT").length, cancelled: bills.filter((bill) => bill.status === "CANCELLED").length, alerts, adjustments, recent: recent.map((row: any) => ({ ...row, customerName: customerName(row.bill?.account?.customer) })) });
+    const eligibleNotBilled = candidates?.rows.filter((row) => row.eligible).length ?? 0;
+    const eligibleNotNotified = bills.filter((bill) =>
+      bill.readingId != null &&
+      ["APPROVED", "POSTED", "PARTIALLY_PAID", "PAID"].includes(bill.status) &&
+      !["QUEUED", "SENT"].includes(bill.notificationStatus),
+    ).length;
+    res.json({ cycle, customersToBill: bills.length + eligibleNotBilled, billsGenerated: bills.length, eligibleNotBilled, eligibleNotNotified, pending: bills.filter((bill) => bill.status === "PENDING_APPROVAL").length, approved, readyToPost, totalBilling: round(bills.reduce((sum, bill) => sum + Number(bill.totalCurrentCharges), 0)), notified: bills.filter((bill) => bill.notificationStatus === "SENT").length, cancelled: bills.filter((bill) => bill.status === "CANCELLED").length, alerts, adjustments, recent: recent.map((row: any) => ({ ...row, customerName: customerName(row.bill?.account?.customer) })) });
   } catch (error) { next(error); }
 });
