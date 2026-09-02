@@ -687,7 +687,9 @@ billingRouter.post("/notifications", requireRole("SYSTEM_ADMIN", "BILLING_OFFICE
         expiresAt: expiresAt.toISOString(),
       });
       const paymentUrl = `${publicAppUrl()}/pay/${paymentToken}`;
-      const message = `Dear ${name} A/C ${accountNumber} your bill as at ${smsDate(bill.issueDate)}. Prev Read ${smsReading(previousReading)} Curr Read ${smsReading(currentReading)} Consumption ${smsReading(Number(bill.consumptionUnits))} Arrears KSh ${smsNumber(Number(bill.previousBalance))} Amount Paid KSh ${smsNumber(amountPaid)} Current Bill KSh ${smsNumber(Number(bill.totalCurrentCharges))} Total Amount KSh ${smsNumber(totalAmount)}. Due date is ${smsDate(bill.dueDate)}. Reconnection Fee is KSh ${smsNumber(Number(settings?.reconnectionFee ?? 1155), 0)}. Bills payable through PayBill No 823496 using ${accountNumber} as the account number. WE MAKE IT SAFE BECAUSE WATER IS LIFE. THANK YOU.\n\nPay now: ${paymentUrl}`;
+      const billDate = bill.billingCycle?.periodEnd ?? bill.issueDate;
+      const dueDate = bill.billingCycle?.dueDate ?? bill.dueDate;
+      const message = `Dear ${name} A/C ${accountNumber} your bill as at ${smsDate(billDate)}. Prev Read ${smsReading(previousReading)} Curr Read ${smsReading(currentReading)} Consumption ${smsReading(Number(bill.consumptionUnits))} Arrears KSh ${smsNumber(Number(bill.previousBalance))} Amount Paid KSh ${smsNumber(amountPaid)} Current Bill KSh ${smsNumber(Number(bill.totalCurrentCharges))} Total Amount KSh ${smsNumber(totalAmount)}. Due date is ${smsDate(dueDate)}. Reconnection Fee is KSh ${smsNumber(Number(settings?.reconnectionFee ?? 1155), 0)}. Bills payable through PayBill No 823496 using ${accountNumber} as the account number. WE MAKE IT SAFE BECAUSE WATER IS LIFE. THANK YOU.\n\nPay now: ${paymentUrl}`;
       for (const channel of data.channels) {
         const deliveryChannel = channel === "APP" ? "PUSH" : "SMS";
         if (!data.resend && existingNotificationKeys.has(`${bill.billId}:${deliveryChannel}`)) continue;
