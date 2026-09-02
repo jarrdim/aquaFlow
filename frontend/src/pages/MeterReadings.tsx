@@ -3759,10 +3759,10 @@ function ReadingTable({
   const allSelected =
     Boolean(items.length) &&
     items.every((item) => selectedIds?.has(String(item.readingId)));
-  const columnCount = (actions ? 10 : 9) + (selectable ? 1 : 0);
+  const columnCount = (actions ? 11 : 10) + (selectable ? 1 : 0);
   return (
     <div className="overflow-x-auto">
-      <table className="w-full min-w-[1250px]">
+      <table className="w-full min-w-[1360px]">
         <thead className="bg-slate-50/90">
           <tr>
             {selectable && (
@@ -3776,7 +3776,8 @@ function ReadingTable({
                 />
               </th>
             )}
-            <th className={`${TH} pl-5`}>Date / Cycle</th>
+            <th className={`${TH} pl-5`}>Reading date</th>
+            <th className={TH}>Cycle</th>
             <th className={TH}>Customer / Account</th>
             <th className={TH}>Meter</th>
             <th className={`${TH} text-right`}>Previous</th>
@@ -3832,11 +3833,18 @@ function ReadingTable({
               )}
               <td className="px-5 py-3.5">
                 <div className="font-semibold text-slate-800">
-                  {date(r.readingDate)}
+                  {formatDmyDate(r.readingDate)}
                 </div>
-                <div className="mt-0.5 text-xs text-slate-400">
-                  {r.cycle?.cycleName}
+              </td>
+              <td className="px-4 py-3.5">
+                <div className="font-semibold text-slate-700">
+                  {r.cycle?.cycleName ?? "—"}
                 </div>
+                {r.cycle?.cycleCode && (
+                  <div className="mt-0.5 text-xs text-slate-400">
+                    {r.cycle.cycleCode}
+                  </div>
+                )}
               </td>
               <td className="px-4 py-3.5">
                 <div className="flex items-center gap-3">
@@ -3944,6 +3952,8 @@ export function ReadingRegister({
     approvalStatus: "",
     readingType: "",
     readingValue: "",
+    fromDate: "",
+    toDate: "",
     search: params.get("search") ?? "",
   });
   useEffect(() => {
@@ -4064,7 +4074,7 @@ export function ReadingRegister({
               "Meter Readings",
               items.map((r) => ({
                 Cycle: r.cycle?.cycleName,
-                Date: date(r.readingDate),
+                "Reading Date": formatDmyDate(r.readingDate),
                 Meter: r.meter?.meterNumber,
                 Account: r.account?.accountNumber,
                 Customer: customerName(r),
@@ -4154,6 +4164,38 @@ export function ReadingRegister({
               placeholder="Meter, account or customer"
             />
           </Field>
+          <Field label="Reading date from">
+            <DateInput
+              className={INPUT}
+              value={filters.fromDate}
+              max={filters.toDate || undefined}
+              onChange={(e) =>
+                updateFilters({ ...filters, fromDate: e.target.value })
+              }
+            />
+          </Field>
+          <Field label="Reading date to">
+            <DateInput
+              className={INPUT}
+              value={filters.toDate}
+              min={filters.fromDate || undefined}
+              onChange={(e) =>
+                updateFilters({ ...filters, toDate: e.target.value })
+              }
+            />
+          </Field>
+          <div className="flex items-end">
+            <button
+              type="button"
+              disabled={!filters.fromDate && !filters.toDate}
+              onClick={() =>
+                updateFilters({ ...filters, fromDate: "", toDate: "" })
+              }
+              className="h-[42px] w-full rounded-xl border border-slate-200 bg-white px-4 text-sm font-bold text-slate-600 shadow-sm transition hover:border-sky-200 hover:bg-sky-50 hover:text-aqua-700 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Clear dates
+            </button>
+          </div>
         </div>
         <div className="grid border-t border-slate-100 bg-slate-50/70 sm:grid-cols-2 lg:grid-cols-4 lg:divide-x lg:divide-slate-200">
           {[

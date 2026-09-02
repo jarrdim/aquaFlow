@@ -787,10 +787,22 @@ readingsRouter.get("/", async (req, res, next) => {
     const exceptionOnly = String(req.query.exceptionOnly ?? "") === "true";
     const readingType = String(req.query.readingType ?? "");
     const readingValue = String(req.query.readingValue ?? "").toUpperCase();
+    const fromDate = String(req.query.fromDate ?? "");
+    const toDate = String(req.query.toDate ?? "");
     const search = String(req.query.search ?? "");
     const paginated = req.query.page !== undefined;
     const page = Math.max(1, Number(req.query.page) || 1);
     const pageSize = Math.min(200, Math.max(10, Number(req.query.pageSize) || 50));
+    const validFromDate = /^\d{4}-\d{2}-\d{2}$/.test(fromDate);
+    const validToDate = /^\d{4}-\d{2}-\d{2}$/.test(toDate);
+    const readingDateFilter: Prisma.DateTimeFilter = {
+      ...(validFromDate
+        ? { gte: new Date(`${fromDate}T00:00:00.000+03:00`) }
+        : {}),
+      ...(validToDate
+        ? { lte: new Date(`${toDate}T23:59:59.999+03:00`) }
+        : {}),
+    };
     const where: Prisma.MeterReadingWhereInput = {
       ...(cycleId ? { readingCycleId: cycleId } : {}),
       ...(approvalStatus ? { approvalStatus } : {}),
@@ -800,6 +812,7 @@ readingsRouter.get("/", async (req, res, next) => {
       ...(readingValue === "ZERO_CURRENT" ? { currentReading: { equals: 0 } } : {}),
       ...(readingValue === "POSITIVE_CONSUMPTION" ? { consumption: { gt: 0 } } : {}),
       ...(readingValue === "NEGATIVE_CONSUMPTION" ? { consumption: { lt: 0 } } : {}),
+      ...(validFromDate || validToDate ? { readingDate: readingDateFilter } : {}),
       ...(routeId ? { account: { OR: [{ routeId }, { property: { routeId } }] } } : {}),
       ...(search ? { OR: [
         { meter: { meterNumber: { contains: search, mode: "insensitive" } } },
