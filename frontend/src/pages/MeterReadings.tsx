@@ -1169,7 +1169,20 @@ export function ReadingCycles() {
                       {formatDmyDate(c.startDate)} – {formatDmyDate(c.endDate)}
                     </td>
                     <td className={TD}><span className="inline-flex min-w-9 justify-center rounded-full bg-violet-50 px-2.5 py-1 text-xs font-bold text-violet-700">{c._count?.routeAssignments ?? 0}</span></td>
-                    <td className={TD}><span className="inline-flex min-w-9 justify-center rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700">{Number(c._count?.readings ?? 0).toLocaleString()}</span></td>
+                    <td className={TD}>
+                      {Number(c._count?.readings ?? 0) > 0 ? (
+                        <Link
+                          to={`/readings/register?cycleId=${encodeURIComponent(String(c.readingCycleId))}`}
+                          aria-label={`View ${Number(c._count.readings).toLocaleString()} readings in ${c.cycleName}`}
+                          className="inline-flex min-w-9 items-center justify-center rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700 ring-1 ring-emerald-100 transition hover:bg-emerald-600 hover:text-white hover:ring-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2"
+                          title="View readings in this cycle"
+                        >
+                          {Number(c._count.readings).toLocaleString()}
+                        </Link>
+                      ) : (
+                        <span className="inline-flex min-w-9 justify-center rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700">0</span>
+                      )}
+                    </td>
                     <td className={TD}>
                       <Badge value={c.status} />
                     </td>
@@ -3927,7 +3940,7 @@ export function ReadingRegister({
   const [error, setError] = useState("");
   const [evidenceReading, setEvidenceReading] = useState<Row | null>(null);
   const [filters, setFilters] = useState({
-    cycleId: "",
+    cycleId: params.get("cycleId") ?? "",
     approvalStatus: "",
     readingType: "",
     readingValue: "",
