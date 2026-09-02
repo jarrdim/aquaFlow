@@ -45,6 +45,8 @@ type Application = {
   amountPaid: number | string;
   paymentReference?: string;
   customerId?: string;
+  accountId?: string;
+  accountNumber?: string;
   activities?: {
     connectionActivityId: string;
     activityType: string;
@@ -640,6 +642,7 @@ export default function ConnectionDashboard() {
                   <tr>
                     <th className="px-4 py-3">Application</th>
                     <th className="px-4 py-3">Applicant</th>
+                    <th className="px-4 py-3">Account</th>
                     <th className="px-4 py-3">Zone / Type</th>
                     <th className="px-4 py-3">Financials</th>
                     <th className="px-4 py-3">Status</th>
@@ -665,6 +668,9 @@ export default function ConnectionDashboard() {
                         <div className="text-xs text-slate-500">
                           {row.phoneNumber}
                         </div>
+                      </td>
+                      <td className="px-4 py-3 font-semibold text-slate-700">
+                        {row.accountNumber || "Not created"}
                       </td>
                       <td className="px-4 py-3">
                         {row.zoneName || "Unassigned"}
@@ -695,7 +701,7 @@ export default function ConnectionDashboard() {
                     <tr>
                       <td
                         className="px-4 py-12 text-center text-slate-500"
-                        colSpan={6}
+                        colSpan={7}
                       >
                         No connection applications match these filters.
                       </td>

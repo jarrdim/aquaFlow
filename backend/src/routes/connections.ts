@@ -90,9 +90,11 @@ connectionsRouter.get("/", canView, async (req, res) => {
         a.phone_number AS "phoneNumber", a.connection_type AS "connectionType",
         a.status, a.connection_fee AS "connectionFee", a.quotation_total AS "quotationTotal",
         a.amount_paid AS "amountPaid", a.created_at AS "createdAt",
+        a.account_id AS "accountId", ca.account_number AS "accountNumber",
         z.zone_name AS "zoneName"
       FROM aquaflow.new_connection_applications a
       LEFT JOIN aquaflow.zones z ON z.zone_id = a.zone_id
+      LEFT JOIN aquaflow.customer_accounts ca ON ca.account_id = a.account_id
       WHERE (${search} = '' OR a.application_number ILIKE ${pattern}
         OR a.applicant_name ILIKE ${pattern} OR a.phone_number ILIKE ${pattern}
         OR COALESCE(a.identification_number, '') ILIKE ${pattern})

@@ -783,7 +783,7 @@ billingRouter.get("/statements/:accountId", async (req, res, next) => {
     }
     const [bills, payments, otherServicePayments, priorBills, priorPayments, latestBill, settings,
       disconnectionPostings, priorDisconnectionPostings, meterReplacements, accountAdjustments,
-      priorAccountAdjustments] = await Promise.all([
+      priorAccountAdjustments, newConnectionApplications] = await Promise.all([
       prisma.bill.findMany({
         where: { accountId, status: { in: ["POSTED", "PARTIALLY_PAID", "PAID"] }, issueDate: { gte: from, lte: to } },
         include: { billingCycle: true, tariff: true, reading: true },
@@ -858,7 +858,27 @@ billingRouter.get("/statements/:accountId", async (req, res, next) => {
         where: { accountId, status: "APPROVED", approvedAt: { lt: from } },
         select: { adjustmentType: true, amount: true },
       }),
+      prisma.newConnectionApplication.findMany({
+        where: { accountId, createdAt: { gte: from, lte: to } },
+        select: {
+          connectionApplicationId: true,
+          applicationNumber: true,
+          connectionFee: true,
+          quotationTotal: true,
+          amountPaid: true,
+          paymentReference: true,
+          createdAt: true,
+        },
+        orderBy: { createdAt: "asc" },
+      }),
     ]);
+    const postedNewConnectionReferences = new Set(
+      otherServicePayments
+        .filter((payment: any) => payment.paymentType === "NEW_CONNECTION_FEE")
+        .flatMap((payment: any) => [payment.customerReference, payment.transactionReference])
+        .filter(Boolean)
+        .map(String),
+    );
     const entries = [
       ...bills.map((bill: any) => ({
         id: `B${bill.billId}`,
@@ -914,6 +934,40 @@ billingRouter.get("/statements/:accountId", async (req, res, next) => {
             debit: 0,
             credit: amount,
           }];
+        }),
+      ...newConnectionApplications
+        .filter((application) => !postedNewConnectionReferences.has(application.applicationNumber))
+        .flatMap((application) => {
+          const charge = Number(application.quotationTotal) > 0
+            ? Number(application.quotationTotal)
+            : Number(application.connectionFee);
+          const paid = Number(application.amountPaid);
+          const common = {
+            date: application.createdAt,
+            period: application.createdAt.toISOString().slice(0, 7),
+            reference: application.applicationNumber,
+          };
+          const rows = [{
+            ...common,
+            id: `NC${application.connectionApplicationId}-CHARGE`,
+            particulars: "New connection fee",
+            details: `New connection charge for ${application.applicationNumber}`,
+            description: `New connection fee ${application.applicationNumber}`,
+            debit: charge,
+            credit: 0,
+          }];
+          if (paid > 0) rows.push({
+            ...common,
+            id: `NC${application.connectionApplicationId}-PAYMENT`,
+            particulars: "New connection payment",
+            details: application.paymentReference
+              ? `Payment reference ${application.paymentReference}`
+              : `Payment recorded for ${application.applicationNumber}`,
+            description: `New connection payment ${application.applicationNumber}`,
+            debit: 0,
+            credit: paid,
+          });
+          return rows;
         }),
       ...disconnectionPostings.flatMap((posting: any) => {
         const readingDetails = `Meter ${posting.meter_number} - Prev: ${Number(posting.previous_reading)} - Curr: ${Number(posting.current_reading)} - Units: ${Number(posting.current_reading) - Number(posting.previous_reading)}`;
