@@ -89,6 +89,28 @@ function worklistSearch(search: string, exact: boolean): Prisma.MeterAssignmentW
   };
 }
 
+function readingWorklistSearch(search: string): Prisma.MeterReadingWhereInput {
+  const terms = search.trim().split(/\s+/).filter(Boolean);
+  return terms.length ? {
+    AND: terms.map((term) => {
+      const text = { contains: term, mode: Prisma.QueryMode.insensitive };
+      return {
+        OR: [
+          { meter: { meterNumber: text } },
+          { meter: { serialNumber: text } },
+          { account: { accountNumber: text } },
+          { account: { customer: { customerNumber: text } } },
+          { account: { customer: { firstName: text } } },
+          { account: { customer: { middleName: text } } },
+          { account: { customer: { lastName: text } } },
+          { account: { customer: { organizationName: text } } },
+          { account: { customer: { phoneNumber: text } } },
+        ],
+      };
+    }),
+  } : {};
+}
+
 async function getEligibleAssignments(
   cycleId?: bigint,
   routeIds?: bigint[],
@@ -410,6 +432,69 @@ readingsRouter.patch("/assignments/:id/status", async (req, res, next) => {
   try {
     const updated = await prisma.routeAssignment.update({ where: { routeAssignmentId }, data: { status: data.status, completedAt: data.status === "COMPLETED" ? new Date() : null } });
     res.json(updated);
+  } catch (error) { next(error); }
+});
+
+readingsRouter.get("/worklist/captured-count", async (req, res, next) => {
+  try {
+    const cycleId = req.query.cycleId ? BigInt(String(req.query.cycleId)) : undefined;
+    if (!cycleId) return res.status(400).json({ error: "cycleId is required" });
+    const rawRouteIds = String(req.query.routeIds ?? req.query.routeId ?? "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
+    if (rawRouteIds.some((value) => !/^\d+$/.test(value))) {
+      return res.status(400).json({ error: "routeIds must contain valid route IDs" });
+    }
+    const requestedRouteIds = Array.from(new Set(rawRouteIds)).map((value) => BigInt(value));
+    const zoneId = req.query.zoneId ? BigInt(String(req.query.zoneId)) : undefined;
+    const meterId = req.query.meterId ? BigInt(String(req.query.meterId)) : undefined;
+    const rawAccountIds = String(req.query.accountIds ?? "").split(",").map((value) => value.trim()).filter(Boolean);
+    if (rawAccountIds.some((value) => !/^\d+$/.test(value))) {
+      return res.status(400).json({ error: "accountIds must contain valid account IDs" });
+    }
+    const accountIds = Array.from(new Set(rawAccountIds)).map((value) => BigInt(value));
+    const search = String(req.query.search ?? "").trim();
+    let allowedRouteIds: bigint[] | undefined;
+    if (req.user?.roles.includes("METER_READER")) {
+      const officer = await prisma.fieldOfficer.findUnique({
+        where: { userId: BigInt(req.user.userId) },
+        select: {
+          status: true,
+          routeAssignments: {
+            where: { readingCycleId: cycleId, status: { in: ["ASSIGNED", "ACCEPTED"] } },
+            select: { routeId: true },
+          },
+        },
+      });
+      if (!officer || officer.status !== "ACTIVE") {
+        return res.status(403).json({ error: "No active field officer profile is linked to this user" });
+      }
+      allowedRouteIds = officer.routeAssignments.map((assignment) => assignment.routeId);
+      if (requestedRouteIds.some((routeId) => !allowedRouteIds?.some((allowed) => allowed === routeId))) {
+        return res.status(403).json({ error: "This route is not assigned to you for the selected cycle" });
+      }
+    }
+    const effectiveRouteIds = requestedRouteIds.length ? requestedRouteIds : allowedRouteIds;
+    const accountFilters: Prisma.CustomerAccountWhereInput[] = [
+      ...(effectiveRouteIds ? [{
+        OR: [
+          { routeId: { in: effectiveRouteIds } },
+          { property: { routeId: { in: effectiveRouteIds } } },
+        ],
+      } as Prisma.CustomerAccountWhereInput] : []),
+      ...(zoneId ? [{ property: { zoneId } } as Prisma.CustomerAccountWhereInput] : []),
+    ];
+    const count = await prisma.meterReading.count({
+      where: {
+        readingCycleId: cycleId,
+        ...(meterId ? { meterId } : {}),
+        ...(accountIds.length ? { accountId: { in: accountIds } } : {}),
+        ...(accountFilters.length ? { account: { AND: accountFilters } } : {}),
+        ...readingWorklistSearch(search),
+      },
+    });
+    res.json({ count });
   } catch (error) { next(error); }
 });
 

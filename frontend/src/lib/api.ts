@@ -409,6 +409,12 @@ export const api = {
     ).toString();
     return request(`/readings/worklist${query ? `?${query}` : ""}`);
   },
+  readingWorklistCapturedCount: (filters: Record<string, string> = {}) => {
+    const query = new URLSearchParams(
+      Object.entries(filters).filter(([, value]) => value),
+    ).toString();
+    return request(`/readings/worklist/captured-count${query ? `?${query}` : ""}`);
+  },
   listReadings: (filters: Record<string, string> = {}) => {
     const query = new URLSearchParams(
       Object.entries(filters).filter(([, value]) => value),

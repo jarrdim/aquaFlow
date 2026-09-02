@@ -2376,6 +2376,7 @@ export function ReadingWorklist() {
   const [routes, setRoutes] = useState<Row[]>([]);
   const [routeAssignments, setRouteAssignments] = useState<Row[]>([]);
   const [items, setItems] = useState<Row[]>([]);
+  const [capturedInCycle, setCapturedInCycle] = useState(0);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [evidenceReading, setEvidenceReading] = useState<Row | null>(null);
@@ -2488,6 +2489,7 @@ export function ReadingWorklist() {
   useEffect(() => {
     if (!cycleId) {
       setItems([]);
+      setCapturedInCycle(0);
       setLoading(false);
       return;
     }
@@ -2499,18 +2501,22 @@ export function ReadingWorklist() {
     let cancelled = false;
     setLoading(true);
     const timer = window.setTimeout(() => {
-      api
-        .readingWorklist({
+      const worklistFilters = {
           cycleId,
           routeIds: routeIds.join(","),
           search: search.trim(),
           missedCycleId:
             readingStatus === "MISSED_CLOSED" ? effectiveMissedCycleId : "",
-        })
-        .then((nextItems) => {
+        };
+      Promise.all([
+        api.readingWorklist(worklistFilters),
+        api.readingWorklistCapturedCount(worklistFilters),
+      ])
+        .then(([nextItems, capturedSummary]) => {
           if (cancelled) return;
           setError("");
           setItems(nextItems);
+          setCapturedInCycle(Number(capturedSummary.count ?? 0));
         })
         .catch((e) => {
           if (!cancelled) setError(e.message);
@@ -2533,8 +2539,8 @@ export function ReadingWorklist() {
       : selectedRoutes.length <= 2
         ? selectedRoutes.map((route) => route.routeName).join(", ")
         : `${selectedRoutes.length.toLocaleString()} routes`;
-  const captured = items.filter((item) => item.cycleReading).length;
-  const unread = items.length - captured;
+  const capturedEligible = items.filter((item) => item.cycleReading).length;
+  const unread = items.length - capturedEligible;
   const filteredItems = useMemo(() => {
     const quickTerm = quickSearch.trim().toLowerCase();
     const matchingItems = items.filter((item) => {
@@ -3636,7 +3642,7 @@ export function ReadingWorklist() {
               Captured in this cycle
             </div>
             <div className="mt-1 text-lg font-extrabold text-emerald-600">
-              {captured.toLocaleString()}
+              {capturedInCycle.toLocaleString()}
             </div>
           </div>
         </div>
