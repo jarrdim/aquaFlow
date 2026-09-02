@@ -3681,6 +3681,15 @@ export function BillNotifications() {
     (bill) => !["QUEUED", "SENT"].includes(String(bill.notificationStatus)),
   );
   const selectedBillIdSet = new Set(selectedBillIds);
+  const selectableBillIds = selectableBills.map((bill) => String(bill.billId));
+  const allSelectableSelected = selectableBillIds.length > 0 && selectableBillIds.every((billId) => selectedBillIdSet.has(billId));
+  function toggleSelectAll() {
+    setSelectedBillIds((current) => {
+      const selectableSet = new Set(selectableBillIds);
+      if (allSelectableSelected) return current.filter((billId) => !selectableSet.has(billId));
+      return [...new Set([...current, ...selectableBillIds])];
+    });
+  }
   function selectNextBatch() {
     setSelectedBillIds(
       selectableBills.slice(0, Number(batchSize)).map((bill) => String(bill.billId)),
@@ -3823,7 +3832,18 @@ export function BillNotifications() {
             <table className="w-full">
               <thead>
                 <tr>
-                  <th className={TH}>Select</th>
+                  <th className={TH}>
+                    <label className="inline-flex cursor-pointer items-center gap-2">
+                      <input
+                        type="checkbox"
+                        aria-label="Select all matching bills"
+                        checked={allSelectableSelected}
+                        disabled={!selectableBillIds.length || Boolean(sendingBillId) || queueing}
+                        onChange={toggleSelectAll}
+                      />
+                      <span>Select all</span>
+                    </label>
+                  </th>
                   <th className={TH}>Bill</th>
                   <th className={TH}>Customer</th>
                   <th className={TH}>Amount</th>
