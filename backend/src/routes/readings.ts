@@ -933,7 +933,19 @@ readingsRouter.get("/dashboard/summary", async (req, res, next) => {
     const zoneId = req.query.zoneId ? BigInt(String(req.query.zoneId)) : undefined;
     const eligible = cycleId ? await getEligibleAssignments(cycleId, undefined, zoneId) : [];
     const meterIds = eligible.map((a) => a.meterId);
-    const readings = cycleId ? await prisma.meterReading.findMany({ where: { readingCycleId: cycleId, ...(meterIds.length ? { meterId: { in: meterIds } } : zoneId ? { meterId: -1n } : {}) }, include: { meter: true, account: { include: { customer: true } }, fieldOfficer: { include: { user: true } } }, orderBy: { readingDate: "desc" } }) : [];
+    const readingWhere = cycleId ? { readingCycleId: cycleId, ...(meterIds.length ? { meterId: { in: meterIds } } : zoneId ? { meterId: -1n } : {}) } : undefined;
+    const [readings, recent] = cycleId && readingWhere ? await Promise.all([
+      prisma.meterReading.findMany({
+        where: readingWhere,
+        select: { meterId: true, approvalStatus: true, abnormalFlag: true },
+      }),
+      prisma.meterReading.findMany({
+        where: readingWhere,
+        include: { meter: true, account: { include: { customer: true } }, fieldOfficer: { include: { user: true } } },
+        orderBy: { readingDate: "desc" },
+        take: 8,
+      }),
+    ]) : [[], []];
     const readIds = new Set(readings.map((r) => r.meterId.toString()));
     res.json({
       cycle,
@@ -945,7 +957,7 @@ readingsRouter.get("/dashboard/summary", async (req, res, next) => {
       rejected: readings.filter((r) => r.approvalStatus === "REJECTED").length,
       exceptions: readings.filter((r) => r.abnormalFlag).length,
       completionPercent: eligible.length ? Math.round((readings.length / eligible.length) * 1000) / 10 : 0,
-      recent: readings.slice(0, 8),
+      recent,
     });
   } catch (error) { next(error); }
 });

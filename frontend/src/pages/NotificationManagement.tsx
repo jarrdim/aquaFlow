@@ -4,6 +4,7 @@ import { api, getSessionUser } from "../lib/api";
 import { SearchableSelect } from "../components/SearchableSelect";
 import { CheckboxMultiSelect } from "../components/CheckboxMultiSelect";
 import { SweetAlertToast } from "../components/SweetAlertToast";
+import { DateTimeInput } from "../components/DateInput";
 
 type Row = Record<string, any>;
 const INPUT =
@@ -584,7 +585,7 @@ function GeneralSmsBroadcast({ modeSwitch }: { modeSwitch: ReactNode }) {
           <label className="block text-sm font-semibold text-slate-700">SMS message<textarea required maxLength={1000} className={`${INPUT} mt-2 min-h-52 resize-y leading-6`} value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Type the announcement customers should receive..." /></label>
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500"><span>{message.length.toLocaleString()} / 1,000 characters</span><span>{smsSegments || 0} estimated SMS segment{smsSegments === 1 ? "" : "s"} per customer</span></div>
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-4"><div className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">Personalisation available</div><p className="text-sm text-slate-600">Use <code className="rounded bg-white px-1.5 py-1 text-aqua-700">{"{{customer_name}}"}</code> or <code className="rounded bg-white px-1.5 py-1 text-aqua-700">{"{{customer_number}}"}</code> in the message.</p></div>
-          <label className="block text-sm font-semibold text-slate-700">Schedule delivery (optional)<input type="datetime-local" className={`${INPUT} mt-2`} value={scheduledAt} onChange={(e) => setScheduledAt(e.target.value)} /><span className="mt-1 block text-xs font-normal text-slate-500">Leave blank to place the campaign in the queue immediately.</span></label>
+          <label className="block text-sm font-semibold text-slate-700">Schedule delivery (optional)<DateTimeInput className={`${INPUT} mt-2`} value={scheduledAt} onChange={(e) => setScheduledAt(e.target.value)} /><span className="mt-1 block text-xs font-normal text-slate-500">Leave blank to place the campaign in the queue immediately.</span></label>
           <Button tone="green" className="w-full py-3" disabled={busy || loading || !message.trim() || !Number(audience.smsReady)}>{busy ? "Queueing broadcast..." : `Review and queue for ${Number(audience.smsReady).toLocaleString()} customers`}</Button>
         </form>
       </Card>
@@ -1112,8 +1113,7 @@ function BulkNotificationSend({ modeSwitch }: { modeSwitch: ReactNode }) {
             </div>
             <label className="block text-sm font-medium">
               Schedule (optional)
-              <input
-                type="datetime-local"
+              <DateTimeInput
                 className={`${INPUT} mt-1`}
                 value={scheduledAt}
                 onChange={(e) => setScheduledAt(e.target.value)}
@@ -1386,8 +1386,7 @@ function NotificationSendLegacy({ modeSwitch }: { modeSwitch: ReactNode }) {
             </div>
             <label className="block text-sm font-medium">
               Schedule (optional)
-              <input
-                type="datetime-local"
+              <DateTimeInput
                 className={`${INPUT} mt-1`}
                 value={scheduledAt}
                 onChange={(e) => setScheduledAt(e.target.value)}

@@ -5,6 +5,7 @@ import { encodeId } from "../lib/hashids";
 import { SearchableSelect } from "../components/SearchableSelect";
 import { SweetAlertToast } from "../components/SweetAlertToast";
 import { isKenyanPhone, normalizeKenyanPhone } from "../lib/phone";
+import { DateInput } from "../components/DateInput";
 
 type CustomerType = "INDIVIDUAL" | "ORGANIZATION";
 type IdType = "NATIONAL_ID" | "PASSPORT" | "OTHER";
@@ -458,7 +459,7 @@ export default function NewCustomer() {
                     </SearchableSelect>
                   </Field>
                   <Field label="Registration Date" required>
-                    <input type="date" className={FIELD_CLS} value={form.registrationDate} onChange={(e) => upd("registrationDate", e.target.value)} />
+                    <DateInput className={FIELD_CLS} value={form.registrationDate} onChange={(e) => upd("registrationDate", e.target.value)} />
                   </Field>
                 </div>
               </>
@@ -493,7 +494,7 @@ export default function NewCustomer() {
                     </SearchableSelect>
                   </Field>
                   <Field label="Registration Date" required>
-                    <input type="date" className={FIELD_CLS} value={form.registrationDate} onChange={(e) => upd("registrationDate", e.target.value)} />
+                    <DateInput className={FIELD_CLS} value={form.registrationDate} onChange={(e) => upd("registrationDate", e.target.value)} />
                   </Field>
                 </div>
               </>

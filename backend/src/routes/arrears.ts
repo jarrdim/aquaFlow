@@ -332,14 +332,9 @@ arrearsRouter.get("/dashboard", async (req, res, next) => {
     rows.forEach((row) => {
       buckets[row.ageBucket] = round(buckets[row.ageBucket] + row.arrearsBalance);
     });
-    const [notices, eligible, plans, promises, recent] = await Promise.all([
+    const [notices, plans, promises, recent] = await Promise.all([
       prisma.debtNotice.count({
         where: { noticeStatus: { in: ["APPROVED", "SENT", "EXPIRED"] } },
-      }),
-      arrearsRows(asOf, {
-        ...req.query,
-        minimumAgeDays: 90,
-        minimumBalance: 1,
       }),
       prisma.paymentPlan.count({ where: { status: { in: ["APPROVED", "ACTIVE"] } } }),
       prisma.promiseToPay.count({ where: { status: "OPEN" } }),
@@ -355,7 +350,7 @@ arrearsRouter.get("/dashboard", async (req, res, next) => {
       customersInArrears: rows.length,
       buckets,
       demandNotices: notices,
-      disconnectionEligible: eligible.length,
+      disconnectionEligible: rows.filter((row) => row.ageDays >= 90 && row.arrearsBalance >= 1).length,
       activePlans: plans,
       openPromises: promises,
       recent,

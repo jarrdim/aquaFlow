@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../lib/api";
 import { exportExcel } from "../lib/meterFiles";
+import { DateInput } from "../components/DateInput";
 
 type Row = Record<string, any>;
 const today = new Date().toISOString().slice(0, 10);
@@ -206,8 +207,7 @@ export default function Reports() {
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[repeat(5,minmax(0,1fr))_auto_auto]">
               <label className="text-xs font-semibold text-slate-600">
                 From
-                <input
-                  type="date"
+                <DateInput
                   className={`${input} mt-1`}
                   value={from}
                   onChange={(e) => setFrom(e.target.value)}
@@ -215,8 +215,7 @@ export default function Reports() {
               </label>
               <label className="text-xs font-semibold text-slate-600">
                 To
-                <input
-                  type="date"
+                <DateInput
                   className={`${input} mt-1`}
                   value={to}
                   onChange={(e) => setTo(e.target.value)}

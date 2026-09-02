@@ -12,6 +12,7 @@ import { CheckboxMultiSelect } from "../components/CheckboxMultiSelect";
 import { SearchableSelect } from "../components/SearchableSelect";
 import { SweetAlertToast } from "../components/SweetAlertToast";
 import { GpsMap } from "../components/GpsMap";
+import { DateInput, DateTimeInput, formatDmyDate } from "../components/DateInput";
 
 type Row = Record<string, any>;
 
@@ -891,8 +892,8 @@ export function ReadingCycles() {
         cycle.cycleCode,
         cycle.cycleName,
         cycle.status,
-        date(cycle.startDate),
-        date(cycle.endDate),
+        formatDmyDate(cycle.startDate),
+        formatDmyDate(cycle.endDate),
       ]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(query)),
@@ -1061,9 +1062,8 @@ export function ReadingCycles() {
             </Field>
             <div className="grid grid-cols-2 gap-3">
               <Field label="Start date" required>
-                <input
+                <DateInput
                   required
-                  type="date"
                   className={INPUT}
                   value={form.startDate}
                   onChange={(e) =>
@@ -1072,9 +1072,8 @@ export function ReadingCycles() {
                 />
               </Field>
               <Field label="End date" required>
-                <input
+                <DateInput
                   required
-                  type="date"
                   className={INPUT}
                   value={form.endDate}
                   onChange={(e) =>
@@ -1167,7 +1166,7 @@ export function ReadingCycles() {
                     </td>
                     <td className={TD}><div className="flex items-center gap-3"><span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-sky-50 text-sky-700"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><rect x="4" y="5" width="16" height="15" rx="2" /><path d="M4 10h16" /></svg></span><span className="font-bold text-slate-800">{c.cycleName}</span></div></td>
                     <td className={TD}>
-                      {date(c.startDate)} – {date(c.endDate)}
+                      {formatDmyDate(c.startDate)} – {formatDmyDate(c.endDate)}
                     </td>
                     <td className={TD}><span className="inline-flex min-w-9 justify-center rounded-full bg-violet-50 px-2.5 py-1 text-xs font-bold text-violet-700">{c._count?.routeAssignments ?? 0}</span></td>
                     <td className={TD}><span className="inline-flex min-w-9 justify-center rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700">{Number(c._count?.readings ?? 0).toLocaleString()}</span></td>
@@ -1676,8 +1675,7 @@ function ReadingRouteAssignmentsPlanner() {
               </SearchableSelect>
             </Field>
             <Field label="Assigned date">
-              <input
-                type="date"
+              <DateInput
                 className={INPUT}
                 value={assignedDate}
                 onChange={(e) => setAssignedDate(e.target.value)}
@@ -2271,8 +2269,7 @@ export function ReadingRouteAssignments() {
             />
           </Field>
           <Field label="Assigned date">
-            <input
-              type="date"
+            <DateInput
               className={INPUT}
               value={form.assignedDate}
               onChange={(e) =>
@@ -3608,9 +3605,8 @@ export function CaptureReading() {
                 </SearchableSelect>
               </Field>
               <Field label="Reading date and time" required>
-                <input
+                <DateTimeInput
                   required
-                  type="datetime-local"
                   className={INPUT}
                   value={form.readingDate}
                   onChange={(e) =>

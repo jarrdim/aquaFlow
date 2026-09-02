@@ -1979,11 +1979,31 @@ paymentsRouter.get("/dashboard/summary", async (req, res, next) => {
       : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
     const to = new Date(finalDay);
     to.setUTCHours(23, 59, 59, 999);
-    const payments = await prisma.payment.findMany({
-      where: { paymentDate: { gte: from, lte: to } },
-      include: paymentInclude,
-      orderBy: { paymentDate: "desc" },
-    });
+    const paymentWhere = { paymentDate: { gte: from, lte: to } };
+    const [payments, pendingReversals, receipts, recentPayments] = await Promise.all([
+      prisma.payment.findMany({
+        where: paymentWhere,
+        select: {
+          paymentId: true,
+          amount: true,
+          paymentDate: true,
+          paymentStatus: true,
+          matchingStatus: true,
+          remarks: true,
+          channel: { select: { channelName: true } },
+          events: { select: { eventType: true } },
+        },
+        orderBy: { paymentDate: "desc" },
+      }),
+      prisma.paymentReversal.count({ where: { status: "PENDING" } }),
+      prisma.receipt.count({ where: { issueDate: { gte: from, lte: to } } }),
+      prisma.payment.findMany({
+        where: paymentWhere,
+        include: paymentInclude,
+        orderBy: { paymentDate: "desc" },
+        take: 10,
+      }),
+    ]);
     const valid = payments.filter((p: any) => p.paymentStatus === "POSTED");
     const channels: Record<string, number> = {};
     const channelBreakdowns: Record<string, Record<string, number>> = {};
@@ -2030,12 +2050,8 @@ paymentsRouter.get("/dashboard/summary", async (req, res, next) => {
         (p: any) =>
           p.paymentStatus !== "REVERSED" && p.matchingStatus === "UNMATCHED",
       ).length,
-      pendingReversals: await prisma.paymentReversal.count({
-        where: { status: "PENDING" },
-      }),
-      receipts: await prisma.receipt.count({
-        where: { issueDate: { gte: from, lte: to } },
-      }),
+      pendingReversals,
+      receipts,
       dailyCollections: (() => {
         const rows = [];
         const firstCollectionDate = [...dailyMap.keys()].sort()[0];
@@ -2048,8 +2064,7 @@ paymentsRouter.get("/dashboard/summary", async (req, res, next) => {
         }
         return rows;
       })(),
-      recent: payments
-        .slice(0, 10)
+      recent: recentPayments
         .map((p: any) => ({
           ...p,
           customerName: name(p.account?.customer),

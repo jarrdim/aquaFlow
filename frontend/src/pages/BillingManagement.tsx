@@ -8,6 +8,7 @@ import { CheckboxMultiSelect } from "../components/CheckboxMultiSelect";
 import { SweetAlertToast } from "../components/SweetAlertToast";
 import { maskAddress, maskEmail, maskIdentifier, maskName, maskPhone, usePrivacyMode } from "../lib/privacyMode";
 import Swal from "sweetalert2";
+import { DateInput } from "../components/DateInput";
 
 type Row = Record<string, any>;
 const INPUT =
@@ -952,16 +953,16 @@ export function IndividualBillingWorkspace() {
           <button type="button" onClick={() => setShowSetup(true)} className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-bold text-white shadow-sm hover:bg-amber-700">Create billing period</button>
         </div>}
         {showSetup && <div className={`grid gap-4 border-t border-slate-100 bg-slate-50/60 p-4 ${needsBillingPeriod || needsReadingCycle ? "" : "xl:grid-cols-2"}`}>
-          {!needsBillingPeriod && <div><div className="mb-3 flex items-center justify-between"><div><h3 className="font-bold text-slate-900">New reading cycle</h3><p className="text-xs text-slate-500">Create it open so readings can be captured</p></div><Badge value={readingForm.status} /></div><div className="grid gap-3 sm:grid-cols-2"><Field label="Cycle code" required><input className={INPUT} value={readingForm.cycleCode} onChange={(e) => setReadingForm({ ...readingForm, cycleCode: e.target.value })} /></Field><Field label="Cycle name" required><input className={INPUT} value={readingForm.cycleName} onChange={(e) => setReadingForm({ ...readingForm, cycleName: e.target.value })} /></Field><Field label="Start date" required><input type="date" className={INPUT} value={readingForm.startDate} onChange={(e) => setReadingForm({ ...readingForm, startDate: e.target.value })} /></Field><Field label="End date" required><input type="date" className={INPUT} value={readingForm.endDate} onChange={(e) => setReadingForm({ ...readingForm, endDate: e.target.value })} /></Field></div><div className="mt-3">{actionButton("Create and select reading cycle", "creating-reading-cycle", !canManageReadingCycles || !readingForm.cycleCode || !readingForm.cycleName, createReadingCycle, "slate")}</div></div>}
+          {!needsBillingPeriod && <div><div className="mb-3 flex items-center justify-between"><div><h3 className="font-bold text-slate-900">New reading cycle</h3><p className="text-xs text-slate-500">Create it open so readings can be captured</p></div><Badge value={readingForm.status} /></div><div className="grid gap-3 sm:grid-cols-2"><Field label="Cycle code" required><input className={INPUT} value={readingForm.cycleCode} onChange={(e) => setReadingForm({ ...readingForm, cycleCode: e.target.value })} /></Field><Field label="Cycle name" required><input className={INPUT} value={readingForm.cycleName} onChange={(e) => setReadingForm({ ...readingForm, cycleName: e.target.value })} /></Field><Field label="Start date" required><DateInput className={INPUT} value={readingForm.startDate} onChange={(e) => setReadingForm({ ...readingForm, startDate: e.target.value })} /></Field><Field label="End date" required><DateInput className={INPUT} value={readingForm.endDate} onChange={(e) => setReadingForm({ ...readingForm, endDate: e.target.value })} /></Field></div><div className="mt-3">{actionButton("Create and select reading cycle", "creating-reading-cycle", !canManageReadingCycles || !readingForm.cycleCode || !readingForm.cycleName, createReadingCycle, "slate")}</div></div>}
           {!needsReadingCycle && <div>
             <div className="mb-3 flex items-center justify-between"><div><h3 className="font-bold text-slate-900">New billing period</h3><p className="text-xs text-slate-500">Links to the selected closed reading cycle</p></div><Badge value={billingForm.status} /></div>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               <Field label="Period code" required><input className={INPUT} value={billingForm.cycleCode} onChange={(e) => setBillingForm({ ...billingForm, cycleCode: e.target.value })} /></Field>
               <Field label="Period name" required><input className={INPUT} value={billingForm.cycleName} onChange={(e) => setBillingForm({ ...billingForm, cycleName: e.target.value })} /></Field>
-              <Field label="Period start" required><input type="date" className={INPUT} value={billingForm.periodStart} onChange={(e) => setBillingForm({ ...billingForm, periodStart: e.target.value })} /></Field>
-              <Field label="Period end" required><input type="date" min={billingForm.periodStart} className={INPUT} value={billingForm.periodEnd} onChange={(e) => setBillingForm({ ...billingForm, periodEnd: e.target.value })} /></Field>
-              <Field label="Due date" required><input type="date" min={billingForm.periodEnd} className={INPUT} value={billingForm.dueDate} onChange={(e) => setBillingForm({ ...billingForm, dueDate: e.target.value })} /></Field>
-              <Field label="Penalty date"><input type="date" min={billingForm.dueDate} className={INPUT} value={billingForm.penaltyDate} onChange={(e) => setBillingForm({ ...billingForm, penaltyDate: e.target.value })} /></Field>
+              <Field label="Period start" required><DateInput className={INPUT} value={billingForm.periodStart} onChange={(e) => setBillingForm({ ...billingForm, periodStart: e.target.value })} /></Field>
+              <Field label="Period end" required><DateInput min={billingForm.periodStart} className={INPUT} value={billingForm.periodEnd} onChange={(e) => setBillingForm({ ...billingForm, periodEnd: e.target.value })} /></Field>
+              <Field label="Due date" required><DateInput min={billingForm.periodEnd} className={INPUT} value={billingForm.dueDate} onChange={(e) => setBillingForm({ ...billingForm, dueDate: e.target.value })} /></Field>
+              <Field label="Penalty date"><DateInput min={billingForm.dueDate} className={INPUT} value={billingForm.penaltyDate} onChange={(e) => setBillingForm({ ...billingForm, penaltyDate: e.target.value })} /></Field>
             </div>
             <p className="mt-2 text-xs text-slate-500">The due date must be on or after the period end. Penalties begin on the optional penalty date, which cannot be before the due date.</p>
             <div className="mt-3">{actionButton("Create and link billing period", "creating-billing-period", !canManageBillingPeriods || selectedReadingCycle?.status !== "CLOSED" || Boolean(selectedReadingCycle?.billingCycleId) || !billingForm.periodStart || !billingForm.periodEnd || !billingForm.dueDate || billingForm.periodEnd < billingForm.periodStart || billingForm.dueDate < billingForm.periodEnd || Boolean(billingForm.penaltyDate && billingForm.penaltyDate < billingForm.dueDate), createBillingPeriod, "slate")}</div>
@@ -1172,9 +1173,8 @@ export function BillingPeriods() {
             </Field>
             <div className="grid grid-cols-2 gap-3">
               <Field label="Start date" required>
-                <input
+                <DateInput
                   required
-                  type="date"
                   className={INPUT}
                   value={form.periodStart}
                   onChange={(e) =>
@@ -1183,9 +1183,8 @@ export function BillingPeriods() {
                 />
               </Field>
               <Field label="End date" required>
-                <input
+                <DateInput
                   required
-                  type="date"
                   className={INPUT}
                   value={form.periodEnd}
                   onChange={(e) =>
@@ -1194,9 +1193,8 @@ export function BillingPeriods() {
                 />
               </Field>
               <Field label="Due date" required>
-                <input
+                <DateInput
                   required
-                  type="date"
                   className={INPUT}
                   value={form.dueDate}
                   onChange={(e) =>
@@ -1205,8 +1203,7 @@ export function BillingPeriods() {
                 />
               </Field>
               <Field label="Penalty date">
-                <input
-                  type="date"
+                <DateInput
                   className={INPUT}
                   value={form.penaltyDate}
                   onChange={(e) =>
@@ -2497,16 +2494,14 @@ function LegacyCustomerStatements() {
             </SearchableSelect>
           </Field>
           <Field label="From">
-            <input
-              type="date"
+            <DateInput
               className={INPUT}
               value={from}
               onChange={(e) => setFrom(e.target.value)}
             />
           </Field>
           <Field label="To">
-            <input
-              type="date"
+            <DateInput
               className={INPUT}
               value={to}
               onChange={(e) => setTo(e.target.value)}
@@ -2768,16 +2763,14 @@ function CustomerStatementsOld() {
             </SearchableSelect>
           </Field>
           <Field label="From">
-            <input
-              type="date"
+            <DateInput
               className={INPUT}
               value={from}
               onChange={(e) => setFrom(e.target.value)}
             />
           </Field>
           <Field label="To">
-            <input
-              type="date"
+            <DateInput
               className={INPUT}
               value={to}
               onChange={(e) => setTo(e.target.value)}
@@ -3238,8 +3231,7 @@ export function CustomerStatements() {
             </SearchableSelect>
           </Field>
           <Field label="From">
-            <input
-              type="date"
+            <DateInput
               className={INPUT}
               disabled={loadingStatement}
               value={from}
@@ -3247,8 +3239,7 @@ export function CustomerStatements() {
             />
           </Field>
           <Field label="To">
-            <input
-              type="date"
+            <DateInput
               className={INPUT}
               disabled={loadingStatement}
               value={to}

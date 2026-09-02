@@ -4,6 +4,7 @@ import { api } from "../lib/api";
 import { exportExcel, parseMeterWorkbook } from "../lib/meterFiles";
 import { SearchableSelect } from "../components/SearchableSelect";
 import { SweetAlertToast } from "../components/SweetAlertToast";
+import { DateInput, DateTimeInput } from "../components/DateInput";
 
 type Row = Record<string, any>;
 const importCell = (row: Record<string, unknown>, key: string) => {
@@ -715,9 +716,8 @@ export function RecordPayment() {
             /></div>
           </Field>
           <Field label="Payment date and time">
-            <input
+            <DateTimeInput
               required
-              type="datetime-local"
               className={paymentInput}
               value={form.paymentDate}
               onChange={(e) =>
@@ -1461,10 +1461,10 @@ export function PaymentRegister() {
             </SearchableSelect>
           </Field>
           <Field label="From">
-            <input type="date" className={INPUT} value={from} onChange={(e) => { setPage(1); setFrom(e.target.value); }} />
+            <DateInput className={INPUT} value={from} onChange={(e) => { setPage(1); setFrom(e.target.value); }} />
           </Field>
           <Field label="To">
-            <input type="date" className={INPUT} value={to} onChange={(e) => { setPage(1); setTo(e.target.value); }} />
+            <DateInput className={INPUT} value={to} onChange={(e) => { setPage(1); setTo(e.target.value); }} />
           </Field>
           <Field label="Search">
             <input
@@ -2188,8 +2188,8 @@ export function CollectionReport() {
           </SearchableSelect>
         </Field>
         <Field label="Search customer, account or reference"><input className={reportInput} value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search collections" /></Field>
-        <Field label="From date"><input type="date" className={reportInput} value={fromDate} onChange={(e) => setFromDate(e.target.value)} /></Field>
-        <Field label="To date"><input type="date" className={reportInput} value={toDate} onChange={(e) => setToDate(e.target.value)} /></Field>
+        <Field label="From date"><DateInput className={reportInput} value={fromDate} onChange={(e) => setFromDate(e.target.value)} /></Field>
+        <Field label="To date"><DateInput className={reportInput} value={toDate} onChange={(e) => setToDate(e.target.value)} /></Field>
         <Field label="Allocation"><SearchableSelect className={reportInput} value={allocation} onChange={(e) => setAllocation(e.target.value)}><option value="">All allocations</option><option value="MATCHED">Matched</option><option value="UNMATCHED">Unmatched</option></SearchableSelect></Field>
         <Field label="Minimum amount"><input type="number" min="0" step="0.01" className={reportInput} value={minimumAmount} onChange={(e) => setMinimumAmount(e.target.value)} placeholder="0.00" /></Field>
         <Field label="Maximum amount"><input type="number" min="0" step="0.01" className={reportInput} value={maximumAmount} onChange={(e) => setMaximumAmount(e.target.value)} placeholder="No maximum" /></Field>
@@ -2385,8 +2385,7 @@ export function PaymentReconciliation() {
             </Field>
             <div className="grid grid-cols-2 gap-3">
               <Field label="Period start">
-                <input
-                  type="date"
+                <DateInput
                   className={reconciliationInput}
                   value={form.periodStart}
                   onChange={(e) =>
@@ -2395,8 +2394,7 @@ export function PaymentReconciliation() {
                 />
               </Field>
               <Field label="Period end">
-                <input
-                  type="date"
+                <DateInput
                   className={reconciliationInput}
                   value={form.periodEnd}
                   onChange={(e) =>

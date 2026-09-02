@@ -5,6 +5,7 @@ import { exportExcel } from "../lib/meterFiles";
 import { SearchableSelect } from "../components/SearchableSelect";
 import { CheckboxMultiSelect } from "../components/CheckboxMultiSelect";
 import { SweetAlertToast } from "../components/SweetAlertToast";
+import { DateInput } from "../components/DateInput";
 
 type Row = Record<string, any>;
 const INPUT =
@@ -294,8 +295,7 @@ export function ArrearsDashboard() {
       <Card className="mb-4">
         <div className="grid gap-3 md:grid-cols-3">
           <Field label="Report date">
-            <input
-              type="date"
+            <DateInput
               className={INPUT}
               value={filters.asOf}
               onChange={(event) =>
@@ -519,8 +519,7 @@ export function ArrearsAgingReport() {
       <Card className="mb-4">
         <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
           <Field label="Report date">
-            <input
-              type="date"
+            <DateInput
               className={INPUT}
               value={filters.asOf}
               onChange={(e) => setFilters({ ...filters, asOf: e.target.value })}
@@ -916,8 +915,7 @@ export function PaymentReminders() {
           </div>
           <div className="space-y-4 p-5">
             <Field label="Arrears as at">
-              <input
-                type="date"
+              <DateInput
                 className={INPUT}
                 value={form.asOf}
                 onChange={(e) => setForm({ ...form, asOf: e.target.value })}
@@ -1377,8 +1375,7 @@ export function DemandNotices() {
                 </SearchableSelect>
               </Field>
               <Field label="Payment deadline *">
-                <input
-                  type="date"
+                <DateInput
                   className={INPUT}
                   value={form.paymentDeadline}
                   onChange={(e) =>
@@ -1847,8 +1844,7 @@ export function PaymentPlans() {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <Field label="Start date">
-                <input
-                  type="date"
+                <DateInput
                   className={INPUT}
                   value={form.startDate}
                   onChange={(e) =>
@@ -2119,8 +2115,7 @@ export function PromisesToPay() {
             </Field>
             <div className="grid grid-cols-2 gap-3">
               <Field label="Promised payment date *">
-                <input
-                  type="date"
+                <DateInput
                   className={INPUT}
                   value={form.expectedPaymentDate}
                   onChange={(e) =>
@@ -2129,8 +2124,7 @@ export function PromisesToPay() {
                 />
               </Field>
               <Field label="Follow-up date">
-                <input
-                  type="date"
+                <DateInput
                   className={INPUT}
                   value={form.followUpDate}
                   onChange={(e) =>
@@ -3011,16 +3005,14 @@ export function DebtRecoveryReport() {
       <Card className="mb-4">
         <div className="grid gap-3 md:grid-cols-3">
           <Field label="From">
-            <input
-              type="date"
+            <DateInput
               className={INPUT}
               value={filters.from}
               onChange={(e) => setFilters({ ...filters, from: e.target.value })}
             />
           </Field>
           <Field label="To">
-            <input
-              type="date"
+            <DateInput
               className={INPUT}
               value={filters.to}
               onChange={(e) => setFilters({ ...filters, to: e.target.value })}

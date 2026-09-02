@@ -18,6 +18,7 @@ import {
   openEvidence,
   parseMeterWorkbook,
 } from "../lib/meterFiles";
+import { DateInput } from "../components/DateInput";
 
 type AnyRecord = Record<string, any>;
 
@@ -323,8 +324,7 @@ export function MeterDashboard() {
       <Card className="mb-5">
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <Field label="From date">
-            <input
-              type="date"
+            <DateInput
               className={INPUT}
               value={filters.dateFrom}
               onChange={(e) =>
@@ -333,8 +333,7 @@ export function MeterDashboard() {
             />
           </Field>
           <Field label="To date">
-            <input
-              type="date"
+            <DateInput
               className={INPUT}
               value={filters.dateTo}
               onChange={(e) =>
@@ -654,16 +653,14 @@ export function RegisterMeter() {
               />
             </Field>
             <Field label="Purchase date">
-              <input
-                type="date"
+              <DateInput
                 className={INPUT}
                 value={form.purchaseDate}
                 onChange={(e) => update("purchaseDate", e.target.value)}
               />
             </Field>
             <Field label="Warranty expiry date">
-              <input
-                type="date"
+              <DateInput
                 min={form.purchaseDate || undefined}
                 className={INPUT}
                 value={form.warrantyExpiryDate}
@@ -1349,9 +1346,8 @@ export function AssignMeter({
               />
             </Field>
             <Field label="Installation date" required>
-              <input
+              <DateInput
                 required
-                type="date"
                 className={INPUT}
                 value={form.assignmentDate}
                 onChange={(e) =>
@@ -1601,8 +1597,7 @@ export function AssignMeter({
                 </SearchableSelect>
               </Field>
               <Field label="Commissioning date">
-                <input
-                  type="date"
+                <DateInput
                   className={INPUT}
                   value={boreholeForm.commissioningDate}
                   onChange={(e) =>
@@ -2060,16 +2055,14 @@ export function MeterProfile() {
                   />
                 </Field>
                 <Field label="Purchase date">
-                  <input
-                    type="date"
+                  <DateInput
                     className={INPUT}
                     value={form.purchaseDate}
                     onChange={(e) => update("purchaseDate", e.target.value)}
                   />
                 </Field>
                 <Field label="Warranty expiry date">
-                  <input
-                    type="date"
+                  <DateInput
                     min={form.purchaseDate || undefined}
                     className={INPUT}
                     value={form.warrantyExpiryDate}
@@ -2379,8 +2372,7 @@ export function InstallationDetails() {
               <input disabled className={INPUT} value={meter.meterNumber} />
             </Field>
             <Field label="Installation date" required>
-              <input
-                type="date"
+              <DateInput
                 className={INPUT}
                 value={form.installationDate}
                 onChange={(e) =>
@@ -3180,8 +3172,8 @@ export function MeterReplacement() {
                         </div>
                       </Field>
                       <Field label="Replacement date" required>
-                        <input
-                          required type="date" className={INPUT} value={form.replacementDate}
+                        <DateInput
+                          required className={INPUT} value={form.replacementDate}
                           onChange={(e) => setForm({ ...form, replacementDate: e.target.value })}
                         />
                       </Field>
@@ -3897,8 +3889,7 @@ export function ExceptionReport({ alerts = false }: { alerts?: boolean }) {
         {error && <Notice>{error}</Notice>}
         <div className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-7">
           <Field label="From">
-            <input
-              type="date"
+            <DateInput
               className={INPUT}
               value={filters.dateFrom}
               onChange={(e) =>
@@ -3907,8 +3898,7 @@ export function ExceptionReport({ alerts = false }: { alerts?: boolean }) {
             />
           </Field>
           <Field label="To">
-            <input
-              type="date"
+            <DateInput
               className={INPUT}
               value={filters.dateTo}
               onChange={(e) =>

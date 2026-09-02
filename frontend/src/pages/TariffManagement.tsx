@@ -4,6 +4,7 @@ import { api } from "../lib/api";
 import { exportExcel } from "../lib/meterFiles";
 import { SearchableSelect } from "../components/SearchableSelect";
 import { SweetAlertToast } from "../components/SweetAlertToast";
+import { DateInput } from "../components/DateInput";
 
 type Row = Record<string, any>;
 const INPUT =
@@ -772,17 +773,15 @@ export function TariffEditor() {
               />
             </Field>
             <Field label="Effective from" required>
-              <input
+              <DateInput
                 required
-                type="date"
                 className={INPUT}
                 value={form.effectiveFrom}
                 onChange={(e) => set("effectiveFrom", e.target.value)}
               />
             </Field>
             <Field label="Effective to">
-              <input
-                type="date"
+              <DateInput
                 min={form.effectiveFrom}
                 className={INPUT}
                 value={form.effectiveTo}

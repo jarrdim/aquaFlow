@@ -201,7 +201,8 @@ export default function OperationalDashboard() {
   const load = useCallback(async () => {
     setRefreshing(true);
     setError("");
-    const results = await Promise.allSettled([
+    const keys: (keyof DashboardData)[] = ["customers", "meters", "readings", "billing", "payments", "arrears", "notifications"];
+    const requests = [
       api.listCustomers("", 1),
       api.meterDashboard(),
       api.readingDashboard(),
@@ -209,15 +210,14 @@ export default function OperationalDashboard() {
       api.paymentDashboard(),
       api.arrearsDashboard(),
       api.notificationDashboard(),
-    ]);
-    const keys: (keyof DashboardData)[] = ["customers", "meters", "readings", "billing", "payments", "arrears", "notifications"];
-    setData((current) => {
-      const next = { ...current };
-      results.forEach((result, index) => {
-        if (result.status === "fulfilled") next[keys[index]] = result.value;
-      });
-      return next;
-    });
+    ].map((request, index) => request.then((value: Row) => {
+      // Render each dashboard source as soon as it arrives. A slow debt or
+      // revenue query must not hold back customer, meter and billing cards.
+      setData((current) => ({ ...current, [keys[index]]: value }));
+      setLoading(false);
+      return value;
+    }));
+    const results = await Promise.allSettled(requests);
     const failed = results.filter((result) => result.status === "rejected").length;
     if (failed) setError(`${failed} dashboard data source${failed === 1 ? " is" : "s are"} temporarily unavailable. Available charts are still shown.`);
     setUpdatedAt(new Date());

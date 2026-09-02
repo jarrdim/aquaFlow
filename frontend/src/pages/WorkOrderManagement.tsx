@@ -11,6 +11,7 @@ import { CheckboxMultiSelect } from "../components/CheckboxMultiSelect";
 import { SearchableSelect } from "../components/SearchableSelect";
 import { showToast } from "../components/SweetAlertToast";
 import { api } from "../lib/api";
+import { DateInput } from "../components/DateInput";
 
 type Lookup = {
   types: any[];
@@ -888,8 +889,7 @@ export default function WorkOrderManagement() {
                         <span className="mb-1 block text-sm font-medium">
                           Scheduled date
                         </span>
-                        <input
-                          type="date"
+                        <DateInput
                           className={input}
                           value={form.scheduledDate}
                           onChange={(e) =>
@@ -901,8 +901,7 @@ export default function WorkOrderManagement() {
                         <span className="mb-1 block text-sm font-medium">
                           Due date
                         </span>
-                        <input
-                          type="date"
+                        <DateInput
                           className={input}
                           value={form.dueDate}
                           onChange={(e) =>
@@ -1536,8 +1535,7 @@ export default function WorkOrderManagement() {
                         </label>
                         <label>
                           <span className="mb-1 block text-xs font-medium">Payment date *</span>
-                          <input
-                            type="date"
+                          <DateInput
                             className={input}
                             value={cashPayment.paymentDate}
                             onChange={(event) => setCashPayment({ ...cashPayment, paymentDate: event.target.value })}
