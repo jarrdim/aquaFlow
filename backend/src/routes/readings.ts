@@ -417,6 +417,9 @@ readingsRouter.get("/worklist", async (req, res, next) => {
     const routeIds = Array.from(new Set(rawRouteIds)).map((value) => BigInt(value));
     const zoneId = req.query.zoneId ? BigInt(String(req.query.zoneId)) : undefined;
     const meterId = req.query.meterId ? BigInt(String(req.query.meterId)) : undefined;
+    const missedCycleId = req.query.missedCycleId
+      ? BigInt(String(req.query.missedCycleId))
+      : undefined;
     const rawAccountIds = String(req.query.accountIds ?? "").split(",").map((value) => value.trim()).filter(Boolean);
     if (rawAccountIds.some((value) => !/^\d+$/.test(value))) {
       return res.status(400).json({ error: "accountIds must contain valid account IDs" });
@@ -459,14 +462,67 @@ readingsRouter.get("/worklist", async (req, res, next) => {
       allowedRouteIds,
       accountIds,
     );
-    const currentReadings = await prisma.meterReading.findMany({
-      where: { readingCycleId: cycleId, meterId: { in: items.map((a) => a.meterId) } },
-      include: { evidence: true },
-    });
+    const meterIds = items.map((assignment) => assignment.meterId);
+    const [currentReadings, missedCycle] = await Promise.all([
+      prisma.meterReading.findMany({
+        where: { readingCycleId: cycleId, meterId: { in: meterIds } },
+        include: { evidence: true },
+      }),
+      missedCycleId
+        ? prisma.readingCycle.findUnique({
+            where: { readingCycleId: missedCycleId },
+            select: {
+              readingCycleId: true,
+              cycleCode: true,
+              cycleName: true,
+              endDate: true,
+              status: true,
+            },
+          })
+        : Promise.resolve(null),
+    ]);
+    if (missedCycleId && (!missedCycle || missedCycle.status !== "CLOSED")) {
+      return res.status(400).json({
+        error: "The carry-forward source must be a closed reading cycle",
+      });
+    }
+    if (missedCycleId === cycleId) {
+      return res.status(400).json({
+        error: "The carry-forward source must be different from the selected reading cycle",
+      });
+    }
+    const missedCycleReadings = missedCycle
+      ? await prisma.meterReading.findMany({
+          where: {
+            readingCycleId: missedCycle.readingCycleId,
+            meterId: { in: meterIds },
+          },
+          select: { meterId: true },
+        })
+      : [];
     const byMeter = new Map(currentReadings.map((reading) => [reading.meterId.toString(), reading]));
-    res.json(items.map((a) => ({
+    const readInMissedCycle = new Set(
+      missedCycleReadings.map((reading) => reading.meterId.toString()),
+    );
+    const visibleItems = missedCycle
+      ? items.filter(
+          (assignment) =>
+            assignment.assignmentDate <= missedCycle.endDate &&
+            !byMeter.has(assignment.meterId.toString()) &&
+            !readInMissedCycle.has(assignment.meterId.toString()),
+        )
+      : items;
+    res.json(visibleItems.map((a) => ({
       ...a,
       cycleReading: byMeter.get(a.meterId.toString()) ?? null,
+      missedCycleUnread: Boolean(missedCycle),
+      missedCycle: missedCycle
+        ? {
+            readingCycleId: missedCycle.readingCycleId,
+            cycleCode: missedCycle.cycleCode,
+            cycleName: missedCycle.cycleName,
+          }
+        : null,
       route: a.account?.route ?? a.account?.property.route,
       zone: a.account?.property.zone,
       customerName:

@@ -2406,6 +2406,7 @@ export function ReadingWorklist() {
   );
   const search = params.get("search") ?? "";
   const readingStatus = params.get("status") ?? "";
+  const missedCycleId = params.get("missedCycleId") ?? "";
   const page = Math.max(1, Number(params.get("page") ?? "1") || 1);
   const pageSize = 25;
   useEffect(() => {
@@ -2424,6 +2425,11 @@ export function ReadingWorklist() {
   useEffect(() => {
     if (!cycleId) {
       setRouteAssignments([]);
+      return;
+    }
+    if (readingStatus === "MISSED_CLOSED" && !missedCycleId) {
+      setItems([]);
+      setLoading(false);
       return;
     }
     api
@@ -2445,6 +2451,8 @@ export function ReadingWorklist() {
           cycleId,
           routeIds: routeIds.join(","),
           search: search.trim(),
+          missedCycleId:
+            readingStatus === "MISSED_CLOSED" ? missedCycleId : "",
         })
         .then((nextItems) => {
           if (cancelled) return;
@@ -2462,10 +2470,23 @@ export function ReadingWorklist() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [cycleId, routeIdsParam, search]);
+  }, [cycleId, routeIdsParam, search, readingStatus, missedCycleId]);
 
   const selectedCycle = cycles.find(
     (cycle) => String(cycle.readingCycleId) === cycleId,
+  );
+  const canCaptureReadings = selectedCycle?.status === "OPEN";
+  const selectedCycleIsLocked = Boolean(
+    selectedCycle && !canCaptureReadings,
+  );
+  const closedSourceCycles = cycles.filter((cycle) => {
+    if (cycle.status !== "CLOSED" || String(cycle.readingCycleId) === cycleId)
+      return false;
+    if (!selectedCycle?.startDate || !cycle.endDate) return true;
+    return new Date(cycle.endDate) <= new Date(selectedCycle.startDate);
+  });
+  const selectedMissedCycle = closedSourceCycles.find(
+    (cycle) => String(cycle.readingCycleId) === missedCycleId,
   );
   const selectedRoutes = routes.filter((route) =>
     routeIds.includes(String(route.routeId)),
@@ -2482,6 +2503,8 @@ export function ReadingWorklist() {
     () =>
       items.filter((item) => {
         if (readingStatus === "UNREAD") return !item.cycleReading;
+        if (readingStatus === "MISSED_CLOSED")
+          return !item.cycleReading && item.missedCycleUnread;
         if (readingStatus === "CAPTURED") return Boolean(item.cycleReading);
         return true;
       }),
@@ -2627,6 +2650,12 @@ export function ReadingWorklist() {
 
   async function chooseBulkFile(file?: File) {
     if (!file || !cycleId) return;
+    if (!canCaptureReadings) {
+      setError(
+        "This reading cycle is closed and cannot accept new readings. Create or select an open reading cycle first.",
+      );
+      return;
+    }
     setBulkFileName(file.name);
     setBulkMessage("");
     setBulkRows([]);
@@ -2796,6 +2825,12 @@ export function ReadingWorklist() {
 
   async function importBulkReadings() {
     if (!bulkRows.length || operation) return;
+    if (!canCaptureReadings) {
+      setError(
+        "This reading cycle is closed and cannot accept new readings. Create or select an open reading cycle first.",
+      );
+      return;
+    }
     setError("");
     setBulkMessage("");
     setOperation("Importing meter readings");
@@ -2864,6 +2899,50 @@ export function ReadingWorklist() {
     setParams(next);
   };
 
+  const updateReadingStatus = (value: string) => {
+    const next = new URLSearchParams(params);
+    value ? next.set("status", value) : next.delete("status");
+    if (value === "MISSED_CLOSED") {
+      const sourceId =
+        missedCycleId || String(closedSourceCycles[0]?.readingCycleId ?? "");
+      sourceId
+        ? next.set("missedCycleId", sourceId)
+        : next.delete("missedCycleId");
+    } else {
+      next.delete("missedCycleId");
+    }
+    next.delete("page");
+    setParams(next);
+  };
+
+  const updateReadingCycle = (value: string) => {
+    const next = new URLSearchParams(params);
+    value ? next.set("cycleId", value) : next.delete("cycleId");
+    if (readingStatus === "MISSED_CLOSED") {
+      const target = cycles.find(
+        (cycle) => String(cycle.readingCycleId) === value,
+      );
+      const sources = cycles.filter(
+        (cycle) =>
+          cycle.status === "CLOSED" &&
+          String(cycle.readingCycleId) !== value &&
+          (!target?.startDate ||
+            !cycle.endDate ||
+            new Date(cycle.endDate) <= new Date(target.startDate)),
+      );
+      const retainedSource = sources.some(
+        (cycle) => String(cycle.readingCycleId) === missedCycleId,
+      )
+        ? missedCycleId
+        : String(sources[0]?.readingCycleId ?? "");
+      retainedSource
+        ? next.set("missedCycleId", retainedSource)
+        : next.delete("missedCycleId");
+    }
+    next.delete("page");
+    setParams(next);
+  };
+
   const updateRoutes = (values: string[]) => {
     const next = new URLSearchParams(params);
     next.delete("routeId");
@@ -2879,6 +2958,15 @@ export function ReadingWorklist() {
     nextPage > 1 ? next.set("page", String(nextPage)) : next.delete("page");
     setParams(next);
   };
+
+  useEffect(() => {
+    if (!selectedCycleIsLocked) return;
+    setShowBulkUpload(false);
+    setBulkRows([]);
+    setBulkErrors([]);
+    setBulkFileName("");
+    setBulkMessage("");
+  }, [selectedCycleIsLocked, cycleId]);
 
   const Pagination = ({ position }: { position: "top" | "bottom" }) => (
     <nav
@@ -2953,7 +3041,7 @@ export function ReadingWorklist() {
           <Button
             tone="green"
             className="inline-flex items-center gap-2"
-            disabled={!cycleId || Boolean(operation)}
+            disabled={!cycleId || !canCaptureReadings || Boolean(operation)}
             onClick={() => setShowBulkUpload((visible) => !visible)}
           >
             <span>{showBulkUpload ? "Close bulk upload" : "Bulk upload readings"}</span>
@@ -2966,6 +3054,24 @@ export function ReadingWorklist() {
       }
     >
       {error && <Notice>{error}</Notice>}
+      {selectedCycleIsLocked && (
+        <section className="mb-4 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-amber-300 bg-amber-50 px-5 py-4 text-amber-950 shadow-sm">
+          <div>
+            <div className="font-extrabold">Reading capture is locked for this cycle</div>
+            <p className="mt-1 text-sm text-amber-800">
+              {selectedCycle?.cycleName} is {String(selectedCycle?.status).toLowerCase()}.
+              Its unread meters are retained for reference, but readings cannot be added after closure.
+              Create or select an open reading cycle to continue capturing readings.
+            </p>
+          </div>
+          <Link
+            to="/readings/cycles"
+            className="inline-flex flex-none items-center rounded-xl bg-amber-700 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-amber-600"
+          >
+            Create reading cycle
+          </Link>
+        </section>
+      )}
       {operation && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/35 px-4 backdrop-blur-[2px]">
           <div
@@ -2994,7 +3100,7 @@ export function ReadingWorklist() {
           </div>
         </div>
       )}
-      {showBulkUpload && (
+      {showBulkUpload && canCaptureReadings && (
         <section className="mb-4 overflow-hidden rounded-2xl border border-sky-200 bg-white shadow-[0_16px_42px_-30px_rgba(15,32,56,0.45)]">
           <div className="border-b border-slate-100 bg-sky-50/60 px-5 py-4">
             <div className="flex flex-wrap items-center gap-2">
@@ -3087,17 +3193,17 @@ export function ReadingWorklist() {
         </section>
       )}
       <section className="mb-4 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_16px_42px_-30px_rgba(15,32,56,0.45)]">
-        <div className="grid gap-3 p-4 md:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-5">
           <Field label="Reading cycle">
             <SearchableSelect
               className={INPUT}
               value={cycleId}
-              onChange={(e) => update("cycleId", e.target.value)}
+              onChange={(e) => updateReadingCycle(e.target.value)}
             >
               <option value="">Select cycle</option>
               {cycles.map((c) => (
                 <option key={c.readingCycleId} value={c.readingCycleId}>
-                  {c.cycleName}
+                  {c.cycleName} ({pretty(c.status)})
                 </option>
               ))}
             </SearchableSelect>
@@ -3126,13 +3232,33 @@ export function ReadingWorklist() {
             <SearchableSelect
               className={INPUT}
               value={readingStatus}
-              onChange={(e) => update("status", e.target.value)}
+              onChange={(e) => updateReadingStatus(e.target.value)}
             >
               <option value="">All meters</option>
               <option value="UNREAD">Unread</option>
+              <option value="MISSED_CLOSED">Unread from a closed cycle</option>
               <option value="CAPTURED">Captured</option>
             </SearchableSelect>
           </Field>
+          {readingStatus === "MISSED_CLOSED" && (
+            <Field label="Source closed cycle">
+              <SearchableSelect
+                className={INPUT}
+                value={missedCycleId}
+                onChange={(e) => update("missedCycleId", e.target.value)}
+              >
+                <option value="">Select closed cycle</option>
+                {closedSourceCycles.map((cycle) => (
+                  <option
+                    key={cycle.readingCycleId}
+                    value={cycle.readingCycleId}
+                  >
+                    {cycle.cycleName}
+                  </option>
+                ))}
+              </SearchableSelect>
+            </Field>
+          )}
         </div>
         <div className="grid border-t border-slate-100 bg-slate-50/70 sm:grid-cols-3 sm:divide-x sm:divide-slate-200">
           <div className="px-4 py-3">
@@ -3168,8 +3294,9 @@ export function ReadingWorklist() {
           <div>
             <h2 className="text-base font-bold text-slate-900">Route worklist</h2>
             <p className="mt-0.5 text-xs text-slate-500">
-              {filteredItems.length.toLocaleString()} eligible meter
-              {filteredItems.length === 1 ? "" : "s"} · Page {page} of{" "}
+              {filteredItems.length.toLocaleString()} {readingStatus === "MISSED_CLOSED"
+                ? `meter${filteredItems.length === 1 ? "" : "s"} unread in ${selectedMissedCycle?.cycleName ?? "the selected closed cycle"}`
+                : `eligible meter${filteredItems.length === 1 ? "" : "s"}`} · Page {page} of{" "}
               {totalPages}
             </p>
           </div>
@@ -3318,13 +3445,20 @@ export function ReadingWorklist() {
                           View reading
                         </Link>
                       </div>
-                    ) : (
+                    ) : canCaptureReadings ? (
                       <Link
                         className="inline-flex rounded-lg bg-emerald-600 px-3.5 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-500"
                         to={`/readings/capture?cycleId=${cycleId}&meterId=${a.meterId}`}
                       >
                         Capture
                       </Link>
+                    ) : (
+                      <span
+                        className="inline-flex cursor-not-allowed rounded-lg bg-slate-100 px-3.5 py-2 text-sm font-bold text-slate-400 ring-1 ring-inset ring-slate-200"
+                        title="Create or select an open reading cycle to capture this meter"
+                      >
+                        Capture locked
+                      </span>
                     )}
                   </td>
                 </tr>
@@ -3337,6 +3471,8 @@ export function ReadingWorklist() {
                         ? "Select a reading cycle"
                         : readingStatus === "UNREAD"
                         ? "No unread meters found"
+                        : readingStatus === "MISSED_CLOSED"
+                          ? `No unread meters found in ${selectedMissedCycle?.cycleName ?? "the selected closed cycle"}`
                         : readingStatus === "CAPTURED"
                           ? "No captured meters found"
                           : "No eligible meters found"}
@@ -3386,6 +3522,7 @@ export function CaptureReading() {
   const cycleId = params.get("cycleId") ?? "";
   const meterId = params.get("meterId") ?? "";
   const [item, setItem] = useState<Row | null>(null);
+  const [selectedCycle, setSelectedCycle] = useState<Row | null>(null);
   const [officers, setOfficers] = useState<Row[]>([]);
   const [loadingItem, setLoadingItem] = useState(true);
   const [error, setError] = useState("");
@@ -3407,10 +3544,18 @@ export function CaptureReading() {
     let cancelled = false;
     setLoadingItem(true);
     setError("");
-    api
-      .readingWorklist({ cycleId, meterId })
-      .then((items) => {
-        if (!cancelled) setItem(items[0] ?? null);
+    Promise.all([
+      api.readingWorklist({ cycleId, meterId }),
+      api.listReadingCycles(),
+    ])
+      .then(([items, cycles]) => {
+        if (cancelled) return;
+        setItem(items[0] ?? null);
+        setSelectedCycle(
+          cycles.find(
+            (cycle: Row) => String(cycle.readingCycleId) === cycleId,
+          ) ?? null,
+        );
       })
       .catch((e) => {
         if (!cancelled) setError(e.message);
@@ -3454,6 +3599,12 @@ export function CaptureReading() {
   }
   async function submit(e: FormEvent) {
     e.preventDefault();
+    if (selectedCycle?.status !== "OPEN") {
+      setError(
+        "This reading cycle is closed and cannot accept new readings. Create or select an open reading cycle first.",
+      );
+      return;
+    }
     setSaving(true);
     setError("");
     const payload = {
@@ -3535,6 +3686,33 @@ export function CaptureReading() {
             </Button>
           </div>
         </Card>
+      </Page>
+    );
+  if (selectedCycle?.status !== "OPEN")
+    return (
+      <Page
+        title="Capture meter reading"
+        subtitle="Reading capture is unavailable for the selected cycle"
+      >
+        <section className="rounded-2xl border border-amber-300 bg-amber-50 p-6 shadow-sm">
+          <h2 className="text-lg font-extrabold text-amber-950">
+            This reading cycle is {String(selectedCycle?.status ?? "unavailable").toLowerCase()}
+          </h2>
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-amber-800">
+            Readings cannot be entered or changed after a cycle is closed. Return to the worklist and select an open cycle, or create a new reading cycle first.
+          </p>
+          <div className="mt-5 flex flex-wrap gap-2">
+            <Button type="button" tone="slate" onClick={() => navigate(-1)}>
+              Return to worklist
+            </Button>
+            <Link
+              to="/readings/cycles"
+              className="inline-flex items-center rounded-xl bg-amber-700 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-amber-600"
+            >
+              Create reading cycle
+            </Link>
+          </div>
+        </section>
       </Page>
     );
   return (
