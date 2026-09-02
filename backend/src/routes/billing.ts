@@ -91,12 +91,11 @@ async function ensureEarlierReadingsAreBilled(billingCycleId: bigint, accountIds
   ), { status: 409 });
 }
 function smsDate(value: Date) {
-  return value.toLocaleDateString("en-GB", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-    timeZone: "UTC",
-  });
+  // Keep customer messages unambiguous across servers and SMS providers.
+  // Billing dates are stored as UTC calendar dates and must be DD/MM/YYYY.
+  const day = String(value.getUTCDate()).padStart(2, "0");
+  const month = String(value.getUTCMonth() + 1).padStart(2, "0");
+  return `${day}/${month}/${value.getUTCFullYear()}`;
 }
 function smsNumber(value: number, places = 2) {
   return value.toLocaleString("en-KE", {
