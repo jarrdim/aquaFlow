@@ -1647,7 +1647,7 @@ export function UnmatchedPayments() {
                 <p className="mt-3 text-xs leading-5 text-amber-800">Suggested from the payment account reference. Confirm these details before allocating.</p>
               </div>}
               <div className="rounded-xl border border-sky-100 bg-sky-50 px-3.5 py-3 text-xs leading-5 text-sky-700">Allocate the full transaction to one account, or add rows to split it across multiple accounts. Each account receives its own payment and receipt.</div>
-              {accountsLoading && <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3 text-xs font-semibold text-slate-600"><span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-200 border-t-aqua-700" />Loading active customer accountsâ€¦</div>}
+              {accountsLoading && <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3 text-xs font-semibold text-slate-600"><span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-200 border-t-aqua-700" />Loading active customer accounts...</div>}
               <div>
                 <div className="mb-2 flex items-center justify-between gap-3">
                   <div><div className="text-sm font-semibold text-slate-700">Account allocations</div><div className="text-xs text-slate-400">Each account can be selected once.</div></div>
