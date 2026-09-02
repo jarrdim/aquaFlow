@@ -1,5 +1,6 @@
 import {
   InputHTMLAttributes,
+  RefObject,
   useEffect,
   useRef,
   useState,
@@ -36,24 +37,15 @@ export function formatDmyDate(
   return Number.isNaN(parsed.getTime()) ? "" : formatDmyDate(parsed);
 }
 
-function dmyToIso(value: string) {
-  const match = value.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-  if (!match) return "";
-  const [, day, month, year] = match;
-  const iso = `${year}-${month}-${day}`;
-  const parsed = new Date(`${iso}T00:00:00.000Z`);
-  return parsed.getUTCFullYear() === Number(year) &&
-    parsed.getUTCMonth() + 1 === Number(month) &&
-    parsed.getUTCDate() === Number(day)
-    ? iso
-    : "";
-}
-
-function typedDate(value: string) {
-  const digits = value.replace(/\D/g, "").slice(0, 8);
-  if (digits.length <= 2) return digits;
-  if (digits.length <= 4) return `${digits.slice(0, 2)}/${digits.slice(2)}`;
-  return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
+function openNativePicker(ref: RefObject<HTMLInputElement>) {
+  const picker = ref.current;
+  if (!picker) return;
+  try {
+    picker.showPicker?.();
+  } catch {
+    picker.focus();
+    picker.click();
+  }
 }
 
 export function DateInput({
@@ -82,48 +74,34 @@ export function DateInput({
     });
   }
 
-  function validate(display: string) {
-    const iso = dmyToIso(display);
-    let message = "";
-    if (display && !iso) message = "Enter a valid date in DD/MM/YYYY format.";
-    else if (iso && min && iso < min.slice(0, 10)) message = `Date must be on or after ${formatDmyDate(min)}.`;
-    else if (iso && max && iso > max.slice(0, 10)) message = `Date must be on or before ${formatDmyDate(max)}.`;
-    visibleRef.current?.setCustomValidity(message);
-    return { iso, valid: !message };
-  }
-
   return (
     <span className="relative block">
       <input
         {...props}
         ref={visibleRef}
         type="text"
-        inputMode="numeric"
         autoComplete="off"
         placeholder="DD/MM/YYYY"
-        className={`${className} pr-10`}
+        className={`${className} cursor-pointer pr-10`}
         value={displayValue}
         disabled={disabled}
         required={required}
-        pattern="\d{2}/\d{2}/\d{4}"
-        onChange={(event) => {
-          const display = typedDate(event.target.value);
-          setDisplayValue(display);
-          visibleRef.current?.setCustomValidity("");
-          if (!display) emit("");
-          else {
-            const iso = dmyToIso(display);
-            if (iso) emit(iso);
+        readOnly
+        aria-haspopup="dialog"
+        onClick={() => openNativePicker(pickerRef)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            openNativePicker(pickerRef);
           }
         }}
-        onBlur={() => validate(displayValue)}
       />
       <button
         type="button"
         disabled={disabled}
         aria-label="Choose date"
         className="absolute inset-y-0 right-0 grid w-10 place-items-center text-slate-400 transition hover:text-aqua-700 disabled:cursor-not-allowed disabled:opacity-50"
-        onClick={() => pickerRef.current?.showPicker()}
+        onClick={() => openNativePicker(pickerRef)}
       >
         <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5">
           <rect x="3" y="5" width="18" height="16" rx="2" />
@@ -140,6 +118,7 @@ export function DateInput({
         min={min}
         max={max}
         disabled={disabled}
+        required={required}
         onChange={(event) => {
           const iso = event.target.value;
           setDisplayValue(formatDmyDate(iso));
@@ -165,25 +144,6 @@ type DateTimeInputProps = Omit<
 function isoToDmyTime(value: string) {
   const match = value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
   return match ? `${match[3]}/${match[2]}/${match[1]} ${match[4]}:${match[5]}` : "";
-}
-
-function dmyTimeToIso(value: string) {
-  const match = value.match(/^(\d{2})\/(\d{2})\/(\d{4}) (\d{2}):(\d{2})$/);
-  if (!match) return "";
-  const [, day, month, year, hour, minute] = match;
-  const isoDate = dmyToIso(`${day}/${month}/${year}`);
-  if (!isoDate || Number(hour) > 23 || Number(minute) > 59) return "";
-  return `${isoDate}T${hour}:${minute}`;
-}
-
-function typedDateTime(value: string) {
-  const digits = value.replace(/\D/g, "").slice(0, 12);
-  let result = digits.slice(0, 2);
-  if (digits.length > 2) result += `/${digits.slice(2, 4)}`;
-  if (digits.length > 4) result += `/${digits.slice(4, 8)}`;
-  if (digits.length > 8) result += ` ${digits.slice(8, 10)}`;
-  if (digits.length > 10) result += `:${digits.slice(10, 12)}`;
-  return result;
 }
 
 export function DateTimeInput({
@@ -213,31 +173,20 @@ export function DateTimeInput({
         {...props}
         ref={visibleRef}
         type="text"
-        inputMode="numeric"
         autoComplete="off"
         placeholder="DD/MM/YYYY HH:mm"
-        className={`${className} pr-10`}
+        className={`${className} cursor-pointer pr-10`}
         value={displayValue}
         disabled={disabled}
         required={required}
-        pattern="\d{2}/\d{2}/\d{4} \d{2}:\d{2}"
-        onChange={(event) => {
-          const display = typedDateTime(event.target.value);
-          setDisplayValue(display);
-          visibleRef.current?.setCustomValidity("");
-          if (!display) emit("");
-          else {
-            const iso = dmyTimeToIso(display);
-            if (iso) emit(iso);
+        readOnly
+        aria-haspopup="dialog"
+        onClick={() => openNativePicker(pickerRef)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            openNativePicker(pickerRef);
           }
-        }}
-        onBlur={() => {
-          const iso = dmyTimeToIso(displayValue);
-          let message = "";
-          if (displayValue && !iso) message = "Enter a valid date and time in DD/MM/YYYY HH:mm format.";
-          else if (iso && min && iso < min.slice(0, 16)) message = `Date and time must be on or after ${isoToDmyTime(min)}.`;
-          else if (iso && max && iso > max.slice(0, 16)) message = `Date and time must be on or before ${isoToDmyTime(max)}.`;
-          visibleRef.current?.setCustomValidity(message);
         }}
       />
       <button
@@ -245,7 +194,7 @@ export function DateTimeInput({
         disabled={disabled}
         aria-label="Choose date and time"
         className="absolute inset-y-0 right-0 grid w-10 place-items-center text-slate-400 transition hover:text-aqua-700 disabled:cursor-not-allowed disabled:opacity-50"
-        onClick={() => pickerRef.current?.showPicker()}
+        onClick={() => openNativePicker(pickerRef)}
       >
         <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5">
           <rect x="3" y="5" width="18" height="16" rx="2" />
@@ -262,6 +211,7 @@ export function DateTimeInput({
         min={min}
         max={max}
         disabled={disabled}
+        required={required}
         onChange={(event) => {
           const iso = event.target.value;
           setDisplayValue(isoToDmyTime(iso));
