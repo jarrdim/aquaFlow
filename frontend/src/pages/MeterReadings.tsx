@@ -2529,17 +2529,29 @@ export function ReadingWorklist() {
         : `${selectedRoutes.length.toLocaleString()} routes`;
   const captured = items.filter((item) => item.cycleReading).length;
   const unread = items.length - captured;
-  const filteredItems = useMemo(
-    () =>
-      items.filter((item) => {
+  const filteredItems = useMemo(() => {
+    const matchingItems = items.filter((item) => {
         if (readingStatus === "UNREAD") return !item.cycleReading;
         if (readingStatus === "MISSED_CLOSED")
           return !item.cycleReading && item.missedCycleUnread;
         if (readingStatus === "CAPTURED") return Boolean(item.cycleReading);
         return true;
-      }),
-    [items, readingStatus],
-  );
+      });
+    return matchingItems.sort((left, right) => {
+      const byAccount = String(
+        left.account?.accountNumber ?? "",
+      ).localeCompare(String(right.account?.accountNumber ?? ""), undefined, {
+        numeric: true,
+        sensitivity: "base",
+      });
+      return byAccount ||
+        String(left.meter?.meterNumber ?? "").localeCompare(
+          String(right.meter?.meterNumber ?? ""),
+          undefined,
+          { numeric: true, sensitivity: "base" },
+        );
+    });
+  }, [items, readingStatus]);
 
   async function exportWorklist(format: "excel" | "pdf") {
     if (!filteredItems.length || operation) return;
