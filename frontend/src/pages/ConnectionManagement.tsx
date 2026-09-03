@@ -1125,6 +1125,7 @@ export function ConnectionProfile() {
   const [lookups, setLookups] = useState<Lookups | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [sendingStk, setSendingStk] = useState(false);
   const [form, setForm] = useState<Record<string, string>>({});
   const [linkCustomerOpen, setLinkCustomerOpen] = useState(false);
   const [customerSearch, setCustomerSearch] = useState("");
@@ -1225,6 +1226,23 @@ export function ConnectionProfile() {
       );
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function sendStkPrompt() {
+    if (!application) return;
+    const amount = Number(form.amount || balance);
+    const phoneNumber = form.stkPhone || application.phoneNumber;
+    setSendingStk(true);
+    try {
+      await api.sendConnectionStk(id, { amount, phoneNumber });
+      showToast("STK prompt sent. Ask the applicant to enter their M-Pesa PIN.", "success");
+      setForm((current) => ({ ...current, amount: String(amount), stkPhone: phoneNumber }));
+      await load();
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Unable to send STK prompt.", "error");
+    } finally {
+      setSendingStk(false);
     }
   }
 
@@ -1566,12 +1584,31 @@ export function ConnectionProfile() {
                 <Field label="Payment amount" required>
                   <input
                     type="number"
-                    min={0.01}
+                    min={1}
+                    step={1}
                     className={input}
                     value={form.amount || ""}
+                    placeholder={String(balance)}
                     onChange={(e) => set("amount", e.target.value)}
                   />
                 </Field>
+                <Field label="M-Pesa phone number">
+                  <input
+                    type="tel"
+                    className={input}
+                    value={form.stkPhone ?? application.phoneNumber ?? ""}
+                    onChange={(e) => set("stkPhone", e.target.value)}
+                    placeholder="+2547XXXXXXXX"
+                  />
+                </Field>
+                <button
+                  type="button"
+                  className={`${secondary} w-full border-emerald-600 text-emerald-700 hover:bg-emerald-50`}
+                  disabled={sendingStk || saving || !(form.stkPhone ?? application.phoneNumber) || Number(form.amount || balance) <= 0}
+                  onClick={() => void sendStkPrompt()}
+                >
+                  {sendingStk ? "Sending STK promptâ€¦" : `Send STK prompt for ${money(form.amount || balance)}`}
+                </button>
                 <Field label="Payment reference" required>
                   <input
                     className={input}

@@ -1468,7 +1468,7 @@ model Payment {
 
 model MpesaStkRequest {
   stkRequestId        BigInt    @id @default(autoincrement()) @map("stk_request_id")
-  accountId           BigInt    @map("account_id")
+  accountId           BigInt?   @map("account_id")
   paymentId           BigInt?   @unique @map("payment_id")
   initiatedBy         BigInt?   @map("initiated_by")
   phoneNumber         String    @map("phone_number")
@@ -1490,7 +1490,7 @@ model MpesaStkRequest {
   completedAt         DateTime? @map("completed_at")
   updatedAt           DateTime  @default(now()) @map("updated_at")
 
-  account   CustomerAccount @relation(fields: [accountId], references: [accountId])
+  account   CustomerAccount? @relation(fields: [accountId], references: [accountId])
   payment   Payment?        @relation(fields: [paymentId], references: [paymentId])
   initiator User?           @relation("MpesaStkInitiator", fields: [initiatedBy], references: [userId])
 

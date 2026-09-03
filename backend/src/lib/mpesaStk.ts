@@ -7,7 +7,7 @@ type StkAccount = {
 };
 
 export async function initiateMpesaStk(input: {
-  account: StkAccount;
+  account: StkAccount | null;
   phoneNumber: string;
   amount: number;
   initiatedBy: bigint | null;
@@ -26,7 +26,7 @@ export async function initiateMpesaStk(input: {
 
   const recent = await prisma.mpesaStkRequest.findFirst({
     where: {
-      accountId: input.account.accountId,
+      accountId: input.account?.accountId ?? null,
       phoneNumber,
       amount: input.amount,
       status: "PENDING",
@@ -46,7 +46,7 @@ export async function initiateMpesaStk(input: {
   const response = await requestStkPush({
     phoneNumber,
     amount: input.amount,
-    accountReference: input.accountReference ?? input.account.accountNumber,
+    accountReference: input.accountReference ?? input.account?.accountNumber ?? "AQUAFLOW",
     description: input.description ?? "AquaFlow water bill",
   });
   if (String(response.ResponseCode) !== "0" || !response.CheckoutRequestID) {
@@ -60,7 +60,7 @@ export async function initiateMpesaStk(input: {
 
   return prisma.mpesaStkRequest.create({
     data: {
-      accountId: input.account.accountId,
+      accountId: input.account?.accountId ?? null,
       initiatedBy: input.initiatedBy,
       phoneNumber,
       amount: input.amount,

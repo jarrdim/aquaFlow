@@ -1007,6 +1007,8 @@ export const api = {
     request("/connections", { method: "POST", body: JSON.stringify(data) }),
   updateConnection: (id: string, data: Record<string, unknown>) =>
     request(`/connections/${id}/action`, { method: "PATCH", body: JSON.stringify(data) }),
+  sendConnectionStk: (id: string, data: Record<string, unknown>) =>
+    request(`/connections/${id}/stk`, { method: "POST", body: JSON.stringify(data) }),
   linkConnectionCustomer: (id: string, customerId: string) =>
     request(`/connections/${id}/link-customer`, {
       method: "POST",

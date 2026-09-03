@@ -1368,11 +1368,10 @@ billingRouter.get("/dashboard", async (req, res, next) => {
       ["APPROVED", "POSTED", "PARTIALLY_PAID", "PAID"].includes(bill.status) &&
       !["QUEUED", "SENT"].includes(bill.notificationStatus),
     ).length;
-    const totalAmount = round(bills.reduce((sum, bill) => sum +
-      Number(bill.previousBalance) +
-      Number(bill.totalCurrentCharges) +
-      Number(bill.penalties) -
-      Number(bill.paidAmount), 0));
-    res.json({ cycle, customersToBill: bills.length + eligibleNotBilled, billsGenerated: bills.length, eligibleNotBilled, eligibleNotNotified, pending: bills.filter((bill) => bill.status === "PENDING_APPROVAL").length, approved, readyToPost, totalBilling: totalAmount, notified: bills.filter((bill) => bill.notificationStatus === "SENT").length, cancelled: bills.filter((bill) => bill.status === "CANCELLED").length, alerts, adjustments, recent: recent.map((row: any) => ({ ...row, customerName: customerName(row.bill?.account?.customer) })) });
+    const totalCurrentBilling = round(bills.reduce(
+      (sum, bill) => sum + Number(bill.totalCurrentCharges),
+      0,
+    ));
+    res.json({ cycle, customersToBill: bills.length + eligibleNotBilled, billsGenerated: bills.length, eligibleNotBilled, eligibleNotNotified, pending: bills.filter((bill) => bill.status === "PENDING_APPROVAL").length, approved, readyToPost, totalBilling: totalCurrentBilling, notified: bills.filter((bill) => bill.notificationStatus === "SENT").length, cancelled: bills.filter((bill) => bill.status === "CANCELLED").length, alerts, adjustments, recent: recent.map((row: any) => ({ ...row, customerName: customerName(row.bill?.account?.customer) })) });
   } catch (error) { next(error); }
 });

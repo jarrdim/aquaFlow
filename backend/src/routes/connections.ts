@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
+import { initiateMpesaStk } from "../lib/mpesaStk";
 import { requireAuth, requirePermission } from "../middleware/auth";
 
 export const connectionsRouter = Router();
@@ -144,6 +145,65 @@ connectionsRouter.get("/:id", canView, async (req, res) => {
   ]);
   if (!applications[0]) return res.status(404).json({ error: "Connection application not found" });
   res.json({ ...applications[0], activities });
+});
+
+connectionsRouter.post("/:id/stk", canProcess, async (req, res, next) => {
+  const parsedId = positiveId.safeParse(req.params.id);
+  const parsed = z.object({
+    phoneNumber: z.preprocess(
+      normalizeKenyanPhone,
+      z.string().regex(/^\+254\d{9}$/, "Phone number must use +254 followed by 9 digits"),
+    ),
+    amount: z.coerce.number().positive().max(250_000),
+  }).safeParse(req.body);
+  if (!parsedId.success) return res.status(400).json({ error: "Invalid connection application" });
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid STK request" });
+  try {
+    const applications = await prisma.$queryRaw<any[]>`
+      SELECT a.connection_application_id AS "connectionApplicationId",
+        a.application_number AS "applicationNumber", a.status,
+        a.quotation_total AS "quotationTotal", a.amount_paid AS "amountPaid",
+        a.account_id AS "accountId", ca.account_number AS "accountNumber"
+      FROM aquaflow.new_connection_applications a
+      LEFT JOIN aquaflow.customer_accounts ca ON ca.account_id = a.account_id
+      WHERE a.connection_application_id = ${parsedId.data}`;
+    const application = applications[0];
+    if (!application) return res.status(404).json({ error: "Connection application not found" });
+    if (!["QUOTED", "PARTIALLY_PAID"].includes(application.status)) {
+      return res.status(409).json({ error: "STK prompts can only be sent for quoted applications awaiting payment" });
+    }
+    const outstanding = Number(application.quotationTotal) - Number(application.amountPaid);
+    if (parsed.data.amount > outstanding + 0.009) {
+      return res.status(409).json({ error: `STK amount cannot exceed the outstanding balance of KSh ${outstanding.toFixed(2)}` });
+    }
+    const row = await initiateMpesaStk({
+      account: application.accountId ? {
+        accountId: BigInt(application.accountId),
+        accountNumber: application.accountNumber,
+      } : null,
+      phoneNumber: parsed.data.phoneNumber,
+      amount: parsed.data.amount,
+      initiatedBy: currentUserId(req),
+      accountReference: application.applicationNumber,
+      description: "AquaFlow new connection payment",
+      purposeType: "NEW_CONNECTION_FEE",
+      purposeReference: application.applicationNumber,
+    });
+    await recordActivity(
+      parsedId.data,
+      "STK_PROMPT_SENT",
+      `M-Pesa prompt sent to ${parsed.data.phoneNumber} for KSh ${parsed.data.amount.toFixed(2)}`,
+      currentUserId(req),
+    );
+    res.status(201).json(row);
+  } catch (error: any) {
+    if (error.status) return res.status(error.status).json({
+      error: error.message,
+      ...(error.stkRequestId ? { stkRequestId: error.stkRequestId } : {}),
+      ...(error.daraja ? { details: error.daraja } : {}),
+    });
+    next(error);
+  }
 });
 
 const createSchema = z.object({

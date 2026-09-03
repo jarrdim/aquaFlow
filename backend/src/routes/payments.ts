@@ -361,13 +361,17 @@ paymentsRouter.post("/mpesa/callback", async (req, res, next) => {
           new Error("Active M-Pesa payment channel is not configured"),
           { status: 409 },
         );
-      const account = await tx.customerAccount.findUniqueOrThrow({
-        where: { accountId: request.accountId },
-      });
+      const isPurposePayment = ["RECONNECTION_FEE", "NEW_CONNECTION_FEE"].includes(request.purposeType);
+      const account = request.accountId
+        ? await tx.customerAccount.findUniqueOrThrow({ where: { accountId: request.accountId } })
+        : null;
+      if (!account && !isPurposePayment) {
+        throw Object.assign(new Error("A customer account is required for this payment"), { status: 409 });
+      }
       const payment = await tx.payment.create({
         data: {
           transactionReference: receiptNumber,
-          accountId: account.accountId,
+          accountId: account?.accountId ?? null,
           channelId: channel.channelId,
           amount: paidAmount,
           paymentDate: transactionDate,
@@ -379,7 +383,7 @@ paymentsRouter.post("/mpesa/callback", async (req, res, next) => {
             ),
           ),
           payerPhone: phoneNumber,
-          customerReference: request.purposeReference ?? account.accountNumber,
+          customerReference: request.purposeReference ?? account?.accountNumber,
           paymentType: request.purposeType,
           remarks: request.purposeType === "RECONNECTION_FEE"
             ? `M-Pesa reconnection fee for ${request.purposeReference}`
@@ -393,10 +397,9 @@ paymentsRouter.post("/mpesa/callback", async (req, res, next) => {
           receivedBy: request.initiatedBy,
         },
       });
-      const isPurposePayment = ["RECONNECTION_FEE", "NEW_CONNECTION_FEE"].includes(request.purposeType);
       const allocation = isPurposePayment
         ? { allocated: 0, remaining: 0, matchingStatus: "MATCHED" }
-        : await allocate(tx, payment, account.accountId, request.initiatedBy);
+        : await allocate(tx, payment, account!.accountId, request.initiatedBy);
       if (isPurposePayment) {
         await tx.payment.update({
           where: { paymentId: payment.paymentId },
@@ -434,7 +437,7 @@ paymentsRouter.post("/mpesa/callback", async (req, res, next) => {
         data: {
           receiptNumber: `RCT-${new Date().getFullYear()}-${String(payment.paymentId).padStart(6, "0")}`,
           paymentId: payment.paymentId,
-          accountId: account.accountId,
+          accountId: account?.accountId ?? null,
           amount: paidAmount,
           issuedBy: request.initiatedBy,
         },

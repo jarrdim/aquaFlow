@@ -516,7 +516,7 @@ export function BillingDashboard() {
               to={`/billing/invoices?billingCycleId=${cycleId}`}
             />
             <Kpi
-              label="Total amount"
+              label="Total current billing"
               value={money(data.totalBilling)}
               tone="text-aqua-700"
               to={`/billing/invoices?billingCycleId=${cycleId}`}
@@ -4809,6 +4809,31 @@ export function AccountAdjustmentApprovals() {
   const decisionDisabled = Boolean(decisionAction) || !selected.length || !canDecide || selectedIncludesOwn;
   const visibleIds = pagedItems.map((item) => String(item.accountAdjustmentId));
   const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selected.includes(id));
+  function toggleVisibleAdjustments(checked: boolean) {
+    const next = checked
+      ? Array.from(new Set([...selected, ...visibleIds]))
+      : selected.filter((id) => !visibleIds.includes(id));
+    setSelected(next);
+    if (checked) {
+      if (!focus || !next.includes(String(focus.accountAdjustmentId))) {
+        setFocus(pagedItems[0] ?? null);
+      }
+    } else if (focus && visibleIds.includes(String(focus.accountAdjustmentId))) {
+      setFocus(items.find((item) => next.includes(String(item.accountAdjustmentId))) ?? null);
+    }
+  }
+  function toggleAdjustment(adjustment: Row, checked: boolean) {
+    const adjustmentId = String(adjustment.accountAdjustmentId);
+    const next = checked
+      ? Array.from(new Set([...selected, adjustmentId]))
+      : selected.filter((id) => id !== adjustmentId);
+    setSelected(next);
+    if (checked) {
+      setFocus(adjustment);
+    } else if (String(focus?.accountAdjustmentId ?? "") === adjustmentId) {
+      setFocus(items.find((item) => next.includes(String(item.accountAdjustmentId))) ?? null);
+    }
+  }
   const focusedProjectedBalance = focus
     ? Number(focus.account.currentBalance) + (focus.adjustmentType === "DEBIT" ? Number(focus.amount) : -Number(focus.amount))
     : 0;
@@ -4818,9 +4843,9 @@ export function AccountAdjustmentApprovals() {
       {message && <Notice tone="green">{message}</Notice>}
       {!canDecide && <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">Decisions require Billing Supervisor, Finance Manager or System Administrator access.</div>}
       {selectedIncludesOwn && <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">Your selection contains your own request. Maker-checker control requires an independent approver.</div>}
-      <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_390px]">
-        <section className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm shadow-slate-200/50">
-          <div className="border-b border-slate-100 px-4 py-3">
+      <div className="grid items-start gap-4 xl:h-[calc(100vh-13rem)] xl:min-h-[32rem] xl:grid-cols-[minmax(0,1fr)_390px]">
+        <section className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm shadow-slate-200/50 xl:flex xl:h-full xl:min-h-0 xl:flex-col">
+          <div className="shrink-0 border-b border-slate-100 px-4 py-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2"><h2 className="text-base font-bold text-slate-900">Pending requests</h2><span className="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">{items.length}</span>{selected.length > 0 && <span className="text-xs font-medium text-aqua-700">{selected.length} selected</span>}</div>
               <button type="button" onClick={() => load().catch((e) => setError(e.message))} disabled={loading || refreshing} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:cursor-wait disabled:opacity-60">
@@ -4838,15 +4863,15 @@ export function AccountAdjustmentApprovals() {
               <select className={`${INPUT} py-1.5`} value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))} aria-label="Requests per page"><option value="10">10 per page</option><option value="25">25 per page</option><option value="50">50 per page</option></select>
             </div>
           </div>
-          {loading ? <Spinner /> : <><div className="overflow-x-auto"><table className="w-full">
+          {loading ? <Spinner /> : <><div className="min-h-0 flex-1 overflow-auto overscroll-contain"><table className="w-full">
             <thead><tr>
-              <th className={TH}><input aria-label="Select all visible account adjustments" type="checkbox" checked={allVisibleSelected} onChange={(e) => setSelected(e.target.checked ? Array.from(new Set([...selected, ...visibleIds])) : selected.filter((id) => !visibleIds.includes(id)))} /></th>
+              <th className={TH}><input aria-label="Select all visible account adjustments" type="checkbox" checked={allVisibleSelected} onChange={(e) => toggleVisibleAdjustments(e.target.checked)} /></th>
               <th className={TH}>Reference</th><th className={TH}>Account / Customer</th><th className={TH}>Type</th><th className={TH}>Amount</th><th className={TH}>Requested by</th><th className={TH}>Action</th>
             </tr></thead>
             <tbody>
               {pagedItems.map((adjustment) => (
                 <tr key={adjustment.accountAdjustmentId} className={`border-t border-slate-100 ${focus?.accountAdjustmentId === adjustment.accountAdjustmentId ? "bg-aqua-50/60" : ""}`}>
-                  <td className={TD}><input aria-label={`Select ${adjustment.adjustmentNumber}`} type="checkbox" checked={selected.includes(String(adjustment.accountAdjustmentId))} onChange={(e) => { const adjustmentId = String(adjustment.accountAdjustmentId); setSelected(e.target.checked ? Array.from(new Set([...selected, adjustmentId])) : selected.filter((id) => id !== adjustmentId)); if (e.target.checked) setFocus(adjustment); }} /></td>
+                  <td className={TD}><input aria-label={`Select ${adjustment.adjustmentNumber}`} type="checkbox" checked={selected.includes(String(adjustment.accountAdjustmentId))} onChange={(e) => toggleAdjustment(adjustment, e.target.checked)} /></td>
                   <td className={TD}><div className="font-semibold text-slate-800">{adjustment.adjustmentNumber}</div><div className="mt-0.5 text-xs text-slate-400">{date(adjustment.createdAt)}</div></td>
                   <td className={TD}><div className="font-medium text-slate-700">{adjustment.account.accountNumber}</div><div className="mt-0.5 max-w-48 truncate text-xs text-slate-400">{accountCustomerName(adjustment.account)}</div></td>
                   <td className={TD}><span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-bold ${adjustment.adjustmentType === "DEBIT" ? "bg-orange-50 text-orange-700" : "bg-emerald-50 text-emerald-700"}`}>{pretty(adjustment.adjustmentType)}</span></td>
@@ -4859,9 +4884,9 @@ export function AccountAdjustmentApprovals() {
             </tbody>
           </table></div>{visibleItems.length > 0 && <div className="px-4 pb-4"><Pagination page={page} totalPages={totalPages} total={visibleItems.length} pageSize={pageSize} onPageChange={setPage} disabled={refreshing} label="requests" /></div>}</>}
         </section>
-        <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm shadow-slate-200/50 xl:sticky xl:top-4">
-          <div className="border-b border-slate-100 px-4 py-3"><div className="flex items-center justify-between gap-3"><div><h2 className="text-base font-bold text-slate-900">Approval decision</h2><p className="text-xs text-slate-500">Review the selected request details</p></div><span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">{selected.length} selected</span></div></div>
-          <div className="p-4">
+        <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm shadow-slate-200/50 xl:flex xl:h-full xl:min-h-0 xl:flex-col">
+          <div className="shrink-0 border-b border-slate-100 px-4 py-3"><div className="flex items-center justify-between gap-3"><div><h2 className="text-base font-bold text-slate-900">Approval decision</h2><p className="text-xs text-slate-500">Review the selected request details</p></div><span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">{selected.length} selected</span></div></div>
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4">
           {focus ? <>
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
               <div className="flex items-start justify-between gap-3"><div><h3 className="font-bold text-slate-900">{focus.adjustmentNumber}</h3><p className="mt-0.5 text-xs text-slate-500">Requested {date(focus.createdAt)}</p></div><Badge value="PENDING" /></div>

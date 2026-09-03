@@ -362,7 +362,7 @@ mobileRouter.get("/customer/pay/:id", requireRole("CUSTOMER"), async (req, res, 
       },
     });
     if (!row) return res.status(404).json({ error: "STK request not found" });
-    if (!(await canAccessAccount(req, row.accountId))) {
+    if (!row.accountId || !(await canAccessAccount(req, row.accountId))) {
       return res.status(403).json({ error: "This payment request does not belong to the authenticated customer" });
     }
     res.json(row);
