@@ -484,6 +484,14 @@ paymentsRouter.post("/mpesa/callback", async (req, res, next) => {
 
 // Public, token-scoped payment page endpoints. The encrypted token binds every
 // request to one account and approved notice, so no staff session is required.
+// Disconnected and suspended accounts must remain payable: clearing their debt
+// is part of the path back to active service. Closed and pending accounts are
+// deliberately excluded from public collection.
+const publicPaymentAccountStatuses = new Set(["ACTIVE", "SUSPENDED", "DISCONNECTED"]);
+function isPubliclyPayableAccount<T extends { accountStatus: string }>(account: T | null): account is T {
+  return Boolean(account && publicPaymentAccountStatuses.has(account.accountStatus));
+}
+
 paymentsRouter.get("/public-link/:token", async (req, res, next) => {
   try {
     const payload = readPaymentLinkToken(req.params.token);
@@ -502,8 +510,8 @@ paymentsRouter.get("/public-link/:token", async (req, res, next) => {
           })
         : Promise.resolve(null),
     ]);
-    if (!account || account.accountStatus !== "ACTIVE")
-      return res.status(404).json({ error: "Active customer account not found" });
+    if (!isPubliclyPayableAccount(account))
+      return res.status(404).json({ error: "Payable customer account not found" });
     if (payload.noticeId && !notice)
       return res.status(404).json({ error: "Approved payment notice not found" });
     res.json({
@@ -537,8 +545,8 @@ paymentsRouter.post("/public-link/:token/stk", async (req, res, next) => {
     const account = await prisma.customerAccount.findUnique({
       where: { accountId: BigInt(payload.accountId) },
     });
-    if (!account || account.accountStatus !== "ACTIVE")
-      return res.status(404).json({ error: "Active customer account not found" });
+    if (!isPubliclyPayableAccount(account))
+      return res.status(404).json({ error: "Payable customer account not found" });
     if (payload.noticeId) {
       const approvedNotice = await prisma.debtNotice.count({
         where: {

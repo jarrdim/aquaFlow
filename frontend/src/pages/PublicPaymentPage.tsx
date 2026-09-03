@@ -29,7 +29,7 @@ function customerSafeError(reason: unknown, stage: PaymentErrorStage) {
   if (/account has no outstanding balance/i.test(message))
     return "This account has no outstanding balance. No payment is required.";
   if (/amount cannot exceed/i.test(message)) return message;
-  if (/active customer account not found|approved payment notice not found/i.test(message))
+  if (/active customer account not found|payable customer account not found|approved payment notice not found/i.test(message))
     return "This payment link is no longer available. Please contact Samdamte for assistance.";
 
   if (stage === "pay")
