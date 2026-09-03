@@ -1639,6 +1639,7 @@ model MeterReplacement {
   replacementDate   DateTime  @map("replacement_date") @db.Date
   oldFinalReading   Decimal   @map("old_final_reading") @db.Decimal(18, 3)
   newOpeningReading Decimal   @default(0) @map("new_opening_reading") @db.Decimal(18, 3)
+  retainedMeterNumber Boolean @default(false) @map("retained_meter_number")
   replacementReason String    @map("replacement_reason")
   workOrderId       BigInt?   @map("work_order_id")
   approvedBy        BigInt?   @map("approved_by")

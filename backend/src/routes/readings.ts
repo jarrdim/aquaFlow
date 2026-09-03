@@ -164,7 +164,7 @@ async function getEligibleAssignments(
   return prisma.meterAssignment.findMany({
     where: searchWhere ? { AND: [baseWhere, searchWhere] } : baseWhere,
     include: {
-      meter: { include: { readings: { orderBy: { readingDate: "desc" }, take: 1 } } },
+      meter: { include: { readings: { orderBy: [{ readingDate: "desc" }, { readingId: "desc" }], take: 1 } } },
       account: {
         include: {
           customer: true,
@@ -647,7 +647,7 @@ async function capture(input: any, req: any) {
         orderBy: { assignmentDate: "desc" },
         take: 1,
       },
-      readings: { orderBy: { readingDate: "desc" }, take: 1 },
+      readings: { orderBy: [{ readingDate: "desc" }, { readingId: "desc" }], take: 1 },
     } }),
     prisma.readingCycle.findUnique({ where: { readingCycleId: input.readingCycleId } }),
   ]);

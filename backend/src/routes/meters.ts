@@ -90,9 +90,14 @@ const assignmentInclude = {
   borehole: { include: { zone: true } },
 } as const;
 
+const latestReadingOrder: Prisma.MeterReadingOrderByWithRelationInput[] = [
+  { readingDate: "desc" },
+  { readingId: "desc" },
+];
+
 const meterListInclude = {
   assignments: { where: { assignmentStatus: "ACTIVE" }, include: assignmentInclude, orderBy: { assignmentDate: "desc" as const }, take: 1 },
-  readings: { orderBy: { readingDate: "desc" as const }, take: 1 },
+  readings: { orderBy: latestReadingOrder, take: 1 },
 } as const;
 
 const meterDetailInclude = {
@@ -895,6 +900,7 @@ metersRouter.post("/replacements/direct", requireRole("ADMIN", "SYSTEM_ADMIN", "
       const replacement = await tx.meterReplacement.create({ data: {
         accountId: ids.accountId, oldMeterId: ids.oldMeterId, newMeterId: ids.newMeterId,
         replacementDate, oldFinalReading: data.oldFinalReading, newOpeningReading: data.newOpeningReading,
+        retainedMeterNumber: true,
         replacementReason: data.replacementReason, requestStatus: "APPROVED", requestedBy: userId(req),
         replacedBy: userId(req), approvedBy: userId(req), decidedAt: new Date(),
         decisionComments: "Completed directly without a work order", gpsLatitude: data.gpsLatitude,
@@ -906,6 +912,12 @@ metersRouter.post("/replacements/direct", requireRole("ADMIN", "SYSTEM_ADMIN", "
         startDate: replacementDate, endDate: replacementDate, status: "CLOSED",
         createdBy: userId(req), remarks: `Dedicated final-reading cycle for direct meter replacement REP-${replacement.replacementId}`,
       } });
+      const baselineReadingCycle = await tx.readingCycle.create({ data: {
+        cycleCode: `MR-BASE-${replacement.replacementId}`,
+        cycleName: `Meter replacement baseline REP-${replacement.replacementId}`,
+        startDate: replacementDate, endDate: replacementDate, status: "CLOSED",
+        createdBy: userId(req), remarks: `Dedicated opening-baseline cycle for direct meter replacement REP-${replacement.replacementId}`,
+      } });
       const finalReading = await tx.meterReading.create({ data: {
         meterId: ids.oldMeterId, accountId: ids.accountId, readingCycleId: replacementReadingCycle.readingCycleId,
         previousReading: ids.previousReading, currentReading: data.oldFinalReading, readingType: "ACTUAL",
@@ -915,7 +927,7 @@ metersRouter.post("/replacements/direct", requireRole("ADMIN", "SYSTEM_ADMIN", "
         syncId: `METER_REPLACEMENT:${replacement.replacementId}`,
       } });
       const openingBaseline = await tx.meterReading.create({ data: {
-        meterId: ids.oldMeterId, accountId: ids.accountId, readingCycleId: replacementReadingCycle.readingCycleId,
+        meterId: ids.oldMeterId, accountId: ids.accountId, readingCycleId: baselineReadingCycle.readingCycleId,
         previousReading: data.newOpeningReading, currentReading: data.newOpeningReading, readingType: "ACTUAL",
         readingDate: replacementDate, gpsLatitude: data.gpsLatitude, gpsLongitude: data.gpsLongitude,
         abnormalFlag: false, exceptionType: "NONE", approvalStatus: "APPROVED", approvedBy: userId(req),
