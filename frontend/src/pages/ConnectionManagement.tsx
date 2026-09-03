@@ -47,6 +47,7 @@ type Application = {
   customerId?: string;
   accountId?: string;
   accountNumber?: string;
+  latestStkRequest?: ConnectionStkRequest | null;
   activities?: {
     connectionActivityId: string;
     activityType: string;
@@ -54,6 +55,14 @@ type Application = {
     performedAt: string;
     performedByName: string;
   }[];
+};
+
+type ConnectionStkRequest = {
+  stkRequestId: string;
+  status: "PENDING" | "COMPLETED" | "FAILED" | "CANCELLED";
+  customerMessage?: string;
+  resultDescription?: string;
+  mpesaReceiptNumber?: string;
 };
 
 type ExistingCustomer = {
@@ -1126,6 +1135,8 @@ export function ConnectionProfile() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [sendingStk, setSendingStk] = useState(false);
+  const [stkRequest, setStkRequest] = useState<ConnectionStkRequest | null>(null);
+  const [stkStatusError, setStkStatusError] = useState("");
   const [form, setForm] = useState<Record<string, string>>({});
   const [linkCustomerOpen, setLinkCustomerOpen] = useState(false);
   const [customerSearch, setCustomerSearch] = useState("");
@@ -1146,7 +1157,11 @@ export function ConnectionProfile() {
         api.getConnection(id),
         api.connectionLookups(),
       ]);
-      setApplication(record as Application);
+      const loadedApplication = record as Application;
+      setApplication(loadedApplication);
+      if (loadedApplication.latestStkRequest) {
+        setStkRequest(loadedApplication.latestStkRequest);
+      }
       setLookups(options as Lookups);
     } catch (error) {
       showToast(
@@ -1160,6 +1175,46 @@ export function ConnectionProfile() {
   useEffect(() => {
     void load();
   }, [id]);
+
+  useEffect(() => {
+    if (!stkRequest?.stkRequestId || stkRequest.status !== "PENDING") return;
+    let stopped = false;
+    let timer: number | undefined;
+
+    const poll = async () => {
+      try {
+        const latest = await api.getMpesaStkRequest(stkRequest.stkRequestId) as ConnectionStkRequest;
+        if (stopped) return;
+        setStkRequest(latest);
+        setStkStatusError("");
+        if (latest.status === "COMPLETED") {
+          showToast(
+            latest.mpesaReceiptNumber
+              ? `M-Pesa payment confirmed. Receipt ${latest.mpesaReceiptNumber}.`
+              : "M-Pesa payment confirmed.",
+            "success",
+          );
+          setForm({});
+          await load();
+          return;
+        }
+        if (latest.status === "FAILED" || latest.status === "CANCELLED") {
+          showToast(latest.resultDescription || `M-Pesa prompt ${latest.status.toLowerCase()}.`, "error");
+          return;
+        }
+      } catch (error) {
+        if (stopped) return;
+        setStkStatusError(error instanceof Error ? error.message : "Unable to confirm the M-Pesa payment status.");
+      }
+      if (!stopped) timer = window.setTimeout(poll, 3000);
+    };
+
+    timer = window.setTimeout(poll, 2000);
+    return () => {
+      stopped = true;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [stkRequest?.stkRequestId, stkRequest?.status]);
   const set = (key: string, value: string) =>
     setForm((current) => ({ ...current, [key]: value }));
 
@@ -1234,8 +1289,10 @@ export function ConnectionProfile() {
     const amount = Number(form.amount || balance);
     const phoneNumber = form.stkPhone || application.phoneNumber;
     setSendingStk(true);
+    setStkStatusError("");
     try {
-      await api.sendConnectionStk(id, { amount, phoneNumber });
+      const request = await api.sendConnectionStk(id, { amount, phoneNumber }) as ConnectionStkRequest;
+      setStkRequest(request);
       showToast("STK prompt sent. Ask the applicant to enter their M-Pesa PIN.", "success");
       setForm((current) => ({ ...current, amount: String(amount), stkPhone: phoneNumber }));
       await load();
@@ -1581,53 +1638,104 @@ export function ConnectionProfile() {
             )}
             {(status === "QUOTED" || status === "PARTIALLY_PAID") && (
               <div className="space-y-3">
-                <Field label="Payment amount" required>
-                  <input
-                    type="number"
-                    min={1}
-                    step={1}
-                    className={input}
-                    value={form.amount || ""}
-                    placeholder={String(balance)}
-                    onChange={(e) => set("amount", e.target.value)}
-                  />
-                </Field>
-                <Field label="M-Pesa phone number">
-                  <input
-                    type="tel"
-                    className={input}
-                    value={form.stkPhone ?? application.phoneNumber ?? ""}
-                    onChange={(e) => set("stkPhone", e.target.value)}
-                    placeholder="+2547XXXXXXXX"
-                  />
-                </Field>
-                <button
-                  type="button"
-                  className={`${secondary} w-full border-emerald-600 text-emerald-700 hover:bg-emerald-50`}
-                  disabled={sendingStk || saving || !(form.stkPhone ?? application.phoneNumber) || Number(form.amount || balance) <= 0}
-                  onClick={() => void sendStkPrompt()}
-                >
-                  {sendingStk ? "Sending STK promptâ€¦" : `Send STK prompt for ${money(form.amount || balance)}`}
-                </button>
-                <Field label="Payment reference" required>
-                  <input
-                    className={input}
-                    value={form.reference || ""}
-                    onChange={(e) => set("reference", e.target.value)}
-                  />
-                </Field>
-                <button
-                  className={`${primary} w-full`}
-                  disabled={saving || !form.amount || !form.reference}
-                  onClick={() =>
-                    void action(
-                      { action: "RECORD_PAYMENT", ...form },
-                      "Payment recorded.",
-                    )
-                  }
-                >
-                  Record payment
-                </button>
+                <div className="overflow-hidden rounded-xl border border-emerald-200 bg-emerald-50/40">
+                  <div className="flex items-center gap-3 border-b border-emerald-100 bg-emerald-50 px-4 py-3">
+                    <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-emerald-600 text-sm font-black text-white">M</div>
+                    <div>
+                      <p className="text-sm font-bold text-emerald-950">M-Pesa STK payment</p>
+                      <p className="text-xs text-emerald-700">Send a prompt and confirm payment automatically.</p>
+                    </div>
+                  </div>
+                  <div className="space-y-3 p-4">
+                    <Field label="Amount to request" required>
+                      <input
+                        type="number"
+                        min={1}
+                        max={Math.max(1, balance)}
+                        step={1}
+                        className={input}
+                        value={form.amount || ""}
+                        placeholder={String(balance)}
+                        onChange={(e) => set("amount", e.target.value)}
+                      />
+                    </Field>
+                    <Field label="Customer M-Pesa phone" required>
+                      <input
+                        type="tel"
+                        className={input}
+                        value={form.stkPhone ?? application.phoneNumber ?? ""}
+                        onChange={(e) => set("stkPhone", e.target.value)}
+                        placeholder="+2547XXXXXXXX"
+                      />
+                    </Field>
+                    <button
+                      type="button"
+                      className="w-full rounded-lg bg-emerald-600 px-4 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={sendingStk || saving || stkRequest?.status === "PENDING" || !(form.stkPhone ?? application.phoneNumber) || Number(form.amount || balance) <= 0}
+                      onClick={() => void sendStkPrompt()}
+                    >
+                      {sendingStk
+                        ? "Sending prompt..."
+                        : stkRequest?.status === "PENDING"
+                          ? "Waiting for M-Pesa confirmation..."
+                          : `Send prompt for ${money(form.amount || balance)}`}
+                    </button>
+                    {stkRequest && (
+                      <div className={`rounded-lg border px-3 py-2.5 text-xs ${
+                        stkRequest.status === "COMPLETED"
+                          ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                          : stkRequest.status === "PENDING"
+                            ? "border-amber-200 bg-amber-50 text-amber-800"
+                            : "border-red-200 bg-red-50 text-red-700"
+                      }`}>
+                        <div className="flex items-center gap-2 font-bold">
+                          {stkRequest.status === "PENDING" && <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-amber-500 border-t-transparent" />}
+                          {stkRequest.status === "COMPLETED"
+                            ? "Payment confirmed"
+                            : stkRequest.status === "PENDING"
+                              ? "Prompt sent - checking automatically"
+                              : `Prompt ${stkRequest.status.toLowerCase()}`}
+                        </div>
+                        <p className="mt-1">
+                          {stkRequest.mpesaReceiptNumber
+                            ? `Receipt: ${stkRequest.mpesaReceiptNumber}`
+                            : stkRequest.resultDescription || stkRequest.customerMessage || "Ask the customer to complete the prompt on their phone."}
+                        </p>
+                      </div>
+                    )}
+                    {stkStatusError && (
+                      <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                        Payment-status check failed: {stkStatusError}. Automatic checking will retry.
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <details className="rounded-xl border border-slate-200 bg-white p-4">
+                  <summary className="cursor-pointer text-sm font-semibold text-slate-700">Record a payment manually</summary>
+                  <div className="mt-3 space-y-3">
+                    <p className="text-xs text-slate-500">Use this only for a payment verified outside the STK prompt.</p>
+                    <Field label="Payment reference" required>
+                      <input
+                        className={input}
+                        value={form.reference || ""}
+                        onChange={(e) => set("reference", e.target.value)}
+                      />
+                    </Field>
+                    <button
+                      className={`${primary} w-full`}
+                      disabled={saving || !form.amount || !form.reference}
+                      onClick={() =>
+                        void action(
+                          { action: "RECORD_PAYMENT", ...form },
+                          "Payment recorded.",
+                        )
+                      }
+                    >
+                      Record verified payment
+                    </button>
+                  </div>
+                </details>
               </div>
             )}
             {status === "PAID" && (

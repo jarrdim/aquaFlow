@@ -371,9 +371,7 @@ metersRouter.get("/replacements", async (req, res) => {
 
 metersRouter.get("/replacements/direct/options", requireRole("ADMIN", "SYSTEM_ADMIN", "METER_MANAGER", "METER_SUPERVISOR", "SUPERVISOR"), async (req, res) => {
   const installedSearch = String(req.query.installedSearch ?? "").trim();
-  const availableSearch = String(req.query.availableSearch ?? "").trim();
-  const [installed, available] = await Promise.all([
-    prisma.meter.findMany({
+  const installed = await prisma.meter.findMany({
       where: {
         status: { in: ["ACTIVE", "FAULTY", "TAMPERED", "INACTIVE"] },
         assignments: { some: { assignmentStatus: "ACTIVE", removalDate: null, accountId: { not: null } } },
@@ -386,18 +384,8 @@ metersRouter.get("/replacements/direct/options", requireRole("ADMIN", "SYSTEM_AD
           { assignments: { some: { assignmentStatus: "ACTIVE", account: { customer: { organizationName: { contains: installedSearch, mode: "insensitive" as const } } } } } },
         ] } : {}),
       }, include: meterListInclude, orderBy: { meterNumber: "asc" }, take: 100,
-    }),
-    prisma.meter.findMany({
-      where: {
-        status: "IN_STOCK", assignments: { none: { assignmentStatus: "ACTIVE" } },
-        ...(availableSearch ? { OR: [
-          { meterNumber: { contains: availableSearch, mode: "insensitive" as const } },
-          { serialNumber: { contains: availableSearch, mode: "insensitive" as const } },
-        ] } : {}),
-      }, include: meterListInclude, orderBy: { meterNumber: "asc" }, take: 100,
-    }),
-  ]);
-  res.json({ installed: installed.map(presentMeter), available: available.map(presentMeter) });
+    });
+  res.json({ installed: installed.map(presentMeter) });
 });
 
 metersRouter.get("/replacements/:id", async (req, res) => {
@@ -654,12 +642,10 @@ const replacementInputSchema = z.object({
 });
 
 const directReplacementInputSchema = z.object({
-  accountId: z.string().min(1), oldMeterId: z.string().min(1), newMeterId: z.string().min(1),
+  accountId: z.string().min(1), oldMeterId: z.string().min(1),
   replacementDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), oldFinalReading: z.coerce.number().min(0),
   newOpeningReading: z.coerce.number().min(0), replacementReason: z.string().trim().min(2).max(1000),
   gpsLatitude: optNumber, gpsLongitude: optNumber, remarks: optText, confirmed: z.literal(true),
-}).refine((data) => data.oldMeterId !== data.newMeterId, {
-  path: ["newMeterId"], message: "Choose a different replacement meter",
 });
 
 const directReplacementPreviewSchema = z.object({
@@ -713,6 +699,53 @@ async function validateReplacementMeters(
   return {
     accountId, oldMeterId, newMeterId, previousReading,
     assignmentId: BigInt(assignments[0].assignment_id), oldMeterStatus: String(assignments[0].status),
+  };
+}
+
+async function validateDirectReplacementMeter(
+  tx: Prisma.TransactionClient,
+  data: z.infer<typeof directReplacementInputSchema>,
+) {
+  const accountId = BigInt(data.accountId);
+  const meterId = BigInt(data.oldMeterId);
+  const assignments = await tx.$queryRaw<any[]>`
+    SELECT ma.assignment_id,m.status,m.opening_reading,
+      COALESCE((SELECT mr.current_reading FROM aquaflow.meter_readings mr
+        WHERE mr.meter_id=m.meter_id AND mr.approval_status='APPROVED'
+        ORDER BY mr.reading_date DESC,mr.reading_id DESC LIMIT 1),m.opening_reading) AS previous_reading,
+      (SELECT mr.reading_date FROM aquaflow.meter_readings mr
+        WHERE mr.meter_id=m.meter_id AND mr.approval_status='APPROVED'
+        ORDER BY mr.reading_date DESC,mr.reading_id DESC LIMIT 1) AS latest_reading_date
+    FROM aquaflow.meter_assignments ma
+    JOIN aquaflow.meters m ON m.meter_id=ma.meter_id
+    WHERE ma.account_id=${accountId} AND ma.meter_id=${meterId}
+      AND ma.assignment_status='ACTIVE' AND ma.removal_date IS NULL
+    FOR UPDATE OF ma,m`;
+  if (!assignments[0]) {
+    throw Object.assign(new Error("The meter is not actively assigned to this customer account"), { status: 409 });
+  }
+  const previousReading = Number(assignments[0].previous_reading);
+  if (assignments[0].latest_reading_date && new Date(`${data.replacementDate}T23:59:59.999Z`) < new Date(assignments[0].latest_reading_date)) {
+    throw Object.assign(new Error("Replacement date cannot be before the latest approved meter reading"), { status: 409 });
+  }
+  if (data.oldFinalReading < previousReading) {
+    throw Object.assign(new Error(`Old final reading cannot be below the latest approved reading of ${previousReading}`), { status: 409 });
+  }
+  const conflicts = await tx.$queryRaw<any[]>`
+    SELECT replacement_id FROM aquaflow.meter_replacements
+    WHERE request_status='PENDING'
+      AND (old_meter_id=${meterId} OR new_meter_id=${meterId})
+    LIMIT 1`;
+  if (conflicts[0]) {
+    throw Object.assign(new Error("This meter already has an open replacement request"), { status: 409 });
+  }
+  return {
+    accountId,
+    oldMeterId: meterId,
+    newMeterId: meterId,
+    previousReading,
+    assignmentId: BigInt(assignments[0].assignment_id),
+    oldMeterStatus: String(assignments[0].status),
   };
 }
 
@@ -857,7 +890,7 @@ metersRouter.post("/replacements/direct", requireRole("ADMIN", "SYSTEM_ADMIN", "
   try {
     const result = await prisma.$transaction(async (tx) => {
       const data = parsed.data;
-      const ids = await validateReplacementMeters(tx, { ...data, requestStatus: "PENDING", evidence: [] });
+      const ids = await validateDirectReplacementMeter(tx, data);
       const replacementDate = new Date(`${data.replacementDate}T00:00:00.000Z`);
       const replacement = await tx.meterReplacement.create({ data: {
         accountId: ids.accountId, oldMeterId: ids.oldMeterId, newMeterId: ids.newMeterId,
@@ -881,30 +914,29 @@ metersRouter.post("/replacements/direct", requireRole("ADMIN", "SYSTEM_ADMIN", "
         approvedAt: new Date(), approvalComments: `Final reading from direct replacement REP-${replacement.replacementId}`,
         syncId: `METER_REPLACEMENT:${replacement.replacementId}`,
       } });
-      const oldAssignment = await tx.meterAssignment.update({
-        where: { assignmentId: ids.assignmentId }, data: { assignmentStatus: "ENDED", removalDate: replacementDate },
-      });
-      await tx.meter.update({ where: { meterId: ids.oldMeterId }, data: { status: "REPLACED", installationStatus: "REMOVED" } });
-      await tx.meter.update({ where: { meterId: ids.newMeterId }, data: {
+      const openingBaseline = await tx.meterReading.create({ data: {
+        meterId: ids.oldMeterId, accountId: ids.accountId, readingCycleId: replacementReadingCycle.readingCycleId,
+        previousReading: data.newOpeningReading, currentReading: data.newOpeningReading, readingType: "ACTUAL",
+        readingDate: replacementDate, gpsLatitude: data.gpsLatitude, gpsLongitude: data.gpsLongitude,
+        abnormalFlag: false, exceptionType: "NONE", approvalStatus: "APPROVED", approvedBy: userId(req),
+        approvedAt: new Date(), approvalComments: `Opening baseline after direct replacement REP-${replacement.replacementId}`,
+        syncId: `METER_REPLACEMENT_BASELINE:${replacement.replacementId}`,
+      } });
+      await tx.meter.update({ where: { meterId: ids.oldMeterId }, data: {
         status: "ACTIVE", installationStatus: "INSTALLED", installationDate: replacementDate,
         openingReading: data.newOpeningReading, gpsLatitude: data.gpsLatitude, gpsLongitude: data.gpsLongitude,
       } });
-      const newAssignment = await tx.meterAssignment.create({ data: {
-        meterId: ids.newMeterId, accountId: ids.accountId, assignmentDate: replacementDate,
-        installedBy: userId(req), installationPoint: oldAssignment.installationPoint,
-        installationStatus: "COMPLETED", remarks: data.remarks,
-      } });
       await tx.meterEvent.createMany({ data: [
         { meterId: ids.oldMeterId, assignmentId: ids.assignmentId, replacementId: replacement.replacementId,
-          eventType: "REPLACEMENT_APPROVED", previousStatus: ids.oldMeterStatus, newStatus: "REPLACED",
+          eventType: "REPLACEMENT_APPROVED", previousStatus: ids.oldMeterStatus, newStatus: "ACTIVE",
           reading: data.oldFinalReading, reason: data.replacementReason, remarks: data.remarks,
           gpsLatitude: data.gpsLatitude, gpsLongitude: data.gpsLongitude, performedBy: userId(req),
-          metadata: { newMeterId: ids.newMeterId.toString(), direct: true } },
-        { meterId: ids.newMeterId, assignmentId: newAssignment.assignmentId, replacementId: replacement.replacementId,
-          eventType: "ASSIGNED", previousStatus: "IN_STOCK", newStatus: "ACTIVE",
+          metadata: { retainedMeterNumber: true, openingBaselineReadingId: openingBaseline.readingId.toString(), direct: true } },
+        { meterId: ids.oldMeterId, assignmentId: ids.assignmentId, replacementId: replacement.replacementId,
+          eventType: "INSTALLATION_UPDATED", previousStatus: ids.oldMeterStatus, newStatus: "ACTIVE",
           reading: data.newOpeningReading, reason: data.replacementReason, remarks: data.remarks,
           gpsLatitude: data.gpsLatitude, gpsLongitude: data.gpsLongitude, performedBy: userId(req),
-          metadata: { oldMeterId: ids.oldMeterId.toString(), direct: true } },
+          metadata: { retainedMeterNumber: true, replacementId: replacement.replacementId.toString(), direct: true } },
       ] });
 
       const consumption = roundMoney(data.oldFinalReading - ids.previousReading);

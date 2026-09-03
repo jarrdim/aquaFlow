@@ -2810,9 +2810,7 @@ export function UpdateMeterStatus() {
 export function DirectMeterReplacement() {
   const today = new Date().toISOString().slice(0, 10);
   const [installed, setInstalled] = useState<AnyRecord[]>([]);
-  const [available, setAvailable] = useState<AnyRecord[]>([]);
   const [installedSearch, setInstalledSearch] = useState("");
-  const [availableSearch, setAvailableSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -2821,7 +2819,7 @@ export function DirectMeterReplacement() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [form, setForm] = useState({
-    oldMeterId: "", newMeterId: "", replacementDate: today,
+    oldMeterId: "", replacementDate: today,
     oldFinalReading: "", newOpeningReading: "0", replacementReason: "",
     remarks: "", confirmed: false,
   });
@@ -2831,7 +2829,6 @@ export function DirectMeterReplacement() {
     try {
       const result = await api.getDirectReplacementOptions(filters);
       setInstalled(result.installed ?? []);
-      setAvailable(result.available ?? []);
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -2841,17 +2838,11 @@ export function DirectMeterReplacement() {
   useEffect(() => { void loadOptions(); }, []);
   useEffect(() => {
     if (!installedSearch.trim()) return;
-    const timer = window.setTimeout(() => void loadOptions({ installedSearch, availableSearch }, true), 300);
+    const timer = window.setTimeout(() => void loadOptions({ installedSearch }, true), 300);
     return () => window.clearTimeout(timer);
   }, [installedSearch]);
-  useEffect(() => {
-    if (!availableSearch.trim()) return;
-    const timer = window.setTimeout(() => void loadOptions({ installedSearch, availableSearch }, true), 300);
-    return () => window.clearTimeout(timer);
-  }, [availableSearch]);
 
   const oldMeter = installed.find((meter) => String(meter.meterId) === form.oldMeterId);
-  const newMeter = available.find((meter) => String(meter.meterId) === form.newMeterId);
   const account = oldMeter?.assignment?.account;
   const previousReading = Number(oldMeter?.latestReading?.currentReading ?? oldMeter?.openingReading ?? 0);
   const latestReadingDate = oldMeter?.latestReading?.readingDate ? String(oldMeter.latestReading.readingDate).slice(0, 10) : "";
@@ -2895,22 +2886,22 @@ export function DirectMeterReplacement() {
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!account?.accountId || !oldMeter || !newMeter) return setError("Select both the installed meter and its in-store replacement.");
+    if (!account?.accountId || !oldMeter) return setError("Select the installed customer meter.");
     if (!form.confirmed) return setError("Confirm that the physical meter change has already been completed.");
     if (!billPreview) return setError("Wait for a valid bill preview before replacing the meter.");
-    if (!window.confirm(`Replace ${oldMeter.meterNumber} with ${newMeter.meterNumber} and post KSh ${money(billPreview.totalCurrentCharges)} to account ${account.accountNumber}?`)) return;
+    if (!window.confirm(`Record the replacement using meter number ${oldMeter.meterNumber} and post KSh ${money(billPreview.totalCurrentCharges)} to account ${account.accountNumber}?`)) return;
     setSaving(true); setError(""); setSuccess("");
     try {
       const result = await api.createDirectMeterReplacement({
-        accountId: String(account.accountId), oldMeterId: form.oldMeterId, newMeterId: form.newMeterId,
+        accountId: String(account.accountId), oldMeterId: form.oldMeterId,
         replacementDate: form.replacementDate, oldFinalReading: Number(form.oldFinalReading),
         newOpeningReading: Number(form.newOpeningReading), replacementReason: form.replacementReason,
         remarks: form.remarks || undefined, confirmed: true,
       });
       setSuccess(`Meter replaced and billed successfully. Replacement REP-${String(result.replacementId).padStart(4, "0")}; bill ${result.bill?.billNumber ?? "created"} for KSh ${Number(result.bill?.totalCurrentCharges ?? 0).toLocaleString("en-KE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}.`);
-      setForm({ oldMeterId: "", newMeterId: "", replacementDate: today, oldFinalReading: "",
+      setForm({ oldMeterId: "", replacementDate: today, oldFinalReading: "",
         newOpeningReading: "0", replacementReason: "", remarks: "", confirmed: false });
-      setInstalledSearch(""); setAvailableSearch("");
+      setInstalledSearch("");
       await loadOptions();
     } catch (err: any) { setError(err.message); }
     finally { setSaving(false); }
@@ -2944,13 +2935,12 @@ export function DirectMeterReplacement() {
             <div><p className="text-xs font-semibold uppercase text-slate-400">Latest approved reading</p><p className="mt-1 font-bold text-slate-800">{previousReading.toLocaleString()}</p></div>
           </div>}
         </Card>
-        <Card title="2. Replacement meter">
-          <Field label="Available in-store meter" required><SearchableSelect className={INPUT} value={form.newMeterId}
-            onSearchQuery={setAvailableSearch}
-            onChange={(e) => setForm({ ...form, newMeterId: e.target.value, confirmed: false })} disabled={loading} required>
-            <option value="">Select replacement meter</option>
-            {available.map((meter) => <option key={meter.meterId} value={meter.meterId}>{meter.meterNumber} {meter.serialNumber ? `- Serial ${meter.serialNumber}` : ""} - {displaySize(meter.meterSizeMm)}</option>)}
-          </SearchableSelect></Field>
+        <Card title="2. Replacement meter number">
+          <div className="rounded-xl border border-aqua-200 bg-aqua-50 px-4 py-3">
+            <p className="text-xs font-semibold uppercase text-aqua-600">Meter number retained</p>
+            <p className="mt-1 text-lg font-extrabold text-aqua-900">{oldMeter?.meterNumber || "Select the installed meter above"}</p>
+            <p className="mt-1 text-xs text-aqua-700">No meter is taken from stock. The replacement continues under this same meter number.</p>
+          </div>
         </Card>
         <Card title="3. Replacement readings and details"><div className="grid gap-3 lg:grid-cols-4">
           <Field label="Replacement date" required><DateInput className={INPUT} value={form.replacementDate} min={latestReadingDate || undefined} max={today} onChange={(e) => setForm({ ...form, replacementDate: e.target.value, confirmed: false })} required /></Field>
@@ -2962,9 +2952,9 @@ export function DirectMeterReplacement() {
       </div>
       <div className="xl:sticky xl:top-24 xl:self-start"><Card title="Confirm immediate replacement">
         <div className="mb-4 grid grid-cols-[1fr_auto_1fr] items-center gap-2 rounded-xl bg-slate-50 p-3 text-center">
-          <div><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Remove</p><p className="mt-1 text-sm font-extrabold text-slate-800">{oldMeter?.meterNumber || "Not selected"}</p></div>
+          <div><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Current</p><p className="mt-1 text-sm font-extrabold text-slate-800">{oldMeter?.meterNumber || "Not selected"}</p></div>
           <span className="grid h-8 w-8 place-items-center rounded-full bg-white text-aqua-700 shadow-sm">→</span>
-          <div><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Install</p><p className="mt-1 text-sm font-extrabold text-slate-800">{newMeter?.meterNumber || "Not selected"}</p></div>
+          <div><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Replacement</p><p className="mt-1 text-sm font-extrabold text-slate-800">{oldMeter?.meterNumber || "Not selected"}</p></div>
         </div>
         <div className="overflow-hidden rounded-xl border border-aqua-200">
           <div className="bg-gradient-to-br from-aqua-700 to-cyan-600 px-4 py-2.5 text-white">
@@ -3011,7 +3001,7 @@ export function DirectMeterReplacement() {
         </div>
         <label className="mt-5 flex cursor-pointer gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm"><input type="checkbox" className="mt-0.5 h-4 w-4" checked={form.confirmed} onChange={(e) => setForm({ ...form, confirmed: e.target.checked })} />
           <span>I confirm the physical replacement is complete, these readings are correct, and the customer should be billed immediately.</span></label>
-        <Button type="submit" tone="green" className="mt-4 w-full" disabled={saving || loading || previewLoading || !billPreview || !form.confirmed || !oldMeter || !newMeter}>{saving ? "Replacing and billing..." : "Replace and bill now"}</Button>
+        <Button type="submit" tone="green" className="mt-4 w-full" disabled={saving || loading || previewLoading || !billPreview || !form.confirmed || !oldMeter}>{saving ? "Replacing and billing..." : "Replace and bill now"}</Button>
       </Card></div>
     </form>
   </Page>;

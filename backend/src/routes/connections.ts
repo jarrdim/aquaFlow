@@ -144,7 +144,23 @@ connectionsRouter.get("/:id", canView, async (req, res) => {
       ORDER BY ac.performed_at DESC`,
   ]);
   if (!applications[0]) return res.status(404).json({ error: "Connection application not found" });
-  res.json({ ...applications[0], activities });
+  const latestStkRequest = await prisma.mpesaStkRequest.findFirst({
+    where: {
+      purposeType: "NEW_CONNECTION_FEE",
+      purposeReference: applications[0].applicationNumber,
+    },
+    select: {
+      stkRequestId: true,
+      status: true,
+      customerMessage: true,
+      resultDescription: true,
+      mpesaReceiptNumber: true,
+      createdAt: true,
+      completedAt: true,
+    },
+    orderBy: { createdAt: "desc" },
+  });
+  res.json({ ...applications[0], activities, latestStkRequest });
 });
 
 connectionsRouter.post("/:id/stk", canProcess, async (req, res, next) => {
@@ -197,6 +213,12 @@ connectionsRouter.post("/:id/stk", canProcess, async (req, res, next) => {
     );
     res.status(201).json(row);
   } catch (error: any) {
+    if (error.stkRequestId) {
+      const existing = await prisma.mpesaStkRequest.findUnique({
+        where: { stkRequestId: BigInt(error.stkRequestId) },
+      });
+      if (existing) return res.json(existing);
+    }
     if (error.status) return res.status(error.status).json({
       error: error.message,
       ...(error.stkRequestId ? { stkRequestId: error.stkRequestId } : {}),
