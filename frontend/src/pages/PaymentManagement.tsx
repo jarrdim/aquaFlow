@@ -2134,6 +2134,9 @@ export function DailyReceiptsReport() {
   const [previewOpen, setPreviewOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
+  const [tableSearch, setTableSearch] = useState("");
+  const [tablePaymentType, setTablePaymentType] = useState("");
+  const [tablePayMode, setTablePayMode] = useState("");
   useEffect(() => {
     api.listPaymentChannels().then((items) => {
       setChannels(items);
@@ -2192,7 +2195,7 @@ export function DailyReceiptsReport() {
     });
     return heads.size ? [...heads].join(", ") : "Water bill / account credit";
   };
-  const reportRows = useMemo(() => filteredRows.map((payment) => ({
+  const allReportRows = useMemo<Row[]>(() => filteredRows.map((payment): Row => ({
     ...payment,
     receiptNumber: payment.receipt?.receiptNumber ?? "—",
     accountName: payment.customerName || customerDisplayName(payment.account?.customer) || payment.payerName || "Unmatched payer",
@@ -2200,9 +2203,20 @@ export function DailyReceiptsReport() {
     payMode: payment.channel?.channelName || payment.channel?.channelCode || "—",
     transactionHead: paymentHead(payment),
   })), [filteredRows]);
+  const reportRows = useMemo(() => {
+    const query = tableSearch.trim().toLowerCase();
+    return allReportRows.filter((payment: Row) => {
+      const searchable = [payment.receiptNumber, payment.transactionReference, payment.accountName, payment.accountNumber, payment.transactionHead, payment.payMode];
+      return (
+        (!query || searchable.some((value) => String(value ?? "").toLowerCase().includes(query))) &&
+        (!tablePaymentType || payment.paymentType === tablePaymentType) &&
+        (!tablePayMode || payment.payMode === tablePayMode)
+      );
+    });
+  }, [allReportRows, tableSearch, tablePaymentType, tablePayMode]);
   const totals = useMemo(
-    () => filteredRows.reduce((s, p) => s + Number(p.amount), 0),
-    [filteredRows],
+    () => reportRows.reduce((s, p) => s + Number(p.amount), 0),
+    [reportRows],
   );
   const reportInput = `${INPUT} rounded-xl border-slate-200 px-3.5 py-2.5 transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10`;
   const channelTotals = useMemo(() => reportRows.reduce((result: Record<string, number>, payment: Row) => {
@@ -2214,6 +2228,8 @@ export function DailyReceiptsReport() {
     result[head] = (result[head] ?? 0) + Number(payment.amount ?? 0);
     return result;
   }, {}), [reportRows]);
+  const payModes = useMemo(() => [...new Set(allReportRows.map((payment: Row) => String(payment.payMode)))].sort(), [allReportRows]);
+  const paymentTypes = useMemo(() => [...new Set(allReportRows.map((payment: Row) => String(payment.paymentType)))].sort(), [allReportRows]);
   const reportPeriod = !fromDate && !toDate
     ? "All dates"
     : fromDate && toDate && fromDate === toDate
@@ -2259,9 +2275,15 @@ export function DailyReceiptsReport() {
           <div className="flex h-[42px] items-stretch gap-2 whitespace-nowrap"><Button className="px-3 text-sm" tone="blue" disabled={loading || !reportRows.length} onClick={() => setPreviewOpen(true)}>{loading ? "Loading..." : "Preview / PDF"}</Button><Button className="px-3 text-sm" tone="slate" disabled={loading || exporting || !reportRows.length} onClick={() => void exportWorkbook()}><span className="inline-flex items-center gap-2">{exporting ? <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" /> : <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="M12 3v12M7 10l5 5 5-5M5 21h14" /></svg>}{exporting ? "Exporting..." : "Excel"}</span></Button></div>
         </div>
       </section>
-      <div className="mb-3 flex flex-wrap gap-2"><div className="rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2"><span className="text-[10px] font-bold uppercase tracking-wide text-emerald-700">Total collected</span><strong className="ml-3 text-base text-slate-900">{money(totals)}</strong></div><div className="rounded-lg border border-sky-100 bg-sky-50 px-3 py-2"><span className="text-[10px] font-bold uppercase tracking-wide text-sky-700">Transactions</span><strong className="ml-3 text-base text-slate-900">{filteredRows.length}</strong></div></div>
+      <div className="mb-3 flex flex-wrap gap-2"><div className="rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2"><span className="text-[10px] font-bold uppercase tracking-wide text-emerald-700">Total collected</span><strong className="ml-3 text-base text-slate-900">{money(totals)}</strong></div><div className="rounded-lg border border-sky-100 bg-sky-50 px-3 py-2"><span className="text-[10px] font-bold uppercase tracking-wide text-sky-700">Transactions</span><strong className="ml-3 text-base text-slate-900">{reportRows.length}</strong></div></div>
       <Card title="Collection transactions" className="relative overflow-hidden shadow-sm">
         {loading && <div className="absolute inset-0 z-10 grid min-h-56 place-items-center bg-white/95"><div className="text-center"><div className="mx-auto h-9 w-9 animate-spin rounded-full border-4 border-slate-200 border-t-slate-700" /><div className="mt-3 text-sm font-bold text-slate-700">Loading selected collections...</div><div className="mt-1 text-xs text-slate-400">Please wait before previewing or exporting</div></div></div>}
+        <div className="mb-3 grid gap-2 md:grid-cols-2 xl:grid-cols-[minmax(280px,1fr)_230px_190px_auto]">
+          <div className="relative"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></svg><input className={`${INPUT} h-10 rounded-lg pl-9 text-sm`} value={tableSearch} onChange={(event) => setTableSearch(event.target.value)} placeholder="Search receipt, customer, account or bill" /></div>
+          <SearchableSelect aria-label="Filter transaction or bill type" className={`${INPUT} h-10 text-sm`} value={tablePaymentType} onChange={(event) => setTablePaymentType(event.target.value)}><option value="">All transaction / bill types</option>{paymentTypes.map((type) => <option key={type} value={type}>{pretty(type)}</option>)}</SearchableSelect>
+          <SearchableSelect aria-label="Filter payment mode" className={`${INPUT} h-10 text-sm`} value={tablePayMode} onChange={(event) => setTablePayMode(event.target.value)}><option value="">All payment modes</option>{payModes.map((mode) => <option key={mode} value={mode}>{mode}</option>)}</SearchableSelect>
+          <button type="button" className="h-10 rounded-lg border border-slate-200 px-3 text-sm font-semibold text-slate-600 hover:bg-slate-50" onClick={() => { setTableSearch(""); setTablePaymentType(""); setTablePayMode(""); }}>Clear</button>
+        </div>
         <div className="overflow-x-auto rounded-xl border border-slate-200"><table className="w-full min-w-[1050px]"><thead><tr className="bg-slate-50/80"><th className={TH}>Receipt No.</th><th className={TH}>Account name</th><th className={TH}>Date</th><th className={TH}>A/c No.</th><th className={TH}>Transaction / bill</th><th className={TH}>Pay mode</th><th className={`${TH} text-right`}>Amount</th></tr></thead><tbody>{reportRows.map((payment: Row) => <tr key={payment.paymentId} className="border-t hover:bg-emerald-50/30"><td className={`${TD} font-semibold`}>{payment.receiptNumber}</td><td className={TD}>{payment.accountName}</td><td className={TD}>{date(payment.valueDate ?? payment.paymentDate)}</td><td className={TD}>{payment.accountNumber}</td><td className={TD}><div className="max-w-xs font-medium text-slate-700">{payment.transactionHead}</div><div className="mt-0.5 text-xs text-slate-400">{pretty(payment.paymentType)}</div></td><td className={TD}>{payment.payMode}</td><td className={`${TD} text-right font-bold text-slate-800`}>{money(payment.amount)}</td></tr>)}{!reportRows.length && <tr><td colSpan={7} className="p-14 text-center text-slate-400">No posted collections were found for this report period.</td></tr>}</tbody></table></div>
       </Card>
       {previewOpen && <div className="daily-report-preview fixed inset-0 z-[100] overflow-y-auto bg-slate-950/70 p-3 sm:p-6" role="dialog" aria-modal="true" aria-label="Daily collection report preview"><div className="mx-auto mb-4 flex max-w-6xl flex-wrap justify-end gap-2"><Button tone="slate" onClick={() => setPreviewOpen(false)}>Close preview</Button><Button tone="green" onClick={printReport}>Print / Save PDF</Button></div><article className="daily-report-print-document mx-auto min-h-[297mm] max-w-6xl bg-white p-8 text-slate-900 shadow-2xl sm:p-12"><header className="border-b-2 border-slate-900 pb-4 text-center"><img src="/samdamte-water-logo-print.png" alt="Samdamte Water Utility Management" className="mx-auto mb-2 h-auto w-[250px] max-w-[55%] object-contain" /><h2 className="text-lg font-extrabold uppercase tracking-wide">Daily Collection Report</h2><p className="mt-1 text-sm font-semibold">Receipts report details for {reportPeriod}</p></header><div className="my-4 flex flex-wrap justify-between gap-2 text-xs"><span><strong>Period:</strong> {reportPeriod}</span><span><strong>Generated:</strong> {dateTime(new Date())}</span><span><strong>Transactions:</strong> {reportRows.length}</span></div><table className="daily-report-table w-full border-collapse text-[10px]"><thead><tr><th>Receipt No.</th><th>Account Name</th><th>Date</th><th>A/c No.</th><th>Transaction / Bill</th><th>Pay Mode</th><th className="text-right">Amount</th></tr></thead><tbody>{reportRows.map((payment: Row) => <tr key={payment.paymentId}><td>{payment.receiptNumber}</td><td>{payment.accountName}</td><td>{date(payment.valueDate ?? payment.paymentDate)}</td><td>{payment.accountNumber}</td><td>{payment.transactionHead}</td><td>{payment.payMode}</td><td className="whitespace-nowrap text-right">{Number(payment.amount).toLocaleString("en-KE", { minimumFractionDigits: 2 })}</td></tr>)}{Object.entries(channelTotals).sort(([a], [b]) => a.localeCompare(b)).map(([label, amount]) => <tr className="daily-report-total" key={label}><td colSpan={5}></td><td>{label} total</td><td className="text-right">{Number(amount).toLocaleString("en-KE", { minimumFractionDigits: 2 })}</td></tr>)}<tr className="daily-report-grand-total"><td colSpan={5}></td><td>GRAND TOTAL</td><td className="text-right">{totals.toLocaleString("en-KE", { minimumFractionDigits: 2 })}</td></tr></tbody></table><section className="mt-6 grid grid-cols-2 gap-8 text-xs"><div><h3 className="border-b pb-1 font-bold uppercase">Totals by transaction type</h3>{Object.entries(headTotals).sort(([a], [b]) => a.localeCompare(b)).map(([label, amount]) => <div key={label} className="flex justify-between border-b border-slate-200 py-1"><span>{label}</span><strong>{money(amount)}</strong></div>)}</div><div className="self-end pt-12 text-center"><div className="border-t border-slate-700 pt-2">Prepared / verified by</div></div></section></article></div>}
