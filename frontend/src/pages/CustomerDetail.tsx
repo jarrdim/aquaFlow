@@ -109,6 +109,7 @@ const STATUS_COLORS: Record<string, string> = {
   REVERSED:     "bg-slate-200 text-slate-600",
   PENDING_APPROVAL: "bg-amber-100 text-amber-700",
 };
+const ACCOUNT_STATUSES = ["PENDING", "ACTIVE", "SUSPENDED", "DISCONNECTED", "CLOSED"] as const;
 function StatusBadge({ status }: { status: string }) {
   const cls = STATUS_COLORS[status] ?? "bg-slate-100 text-slate-500";
   return (
@@ -175,8 +176,15 @@ export default function CustomerDetail() {
   const [portalSuccess, setPortalSuccess] = useState<string | null>(null);
   const [portalResult, setPortalResult] = useState<{ username: string; password: string; phoneNumber: string } | null>(null);
   const [portalForm, setPortalForm] = useState({ phoneNumber: "", password: "", confirmation: "" });
+  const [showAccountStatusForm, setShowAccountStatusForm] = useState(false);
+  const [accountStatus, setAccountStatus] = useState("");
+  const [accountStatusSaving, setAccountStatusSaving] = useState(false);
+  const [accountStatusError, setAccountStatusError] = useState<string | null>(null);
   const sessionRoles = getSessionUser()?.roles ?? [];
   const canManagePortal = sessionRoles.includes("SYSTEM_ADMIN") || sessionRoles.includes("CUSTOMER_CARE_OFFICER");
+  const canManageAccountStatus = sessionRoles.some((role) =>
+    ["SYSTEM_ADMIN", "FINANCE_MANAGER", "CUSTOMER_CARE_OFFICER"].includes(role),
+  );
 
   const [showPropertyForm, setShowPropertyForm] = useState(false);
   const [propertyForm, setPropertyForm] = useState({
@@ -403,6 +411,35 @@ export default function CustomerDetail() {
     }
   }
 
+  function openAccountStatusForm() {
+    if (!primaryAccount) return;
+    setAccountStatus(primaryAccount.accountStatus);
+    setAccountStatusError(null);
+    setShowAccountStatusForm(true);
+  }
+
+  async function saveAccountStatus(e: FormEvent) {
+    e.preventDefault();
+    if (!primaryAccount || !accountStatus) return;
+    setAccountStatusSaving(true);
+    setAccountStatusError(null);
+    try {
+      const updated = await api.updateAccountStatus(primaryAccount.accountId, accountStatus);
+      setCustomer((current) => current ? {
+        ...current,
+        accounts: current.accounts?.map((account) =>
+          account.accountId === primaryAccount.accountId ? { ...account, ...updated } : account,
+        ),
+      } : current);
+      setShowAccountStatusForm(false);
+      setPortalSuccess(`Account status changed to ${accountStatus.toLowerCase()}.`);
+    } catch (err: any) {
+      setAccountStatusError(err.message ?? "Account status could not be updated.");
+    } finally {
+      setAccountStatusSaving(false);
+    }
+  }
+
   if (error) return (
     <div className="p-6">
       <div className="px-4 py-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-600">{error}</div>
@@ -554,6 +591,36 @@ export default function CustomerDetail() {
         </div>
       )}
 
+      {showAccountStatusForm && primaryAccount && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-sm overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+            <div className="flex items-start justify-between border-b border-slate-100 px-5 py-4">
+              <div>
+                <h2 className="text-lg font-bold text-slate-900">Edit account status</h2>
+                <p className="mt-1 text-xs text-slate-500">{primaryAccount.accountNumber}</p>
+              </div>
+              <button type="button" onClick={() => setShowAccountStatusForm(false)} className="grid h-8 w-8 place-items-center rounded-full text-xl text-slate-400 hover:bg-slate-100" aria-label="Close">×</button>
+            </div>
+            <form onSubmit={saveAccountStatus} className="space-y-4 p-5">
+              <Field label="Account status">
+                <SearchableSelect className={FIELD_CLS} value={accountStatus} onChange={(event) => setAccountStatus(event.target.value)}>
+                  {ACCOUNT_STATUSES.map((status) => (
+                    <option key={status} value={status}>{status.charAt(0) + status.slice(1).toLowerCase()}</option>
+                  ))}
+                </SearchableSelect>
+              </Field>
+              {accountStatusError && <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{accountStatusError}</div>}
+              <div className="flex justify-end gap-2 border-t border-slate-100 pt-4">
+                <button type="button" onClick={() => setShowAccountStatusForm(false)} className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Cancel</button>
+                <button type="submit" disabled={accountStatusSaving || accountStatus === primaryAccount.accountStatus} className="rounded-lg bg-aqua-700 px-4 py-2 text-sm font-semibold text-white hover:bg-aqua-600 disabled:cursor-not-allowed disabled:opacity-50">
+                  {accountStatusSaving ? "Saving…" : "Save status"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* ── Edit form (full width, shown instead of cards) ── */}
       {editing && (
         <form onSubmit={saveEdit} className="bg-white border border-slate-200 rounded-xl shadow-sm p-4 mb-3 space-y-3 text-sm">
@@ -652,9 +719,16 @@ export default function CustomerDetail() {
             </section>
 
             <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-              <div className="border-b border-slate-100 px-5 py-4">
-                <h2 className="font-semibold text-slate-900">Account overview</h2>
-                <p className="mt-0.5 text-xs text-slate-500">Billing configuration and account state</p>
+              <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
+                <div>
+                  <h2 className="font-semibold text-slate-900">Account overview</h2>
+                  <p className="mt-0.5 text-xs text-slate-500">Billing configuration and account state</p>
+                </div>
+                {primaryAccount && canManageAccountStatus && (
+                  <button type="button" onClick={openAccountStatusForm} className="shrink-0 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">
+                    Edit status
+                  </button>
+                )}
               </div>
               {primaryAccount ? (
                 <div className="grid gap-x-8 px-5 py-3 sm:grid-cols-2">

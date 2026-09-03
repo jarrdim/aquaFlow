@@ -529,6 +529,39 @@ accountsRouter.post("/", async (req, res) => {
 });
 
 accountsRouter.patch(
+  "/:id/status",
+  requireRole("FINANCE_MANAGER", "CUSTOMER_CARE_OFFICER"),
+  async (req, res, next) => {
+    const accountId = z.coerce.bigint().positive().safeParse(req.params.id);
+    const input = z.object({ accountStatus: z.enum(accountStatuses) }).safeParse(req.body);
+    if (!accountId.success) return res.status(400).json({ error: "Invalid account ID" });
+    if (!input.success) return res.status(400).json({ error: "Invalid account status" });
+
+    try {
+      const existing = await prisma.customerAccount.findUnique({
+        where: { accountId: accountId.data },
+      });
+      if (!existing) return res.status(404).json({ error: "Account was not found" });
+
+      const account = await prisma.customerAccount.update({
+        where: { accountId: accountId.data },
+        data: {
+          accountStatus: input.data.accountStatus,
+          connectionDate: input.data.accountStatus === "ACTIVE"
+            ? existing.connectionDate ?? new Date()
+            : existing.connectionDate,
+          closureDate: input.data.accountStatus === "CLOSED" ? new Date() : null,
+          updatedAt: new Date(),
+        },
+      });
+      res.json(account);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+accountsRouter.patch(
   "/:id/activate",
   requireRole("SYSTEM_ADMIN", "FINANCE_MANAGER"),
   async (req, res) => {

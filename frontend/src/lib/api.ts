@@ -232,6 +232,11 @@ export const api = {
     request("/accounts", { method: "POST", body: JSON.stringify(data) }),
   activateAccount: (id: string) =>
     request(`/accounts/${id}/activate`, { method: "PATCH" }),
+  updateAccountStatus: (id: string, accountStatus: string) =>
+    request(`/accounts/${id}/status`, {
+      method: "PATCH",
+      body: JSON.stringify({ accountStatus }),
+    }),
   bulkImportAccounts: (accounts: Record<string, unknown>[]) =>
     request("/accounts/bulk-import", {
       method: "POST",
