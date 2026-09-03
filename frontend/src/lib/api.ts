@@ -664,6 +664,10 @@ export const api = {
     ).toString();
     return request(`/payments${query ? `?${query}` : ""}`);
   },
+  listDailyCollections: (filters: Record<string, string> = {}) => {
+    const query = new URLSearchParams({ ...filters, includeBillItems: "true" }).toString();
+    return request(`/payments?${query}`);
+  },
   recordPayment: (data: Record<string, unknown>) =>
     request("/payments/record", { method: "POST", body: JSON.stringify(data) }),
   importHistoricalReceipts: (receipts: Record<string, unknown>[]) =>

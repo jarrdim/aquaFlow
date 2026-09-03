@@ -67,6 +67,87 @@ export async function exportExcel(
   URL.revokeObjectURL(link.href);
 }
 
+export async function exportDailyReceiptsWorkbook(
+  filename: string,
+  period: string,
+  rows: Record<string, unknown>[],
+  channelTotals: Record<string, number>,
+  grandTotal: number,
+) {
+  if (!rows.length) return;
+  const { default: ExcelJS } = await import("exceljs");
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("Daily receipts", {
+    pageSetup: {
+      orientation: "landscape",
+      paperSize: 9,
+      fitToPage: true,
+      fitToWidth: 1,
+      fitToHeight: 0,
+      margins: { left: 0.25, right: 0.25, top: 0.35, bottom: 0.35, header: 0.1, footer: 0.1 },
+    },
+  });
+  sheet.columns = [
+    { key: "Receipt No.", width: 20 },
+    { key: "Account Name", width: 30 },
+    { key: "Date", width: 14 },
+    { key: "Account No.", width: 18 },
+    { key: "Transaction / Bill", width: 34 },
+    { key: "Pay Mode", width: 16 },
+    { key: "Amount", width: 16 },
+  ];
+  sheet.mergeCells("A1:G1");
+  sheet.getCell("A1").value = "SAMDAMTE WATER";
+  sheet.mergeCells("A2:G2");
+  sheet.getCell("A2").value = `RECEIPTS REPORT DETAILS FOR ${period.toUpperCase()}`;
+  [1, 2].forEach((rowNumber) => {
+    const row = sheet.getRow(rowNumber);
+    row.font = { bold: true, size: rowNumber === 1 ? 14 : 11, color: { argb: "FF000000" } };
+    row.alignment = { horizontal: "center", vertical: "middle" };
+  });
+  sheet.addRow([]);
+  const header = sheet.addRow(["Receipt No.", "Account Name", "Date", "A/c No.", "Transaction / Bill", "Pay Mode", "Amount"]);
+  header.font = { bold: true, color: { argb: "FF000000" } };
+  rows.forEach((item) => sheet.addRow([
+    item["Receipt No."],
+    item["Account Name"],
+    item.Date,
+    item["Account No."],
+    item["Transaction / Bill"],
+    item["Pay Mode"],
+    Number(item.Amount ?? 0),
+  ]));
+  Object.entries(channelTotals).sort(([left], [right]) => left.localeCompare(right)).forEach(([label, amount]) => {
+    const row = sheet.addRow([`${label.toUpperCase()} TOTALS`, "", "", "", "", "", amount]);
+    sheet.mergeCells(row.number, 1, row.number, 6);
+    row.font = { bold: true, color: { argb: "FF000000" } };
+  });
+  const grand = sheet.addRow(["GRAND TOTALS", "", "", "", "", "", grandTotal]);
+  sheet.mergeCells(grand.number, 1, grand.number, 6);
+  grand.font = { bold: true, size: 12, color: { argb: "FF000000" } };
+  for (let rowNumber = 4; rowNumber <= grand.number; rowNumber += 1) {
+    const row = sheet.getRow(rowNumber);
+    row.eachCell({ includeEmpty: true }, (cell, columnNumber) => {
+      cell.border = {
+        top: { style: "thin", color: { argb: "FF000000" } },
+        left: { style: "thin", color: { argb: "FF000000" } },
+        bottom: { style: "thin", color: { argb: "FF000000" } },
+        right: { style: "thin", color: { argb: "FF000000" } },
+      };
+      cell.alignment = { vertical: "middle", horizontal: columnNumber === 7 ? "right" : "left", wrapText: true };
+      if (columnNumber === 7 && rowNumber > 4) cell.numFmt = "#,##0.00";
+    });
+  }
+  sheet.views = [{ state: "frozen", ySplit: 4 }];
+  sheet.pageSetup.printTitlesRow = "1:4";
+  const data = await workbook.xlsx.writeBuffer();
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(new Blob([data], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+  link.download = filename.endsWith(".xlsx") ? filename : `${filename}.xlsx`;
+  link.click();
+  URL.revokeObjectURL(link.href);
+}
+
 export interface MeterReadingZoneSheet {
   zoneName: string;
   areaNames: string[];

@@ -704,6 +704,17 @@ const paymentInclude = {
   },
 } as const;
 
+const paymentReportInclude = {
+  ...paymentInclude,
+  allocations: {
+    include: {
+      bill: { include: { billingCycle: true, items: true } },
+      allocator: true,
+    },
+    orderBy: { createdAt: "asc" as const },
+  },
+} as const;
+
 async function addSuggestedAccounts(payments: any[]) {
   const candidatesByPayment = new Map<string, string[]>();
   const candidateNumbers = new Set<string>();
@@ -1193,6 +1204,7 @@ paymentsRouter.get("/", async (req, res, next) => {
       q = String(req.query.search ?? ""),
       from = String(req.query.from ?? ""),
       to = String(req.query.to ?? "");
+    const includeBillItems = req.query.includeBillItems === "true";
     const validDate = /^\d{4}-\d{2}-\d{2}$/;
     if ((from && !validDate.test(from)) || (to && !validDate.test(to)))
       return res.status(400).json({ error: "Valid from and to dates are required" });
@@ -1239,7 +1251,7 @@ paymentsRouter.get("/", async (req, res, next) => {
       const [rows, total] = await Promise.all([
         prisma.payment.findMany({
           where,
-          include: paymentInclude,
+          include: includeBillItems ? paymentReportInclude : paymentInclude,
           orderBy,
           skip: (page - 1) * pageSize,
           take: pageSize,
@@ -1256,9 +1268,9 @@ paymentsRouter.get("/", async (req, res, next) => {
     }
     const rows = await prisma.payment.findMany({
       where,
-      include: paymentInclude,
+      include: includeBillItems ? paymentReportInclude : paymentInclude,
       orderBy,
-      take: 3000,
+      ...(includeBillItems ? {} : { take: 3000 }),
     });
     res.json(await addSuggestedAccounts(rows));
   } catch (e) {

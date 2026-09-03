@@ -1,7 +1,7 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api } from "../lib/api";
-import { exportExcel, parseMeterWorkbook } from "../lib/meterFiles";
+import { exportDailyReceiptsWorkbook, exportExcel, parseMeterWorkbook } from "../lib/meterFiles";
 import { SearchableSelect } from "../components/SearchableSelect";
 import { SweetAlertToast } from "../components/SweetAlertToast";
 import { DateInput, DateTimeInput } from "../components/DateInput";
@@ -2048,40 +2048,112 @@ export function ReversalApprovals() {
 }
 
 export function CollectionReport() {
+  const [rows, setRows] = useState<Row[]>([]);
+  const [channels, setChannels] = useState<Row[]>([]);
+  const [channelId, setChannelId] = useState("");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+  const [search, setSearch] = useState("");
+  const [loadError, setLoadError] = useState("");
+
+  useEffect(() => {
+    api.listPaymentChannels().then((items) => {
+      setChannels(items);
+      const mpesa = items.find((channel: Row) =>
+        String(channel.channelName ?? "").trim().toUpperCase() === "MPESA",
+      );
+      if (mpesa) setChannelId(String(mpesa.channelId));
+    });
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (fromDate && toDate && fromDate > toDate) {
+      setRows([]);
+      setLoadError("From date cannot be after To date.");
+      return () => { cancelled = true; };
+    }
+    setLoadError("");
+    api.listPayments({
+      ...(channelId ? { channelId } : {}),
+      ...(fromDate ? { from: fromDate } : {}),
+      ...(toDate ? { to: toDate } : {}),
+    }).then((payments) => {
+      if (!cancelled) setRows(payments.filter((payment: Row) => payment.paymentStatus === "POSTED"));
+    }).catch((error) => {
+      if (!cancelled) {
+        setRows([]);
+        setLoadError(error instanceof Error ? error.message : "Unable to load collections.");
+      }
+    });
+    return () => { cancelled = true; };
+  }, [channelId, fromDate, toDate]);
+
+  const visibleRows = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    if (!query) return rows;
+    return rows.filter((payment) => [
+      payment.transactionReference,
+      payment.account?.accountNumber,
+      payment.customerName,
+      payment.payerName,
+      payment.receipt?.receiptNumber,
+    ].some((value) => String(value ?? "").toLowerCase().includes(query)));
+  }, [rows, search]);
+  const total = visibleRows.reduce((sum, payment) => sum + Number(payment.amount ?? 0), 0);
+  const reportInput = `${INPUT} rounded-xl border-slate-200 px-3.5 py-2.5 transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10`;
+
+  return <Page title="Daily collection report" subtitle="Collections by channel, cashier, receipt and transaction" actions={<Button tone="slate" onClick={() => exportExcel("daily-collections.xlsx", "Collections", visibleRows)}>Export Excel</Button>}>
+    {loadError && <Notice>{loadError}</Notice>}
+    <Card className="mb-5 overflow-hidden shadow-md shadow-slate-200/50">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <Field label="Collection channel"><SearchableSelect className={reportInput} value={channelId} onChange={(event) => setChannelId(event.target.value)}><option value="">All channels</option>{channels.map((channel) => <option key={channel.channelId} value={channel.channelId}>{channel.channelName}</option>)}</SearchableSelect></Field>
+        <Field label="Search customer, account or reference"><input className={reportInput} value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search collections" /></Field>
+        <Field label="From date"><DateInput className={reportInput} value={fromDate} onChange={(event) => setFromDate(event.target.value)} /></Field>
+        <Field label="To date"><DateInput className={reportInput} value={toDate} onChange={(event) => setToDate(event.target.value)} /></Field>
+      </div>
+    </Card>
+    <div className="mb-5 grid gap-3 sm:grid-cols-3"><Kpi label="Total collected" value={money(total)} /><Kpi label="Transactions" value={visibleRows.length} /><Kpi label="Average payment" value={money(visibleRows.length ? total / visibleRows.length : 0)} /></div>
+    <Card title="Collection transactions" className="overflow-hidden shadow-md shadow-slate-200/50"><PaymentTable rows={visibleRows} /></Card>
+  </Page>;
+}
+
+export function DailyReceiptsReport() {
+  const localDay = () => {
+    const now = new Date();
+    const offset = now.getTimezoneOffset() * 60_000;
+    return new Date(now.getTime() - offset).toISOString().slice(0, 10);
+  };
+  const initialDay = localDay();
   const [rows, setRows] = useState<Row[]>([]),
     [channels, setChannels] = useState<Row[]>([]),
     [channelId, setChannelId] = useState("");
   const [loadError, setLoadError] = useState("");
-  const [search, setSearch] = useState("");
-  const [fromDate, setFromDate] = useState("");
-  const [toDate, setToDate] = useState("");
-  const [allocation, setAllocation] = useState("");
-  const [minimumAmount, setMinimumAmount] = useState("");
-  const [maximumAmount, setMaximumAmount] = useState("");
-  const [sortBy, setSortBy] = useState("paymentDate");
-  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
+  const [fromDate, setFromDate] = useState(initialDay);
+  const [toDate, setToDate] = useState(initialDay);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [exporting, setExporting] = useState(false);
   useEffect(() => {
     api.listPaymentChannels().then((items) => {
       setChannels(items);
-      const mpesa = items.find(
-        (channel: Row) =>
-          String(channel.channelName ?? "").trim().toUpperCase() === "MPESA",
-      );
-      if (mpesa) setChannelId(String(mpesa.channelId));
     });
   }, []);
   useEffect(() => {
     let cancelled = false;
     if (fromDate && toDate && fromDate > toDate) {
       setRows([]);
+      setLoading(false);
       setLoadError("From date cannot be after To date.");
       return () => {
         cancelled = true;
       };
     }
     setLoadError("");
+    setRows([]);
+    setLoading(true);
     api
-      .listPayments({
+      .listDailyCollections({
         ...(channelId ? { channelId } : {}),
         ...(fromDate ? { from: fromDate } : {}),
         ...(toDate ? { to: toDate } : {}),
@@ -2098,109 +2170,101 @@ export function CollectionReport() {
           setRows([]);
           setLoadError(error instanceof Error ? error.message : "Unable to load collections.");
         }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
       });
     return () => {
       cancelled = true;
     };
   }, [channelId, fromDate, toDate]);
-  const filteredRows = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    const minimum = minimumAmount === "" ? null : Number(minimumAmount);
-    const maximum = maximumAmount === "" ? null : Number(maximumAmount);
-    return rows
-      .filter((payment) => {
-        // valueDate is the accounting/business date used by the API range filter.
-        // Fall back to paymentDate for older records that do not have one.
-        const paymentDay = String(payment.valueDate ?? payment.paymentDate ?? "").slice(0, 10);
-        const normalizedAllocation = payment.matchingStatus === "PARTIALLY_MATCHED"
-          ? "MATCHED"
-          : String(payment.matchingStatus ?? "");
-        const searchable = [
-          payment.transactionReference,
-          payment.account?.accountNumber,
-          payment.accountNumber,
-          payment.customerName,
-          customerDisplayName(payment.account?.customer),
-          payment.payerName,
-          payment.payerPhone,
-          payment.receipt?.receiptNumber,
-        ].map((value) => String(value ?? "").toLowerCase());
-        return (
-          (!query || searchable.some((value) => value.includes(query))) &&
-          (!fromDate || paymentDay >= fromDate) &&
-          (!toDate || paymentDay <= toDate) &&
-          (!allocation || normalizedAllocation === allocation) &&
-          (minimum === null || Number(payment.amount) >= minimum) &&
-          (maximum === null || Number(payment.amount) <= maximum)
-        );
-      })
-      .sort((left, right) => {
-        const value = (payment: Row) => {
-          if (sortBy === "amount") return Number(payment.amount ?? 0);
-          if (sortBy === "customer") return String(payment.customerName ?? customerDisplayName(payment.account?.customer) ?? "").toLowerCase();
-          if (sortBy === "reference") return String(payment.transactionReference ?? "").toLowerCase();
-          if (sortBy === "channel") return String(payment.channel?.channelName ?? payment.channel?.channelCode ?? "").toLowerCase();
-          return new Date(payment.paymentDate ?? payment.valueDate ?? 0).getTime();
-        };
-        const a = value(left);
-        const b = value(right);
-        const comparison = typeof a === "number" && typeof b === "number"
-          ? a - b
-          : String(a).localeCompare(String(b));
-        return sortDirection === "asc" ? comparison : -comparison;
+  const filteredRows = rows;
+  const paymentHead = (payment: Row) => {
+    if (payment.paymentType === "NEW_CONNECTION_FEE") return "New connection fee";
+    if (payment.paymentType === "RECONNECTION_FEE") return "Reconnection / disconnection service fee";
+    if (payment.paymentType === "ADVANCE_PAYMENT") return "Advance payment";
+    if (payment.paymentType === "DEPOSIT") return "Deposit";
+    const heads = new Set<string>();
+    (payment.allocations ?? []).forEach((allocationRow: Row) => {
+      (allocationRow.bill?.items ?? []).forEach((item: Row) => {
+        if (Number(item.amount ?? 0) !== 0) heads.add(String(item.description || pretty(item.chargeType)));
       });
-  }, [rows, search, fromDate, toDate, allocation, minimumAmount, maximumAmount, sortBy, sortDirection]);
+    });
+    return heads.size ? [...heads].join(", ") : "Water bill / account credit";
+  };
+  const reportRows = useMemo(() => filteredRows.map((payment) => ({
+    ...payment,
+    receiptNumber: payment.receipt?.receiptNumber ?? "—",
+    accountName: payment.customerName || customerDisplayName(payment.account?.customer) || payment.payerName || "Unmatched payer",
+    accountNumber: payment.account?.accountNumber || payment.customerReference || "—",
+    payMode: payment.channel?.channelName || payment.channel?.channelCode || "—",
+    transactionHead: paymentHead(payment),
+  })), [filteredRows]);
   const totals = useMemo(
     () => filteredRows.reduce((s, p) => s + Number(p.amount), 0),
     [filteredRows],
   );
   const reportInput = `${INPUT} rounded-xl border-slate-200 px-3.5 py-2.5 transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10`;
-  const average = filteredRows.length ? totals / filteredRows.length : 0;
+  const channelTotals = useMemo(() => reportRows.reduce((result: Record<string, number>, payment: Row) => {
+    result[payment.payMode] = (result[payment.payMode] ?? 0) + Number(payment.amount ?? 0);
+    return result;
+  }, {}), [reportRows]);
+  const headTotals = useMemo(() => reportRows.reduce((result: Record<string, number>, payment: Row) => {
+    const head = pretty(payment.paymentType || "BILL_PAYMENT");
+    result[head] = (result[head] ?? 0) + Number(payment.amount ?? 0);
+    return result;
+  }, {}), [reportRows]);
+  const reportPeriod = !fromDate && !toDate
+    ? "All dates"
+    : fromDate && toDate && fromDate === toDate
+      ? date(`${fromDate}T12:00:00`)
+      : `${fromDate ? date(`${fromDate}T12:00:00`) : "Beginning"} – ${toDate ? date(`${toDate}T12:00:00`) : "Today"}`;
+  const printReport = () => {
+    document.body.classList.add("printing-daily-report");
+    window.addEventListener("afterprint", () => document.body.classList.remove("printing-daily-report"), { once: true });
+    window.print();
+  };
+  const excelRows = reportRows.map((payment: Row) => ({
+    "Receipt No.": payment.receiptNumber,
+    "Transaction Reference": payment.transactionReference,
+    "Account Name": payment.accountName,
+    "Account No.": payment.accountNumber,
+    Date: date(payment.valueDate ?? payment.paymentDate),
+    "Transaction / Bill": payment.transactionHead,
+    "Pay Mode": payment.payMode,
+    Amount: Number(payment.amount ?? 0),
+  }));
+  const exportWorkbook = async () => {
+    if (loading || !excelRows.length) return;
+    setExporting(true);
+    try {
+      await exportDailyReceiptsWorkbook("daily-receipts-report.xlsx", reportPeriod, excelRows, channelTotals, totals);
+    } finally {
+      setExporting(false);
+    }
+  };
   return (
     <Page
-      title="Daily collection report"
-      subtitle="Collections by channel, cashier, receipt and transaction"
-      actions={
-        <Button
-          tone="slate"
-          onClick={() =>
-            exportExcel("daily-collections.xlsx", "Collections", filteredRows)
-          }
-        >
-          <span className="inline-flex items-center gap-2"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="M12 3v12M7 10l5 5 5-5M5 21h14" /></svg>Export Excel</span>
-        </Button>
-      }
+      className="daily-report-page"
+      title="Daily receipts report"
+      subtitle="All receipts, transaction types and billed services collected during the selected day"
     >
       {loadError && <Notice>{loadError}</Notice>}
-      <Card className="mb-5 overflow-hidden shadow-md shadow-slate-200/50">
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4"><Field label="Collection channel">
-          <SearchableSelect
-            className={reportInput}
-            value={channelId}
-            onChange={(e) => setChannelId(e.target.value)}
-          >
-            <option value="">All channels</option>
-            {channels.map((c) => (
-              <option key={c.channelId} value={c.channelId}>
-                {c.channelName}
-              </option>
-            ))}
-          </SearchableSelect>
-        </Field>
-        <Field label="Search customer, account or reference"><input className={reportInput} value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search collections" /></Field>
-        <Field label="From date"><DateInput className={reportInput} value={fromDate} onChange={(e) => setFromDate(e.target.value)} /></Field>
-        <Field label="To date"><DateInput className={reportInput} value={toDate} onChange={(e) => setToDate(e.target.value)} /></Field>
-        <Field label="Allocation"><SearchableSelect className={reportInput} value={allocation} onChange={(e) => setAllocation(e.target.value)}><option value="">All allocations</option><option value="MATCHED">Matched</option><option value="UNMATCHED">Unmatched</option></SearchableSelect></Field>
-        <Field label="Minimum amount"><input type="number" min="0" step="0.01" className={reportInput} value={minimumAmount} onChange={(e) => setMinimumAmount(e.target.value)} placeholder="0.00" /></Field>
-        <Field label="Maximum amount"><input type="number" min="0" step="0.01" className={reportInput} value={maximumAmount} onChange={(e) => setMaximumAmount(e.target.value)} placeholder="No maximum" /></Field>
-        <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2"><Field label="Sort by"><SearchableSelect className={reportInput} value={sortBy} onChange={(e) => setSortBy(e.target.value)}><option value="paymentDate">Date</option><option value="amount">Amount</option><option value="customer">Customer</option><option value="reference">Reference</option><option value="channel">Channel</option></SearchableSelect></Field><Field label="Order"><button type="button" className={`${reportInput} min-w-28 font-semibold`} onClick={() => setSortDirection((value) => value === "asc" ? "desc" : "asc")}>{sortDirection === "asc" ? "Ascending" : "Descending"}</button></Field></div>
+      <section className="mb-3 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+        <div className="grid items-end gap-3 md:grid-cols-2 xl:grid-cols-[minmax(220px,1fr)_190px_190px_auto_auto]">
+          <Field label="Collection channel"><SearchableSelect className={reportInput} value={channelId} onChange={(event) => setChannelId(event.target.value)}><option value="">All channels</option>{channels.map((channel) => <option key={channel.channelId} value={channel.channelId}>{channel.channelName}</option>)}</SearchableSelect></Field>
+          <Field label="From date"><DateInput className={reportInput} value={fromDate} onChange={(event) => setFromDate(event.target.value)} /></Field>
+          <Field label="To date"><DateInput className={reportInput} value={toDate} onChange={(event) => setToDate(event.target.value)} /></Field>
+          <button type="button" className="h-[42px] rounded-lg border border-emerald-200 bg-emerald-50 px-5 text-sm font-bold text-emerald-700 transition hover:bg-emerald-100" onClick={() => { setFromDate(initialDay); setToDate(initialDay); }}>Today</button>
+          <div className="flex h-[42px] items-stretch gap-2 whitespace-nowrap"><Button className="px-3 text-sm" tone="blue" disabled={loading || !reportRows.length} onClick={() => setPreviewOpen(true)}>{loading ? "Loading..." : "Preview / PDF"}</Button><Button className="px-3 text-sm" tone="slate" disabled={loading || exporting || !reportRows.length} onClick={() => void exportWorkbook()}><span className="inline-flex items-center gap-2">{exporting ? <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" /> : <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="M12 3v12M7 10l5 5 5-5M5 21h14" /></svg>}{exporting ? "Exporting..." : "Excel"}</span></Button></div>
         </div>
-        <div className="mt-4 flex flex-wrap items-center justify-between gap-3"><div className="rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-700"><span className="font-bold">{filteredRows.length}</span> posted transaction{filteredRows.length === 1 ? "" : "s"} in this view</div><button type="button" className="text-sm font-semibold text-slate-500 hover:text-emerald-700" onClick={() => { setSearch(""); setFromDate(""); setToDate(""); setAllocation(""); setMinimumAmount(""); setMaximumAmount(""); setSortBy("paymentDate"); setSortDirection("desc"); }}>Clear filters</button></div>
+      </section>
+      <div className="mb-3 flex flex-wrap gap-2"><div className="rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2"><span className="text-[10px] font-bold uppercase tracking-wide text-emerald-700">Total collected</span><strong className="ml-3 text-base text-slate-900">{money(totals)}</strong></div><div className="rounded-lg border border-sky-100 bg-sky-50 px-3 py-2"><span className="text-[10px] font-bold uppercase tracking-wide text-sky-700">Transactions</span><strong className="ml-3 text-base text-slate-900">{filteredRows.length}</strong></div></div>
+      <Card title="Collection transactions" className="relative overflow-hidden shadow-sm">
+        {loading && <div className="absolute inset-0 z-10 grid min-h-56 place-items-center bg-white/95"><div className="text-center"><div className="mx-auto h-9 w-9 animate-spin rounded-full border-4 border-slate-200 border-t-slate-700" /><div className="mt-3 text-sm font-bold text-slate-700">Loading selected collections...</div><div className="mt-1 text-xs text-slate-400">Please wait before previewing or exporting</div></div></div>}
+        <div className="overflow-x-auto rounded-xl border border-slate-200"><table className="w-full min-w-[1050px]"><thead><tr className="bg-slate-50/80"><th className={TH}>Receipt No.</th><th className={TH}>Account name</th><th className={TH}>Date</th><th className={TH}>A/c No.</th><th className={TH}>Transaction / bill</th><th className={TH}>Pay mode</th><th className={`${TH} text-right`}>Amount</th></tr></thead><tbody>{reportRows.map((payment: Row) => <tr key={payment.paymentId} className="border-t hover:bg-emerald-50/30"><td className={`${TD} font-semibold`}>{payment.receiptNumber}</td><td className={TD}>{payment.accountName}</td><td className={TD}>{date(payment.valueDate ?? payment.paymentDate)}</td><td className={TD}>{payment.accountNumber}</td><td className={TD}><div className="max-w-xs font-medium text-slate-700">{payment.transactionHead}</div><div className="mt-0.5 text-xs text-slate-400">{pretty(payment.paymentType)}</div></td><td className={TD}>{payment.payMode}</td><td className={`${TD} text-right font-bold text-slate-800`}>{money(payment.amount)}</td></tr>)}{!reportRows.length && <tr><td colSpan={7} className="p-14 text-center text-slate-400">No posted collections were found for this report period.</td></tr>}</tbody></table></div>
       </Card>
-      <div className="grid gap-3 sm:grid-cols-3"><div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-emerald-700">Total collected</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{money(totals)}</div></div><div className="rounded-2xl border border-sky-100 bg-sky-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-sky-700">Transactions</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{filteredRows.length}</div></div><div className="rounded-2xl border border-violet-100 bg-violet-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-violet-700">Average payment</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{money(average)}</div></div></div>
-      <Card title="Collection transactions" className="mt-5 overflow-hidden shadow-md shadow-slate-200/50">
-        <PaymentTable rows={filteredRows} />
-      </Card>
+      {previewOpen && <div className="daily-report-preview fixed inset-0 z-[100] overflow-y-auto bg-slate-950/70 p-3 sm:p-6" role="dialog" aria-modal="true" aria-label="Daily collection report preview"><div className="mx-auto mb-4 flex max-w-6xl flex-wrap justify-end gap-2"><Button tone="slate" onClick={() => setPreviewOpen(false)}>Close preview</Button><Button tone="green" onClick={printReport}>Print / Save PDF</Button></div><article className="daily-report-print-document mx-auto min-h-[297mm] max-w-6xl bg-white p-8 text-slate-900 shadow-2xl sm:p-12"><header className="border-b-2 border-slate-900 pb-4 text-center"><img src="/samdamte-water-logo-print.png" alt="Samdamte Water Utility Management" className="mx-auto mb-2 h-auto w-[250px] max-w-[55%] object-contain" /><h2 className="text-lg font-extrabold uppercase tracking-wide">Daily Collection Report</h2><p className="mt-1 text-sm font-semibold">Receipts report details for {reportPeriod}</p></header><div className="my-4 flex flex-wrap justify-between gap-2 text-xs"><span><strong>Period:</strong> {reportPeriod}</span><span><strong>Generated:</strong> {dateTime(new Date())}</span><span><strong>Transactions:</strong> {reportRows.length}</span></div><table className="daily-report-table w-full border-collapse text-[10px]"><thead><tr><th>Receipt No.</th><th>Account Name</th><th>Date</th><th>A/c No.</th><th>Transaction / Bill</th><th>Pay Mode</th><th className="text-right">Amount</th></tr></thead><tbody>{reportRows.map((payment: Row) => <tr key={payment.paymentId}><td>{payment.receiptNumber}</td><td>{payment.accountName}</td><td>{date(payment.valueDate ?? payment.paymentDate)}</td><td>{payment.accountNumber}</td><td>{payment.transactionHead}</td><td>{payment.payMode}</td><td className="whitespace-nowrap text-right">{Number(payment.amount).toLocaleString("en-KE", { minimumFractionDigits: 2 })}</td></tr>)}{Object.entries(channelTotals).sort(([a], [b]) => a.localeCompare(b)).map(([label, amount]) => <tr className="daily-report-total" key={label}><td colSpan={5}></td><td>{label} total</td><td className="text-right">{Number(amount).toLocaleString("en-KE", { minimumFractionDigits: 2 })}</td></tr>)}<tr className="daily-report-grand-total"><td colSpan={5}></td><td>GRAND TOTAL</td><td className="text-right">{totals.toLocaleString("en-KE", { minimumFractionDigits: 2 })}</td></tr></tbody></table><section className="mt-6 grid grid-cols-2 gap-8 text-xs"><div><h3 className="border-b pb-1 font-bold uppercase">Totals by transaction type</h3>{Object.entries(headTotals).sort(([a], [b]) => a.localeCompare(b)).map(([label, amount]) => <div key={label} className="flex justify-between border-b border-slate-200 py-1"><span>{label}</span><strong>{money(amount)}</strong></div>)}</div><div className="self-end pt-12 text-center"><div className="border-t border-slate-700 pt-2">Prepared / verified by</div></div></section></article></div>}
     </Page>
   );
 }

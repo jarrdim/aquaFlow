@@ -89,6 +89,7 @@ import {
 } from "./pages/BillingManagement";
 import {
   CollectionReport,
+  DailyReceiptsReport,
   MpesaStkPush,
   PaymentAudit,
   PaymentChannels,
@@ -384,6 +385,7 @@ const NEW_SIDEBAR_ROUTES = new Set([
   "/billing/account-adjustments",
   "/billing/account-adjustments/approvals",
   "/meters/direct-replacement",
+  "/payments/reports/receipt-detail",
 ]);
 
 const PAYMENT_MENU = [
@@ -397,6 +399,7 @@ const PAYMENT_MENU = [
   ["Cancel Receipts", "/payments/reversals"],
   ["Cancellation Approval", "/payments/reversals/approvals"],
   ["Daily Collections", "/payments/reports/daily"],
+  ["Daily Receipts Report", "/payments/reports/receipt-detail"],
   ["Reconciliation", "/payments/reconciliation"],
   ["Customer Payment History", "/payments/history"],
   ["Payment Audit Trail", "/payments/audit"],
@@ -1020,6 +1023,11 @@ function Shell({ children }: { children: React.ReactNode }) {
                           className={`flex items-center justify-between gap-2 rounded px-2 py-1.5 text-xs font-medium transition-colors ${itemActive ? "bg-white/10 text-white" : "text-blue-100/50 hover:bg-white/5 hover:text-white"}`}
                         >
                           <span>{itemLabel}</span>
+                          {NEW_SIDEBAR_ROUTES.has(itemPath) && (
+                            <span className="shrink-0 rounded-full border border-cyan-300/30 bg-cyan-400/15 px-1.5 py-0.5 text-[9px] font-extrabold uppercase leading-none tracking-wide text-cyan-200">
+                              New
+                            </span>
+                          )}
                           {(sidebarCounts[itemPath] ?? 0) > 0 && (
                             <span className="min-w-5 shrink-0 rounded-full bg-amber-400 px-1.5 py-0.5 text-center text-[10px] font-extrabold leading-none text-amber-950">
                               {sidebarCounts[itemPath] > 99 ? "99+" : sidebarCounts[itemPath]}
@@ -1972,6 +1980,16 @@ export default function App() {
           <Protected>
             <Shell>
               <CollectionReport />
+            </Shell>
+          </Protected>
+        }
+      />
+      <Route
+        path="/payments/reports/receipt-detail"
+        element={
+          <Protected>
+            <Shell>
+              <DailyReceiptsReport />
             </Shell>
           </Protected>
         }

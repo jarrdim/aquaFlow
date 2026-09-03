@@ -350,6 +350,48 @@ input[type="radio"] {
   box-shadow: 0 12px 24px -18px rgba(15, 32, 56, 0.55);
 }
 
+.daily-report-table th,
+.daily-report-table td {
+  border: 1px solid #000;
+  padding: 5px 7px;
+  vertical-align: top;
+}
+
+.daily-report-table th {
+  background: #fff;
+  font-weight: 700;
+  text-align: left;
+}
+
+.daily-report-table .daily-report-total td {
+  background: #fff;
+  font-weight: 700;
+}
+
+.daily-report-table .daily-report-grand-total td {
+  background: #fff;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.daily-report-print-document {
+  color: #000;
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+.daily-report-print-document > header + div,
+.daily-report-print-document > section {
+  display: none;
+}
+
+.daily-report-preview > div:first-child {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  padding: 10px 0;
+  background: transparent;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .landing-live-dot,
   .landing-workflow-dot,
@@ -373,6 +415,92 @@ input[type="radio"] {
   @page invoice {
     size: A4 portrait;
     margin: 0;
+  }
+
+  @page daily-collection {
+    size: A4 portrait;
+    margin: 8mm;
+  }
+
+  body.printing-daily-report {
+    overflow: visible !important;
+    background: white !important;
+  }
+
+  body.printing-daily-report > * {
+    visibility: hidden !important;
+  }
+
+  body.printing-daily-report .daily-report-preview,
+  body.printing-daily-report .daily-report-preview * {
+    visibility: visible !important;
+  }
+
+  body.printing-daily-report .daily-report-preview {
+    position: absolute !important;
+    inset: 0 !important;
+    overflow: visible !important;
+    padding: 0 !important;
+    background: white !important;
+  }
+
+  body.printing-daily-report .daily-report-preview > div:first-child {
+    display: none !important;
+  }
+
+  body.printing-daily-report .daily-report-print-document {
+    page: daily-collection;
+    width: 100% !important;
+    max-width: none !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+    color: #000 !important;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  body.printing-daily-report .daily-report-print-document > header + div,
+  body.printing-daily-report .daily-report-print-document > section {
+    display: none !important;
+  }
+
+  body.printing-daily-report .daily-report-print-document header {
+    border-color: #000 !important;
+    padding-bottom: 7px !important;
+  }
+
+  body.printing-daily-report .daily-report-print-document header img {
+    display: block;
+    width: 190px !important;
+    max-width: 45% !important;
+    height: auto !important;
+    margin: 0 auto 4px !important;
+  }
+
+  body.printing-daily-report .daily-report-print-document h2 {
+    margin-top: 1px !important;
+    font-size: 11pt !important;
+  }
+
+  body.printing-daily-report .daily-report-print-document p {
+    margin-top: 1px !important;
+    font-size: 9pt !important;
+  }
+
+  body.printing-daily-report .daily-report-table {
+    margin-top: 8px !important;
+    color: #000 !important;
+    font-size: 7.5pt !important;
+  }
+
+  body.printing-daily-report .daily-report-print-document thead {
+    display: table-header-group;
+  }
+
+  body.printing-daily-report .daily-report-print-document tr {
+    break-inside: avoid;
   }
 
   body.printing-invoice .invoice-print-document,
