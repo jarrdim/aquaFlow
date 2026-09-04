@@ -11,6 +11,7 @@ type Props = {
   className?: string;
   disabled?: boolean;
   emptyMessage?: string;
+  loading?: boolean;
   maxSelected?: number;
   onSearchQuery?: (query: string) => void;
   options: CheckboxMultiSelectOption[];
@@ -26,6 +27,7 @@ export function CheckboxMultiSelect({
   className = "",
   disabled,
   emptyMessage = "No options found",
+  loading = false,
   maxSelected,
   onSearchQuery,
   options,
@@ -114,15 +116,17 @@ export function CheckboxMultiSelect({
 
   return (
     <div ref={rootRef} className="relative">
-      <button ref={buttonRef} type="button" disabled={disabled} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)} className={`${className} flex items-center justify-between gap-2 text-left`}>
+      <button ref={buttonRef} type="button" disabled={disabled} aria-busy={loading} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)} className={`${className} flex items-center justify-between gap-2 text-left`}>
         <span className={`min-w-0 flex-1 truncate ${selected.length ? "" : "text-slate-400"}`}>{summary}</span>
-        <svg className="h-4 w-4 shrink-0 text-slate-500" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fillRule="evenodd" d="M5.23 7.21a.75.75 0 0 1 1.06.02L10 11.17l3.71-3.94a.75.75 0 1 1 1.08 1.04l-4.25 4.5a.75.75 0 0 1-1.08 0l-4.25-4.5a.75.75 0 0 1 .02-1.06Z" clipRule="evenodd" /></svg>
+        {loading
+          ? <span className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-sky-200 border-t-aqua-700" aria-hidden="true" />
+          : <svg className="h-4 w-4 shrink-0 text-slate-500" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fillRule="evenodd" d="M5.23 7.21a.75.75 0 0 1 1.06.02L10 11.17l3.71-3.94a.75.75 0 1 1 1.08 1.04l-4.25 4.5a.75.75 0 0 1-1.08 0l-4.25-4.5a.75.75 0 0 1 .02-1.06Z" clipRule="evenodd" /></svg>}
       </button>
       {open && !disabled && position && createPortal(
         <div ref={menuRef} style={position} className="fixed z-[1000] overflow-hidden rounded-lg border border-slate-200 bg-white shadow-xl">
           <div className="border-b border-slate-100 p-2">
-            <input ref={searchRef} type="search" value={query} onChange={(event) => { setQuery(event.target.value); onSearchQuery?.(event.target.value); }} onKeyDown={(event) => { if (event.key === "Escape") setOpen(false); }} className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm outline-none focus:border-aqua-500 focus:ring-2 focus:ring-aqua-500/20" placeholder="Search account number or customer..." />
-            {selectableFiltered.length > 0 && (
+            <input ref={searchRef} type="search" disabled={loading} value={query} onChange={(event) => { setQuery(event.target.value); onSearchQuery?.(event.target.value); }} onKeyDown={(event) => { if (event.key === "Escape") setOpen(false); }} className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm outline-none focus:border-aqua-500 focus:ring-2 focus:ring-aqua-500/20 disabled:cursor-wait disabled:bg-slate-50" placeholder={loading ? "Loading accounts…" : "Search account number or customer..."} />
+            {!loading && selectableFiltered.length > 0 && (
               <button type="button" className="mt-2 flex w-full items-center justify-between rounded-md bg-slate-50 px-3 py-2 text-left text-sm font-semibold text-aqua-700 hover:bg-sky-50" onClick={toggleAllFiltered}>
                 <span>{allFilteredSelected ? "Deselect all results" : selectAllFits ? "Select all results" : `Select up to ${maxSelected?.toLocaleString()} total`}</span>
                 <span className="text-xs font-normal text-slate-500">{selectableFiltered.length.toLocaleString()}</span>
@@ -130,16 +134,22 @@ export function CheckboxMultiSelect({
             )}
           </div>
           <div role="listbox" aria-multiselectable="true" className="max-h-64 overflow-y-auto p-1">
-            {filtered.map((option) => (
+            {loading ? (
+              <div className="flex flex-col items-center justify-center px-3 py-8 text-center" role="status">
+                <span className="h-7 w-7 animate-spin rounded-full border-[3px] border-sky-100 border-t-aqua-700" aria-hidden="true" />
+                <span className="mt-3 text-sm font-semibold text-slate-600">Loading active and suspended accounts…</span>
+                <span className="mt-1 text-xs text-slate-400">Please wait while the account list is prepared</span>
+              </div>
+            ) : filtered.map((option) => (
               <label key={option.value} role="option" aria-selected={value.includes(option.value)} className={`flex cursor-pointer items-center gap-3 rounded-md px-3 py-2 text-sm hover:bg-slate-50 ${option.disabled || (selectionLimitReached && !value.includes(option.value)) ? "cursor-not-allowed opacity-40" : ""}`}>
                 <input className="h-5 w-5 shrink-0 cursor-pointer rounded-md border-slate-300 accent-emerald-600 outline-none transition duration-150 hover:ring-4 hover:ring-emerald-500/10 focus:ring-4 focus:ring-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40" type="checkbox" disabled={option.disabled || (selectionLimitReached && !value.includes(option.value))} checked={value.includes(option.value)} onChange={() => toggle(option.value)} />
                 <span className="min-w-0 flex-1 truncate">{option.label}</span>
               </label>
             ))}
-            {!filtered.length && <div className="px-3 py-6 text-center text-sm text-slate-400">{emptyMessage}</div>}
+            {!loading && !filtered.length && <div className="px-3 py-6 text-center text-sm text-slate-400">{emptyMessage}</div>}
           </div>
           <div className="flex items-center justify-between border-t border-slate-100 p-2 text-sm">
-            <button type="button" className="px-2 py-1 font-semibold text-slate-500" onClick={() => onChange([])}>Clear</button>
+            <button type="button" disabled={loading} className="px-2 py-1 font-semibold text-slate-500 disabled:cursor-not-allowed disabled:opacity-40" onClick={() => onChange([])}>Clear</button>
             <button type="button" className="rounded-md bg-aqua-700 px-3 py-1.5 font-semibold text-white" onClick={() => { setOpen(false); setQuery(""); }}>Done</button>
           </div>
         </div>,
