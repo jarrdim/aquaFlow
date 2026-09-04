@@ -1022,6 +1022,10 @@ export const api = {
     request(`/connections/${id}/action`, { method: "PATCH", body: JSON.stringify(data) }),
   sendConnectionStk: (id: string, data: Record<string, unknown>) =>
     request(`/connections/${id}/stk`, { method: "POST", body: JSON.stringify(data) }),
+  listConnectionC2bPayments: (id: string, reference = "") =>
+    request(`/connections/${id}/c2b-payments${reference ? `?reference=${encodeURIComponent(reference)}` : ""}`),
+  applyConnectionC2bPayment: (id: string, paymentId: string) =>
+    request(`/connections/${id}/c2b-payments/${paymentId}/apply`, { method: "POST", body: "{}" }),
   linkConnectionCustomer: (id: string, customerId: string) =>
     request(`/connections/${id}/link-customer`, {
       method: "POST",

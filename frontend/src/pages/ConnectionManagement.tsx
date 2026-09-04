@@ -63,7 +63,34 @@ type ConnectionStkRequest = {
   customerMessage?: string;
   resultDescription?: string;
   mpesaReceiptNumber?: string;
+  createdAt?: string;
 };
+
+type ConnectionC2bPayment = {
+  paymentId: string;
+  transactionReference: string;
+  customerReference?: string;
+  amount: number | string;
+  paymentDate: string;
+  paymentStatus: string;
+  matchingStatus: string;
+  paymentType: string;
+  suspenseStatus?: string;
+  receiptNumber?: string;
+  canApply: boolean;
+  applicationNumber: string;
+  account?: { accountId: string; accountNumber: string } | null;
+};
+
+const STK_PENDING_TIMEOUT_MS = 5 * 60 * 1000;
+
+function stkRequestIsStale(request: ConnectionStkRequest | null) {
+  return Boolean(
+    request?.status === "PENDING" &&
+    request.createdAt &&
+    Date.now() - new Date(request.createdAt).getTime() >= STK_PENDING_TIMEOUT_MS,
+  );
+}
 
 type ExistingCustomer = {
   customerId: string;
@@ -1137,6 +1164,11 @@ export function ConnectionProfile() {
   const [sendingStk, setSendingStk] = useState(false);
   const [stkRequest, setStkRequest] = useState<ConnectionStkRequest | null>(null);
   const [stkStatusError, setStkStatusError] = useState("");
+  const [c2bReference, setC2bReference] = useState("");
+  const [c2bPayments, setC2bPayments] = useState<ConnectionC2bPayment[]>([]);
+  const [checkingC2b, setCheckingC2b] = useState(false);
+  const [checkedC2b, setCheckedC2b] = useState(false);
+  const [applyingC2bId, setApplyingC2bId] = useState("");
   const [form, setForm] = useState<Record<string, string>>({});
   const [linkCustomerOpen, setLinkCustomerOpen] = useState(false);
   const [customerSearch, setCustomerSearch] = useState("");
@@ -1174,10 +1206,16 @@ export function ConnectionProfile() {
   }
   useEffect(() => {
     void load();
+    setC2bReference("");
+    void checkC2bPayments("");
   }, [id]);
 
   useEffect(() => {
     if (!stkRequest?.stkRequestId || stkRequest.status !== "PENDING") return;
+    if (stkRequestIsStale(stkRequest)) {
+      setStkStatusError("No callback was received within five minutes. Check C2B or send a new prompt; this request will no longer be polled.");
+      return;
+    }
     let stopped = false;
     let timer: number | undefined;
 
@@ -1200,6 +1238,10 @@ export function ConnectionProfile() {
         }
         if (latest.status === "FAILED" || latest.status === "CANCELLED") {
           showToast(latest.resultDescription || `M-Pesa prompt ${latest.status.toLowerCase()}.`, "error");
+          return;
+        }
+        if (stkRequestIsStale(latest)) {
+          setStkStatusError("No callback was received within five minutes. Check C2B or send a new prompt; this request will no longer be polled.");
           return;
         }
       } catch (error) {
@@ -1303,6 +1345,39 @@ export function ConnectionProfile() {
     }
   }
 
+  async function checkC2bPayments(reference = c2bReference) {
+    setCheckingC2b(true);
+    try {
+      const rows = await api.listConnectionC2bPayments(id, reference.trim()) as ConnectionC2bPayment[];
+      setC2bPayments(rows);
+      setCheckedC2b(true);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Unable to check C2B payments.", "error");
+    } finally {
+      setCheckingC2b(false);
+    }
+  }
+
+  async function applyC2bPayment(payment: ConnectionC2bPayment) {
+    setApplyingC2bId(payment.paymentId);
+    try {
+      const result = await api.applyConnectionC2bPayment(id, payment.paymentId) as { receiptNumber?: string };
+      showToast(
+        result.receiptNumber
+          ? `C2B payment applied. Receipt ${result.receiptNumber}.`
+          : "C2B payment applied to this connection.",
+        "success",
+      );
+      setC2bReference("");
+      await load();
+      await checkC2bPayments("");
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Unable to apply C2B payment.", "error");
+    } finally {
+      setApplyingC2bId("");
+    }
+  }
+
   if (loading && !application)
     return (
       <main className="mx-auto max-w-[1500px] p-4 lg:p-6">
@@ -1313,6 +1388,7 @@ export function ConnectionProfile() {
   const balance =
     Number(application.quotationTotal) - Number(application.amountPaid);
   const status = application.status;
+  const staleStkRequest = stkRequestIsStale(stkRequest);
   const gpsPoints = applicationGpsPoints(application);
   const primaryGps = gpsPoints[0];
   const mapUrl = primaryGps
@@ -1671,13 +1747,15 @@ export function ConnectionProfile() {
                     <button
                       type="button"
                       className="w-full rounded-lg bg-emerald-600 px-4 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
-                      disabled={sendingStk || saving || stkRequest?.status === "PENDING" || !(form.stkPhone ?? application.phoneNumber) || Number(form.amount || balance) <= 0}
+                      disabled={sendingStk || saving || (stkRequest?.status === "PENDING" && !staleStkRequest) || !(form.stkPhone ?? application.phoneNumber) || Number(form.amount || balance) <= 0}
                       onClick={() => void sendStkPrompt()}
                     >
                       {sendingStk
                         ? "Sending prompt..."
-                        : stkRequest?.status === "PENDING"
+                        : stkRequest?.status === "PENDING" && !staleStkRequest
                           ? "Waiting for M-Pesa confirmation..."
+                          : staleStkRequest
+                            ? "Send a new M-Pesa prompt"
                           : `Send prompt for ${money(form.amount || balance)}`}
                     </button>
                     {stkRequest && (
@@ -1689,24 +1767,111 @@ export function ConnectionProfile() {
                             : "border-red-200 bg-red-50 text-red-700"
                       }`}>
                         <div className="flex items-center gap-2 font-bold">
-                          {stkRequest.status === "PENDING" && <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-amber-500 border-t-transparent" />}
+                          {stkRequest.status === "PENDING" && !staleStkRequest && <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-amber-500 border-t-transparent" />}
                           {stkRequest.status === "COMPLETED"
                             ? "Payment confirmed"
-                            : stkRequest.status === "PENDING"
+                            : stkRequest.status === "PENDING" && !staleStkRequest
                               ? "Prompt sent - checking automatically"
+                              : staleStkRequest
+                                ? "Prompt expired without confirmation"
                               : `Prompt ${stkRequest.status.toLowerCase()}`}
                         </div>
                         <p className="mt-1">
                           {stkRequest.mpesaReceiptNumber
                             ? `Receipt: ${stkRequest.mpesaReceiptNumber}`
-                            : stkRequest.resultDescription || stkRequest.customerMessage || "Ask the customer to complete the prompt on their phone."}
+                            : staleStkRequest
+                              ? "The old request is no longer being checked. Search for a C2B receipt below or send a new prompt."
+                              : stkRequest.resultDescription || stkRequest.customerMessage || "Ask the customer to complete the prompt on their phone."}
                         </p>
                       </div>
                     )}
                     {stkStatusError && (
                       <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
-                        Payment-status check failed: {stkStatusError}. Automatic checking will retry.
+                        Payment-status check: {stkStatusError}
                       </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="overflow-hidden rounded-xl border border-sky-200 bg-sky-50/40">
+                  <div className="border-b border-sky-100 bg-sky-50 px-4 py-3">
+                    <p className="text-sm font-bold text-sky-950">Paid through PayBill / C2B?</p>
+                    <p className="mt-1 text-xs text-sky-700">
+                      Expected account reference: <span className="font-bold">{application.applicationNumber}</span>
+                    </p>
+                  </div>
+                  <div className="space-y-3 p-4">
+                    <p className="text-xs text-slate-600">
+                      Payments using the application number are checked automatically. Enter the M-Pesa receipt to find a payment made with another reference.
+                    </p>
+                    <div className="flex gap-2">
+                      <input
+                        className={input}
+                        value={c2bReference}
+                        onChange={(event) => setC2bReference(event.target.value.toUpperCase())}
+                        placeholder="M-Pesa receipt, e.g. UI3AB59S7S"
+                      />
+                      <button
+                        type="button"
+                        className={secondary}
+                        disabled={checkingC2b}
+                        onClick={() => void checkC2bPayments()}
+                      >
+                        {checkingC2b ? "Checking…" : "Check"}
+                      </button>
+                    </div>
+                    {c2bPayments.map((payment) => {
+                      const appliedHere = payment.paymentType === "NEW_CONNECTION_FEE" &&
+                        payment.paymentStatus === "POSTED" &&
+                        payment.customerReference?.toUpperCase() === payment.applicationNumber.toUpperCase();
+                      const matchedElsewhere = payment.paymentStatus === "POSTED" && !appliedHere;
+                      return (
+                        <div key={payment.paymentId} className="rounded-lg border border-slate-200 bg-white p-3 text-xs">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <div className="font-bold text-slate-900">{payment.transactionReference} · {money(payment.amount)}</div>
+                              <div className="mt-1 text-slate-500">PayBill reference: {payment.customerReference || "Not supplied"}</div>
+                            </div>
+                            <span className={`rounded-full px-2 py-1 font-bold ${
+                              appliedHere
+                                ? "bg-emerald-100 text-emerald-700"
+                                : matchedElsewhere
+                                  ? "bg-amber-100 text-amber-800"
+                                  : "bg-red-100 text-red-700"
+                            }`}>
+                              {appliedHere ? "Applied" : matchedElsewhere ? "Matched elsewhere" : "Unmatched"}
+                            </span>
+                          </div>
+                          {matchedElsewhere && (
+                            <p className="mt-2 font-semibold text-amber-700">
+                              {payment.account?.accountNumber
+                                ? `Already matched to account ${payment.account.accountNumber}; it cannot be moved automatically.`
+                                : "Already applied to another purpose; it cannot be moved automatically."}
+                            </p>
+                          )}
+                          {!appliedHere && !matchedElsewhere && payment.canApply && (
+                            <button
+                              type="button"
+                              className="mt-3 w-full rounded-lg bg-sky-700 px-3 py-2 font-bold text-white hover:bg-sky-800 disabled:opacity-50"
+                              disabled={Boolean(applyingC2bId)}
+                              onClick={() => void applyC2bPayment(payment)}
+                            >
+                              {applyingC2bId === payment.paymentId ? "Applying…" : "Apply this payment to the connection"}
+                            </button>
+                          )}
+                          {!appliedHere && !matchedElsewhere && !payment.canApply && (
+                            <p className="mt-2 font-semibold text-red-700">
+                              This payment needs finance review and cannot be applied automatically.
+                            </p>
+                          )}
+                          {payment.receiptNumber && <p className="mt-2 text-emerald-700">Receipt: {payment.receiptNumber}</p>}
+                        </div>
+                      );
+                    })}
+                    {checkedC2b && !checkingC2b && !c2bPayments.length && (
+                      <p className="rounded-lg bg-white px-3 py-2 text-xs text-slate-500 ring-1 ring-slate-200">
+                        No C2B payment was found. Confirm the receipt number, then check the unmatched-payments register if a different PayBill reference was used.
+                      </p>
                     )}
                   </div>
                 </div>

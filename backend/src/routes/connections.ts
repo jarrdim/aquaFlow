@@ -3,7 +3,10 @@ import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { initiateMpesaStk } from "../lib/mpesaStk";
 import { requireAuth, requirePermission } from "../middleware/auth";
-import { postOfflineNewConnectionPayment } from "../lib/newConnectionPayment";
+import {
+  applyExistingC2bNewConnectionPayment,
+  postOfflineNewConnectionPayment,
+} from "../lib/newConnectionPayment";
 import { paymentPersistenceError, roundMoney } from "../lib/paymentAllocation";
 
 export const connectionsRouter = Router();
@@ -29,6 +32,15 @@ function normalizeKenyanPhone(value: unknown) {
 
 function currentUserId(req: Express.Request) {
   return BigInt(req.user!.userId);
+}
+
+function isC2bPayment(payment: { remarks?: string | null; externalPayload?: unknown; events?: Array<{ eventType: string }> }) {
+  const payload = payment.externalPayload as Record<string, unknown> | null;
+  return Boolean(
+    (payload?.TransID && payload?.BillRefNumber) ||
+    payment.remarks?.toUpperCase().includes("C2B") ||
+    payment.events?.some((event) => event.eventType.startsWith("MPESA_C2B_")),
+  );
 }
 
 async function recordActivity(applicationId: bigint, type: string, notes: string | null, userId: bigint) {
@@ -163,6 +175,115 @@ connectionsRouter.get("/:id", canView, async (req, res) => {
     orderBy: { createdAt: "desc" },
   });
   res.json({ ...applications[0], activities, latestStkRequest });
+});
+
+connectionsRouter.get("/:id/c2b-payments", canView, async (req, res, next) => {
+  const applicationId = positiveId.safeParse(req.params.id);
+  const reference = z.string().trim().max(100).optional().safeParse(req.query.reference ? String(req.query.reference) : undefined);
+  if (!applicationId.success) return res.status(400).json({ error: "Invalid connection application" });
+  if (!reference.success) return res.status(400).json({ error: "Invalid M-Pesa reference" });
+  try {
+    const application = await prisma.newConnectionApplication.findUnique({
+      where: { connectionApplicationId: applicationId.data },
+      select: { applicationNumber: true, quotationTotal: true, amountPaid: true, status: true },
+    });
+    if (!application) return res.status(404).json({ error: "Connection application not found" });
+    const payments = await prisma.payment.findMany({
+      where: reference.data
+        ? { transactionReference: { equals: reference.data, mode: "insensitive" } }
+        : { customerReference: { equals: application.applicationNumber, mode: "insensitive" } },
+      include: {
+        account: { select: { accountId: true, accountNumber: true } },
+        suspense: true,
+        receipt: true,
+        events: { select: { eventType: true }, orderBy: { createdAt: "desc" } },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 20,
+    });
+    const outstanding = roundMoney(Number(application.quotationTotal) - Number(application.amountPaid));
+    res.json(payments.filter(isC2bPayment).map((payment) => ({
+      paymentId: payment.paymentId,
+      transactionReference: payment.transactionReference,
+      customerReference: payment.customerReference,
+      amount: payment.amount,
+      paymentDate: payment.paymentDate,
+      paymentStatus: payment.paymentStatus,
+      matchingStatus: payment.matchingStatus,
+      paymentType: payment.paymentType,
+      account: payment.account,
+      suspenseStatus: payment.suspense?.status ?? null,
+      receiptNumber: payment.receipt?.receiptNumber ?? null,
+      canApply: payment.accountId == null &&
+        payment.paymentStatus === "RECEIVED" &&
+        payment.matchingStatus === "UNMATCHED" &&
+        payment.suspense?.status === "OPEN" &&
+        ["QUOTED", "PARTIALLY_PAID"].includes(application.status) &&
+        Number(payment.amount) <= outstanding + 0.009,
+      applicationNumber: application.applicationNumber,
+    })));
+  } catch (error) { next(error); }
+});
+
+connectionsRouter.post("/:id/c2b-payments/:paymentId/apply", canProcess, async (req, res, next) => {
+  const applicationId = positiveId.safeParse(req.params.id);
+  const paymentId = positiveId.safeParse(req.params.paymentId);
+  if (!applicationId.success || !paymentId.success)
+    return res.status(400).json({ error: "Invalid connection application or payment" });
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      const applications = await tx.$queryRaw<any[]>`
+        SELECT connection_application_id, application_number, status,
+          quotation_total, amount_paid
+        FROM aquaflow.new_connection_applications
+        WHERE connection_application_id=${applicationId.data}
+        FOR UPDATE`;
+      const application = applications[0];
+      if (!application) throw Object.assign(new Error("Connection application not found"), { status: 404 });
+      if (!["QUOTED", "PARTIALLY_PAID"].includes(application.status))
+        throw Object.assign(new Error("Only quoted applications awaiting payment can receive a C2B payment"), { status: 409 });
+
+      await tx.$queryRaw`
+        SELECT payment_id FROM aquaflow.payments
+        WHERE payment_id=${paymentId.data}
+        FOR UPDATE`;
+      const payment = await tx.payment.findUnique({
+        where: { paymentId: paymentId.data },
+        include: { suspense: true, receipt: true, allocations: true, events: { select: { eventType: true } } },
+      });
+      if (!payment) throw Object.assign(new Error("C2B payment not found"), { status: 404 });
+      if (!isC2bPayment(payment))
+        throw Object.assign(new Error("Only a verified M-Pesa C2B payment can be applied here"), { status: 409 });
+      if (payment.accountId || payment.allocations.length || payment.paymentStatus === "POSTED")
+        throw Object.assign(new Error("This payment is already matched or allocated and cannot be moved automatically"), { status: 409 });
+      if (payment.paymentStatus !== "RECEIVED" || payment.matchingStatus !== "UNMATCHED" || payment.suspense?.status !== "OPEN" || payment.receipt)
+        throw Object.assign(new Error("Only an open unmatched C2B payment can be applied"), { status: 409 });
+      const outstanding = roundMoney(Number(application.quotation_total) - Number(application.amount_paid));
+      const amount = Number(payment.amount);
+      if (amount > outstanding + 0.009)
+        throw Object.assign(new Error(`C2B payment exceeds the outstanding connection balance of KSh ${outstanding.toFixed(2)}`), { status: 409 });
+
+      return applyExistingC2bNewConnectionPayment(tx, {
+        applicationId: applicationId.data,
+        applicationNumber: application.application_number,
+        quotationTotal: application.quotation_total,
+        amountPaid: application.amount_paid,
+        paymentId: payment.paymentId,
+        transactionReference: payment.transactionReference,
+        amount,
+        actor: currentUserId(req),
+      });
+    }, { maxWait: 10_000, timeout: 15_000 });
+    res.json({
+      ok: true,
+      receiptNumber: result.receipt.receiptNumber,
+      status: result.status,
+      amountPaid: result.paidAmount,
+    });
+  } catch (error: any) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    next(error);
+  }
 });
 
 connectionsRouter.post("/:id/stk", canProcess, async (req, res, next) => {
