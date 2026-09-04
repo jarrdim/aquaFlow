@@ -259,6 +259,10 @@ export const api = {
       `/accounts?search=${encodeURIComponent(search)}&take=${encodeURIComponent(String(take))}${accountId ? `&accountId=${encodeURIComponent(accountId)}` : ""}${accountIds.length ? `&accountIds=${encodeURIComponent(accountIds.join(","))}` : ""}`,
     ),
   listActiveAccounts: () => request("/accounts?status=ACTIVE&all=true"),
+  listReadingAccounts: () => Promise.all([
+    request("/accounts?status=ACTIVE&all=true"),
+    request("/accounts?status=SUSPENDED&all=true"),
+  ]).then(([active, suspended]) => [...active, ...suspended]),
 
   meterDashboard: (filters: Record<string, string> = {}) => {
     const query = new URLSearchParams(

@@ -2611,6 +2611,8 @@ export function ReadingWorklist() {
         "Serial Number": index + 1,
         "Account Number": item.account?.accountNumber ?? "",
         "Customer Names": item.customerName ?? "",
+        "Account Status": item.account?.accountStatus ?? "",
+        "Meter Warning": item.eligibilityWarning ?? "",
         "Previous Reading": Number(
           item.cycleReading?.previousReading ??
             item.meter?.readings?.[0]?.currentReading ??
@@ -2684,6 +2686,8 @@ export function ReadingWorklist() {
               return {
                 "Account Number": item.account?.accountNumber ?? "",
                 "Customer Names": item.customerName ?? "",
+                "Account Status": item.account?.accountStatus ?? "",
+                "Meter Warning": item.eligibilityWarning ?? "",
                 "Previous Reading": Number(
                   item.cycleReading?.previousReading ??
                     item.meter?.readings?.[0]?.currentReading ??
@@ -3776,6 +3780,7 @@ export function ReadingWorklist() {
                           <span className="text-slate-400">
                             Account: {a.account?.accountNumber ?? "—"}
                           </span>
+                          <Badge value={a.account?.accountStatus} />
                         </div>
                       </div>
                     </div>
@@ -3808,6 +3813,11 @@ export function ReadingWorklist() {
                         {pretty(a.meter?.status ?? "UNKNOWN")}
                       </span>
                     </div>
+                    {a.eligibilityWarning && (
+                      <div className="mt-1.5 inline-flex rounded-md bg-amber-50 px-2 py-1 text-[11px] font-bold text-amber-800 ring-1 ring-inset ring-amber-200">
+                        {a.eligibilityWarning}
+                      </div>
+                    )}
                   </td>
                   <td className="px-4 py-3.5">
                     <span className="font-bold tabular-nums text-slate-800">
@@ -4158,9 +4168,9 @@ export function CaptureReading() {
         {error && <Notice>{error}</Notice>}
         <Card title="Unable to open this meter">
           <p className="text-sm text-slate-600">
-            This meter is not eligible for the selected reading cycle. It may
-            already have a reading, be inactive, or no longer have an active
-            customer assignment.
+            This meter is not the readable current assignment for the selected
+            cycle. It may have been replaced, belong to an ineligible account,
+            or no longer have an open customer assignment.
           </p>
           <div className="mt-4">
             <Button type="button" tone="slate" onClick={() => navigate(-1)}>
@@ -4204,6 +4214,12 @@ export function CaptureReading() {
     >
       {error && <Notice>{error}</Notice>}
       {message && <Notice tone="green">{message}</Notice>}
+      {item.account?.accountStatus === "SUSPENDED" && (
+        <Notice>This customer account is suspended. Meter-reading capture remains permitted.</Notice>
+      )}
+      {item.eligibilityWarning && (
+        <Notice>{item.eligibilityWarning}. No valid current replacement meter is recorded.</Notice>
+      )}
       <form onSubmit={submit}>
         <div className="grid gap-4 xl:grid-cols-[1fr_1.6fr]">
           <Card title="Meter and account">
@@ -4219,6 +4235,7 @@ export function CaptureReading() {
                 <dd className="font-semibold text-slate-800">
                   {item.account?.accountNumber}
                 </dd>
+                <dd className="mt-1"><Badge value={item.account?.accountStatus} /></dd>
               </div>
               <div>
                 <dt className="text-slate-500">Customer</dt>

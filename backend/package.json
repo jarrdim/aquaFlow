@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
     "build": "tsc -p .",
-    "test": "node --test -r ts-node/register src/lib/paymentAllocation.test.ts src/lib/newConnectionPayment.test.ts",
+    "test": "node --test -r ts-node/register src/lib/paymentAllocation.test.ts src/lib/newConnectionPayment.test.ts src/lib/readingEligibility.test.ts",
     "start": "node dist/index.js",
     "prisma:generate": "prisma generate",
     "prisma:pull": "prisma db pull",

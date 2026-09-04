@@ -5,6 +5,11 @@ import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { requireAuth, requireRole } from "../middleware/auth";
 import { initiateMpesaStk } from "../lib/mpesaStk";
+import {
+  LEGACY_READABLE_METER_STATUSES,
+  READING_ACCOUNT_STATUSES,
+  resolveReadableAssignments,
+} from "../lib/readingEligibility";
 
 export const mobileRouter = Router();
 
@@ -1778,21 +1783,29 @@ mobileRouter.get(
               { property: { routeId: assignment.routeId } },
             ],
           };
-          const [meters, captured, pending, exceptions] = await Promise.all([
-            prisma.meterAssignment.count({
-              where: {
-                assignmentStatus: "ACTIVE",
-                removalDate: null,
-                accountId: { not: null },
-                meter: { status: "ACTIVE" },
-                account: { accountStatus: "ACTIVE", ...accountRoute },
+          const meterAssignments = await prisma.meterAssignment.findMany({
+            where: {
+              assignmentStatus: "ACTIVE",
+              removalDate: null,
+              accountId: { not: null },
+              meter: {
+                status: { in: ["ACTIVE", ...LEGACY_READABLE_METER_STATUSES] },
               },
-            }),
+              account: {
+                accountStatus: { in: [...READING_ACCOUNT_STATUSES] },
+                ...accountRoute,
+              },
+            },
+            include: { meter: true },
+          });
+          const readableAssignments = resolveReadableAssignments(meterAssignments);
+          const readableMeterIds = readableAssignments.map((item) => item.meterId);
+          const [captured, pending, exceptions] = await Promise.all([
             prisma.meterReading.count({
               where: {
                 readingCycleId: assignment.readingCycleId,
                 fieldOfficerId: officer.fieldOfficerId,
-                account: accountRoute,
+                meterId: { in: readableMeterIds },
               },
             }),
             prisma.meterReading.count({
@@ -1800,7 +1813,7 @@ mobileRouter.get(
                 readingCycleId: assignment.readingCycleId,
                 fieldOfficerId: officer.fieldOfficerId,
                 approvalStatus: "PENDING",
-                account: accountRoute,
+                meterId: { in: readableMeterIds },
               },
             }),
             prisma.meterReading.count({
@@ -1808,10 +1821,11 @@ mobileRouter.get(
                 readingCycleId: assignment.readingCycleId,
                 fieldOfficerId: officer.fieldOfficerId,
                 abnormalFlag: true,
-                account: accountRoute,
+                meterId: { in: readableMeterIds },
               },
             }),
           ]);
+          const meters = readableAssignments.length;
           return {
             routeAssignmentId: assignment.routeAssignmentId,
             status: assignment.status,

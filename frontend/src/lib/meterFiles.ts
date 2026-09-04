@@ -188,7 +188,7 @@ export async function exportMeterReadingZoneWorkbook(
       safeWorksheetName(group.zoneName, usedNames),
       {
         pageSetup: {
-          orientation: "portrait",
+          orientation: "landscape",
           paperSize: 9,
           fitToPage: true,
           fitToWidth: 1,
@@ -214,12 +214,14 @@ export async function exportMeterReadingZoneWorkbook(
       { key: "Serial Number", width: 10 },
       { key: "Account Number", width: 18 },
       { key: "Customer Names", width: 30 },
+      { key: "Account Status", width: 16 },
+      { key: "Meter Warning", width: 28 },
       { key: "Previous Reading", width: 16 },
       { key: "Meter Reading", width: 16 },
       { key: "Comment", width: 24 },
     ];
 
-    sheet.mergeCells("A1:F2");
+    sheet.mergeCells("A1:H2");
     const title = sheet.getCell("A1");
     title.value = `SAMDAMTE WATER\nREADING SHEETS FOR ${group.readingCycle.toUpperCase()}`;
     title.font = { bold: true, size: 18 };
@@ -237,7 +239,7 @@ export async function exportMeterReadingZoneWorkbook(
       const startColumn = 1;
       const labelEnd = 2;
       const valueStart = 3;
-      const valueEnd = 6;
+      const valueEnd = 8;
       sheet.mergeCells(rowNumber, startColumn, rowNumber, labelEnd);
       sheet.mergeCells(rowNumber, valueStart, rowNumber, valueEnd);
       const labelCell = sheet.getCell(rowNumber, startColumn);
@@ -272,7 +274,7 @@ export async function exportMeterReadingZoneWorkbook(
         vertical: "middle",
         wrapText: true,
       };
-      excelRow.getCell(5).alignment = {
+      excelRow.getCell(7).alignment = {
         horizontal: "right",
         vertical: "middle",
         wrapText: true,
@@ -293,7 +295,7 @@ export async function exportMeterReadingZoneWorkbook(
         };
       });
     });
-    sheet.autoFilter = { from: "A7", to: "F7" };
+    sheet.autoFilter = { from: "A7", to: "H7" };
   });
 
   const data = await workbook.xlsx.writeBuffer();
@@ -335,11 +337,13 @@ export async function exportMeterReadingZonePdf(
     align?: "left" | "center" | "right";
   }> = [
     { label: "NO.", key: "Serial Number", width: 35, align: "center" },
-    { label: "ACCOUNT NO.", key: "Account Number", width: 82 },
-    { label: "CUSTOMER NAMES", key: "Customer Names", width: 155, align: "left" },
-    { label: "PREVIOUS", key: "Previous Reading", width: 74, align: "right" },
-    { label: "METER READING", key: "Meter Reading", width: 82, align: "right" },
-    { label: "COMMENT", key: "Comment", width: tableWidth - 428 },
+    { label: "ACCOUNT NO.", key: "Account Number", width: 70 },
+    { label: "CUSTOMER NAMES", key: "Customer Names", width: 110, align: "left" },
+    { label: "STATUS", key: "Account Status", width: 52 },
+    { label: "PREVIOUS", key: "Previous Reading", width: 62, align: "right" },
+    { label: "METER READING", key: "Meter Reading", width: 70, align: "right" },
+    { label: "METER WARNING", key: "Meter Warning", width: 100 },
+    { label: "COMMENT", key: "Comment", width: tableWidth - 499 },
   ];
   const text = (value: unknown) => String(value ?? "");
   const fit = (value: unknown, width: number, size: number, font = regular) => {

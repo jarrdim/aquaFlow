@@ -676,7 +676,7 @@ export function IndividualBillingWorkspace() {
 
   async function loadReferenceData(preferredReadingCycleId = readingCycleId, preferredBillingCycleId = billingCycleId) {
     const [accountRows, readingRows, billingRows] = await Promise.all([
-      api.listActiveAccounts(), api.listReadingCycles(), api.listBillingCycles(),
+      api.listReadingAccounts(), api.listReadingCycles(), api.listBillingCycles(),
     ]);
     setAccounts(accountRows);
     setReadingCycles(readingRows);
@@ -1011,8 +1011,8 @@ export function IndividualBillingWorkspace() {
               const billPreview = previewByAccount.get(String(row.accountId)) as Row | undefined;
               const bill = selectedBills.find((item) => String(item.accountId) === String(row.accountId));
               return <tr key={row.assignmentId} className={`border-t ${invalid ? "border-red-200 bg-red-50/40" : "border-slate-100"}`}>
-                <td className={TD}><div className="font-semibold text-slate-800">{row.account.accountNumber}</div><div className="text-xs text-slate-400">{row.customerName}</div></td>
-                <td className={TD}><div className="font-medium">{row.meter.meterNumber}</div><div className="text-xs text-slate-400">{pretty(row.meter.technology)}</div></td>
+                <td className={TD}><div className="font-semibold text-slate-800">{row.account.accountNumber}</div><div className="text-xs text-slate-400">{row.customerName}</div><div className="mt-1"><Badge value={row.account.accountStatus} /></div></td>
+                <td className={TD}><div className="font-medium">{row.meter.meterNumber}</div><div className="text-xs text-slate-400">{pretty(row.meter.technology)}</div>{row.eligibilityWarning && <div className="mt-1 text-xs font-bold text-amber-700">{row.eligibilityWarning}</div>}</td>
                 <td className={`${TD} font-semibold text-slate-700`}>{previous.toLocaleString()}</td>
                 <td className={TD}>
                   <input type="number" min={previous} step="0.001" disabled={Boolean(row.cycleReading) || selectedReadingCycle?.status !== "OPEN"} aria-invalid={invalid} className={`${INPUT} w-40 py-2 ${invalid ? "border-red-400 bg-red-50 text-red-700 focus:border-red-500 focus:ring-red-100" : ""}`} value={rawCurrent} onChange={(e) => setReadingValues({ ...readingValues, [String(row.meterId)]: e.target.value })} placeholder={`Minimum ${previous}`} />
@@ -1023,7 +1023,7 @@ export function IndividualBillingWorkspace() {
                 <td className={TD}>{loadingBills && billingCycleId ? <div className="space-y-2" aria-label="Loading bill amount"><div className="h-4 w-24 animate-pulse rounded bg-slate-200" /><div className="h-5 w-16 animate-pulse rounded-full bg-slate-100" /></div> : bill ? <><div className="font-bold text-slate-800">{money(bill.totalAmountDue)}</div><Badge value={bill.status} /></> : billPreview ? <><div className="font-bold text-slate-800">{money(billPreview.totalAmountDue)}</div><span className={`text-xs font-semibold ${billPreview.eligible ? "text-emerald-600" : "text-red-600"}`}>{pretty(billPreview.issue)}</span></> : <span className="text-xs text-slate-400">Not prepared</span>}</td>
               </tr>;
             })}
-            {missingMeterAccounts.map((account) => <tr key={`missing-${account.accountId}`} className="border-t border-slate-100 bg-red-50/30"><td className={TD}><div className="font-semibold text-slate-800">{account.accountNumber}</div><div className="text-xs text-slate-400">{accountCustomerName(account)}</div></td><td colSpan={6} className={`${TD} text-red-600`}>No active customer meter assignment was found.</td></tr>)}
+            {missingMeterAccounts.map((account) => <tr key={`missing-${account.accountId}`} className="border-t border-slate-100 bg-red-50/30"><td className={TD}><div className="font-semibold text-slate-800">{account.accountNumber}</div><div className="text-xs text-slate-400">{accountCustomerName(account)}</div><div className="mt-1"><Badge value={account.accountStatus} /></div></td><td colSpan={6} className={`${TD} text-red-600`}>No readable current customer meter assignment was found.</td></tr>)}
             {!selectedAccountIds.length && <tr><td colSpan={7} className="px-6 py-12 text-center text-slate-400">Select one or more customer accounts to begin.</td></tr>}
           </tbody></table></div>}
         </section>
