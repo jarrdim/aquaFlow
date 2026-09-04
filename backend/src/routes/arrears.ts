@@ -126,7 +126,7 @@ async function arrearsRows(asOf: Date, filters: any = {}) {
       const overdueBills = account.bills.filter(
         (bill: any) =>
           bill.dueDate < asOf &&
-          Number(bill.totalCurrentCharges) - Number(bill.paidAmount) > 0,
+          Number(bill.totalAmountDue) - Number(bill.paidAmount) > 0,
       );
       const currentBills = account.bills.filter((bill: any) => bill.dueDate >= asOf);
       const overdueBillBalance = round(
@@ -135,7 +135,7 @@ async function arrearsRows(asOf: Date, filters: any = {}) {
             sum +
             Math.max(
               0,
-              Number(bill.totalCurrentCharges) - Number(bill.paidAmount),
+              Number(bill.totalAmountDue) - Number(bill.paidAmount),
             ),
           0,
         ),
@@ -168,7 +168,7 @@ async function arrearsRows(asOf: Date, filters: any = {}) {
               sum +
               Math.max(
                 0,
-                Number(bill.totalCurrentCharges) - Number(bill.paidAmount),
+                Number(bill.totalAmountDue) - Number(bill.paidAmount),
               ),
             0,
           ),

@@ -1507,6 +1507,7 @@ model PaymentAllocation {
   allocatedAmount Decimal  @map("allocated_amount") @db.Decimal(18, 2)
   allocationDate  DateTime @default(now()) @map("allocation_date") @db.Date
   allocatedBy     BigInt?  @map("allocated_by")
+  status          String   @default("ACTIVE")
   createdAt       DateTime @default(now()) @map("created_at")
 
   payment   Payment @relation(fields: [paymentId], references: [paymentId])

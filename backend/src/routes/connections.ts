@@ -3,6 +3,8 @@ import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { initiateMpesaStk } from "../lib/mpesaStk";
 import { requireAuth, requirePermission } from "../middleware/auth";
+import { postOfflineNewConnectionPayment } from "../lib/newConnectionPayment";
+import { paymentPersistenceError, roundMoney } from "../lib/paymentAllocation";
 
 export const connectionsRouter = Router();
 connectionsRouter.use(requireAuth);
@@ -294,14 +296,15 @@ const actionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.enum(["APPROVE", "REJECT", "MARK_INSTALLATION_ORDERED", "MARK_INSTALLATION_COMPLETED", "ACTIVATE"]), notes: z.string().trim().min(2).max(2000) }),
 ]);
 
-connectionsRouter.patch("/:id/action", canProcess, async (req, res) => {
+connectionsRouter.patch("/:id/action", canProcess, async (req, res, next) => {
   const parsedId = positiveId.safeParse(req.params.id);
   const parsed = actionSchema.safeParse(req.body);
   if (!parsedId.success) return res.status(400).json({ error: "Invalid application" });
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid action" });
   const applicationId = parsedId.data;
   const current = await prisma.$queryRaw<any[]>`
-    SELECT status, connection_fee, quotation_total, amount_paid
+    SELECT status, connection_fee, quotation_total, amount_paid,
+      application_number, account_id
     FROM aquaflow.new_connection_applications WHERE connection_application_id = ${applicationId}`;
   if (!current[0]) return res.status(404).json({ error: "Connection application not found" });
   const data = parsed.data;
@@ -320,6 +323,69 @@ connectionsRouter.patch("/:id/action", canProcess, async (req, res) => {
     return res.status(409).json({
       error: `This action is not available while the application is ${String(current[0].status).toLowerCase().replace(/_/g, " ")}. Refresh the application to see its current action.`,
     });
+  }
+  if (data.action === "RECORD_PAYMENT") {
+    try {
+      const result = await prisma.$transaction(async (tx) => {
+        const locked = await tx.$queryRaw<any[]>`
+          SELECT connection_application_id, application_number, account_id,
+            status, quotation_total, amount_paid
+          FROM aquaflow.new_connection_applications
+          WHERE connection_application_id=${applicationId}
+          FOR UPDATE`;
+        const application = locked[0];
+        if (!application)
+          throw Object.assign(new Error("Connection application not found"), { status: 404 });
+        if (!["QUOTED", "PARTIALLY_PAID"].includes(application.status))
+          throw Object.assign(new Error("Only quoted applications awaiting payment can receive a manual payment"), { status: 409 });
+
+        const outstanding = roundMoney(Number(application.quotation_total) - Number(application.amount_paid));
+        if (outstanding <= 0)
+          throw Object.assign(new Error("This connection quotation has no outstanding balance"), { status: 409 });
+        if (data.amount > outstanding + 0.009)
+          throw Object.assign(new Error(`Payment cannot exceed the outstanding quotation balance of KSh ${outstanding.toFixed(2)}`), { status: 409 });
+
+        const channel = await tx.paymentChannel.findFirst({
+          where: {
+            status: "ACTIVE",
+            OR: [
+              { channelCode: "CASH" },
+              { channelName: { equals: "Cash", mode: "insensitive" } },
+            ],
+          },
+        });
+        if (!channel)
+          throw Object.assign(new Error("An active Cash payment channel is required for manual connection payments"), { status: 409 });
+
+        return postOfflineNewConnectionPayment(tx, {
+          applicationId,
+          applicationNumber: application.application_number,
+          accountId: application.account_id,
+          quotationTotal: application.quotation_total,
+          amountPaid: application.amount_paid,
+          amount: data.amount,
+          reference: data.reference,
+          actor: currentUserId(req),
+          channelId: channel.channelId,
+        });
+      }, { maxWait: 10_000, timeout: 15_000 });
+      return res.json({
+        ok: true,
+        paymentId: result.payment.paymentId,
+        receiptId: result.receipt.receiptId,
+        receiptNumber: result.receipt.receiptNumber,
+        status: result.status,
+        amountPaid: result.paidAmount,
+      });
+    } catch (error: any) {
+      if (error.status) return res.status(error.status).json({ error: error.message });
+      if (error.code === "P2002")
+        return res.status(409).json({ error: "This payment reference has already been recorded" });
+      const persistenceError = paymentPersistenceError(error);
+      if (persistenceError)
+        return res.status(persistenceError.status).json({ error: persistenceError.message });
+      return next(error);
+    }
   }
   let note: string | null = "notes" in data ? (data.notes ?? null) : null;
   if (data.action === "SCHEDULE_INSPECTION") {
@@ -344,11 +410,6 @@ connectionsRouter.patch("/:id/action", canProcess, async (req, res) => {
     const total = fee + data.materialsCost + data.labourCost;
     note = `Quotation issued for KSh ${total.toFixed(2)}`;
     await prisma.$executeRaw`UPDATE aquaflow.new_connection_applications SET status='QUOTED', connection_fee=${fee}, connection_fee_overridden=(connection_fee_overridden OR ${overridden}), fee_override_reason=COALESCE(${data.feeOverrideReason || null}, fee_override_reason), materials_cost=${data.materialsCost}, labour_cost=${data.labourCost}, quotation_total=${total}, updated_at=NOW() WHERE connection_application_id=${applicationId}`;
-  } else if (data.action === "RECORD_PAYMENT") {
-    const paid = Number(current[0].amount_paid) + data.amount;
-    const next = paid >= Number(current[0].quotation_total) ? "PAID" : "PARTIALLY_PAID";
-    note = `Payment ${data.reference}: KSh ${data.amount.toFixed(2)}`;
-    await prisma.$executeRaw`UPDATE aquaflow.new_connection_applications SET status=${next}, amount_paid=${paid}, payment_reference=${data.reference}, updated_at=NOW() WHERE connection_application_id=${applicationId}`;
   } else {
     const next = {
       APPROVE: "APPROVED", REJECT: "REJECTED",

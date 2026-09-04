@@ -12,6 +12,12 @@ import {
 } from "../lib/mpesa";
 import { initiateMpesaStk } from "../lib/mpesaStk";
 import { readPaymentLinkToken } from "../lib/paymentLink";
+import {
+  billStateAfterReversal,
+  paymentPersistenceError,
+  planBillAllocations,
+  validatePaymentSplits,
+} from "../lib/paymentAllocation";
 
 export const paymentsRouter = Router();
 
@@ -772,43 +778,30 @@ async function allocate(
   payment: any,
   accountId: bigint,
   actor: bigint | null,
+  prefetchedBills?: any[],
 ) {
-  const bills = await tx.bill.findMany({
-    where: { accountId, status: { in: ["POSTED", "PARTIALLY_PAID"] } },
-    orderBy: [{ dueDate: "asc" }, { billId: "asc" }],
-  });
-  let remaining = Number(payment.amount);
-  let allocated = 0;
-  for (const bill of bills) {
-    const outstanding = Math.max(
-      0,
-      Number(bill.totalCurrentCharges) - Number(bill.paidAmount),
-    );
-    const applied = round(Math.min(remaining, outstanding));
-    if (applied <= 0) continue;
-    await tx.paymentAllocation.create({
-      data: {
+  const bills = prefetchedBills ?? await loadAllocatableBills(tx, [accountId]);
+  const plan = planBillAllocations(Number(payment.amount), bills);
+  if (plan.allocations.length) {
+    await tx.paymentAllocation.createMany({
+      data: plan.allocations.map((item) => ({
         paymentId: payment.paymentId,
-        billId: bill.billId,
-        allocatedAmount: applied,
+        billId: item.billId,
+        allocatedAmount: item.amount,
         allocatedBy: actor,
-      },
+      })),
     });
-    const newPaid = round(Number(bill.paidAmount) + applied);
-    await tx.bill.update({
-      where: { billId: bill.billId },
-      data: {
-        paidAmount: newPaid,
-        status:
-          newPaid >= Number(bill.totalCurrentCharges)
-            ? "PAID"
-            : "PARTIALLY_PAID",
-        updatedAt: new Date(),
-      },
-    });
-    allocated = round(allocated + applied);
-    remaining = round(remaining - applied);
-    if (remaining <= 0) break;
+    const billChanges = plan.allocations.map((item) => Prisma.sql`
+      (${item.billId}::bigint, ${item.paidAmount}::numeric, ${item.status}::text)
+    `);
+    await tx.$executeRaw(Prisma.sql`
+      UPDATE aquaflow.bills AS bill
+      SET paid_amount = changes.paid_amount,
+          status = changes.status,
+          updated_at = NOW()
+      FROM (VALUES ${Prisma.join(billChanges)}) AS changes(bill_id, paid_amount, status)
+      WHERE bill.bill_id = changes.bill_id
+    `);
   }
   await tx.customerAccount.update({
     where: { accountId },
@@ -828,12 +821,28 @@ async function allocate(
       accountId,
       matchingStatus,
       paymentStatus: "POSTED",
-      unallocatedAmount: remaining,
+      unallocatedAmount: plan.remaining,
       postedAt: new Date(),
       updatedAt: new Date(),
     },
   });
-  return { allocated, remaining, matchingStatus };
+  return { allocated: plan.allocated, remaining: plan.remaining, matchingStatus };
+}
+
+async function loadAllocatableBills(tx: any, accountIds: bigint[]) {
+  if (!accountIds.length) return [];
+  await tx.$queryRaw(Prisma.sql`
+    SELECT bill_id
+    FROM aquaflow.bills
+    WHERE account_id IN (${Prisma.join(accountIds)})
+      AND status IN ('POSTED', 'PARTIALLY_PAID')
+    ORDER BY bill_id
+    FOR UPDATE
+  `);
+  return tx.bill.findMany({
+    where: { accountId: { in: accountIds }, status: { in: ["POSTED", "PARTIALLY_PAID"] } },
+    orderBy: [{ dueDate: "asc" }, { billId: "asc" }],
+  });
 }
 
 paymentsRouter.get("/channels", async (_req, res, next) => {
@@ -1390,6 +1399,9 @@ paymentsRouter.post("/record", staff, async (req, res, next) => {
       return res
         .status(409)
         .json({ error: "Payment reference already exists" });
+    const persistenceError = paymentPersistenceError(e);
+    if (persistenceError)
+      return res.status(persistenceError.status).json({ error: persistenceError.message });
     next(e);
   }
 });
@@ -1509,6 +1521,9 @@ paymentsRouter.post(
         return res
           .status(409)
           .json({ error: "M-Pesa transaction reference already exists" });
+      const persistenceError = paymentPersistenceError(e);
+      if (persistenceError)
+        return res.status(persistenceError.status).json({ error: persistenceError.message });
       next(e);
     }
   },
@@ -1556,14 +1571,7 @@ paymentsRouter.patch("/:id/allocate", checker, async (req, res, next) => {
             amount: round(allocation.amount),
           }))
         : [{ accountId: data.accountId, amount: round(Number(payment.amount)) }];
-      const paymentCents = Math.round(Number(payment.amount) * 100);
-      const allocationCents = allocations.reduce((sum, allocation) => sum + Math.round(allocation.amount * 100), 0);
-      if (allocations.some((allocation) => allocation.amount <= 0))
-        throw Object.assign(new Error("Every split amount must be greater than zero"), { status: 400 });
-      if (allocationCents !== paymentCents)
-        throw Object.assign(new Error(`Split amounts must total KSh ${Number(payment.amount).toFixed(2)}`), { status: 400 });
-      if (new Set(allocations.map((allocation) => String(allocation.accountId))).size !== allocations.length)
-        throw Object.assign(new Error("Select each customer account only once"), { status: 400 });
+      validatePaymentSplits(Number(payment.amount), allocations);
 
       const accounts = await tx.customerAccount.findMany({
         where: { accountId: { in: allocations.map((allocation) => allocation.accountId) }, accountStatus: "ACTIVE" },
@@ -1572,8 +1580,26 @@ paymentsRouter.patch("/:id/allocate", checker, async (req, res, next) => {
       if (accounts.length !== allocations.length)
         throw Object.assign(new Error("Every allocation must use an active customer account"), { status: 400 });
 
+      // Lock and load every candidate bill once. This both serializes competing
+      // allocations and avoids one bill-list query for every row in a split.
+      const allocatableBills = await loadAllocatableBills(
+        tx,
+        allocations.map((allocation) => allocation.accountId),
+      );
+      const billsByAccount = new Map<string, any[]>();
+      for (const bill of allocatableBills) {
+        const key = String(bill.accountId);
+        billsByAccount.set(key, [...(billsByAccount.get(key) ?? []), bill]);
+      }
+
       if (allocations.length === 1) {
-        const allocation = await allocate(tx, payment, allocations[0].accountId, uid(req));
+        const allocation = await allocate(
+          tx,
+          payment,
+          allocations[0].accountId,
+          uid(req),
+          billsByAccount.get(String(allocations[0].accountId)) ?? [],
+        );
         await tx.suspensePayment.updateMany({
           where: { paymentId },
           data: {
@@ -1638,7 +1664,13 @@ paymentsRouter.patch("/:id/allocate", checker, async (req, res, next) => {
             receivedBy: uid(req),
           },
         });
-        await allocate(tx, child, split.accountId, uid(req));
+        await allocate(
+          tx,
+          child,
+          split.accountId,
+          uid(req),
+          billsByAccount.get(String(split.accountId)) ?? [],
+        );
         const receipt = await tx.receipt.create({
           data: {
             receiptNumber: `RCT-${new Date().getFullYear()}-${String(child.paymentId).padStart(6, "0")}`,
@@ -1704,11 +1736,13 @@ paymentsRouter.patch("/:id/allocate", checker, async (req, res, next) => {
         },
       });
       return { matchingStatus: "MATCHED", split: true, allocated: Number(payment.amount), remaining: 0, receipts: splitResults };
-    });
+    }, { maxWait: 10_000, timeout: 30_000 });
     res.json(result);
   } catch (e: any) {
     if (e.status) return res.status(e.status).json({ error: e.message });
     if (e.code === "P2002") return res.status(409).json({ error: "This payment split has already been posted" });
+    const persistenceError = paymentPersistenceError(e);
+    if (persistenceError) return res.status(persistenceError.status).json({ error: persistenceError.message });
     next(e);
   }
 });
@@ -1819,7 +1853,7 @@ paymentsRouter.patch(
     try {
       const reversal = await prisma.paymentReversal.findUnique({
         where: { reversalId },
-        include: { payment: { include: { allocations: true } } },
+        include: { payment: { include: { allocations: { where: { status: "ACTIVE" } } } } },
       });
       if (!reversal || reversal.status !== "PENDING")
         return res
@@ -1851,15 +1885,16 @@ paymentsRouter.patch(
           const bill = await tx.bill.findUniqueOrThrow({
             where: { billId: allocation.billId },
           });
-          const paid = Math.max(
-            0,
-            round(Number(bill.paidAmount) - Number(allocation.allocatedAmount)),
+          const reversed = billStateAfterReversal(
+            bill.totalAmountDue,
+            bill.paidAmount,
+            allocation.allocatedAmount,
           );
           await tx.bill.update({
             where: { billId: bill.billId },
             data: {
-              paidAmount: paid,
-              status: paid <= 0 ? "POSTED" : "PARTIALLY_PAID",
+              paidAmount: reversed.paidAmount,
+              status: reversed.status,
               updatedAt: new Date(),
             },
           });

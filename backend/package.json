@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
     "build": "tsc -p .",
+    "test": "node --test -r ts-node/register src/lib/paymentAllocation.test.ts src/lib/newConnectionPayment.test.ts",
     "start": "node dist/index.js",
     "prisma:generate": "prisma generate",
     "prisma:pull": "prisma db pull",
@@ -42,6 +43,7 @@
     "db:new-connection-signature-optional-upgrade": "prisma db execute --file prisma/migrations/20260829180000_relax_new_connection_signature/migration.sql --schema prisma/schema.prisma",
     "db:meter-replacement-integrity-upgrade": "prisma db execute --file prisma/migrations/20260830090000_meter_replacement_integrity/migration.sql --schema prisma/schema.prisma",
     "db:direct-meter-replacement-upgrade": "prisma db execute --file prisma/migrations/20260903200000_direct_meter_replacement_retained_number/migration.sql --schema prisma/schema.prisma",
+    "db:payment-outstanding-upgrade": "prisma db execute --file prisma/migrations/20260904100000_bill_outstanding_allocation_consistency/migration.sql --schema prisma/schema.prisma",
     "db:work-order-completion-upgrade": "prisma db execute --file prisma/migrations/20260815090000_field_work_order_completion_contract/migration.sql --schema prisma/schema.prisma",
     "verify:work-order-completion": "node scripts/verify-work-order-completion-contract.js",
     "verify:reconnection": "node scripts/verify-reconnection-contract.js",
