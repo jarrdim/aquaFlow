@@ -423,6 +423,18 @@ accountsRouter.get("/", async (req, res, next) => {
     if (!statusResult.success) {
       return res.status(400).json({ error: "Invalid account status" });
     }
+    const requestedStatuses = String(req.query.statuses ?? "")
+      .split(",")
+      .map((value) => value.trim().toUpperCase())
+      .filter(Boolean);
+    const statusesResult = z.array(z.enum(accountStatuses)).safeParse(requestedStatuses);
+    if (!statusesResult.success) {
+      return res.status(400).json({ error: "Invalid account statuses" });
+    }
+    const statuses = Array.from(new Set([
+      ...(statusResult.data ? [statusResult.data] : []),
+      ...statusesResult.data,
+    ]));
     const loadAll = String(req.query.all ?? "").toLowerCase() === "true";
     const take = Math.min(20_000, Math.max(1, Number(req.query.take) || 8));
     const identityWhere: any = accountIds.length
@@ -441,8 +453,8 @@ accountsRouter.get("/", async (req, res, next) => {
           ],
         }
       : undefined;
-    const where = statusResult.data
-      ? { AND: [...(identityWhere ? [identityWhere] : []), { accountStatus: statusResult.data }] }
+    const where = statuses.length
+      ? { AND: [...(identityWhere ? [identityWhere] : []), { accountStatus: { in: statuses } }] }
       : identityWhere;
     const accounts = await prisma.customerAccount.findMany({
       where,

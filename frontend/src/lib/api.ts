@@ -53,9 +53,19 @@ async function fetchWithReadRetry(path: string, options: RequestInit) {
   let lastError: unknown;
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const timeoutController = new AbortController();
+    const abortFromCaller = () => timeoutController.abort(options.signal?.reason);
+    const timeout = window.setTimeout(() => timeoutController.abort(), 30_000);
+    options.signal?.addEventListener("abort", abortFromCaller, { once: true });
     try {
-      const response = await fetch(`/api${path}`, options);
-      const transientServerFailure = [502, 503, 504].includes(response.status);
+      const response = await fetch(`/api${path}`, {
+        ...options,
+        signal: timeoutController.signal,
+      });
+      const contentType = response.headers.get("content-type") ?? "";
+      const transientServerFailure =
+        [502, 503, 504].includes(response.status) ||
+        (response.status === 500 && !contentType.includes("application/json"));
       if (
         method === "GET" &&
         transientServerFailure &&
@@ -69,6 +79,9 @@ async function fetchWithReadRetry(path: string, options: RequestInit) {
       lastError = error;
       if (method !== "GET" || attempt === maxAttempts - 1) break;
       await wait(retryDelays[attempt]);
+    } finally {
+      window.clearTimeout(timeout);
+      options.signal?.removeEventListener("abort", abortFromCaller);
     }
   }
 
@@ -259,10 +272,8 @@ export const api = {
       `/accounts?search=${encodeURIComponent(search)}&take=${encodeURIComponent(String(take))}${accountId ? `&accountId=${encodeURIComponent(accountId)}` : ""}${accountIds.length ? `&accountIds=${encodeURIComponent(accountIds.join(","))}` : ""}`,
     ),
   listActiveAccounts: () => request("/accounts?status=ACTIVE&all=true"),
-  listReadingAccounts: () => Promise.all([
-    request("/accounts?status=ACTIVE&all=true"),
-    request("/accounts?status=SUSPENDED&all=true"),
-  ]).then(([active, suspended]) => [...active, ...suspended]),
+  listReadingAccounts: () =>
+    request("/accounts?statuses=ACTIVE%2CSUSPENDED&all=true"),
 
   meterDashboard: (filters: Record<string, string> = {}) => {
     const query = new URLSearchParams(

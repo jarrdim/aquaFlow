@@ -754,6 +754,12 @@ export function IndividualBillingWorkspace() {
     if (loading || !restorePreviewPending.current) return;
     restorePreviewPending.current = false;
     if (!billingCycleId || !selectedAccountIds.length) return;
+    const linkedReadingCycle = readingCycles.find((cycle) =>
+      String(cycle.readingCycleId) === readingCycleId,
+    );
+    // Previewing bills is only valid after readings are closed. A saved open
+    // workspace should return to reading capture without raising a load error.
+    if (linkedReadingCycle?.status !== "CLOSED") return;
     api.previewBills({
       billingCycleId,
       accountIds: selectedAccountIds.join(","),

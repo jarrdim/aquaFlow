@@ -5,7 +5,6 @@ import { requireAuth, requireRole } from "../middleware/auth";
 import {
   LEGACY_READABLE_METER_STATUSES,
   READING_ACCOUNT_STATUSES,
-  filterReadingAssignmentsBySearch,
   readingEligibilityWarning,
   requestedRoutesAreAllowed,
   resolveReadableAssignments,
@@ -78,6 +77,25 @@ const readingInclude = {
   events: { include: { performer: true }, orderBy: { createdAt: "desc" as const } },
 };
 
+function worklistSearch(search: string, exact: boolean): Prisma.MeterAssignmentWhereInput {
+  const text = exact
+    ? { equals: search, mode: Prisma.QueryMode.insensitive }
+    : { contains: search, mode: Prisma.QueryMode.insensitive };
+  return {
+    OR: [
+      { meter: { meterNumber: text } },
+      { meter: { serialNumber: text } },
+      { account: { accountNumber: text } },
+      { account: { customer: { customerNumber: text } } },
+      { account: { customer: { firstName: text } } },
+      { account: { customer: { middleName: text } } },
+      { account: { customer: { lastName: text } } },
+      { account: { customer: { organizationName: text } } },
+      { account: { customer: { phoneNumber: text } } },
+    ],
+  };
+}
+
 async function getEligibleAssignments(
   cycleId?: bigint,
   routeIds?: bigint[],
@@ -86,22 +104,9 @@ async function getEligibleAssignments(
   meterId?: bigint,
   allowedRouteIds?: bigint[],
   accountIds?: bigint[],
-) {
+  includeDetails = true,
+): Promise<any[]> {
   void cycleId;
-  let eligibleAccountIds = accountIds;
-  if (meterId) {
-    const requestedAssignments = await prisma.meterAssignment.findMany({
-      where: { meterId, assignmentStatus: "ACTIVE", removalDate: null, accountId: { not: null } },
-      select: { accountId: true },
-    });
-    const requestedAccountIds = requestedAssignments.flatMap((assignment) =>
-      assignment.accountId == null ? [] : [assignment.accountId],
-    );
-    eligibleAccountIds = accountIds?.length
-      ? accountIds.filter((accountId) => requestedAccountIds.some((requested) => requested === accountId))
-      : requestedAccountIds;
-    if (!eligibleAccountIds.length) return [];
-  }
   const accountFilters: Prisma.CustomerAccountWhereInput[] = [
     { accountStatus: { in: [...READING_ACCOUNT_STATUSES] } },
     ...(routeIds?.length
@@ -122,10 +127,10 @@ async function getEligibleAssignments(
       : []),
     ...(zoneId ? [{ property: { zoneId } } as Prisma.CustomerAccountWhereInput] : []),
   ];
-  const baseWhere: Prisma.MeterAssignmentWhereInput = {
+  const scopeWhere: Prisma.MeterAssignmentWhereInput = {
     assignmentStatus: "ACTIVE",
     removalDate: null,
-    accountId: eligibleAccountIds?.length ? { in: eligibleAccountIds } : { not: null },
+    accountId: accountIds?.length ? { in: accountIds } : { not: null },
     account: { AND: accountFilters },
     meter: {
       OR: [
@@ -134,31 +139,70 @@ async function getEligibleAssignments(
       ],
     },
   };
+  let narrowedAccountIds = accountIds;
+  const terms = search.trim().split(/\s+/).filter(Boolean);
+  if (meterId || terms.length) {
+    const exactSearch = terms.length ? worklistSearch(search.trim(), true) : undefined;
+    const exactMatches = await prisma.meterAssignment.findMany({
+      where: {
+        AND: [
+          scopeWhere,
+          ...(meterId ? [{ meterId }] : []),
+          ...(exactSearch ? [exactSearch] : []),
+        ],
+      },
+      select: { accountId: true },
+      distinct: ["accountId"],
+    });
+    const matches = exactMatches.length || !terms.length
+      ? exactMatches
+      : await prisma.meterAssignment.findMany({
+          where: {
+            AND: [
+              scopeWhere,
+              ...(meterId ? [{ meterId }] : []),
+              ...terms.map((term) => worklistSearch(term, false)),
+            ],
+          },
+          select: { accountId: true },
+          distinct: ["accountId"],
+        });
+    narrowedAccountIds = matches.flatMap((assignment) =>
+      assignment.accountId == null ? [] : [assignment.accountId],
+    );
+    if (!narrowedAccountIds.length) return [];
+  }
+  const baseWhere: Prisma.MeterAssignmentWhereInput = {
+    ...scopeWhere,
+    accountId: narrowedAccountIds?.length ? { in: narrowedAccountIds } : { not: null },
+  };
   const assignments = await prisma.meterAssignment.findMany({
     where: baseWhere,
-    include: {
-      meter: { include: { readings: { orderBy: [{ readingDate: "desc" }, { readingId: "desc" }], take: 1 } } },
-      account: {
-        include: {
-          customer: true,
-          route: { include: { zone: true } },
-          property: {
+    include: includeDetails
+      ? {
+          meter: { include: { readings: { orderBy: [{ readingDate: "desc" }, { readingId: "desc" }], take: 1 } } },
+          account: {
             include: {
+              customer: true,
               route: { include: { zone: true } },
-              zone: true,
-              serviceArea: true,
+              property: {
+                include: {
+                  route: { include: { zone: true } },
+                  zone: true,
+                  serviceArea: true,
+                },
+              },
             },
           },
-        },
-      },
-    },
+        }
+      : { meter: true },
     orderBy: [{ assignmentDate: "asc" }, { assignmentId: "asc" }],
   });
   const resolved = resolveReadableAssignments(assignments);
-  const requestedMeterResolved = meterId
-    ? resolved.filter((assignment) => assignment.meterId === meterId)
-    : resolved;
-  return filterReadingAssignmentsBySearch(requestedMeterResolved, search);
+  // Search identifies the account first. Returning its resolved current meter
+  // means an old meter number safely leads to the replacement instead of
+  // reviving the removed meter or forcing a system-wide in-memory scan.
+  return meterId ? resolved.filter((assignment) => assignment.meterId === meterId) : resolved;
 }
 
 readingsRouter.get("/cycles", async (req, res, next) => {
@@ -463,6 +507,7 @@ readingsRouter.get("/worklist/captured-count", async (req, res, next) => {
       meterId,
       undefined,
       accountIds,
+      false,
     );
     const count = eligible.length
       ? await prisma.meterReading.count({
