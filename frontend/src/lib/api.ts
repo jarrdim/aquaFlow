@@ -354,6 +354,26 @@ export const api = {
     request("/meters/replacements/direct", { method: "POST", body: JSON.stringify(data) }),
   previewDirectMeterReplacement: (data: Record<string, unknown>) =>
     request("/meters/replacements/direct/preview", { method: "POST", body: JSON.stringify(data) }),
+  getDirectMeterServiceOptions: (search = "") =>
+    request(`/meters/service-actions/direct/options${search ? `?search=${encodeURIComponent(search)}` : ""}`),
+  getDirectMeterServiceHistory: () =>
+    request("/meters/service-actions/direct/history"),
+  previewDirectMeterDisconnection: (data: Record<string, unknown>) =>
+    request("/meters/service-actions/direct/disconnection/preview", { method: "POST", body: JSON.stringify(data) }),
+  createDirectMeterDisconnection: (data: Record<string, unknown>) =>
+    request("/meters/service-actions/direct/disconnect", { method: "POST", body: JSON.stringify(data) }),
+  createDirectMeterReconnection: (data: Record<string, unknown>) =>
+    request("/meters/service-actions/direct/reconnect", { method: "POST", body: JSON.stringify(data) }),
+  createDirectReconnectionRequest: (data: Record<string, unknown>) =>
+    request("/meters/service-actions/direct/reconnection/request", { method: "POST", body: JSON.stringify(data) }),
+  requestDirectReconnectionStk: (data: Record<string, unknown>) =>
+    request("/meters/service-actions/direct/reconnection/payment/stk", { method: "POST", body: JSON.stringify(data) }),
+  refreshDirectReconnectionPayment: (accountId: string) =>
+    request("/meters/service-actions/direct/reconnection/payment/status", { method: "POST", body: JSON.stringify({ accountId }) }),
+  resetDirectReconnectionPayment: (data: Record<string, unknown>) =>
+    request("/meters/service-actions/direct/reconnection/payment/reset", { method: "POST", body: JSON.stringify(data) }),
+  applyDirectReconnectionCredit: (data: Record<string, unknown>) =>
+    request("/meters/service-actions/direct/reconnection/payment/credit", { method: "POST", body: JSON.stringify(data) }),
   getMeterReplacement: (id: string) => request(`/meters/replacements/${id}`),
   createMeterReplacement: (data: Record<string, unknown>) =>
     request("/meters/replacements", {

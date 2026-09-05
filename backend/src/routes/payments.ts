@@ -105,6 +105,23 @@ function findC2bAccount(
   });
 }
 
+async function findC2bReconnectionRequest(
+  database: Prisma.TransactionClient | typeof prisma,
+  reference: string,
+) {
+  const rows = await database.$queryRaw<any[]>(Prisma.sql`
+    SELECT r.reconnection_request_id AS "reconnectionRequestId",r.request_number AS "requestNumber",
+      r.account_id AS "accountId",r.reconnection_fee AS "reconnectionFee",
+      r.fee_payment_status AS "feePaymentStatus",r.status,
+      ca.account_number AS "accountNumber"
+    FROM aquaflow.reconnection_requests r
+    JOIN aquaflow.customer_accounts ca ON ca.account_id=r.account_id
+    WHERE UPPER(r.request_number)=UPPER(${reference.trim()})
+      AND r.status IN ('SUBMITTED','APPROVED','WORK_ORDER_CREATED')
+    ORDER BY r.created_at DESC LIMIT 1`);
+  return rows[0] ?? null;
+}
+
 // PayBill validation is deliberately read-only. Confirmation is the source of
 // truth and remains capable of preserving an unmatched payment in suspense.
 paymentsRouter.post(["/c2b/validation", "/mpesa/c2b/validation"], async (req, res, next) => {
@@ -119,6 +136,14 @@ paymentsRouter.post(["/c2b/validation", "/mpesa/c2b/validation"], async (req, re
   if (!parsed.success || !c2bShortCodeMatches(parsed.data.BusinessShortCode))
     return res.json({ ResultCode: "C2B00012", ResultDesc: "Invalid transaction details" });
   try {
+    const reconnection = await findC2bReconnectionRequest(prisma, parsed.data.BillRefNumber);
+    if (reconnection) {
+      if (reconnection.feePaymentStatus === "PAID") return res.json({ ResultCode: "C2B00013", ResultDesc: "Reconnection fee already paid" });
+      if (Number(parsed.data.TransAmount) !== Number(reconnection.reconnectionFee)) {
+        return res.json({ ResultCode: "C2B00013", ResultDesc: `Pay the exact reconnection fee of KSh ${Number(reconnection.reconnectionFee).toFixed(2)}` });
+      }
+      return res.json({ ResultCode: 0, ResultDesc: "Accepted" });
+    }
     const account = await findC2bAccount(prisma, parsed.data.BillRefNumber);
     return res.json(account
       ? { ResultCode: 0, ResultDesc: "Accepted" }
@@ -159,7 +184,13 @@ paymentsRouter.post(["/c2b/confirmation", "/mpesa/c2b/confirmation"], async (req
       });
       if (!channel)
         throw Object.assign(new Error("Active M-Pesa payment channel is not configured"), { status: 503 });
-      const account = await findC2bAccount(tx, customerReference);
+      const reconnection = await findC2bReconnectionRequest(tx, customerReference);
+      const reconnectionAmountMatches = reconnection &&
+        Number(body.TransAmount) === Number(reconnection.reconnectionFee) &&
+        reconnection.feePaymentStatus !== "PAID";
+      const account = reconnectionAmountMatches
+        ? await tx.customerAccount.findUnique({ where: { accountId: BigInt(reconnection.accountId) } })
+        : await findC2bAccount(tx, customerReference);
       const payment = await tx.payment.create({
         data: {
           transactionReference,
@@ -171,16 +202,38 @@ paymentsRouter.post(["/c2b/confirmation", "/mpesa/c2b/confirmation"], async (req
           paymentDate,
           valueDate: new Date(Date.UTC(paymentDate.getUTCFullYear(), paymentDate.getUTCMonth(), paymentDate.getUTCDate())),
           customerReference,
-          paymentType: "BILL_PAYMENT",
-          remarks: "M-Pesa PayBill C2B payment",
-          matchingStatus: "UNMATCHED",
-          paymentStatus: "RECEIVED",
-          unallocatedAmount: body.TransAmount,
+          paymentType: reconnectionAmountMatches ? "RECONNECTION_FEE" : "BILL_PAYMENT",
+          remarks: reconnectionAmountMatches ? `M-Pesa PayBill reconnection fee for ${reconnection.requestNumber}` : "M-Pesa PayBill C2B payment",
+          matchingStatus: reconnectionAmountMatches ? "MATCHED" : "UNMATCHED",
+          paymentStatus: reconnectionAmountMatches ? "POSTED" : "RECEIVED",
+          unallocatedAmount: reconnectionAmountMatches ? 0 : body.TransAmount,
+          ...(reconnectionAmountMatches ? { postedAt: new Date() } : {}),
           externalPayload: req.body,
         },
       });
 
-      if (account) {
+      if (account && reconnectionAmountMatches) {
+        const receipt = await tx.receipt.create({
+          data: {
+            receiptNumber: `RCT-${new Date().getFullYear()}-${String(payment.paymentId).padStart(6, "0")}`,
+            paymentId: payment.paymentId,
+            accountId: account.accountId,
+            amount: body.TransAmount,
+          },
+        });
+        await tx.$executeRaw`UPDATE aquaflow.reconnection_requests
+          SET fee_payment_status='PAID',fee_payment_id=${payment.paymentId},fee_paid_at=NOW(),updated_at=NOW()
+          WHERE reconnection_request_id=${reconnection.reconnectionRequestId}`;
+        await tx.paymentEvent.create({
+          data: {
+            paymentId: payment.paymentId,
+            eventType: "MPESA_C2B_RECONNECTION_FEE_POSTED",
+            previousStatus: "RECEIVED", newStatus: "POSTED",
+            details: `PayBill ${transactionReference}; reconnection fee KSh ${Number(body.TransAmount).toFixed(2)}`,
+            metadata: { receiptId: String(receipt.receiptId), customerReference, reconnectionRequestId: String(reconnection.reconnectionRequestId) },
+          },
+        });
+      } else if (account) {
         const allocation = await allocate(tx, payment, account.accountId, null);
         const receipt = await tx.receipt.create({
           data: {

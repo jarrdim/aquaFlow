@@ -2,6 +2,8 @@ import { Prisma } from "@prisma/client";
 import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
+import { queryStkPush } from "../lib/mpesa";
+import { initiateMpesaStk } from "../lib/mpesaStk";
 import { requireAuth, requireRole } from "../middleware/auth";
 
 export const metersRouter = Router();
@@ -194,10 +196,10 @@ async function prepareReplacementBill(
     include: { bands: { where: { status: "ACTIVE" }, orderBy: { bandSequence: "asc" } } },
     orderBy: { effectiveFrom: "desc" },
   });
-  if (!tariff) throw Object.assign(new Error("No active tariff covers this account on the replacement date. Replacement cannot continue."), { status: 409 });
+  if (!tariff) throw Object.assign(new Error("No active tariff covers this account on the action date. Immediate billing cannot continue."), { status: 409 });
   const calculation = calculateReplacementBill(tariff, consumption);
   if (![consumption, calculation.totalCurrentCharges, ...calculation.items.flatMap((item) => [item.quantity, item.unitRate, item.amount])].every((value) => Number.isFinite(value) && value >= 0)) {
-    throw Object.assign(new Error("The replacement bill calculation produced invalid amounts. Replacement cannot continue."), { status: 409 });
+    throw Object.assign(new Error("The immediate bill calculation produced invalid amounts. The action cannot continue."), { status: 409 });
   }
   const settings = await tx.systemSetting.findUnique({ where: { settingId: 1n }, select: { billingDueDays: true } });
   const dueDate = new Date(replacementDate);
@@ -659,6 +661,129 @@ const directReplacementPreviewSchema = z.object({
   oldFinalReading: z.coerce.number().min(0),
 });
 
+const directDisconnectionSchema = z.object({
+  accountId: z.string().regex(/^\d+$/),
+  meterId: z.string().regex(/^\d+$/),
+  actionDateTime: z.coerce.date(),
+  currentReading: z.coerce.number().finite().min(0).max(999_999_999),
+  reason: z.string().trim().min(3).max(1000),
+  remarks: z.string().trim().max(5000).optional(),
+  customerAcknowledgement: z.enum(["ACKNOWLEDGED", "UNAVAILABLE", "REFUSED_TO_SIGN"]),
+  confirmed: z.literal(true),
+});
+
+const directDisconnectionPreviewSchema = directDisconnectionSchema.pick({
+  accountId: true,
+  meterId: true,
+  actionDateTime: true,
+  currentReading: true,
+});
+
+const directReconnectionSchema = z.object({
+  accountId: z.string().regex(/^\d+$/),
+  meterId: z.string().regex(/^\d+$/),
+  actionDateTime: z.coerce.date(),
+  reason: z.string().trim().min(3).max(1000),
+  remarks: z.string().trim().max(5000).optional(),
+  confirmed: z.literal(true),
+});
+
+const directServiceRoles = requireRole(
+  "ADMIN", "SYSTEM_ADMIN", "METER_MANAGER", "METER_SUPERVISOR", "SUPERVISOR",
+);
+
+async function directServiceContext(
+  tx: Prisma.TransactionClient,
+  accountId: bigint,
+  meterId: bigint,
+  actionDate: Date,
+  lock = false,
+) {
+  const rows = await tx.$queryRaw<any[]>(Prisma.sql`
+    SELECT ca.account_id AS "accountId",ca.account_number AS "accountNumber",
+      ca.account_status AS "accountStatus",ca.current_balance AS "currentBalance",
+      ca.customer_id AS "customerId",ca.property_id AS "propertyId",p.zone_id AS "zoneId",
+      COALESCE(NULLIF(TRIM(CONCAT_WS(' ',c.first_name,c.middle_name,c.last_name)),''),c.organization_name,c.customer_number) AS "customerName",
+      c.phone_number AS "customerPhone",ma.assignment_id AS "assignmentId",
+      m.meter_id AS "meterId",m.meter_number AS "meterNumber",m.serial_number AS "serialNumber",
+      m.status AS "meterStatus",m.installation_status AS "installationStatus",m.opening_reading AS "openingReading",
+      latest.current_reading AS "latestReading",latest.reading_date AS "latestReadingDate"
+    FROM aquaflow.customer_accounts ca
+    JOIN aquaflow.customers c ON c.customer_id=ca.customer_id
+    JOIN aquaflow.properties p ON p.property_id=ca.property_id
+    JOIN aquaflow.meter_assignments ma ON ma.account_id=ca.account_id
+      AND ma.assignment_status='ACTIVE' AND ma.removal_date IS NULL
+    JOIN aquaflow.meters m ON m.meter_id=ma.meter_id
+    LEFT JOIN LATERAL (
+      SELECT mr.current_reading,mr.reading_date FROM aquaflow.meter_readings mr
+      WHERE mr.meter_id=m.meter_id AND mr.approval_status='APPROVED'
+      ORDER BY mr.reading_date DESC,mr.reading_id DESC LIMIT 1
+    ) latest ON TRUE
+    WHERE ca.account_id=${accountId} AND m.meter_id=${meterId}
+    ORDER BY ma.assignment_date DESC,ma.assignment_id DESC LIMIT 1
+    ${lock ? Prisma.sql`FOR UPDATE OF ca,ma,m` : Prisma.empty}`);
+  const context = rows[0];
+  if (!context) throw Object.assign(new Error("The meter is not currently assigned to this customer account"), { status: 409 });
+  if (actionDate.getTime() > Date.now() + 5 * 60_000) {
+    throw Object.assign(new Error("The action date and time cannot be in the future"), { status: 409 });
+  }
+  const latestReading = Number(context.latestReading ?? context.openingReading ?? 0);
+  if (context.latestReadingDate && actionDate < new Date(context.latestReadingDate)) {
+    throw Object.assign(new Error("The action date cannot be before the latest approved meter reading"), { status: 409 });
+  }
+  return { ...context, latestReading };
+}
+
+async function paidDirectReconnectionRequest(tx: Prisma.TransactionClient, accountId: bigint) {
+  const rows = await tx.$queryRaw<any[]>`
+    SELECT r.reconnection_request_id AS "reconnectionRequestId",r.request_number AS "requestNumber",
+      r.status,r.reconnection_fee AS "reconnectionFee",r.fee_payment_status AS "feePaymentStatus",
+      r.fee_paid_at AS "feePaidAt",r.work_order_id AS "workOrderId",r.decision_notes AS "decisionNotes",
+      pay.payment_id AS "paymentId",pay.payment_status AS "paymentStatus",
+      pay.payment_type AS "paymentType",pay.amount AS "paidAmount",
+      rec.receipt_number AS "receiptNumber"
+    FROM aquaflow.reconnection_requests r
+    LEFT JOIN aquaflow.payments pay ON pay.payment_id=r.fee_payment_id
+    LEFT JOIN aquaflow.receipts rec ON rec.payment_id=pay.payment_id
+    WHERE r.account_id=${accountId} AND r.status IN ('SUBMITTED','APPROVED','WORK_ORDER_CREATED')
+    ORDER BY r.created_at DESC LIMIT 1`;
+  return rows[0] ?? null;
+}
+
+async function ensureDirectReconnectionRequest(
+  tx: Prisma.TransactionClient,
+  context: any,
+  actorId: bigint,
+  reason = "Direct meter reconnection",
+  phoneNumber?: string,
+) {
+  await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`direct-reconnection:${context.accountId}`}))::text AS lock`;
+  const existing = await paidDirectReconnectionRequest(tx, context.accountId);
+  if (existing) return existing;
+  const settings = await tx.systemSetting.findUnique({ where: { settingId: 1n }, select: { reconnectionFee: true } });
+  const fee = Number(settings?.reconnectionFee ?? 0);
+  if (!Number.isFinite(fee) || fee <= 0) {
+    throw Object.assign(new Error("A positive reconnection fee is not configured"), { status: 409 });
+  }
+  const disconnections = await tx.$queryRaw<any[]>`
+    SELECT work_order_id FROM aquaflow.disconnection_postings
+    WHERE account_id=${context.accountId} ORDER BY posted_at DESC LIMIT 1`;
+  if (!disconnections[0]) {
+    throw Object.assign(new Error("No completed disconnection posting exists for this account"), { status: 409 });
+  }
+  const requestNumber = `RC-${new Date().getFullYear()}-${Date.now().toString().slice(-9)}`;
+  const rows = await tx.$queryRaw<any[]>`
+    INSERT INTO aquaflow.reconnection_requests(request_number,customer_id,account_id,reason,contact_phone,
+      status,reconnection_fee,decision_notes,decided_by,decided_at,disconnection_work_order_id)
+    VALUES(${requestNumber},${context.customerId},${context.accountId},${reason},
+      ${phoneNumber || context.customerPhone},'APPROVED',${fee},'Approved for direct meter-service payment',
+      ${actorId},NOW(),${disconnections[0].work_order_id})
+    RETURNING reconnection_request_id AS "reconnectionRequestId",request_number AS "requestNumber",
+      status,reconnection_fee AS "reconnectionFee",fee_payment_status AS "feePaymentStatus",
+      fee_paid_at AS "feePaidAt",work_order_id AS "workOrderId"`;
+  return rows[0];
+}
+
 async function validateReplacementMeters(
   tx: Prisma.TransactionClient,
   data: z.infer<typeof replacementInputSchema>,
@@ -988,6 +1113,443 @@ metersRouter.post("/replacements/direct", requireRole("ADMIN", "SYSTEM_ADMIN", "
         { billingCycleId: billingCycle.billingCycleId, billId: bill.billId, eventType: "BILL_POSTED", previousStatus: "APPROVED", newStatus: "POSTED", details: "Posted immediately during direct meter replacement", performedBy: userId(req), createdAt: postedAt },
       ] });
       return { ...replacement, bill };
+    }, { maxWait: 10_000, timeout: 30_000 });
+    res.status(201).json(result);
+  } catch (error: any) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    next(error);
+  }
+});
+
+metersRouter.get("/service-actions/direct/options", directServiceRoles, async (req, res, next) => {
+  try {
+    const search = String(req.query.search ?? "").trim();
+    const pattern = `%${search}%`;
+    const rows = await prisma.$queryRaw<any[]>`
+      SELECT ca.account_id AS "accountId",ca.account_number AS "accountNumber",
+        ca.account_status AS "accountStatus",ca.current_balance AS "currentBalance",
+        COALESCE(NULLIF(TRIM(CONCAT_WS(' ',c.first_name,c.middle_name,c.last_name)),''),c.organization_name,c.customer_number) AS "customerName",
+        c.phone_number AS "customerPhone",ma.assignment_id AS "assignmentId",
+        m.meter_id AS "meterId",m.meter_number AS "meterNumber",m.serial_number AS "serialNumber",
+        m.status AS "meterStatus",m.installation_status AS "installationStatus",
+        COALESCE(latest.current_reading,m.opening_reading) AS "latestReading",
+        latest.reading_date AS "latestReadingDate",
+        rr.reconnection_request_id AS "reconnectionRequestId",rr.request_number AS "reconnectionRequestNumber",
+        rr.status AS "reconnectionRequestStatus",COALESCE(rr.reconnection_fee,settings.reconnection_fee,0) AS "reconnectionFee",
+        rr.fee_payment_status AS "reconnectionFeePaymentStatus",rr.fee_paid_at AS "reconnectionFeePaidAt",
+        rr.work_order_id AS "workOrderId",
+        rec.receipt_number AS "reconnectionReceiptNumber",
+        GREATEST(0,-ca.current_balance) AS "accountCreditAvailable",
+        CASE WHEN rr.fee_payment_status='PAID' AND rr.fee_payment_id IS NULL
+          AND COALESCE(rr.decision_notes,'') ILIKE '%account credit%' THEN 'ACCOUNT_CREDIT'
+          WHEN pay.payment_status='POSTED' AND pay.payment_type='RECONNECTION_FEE'
+          AND pay.amount>=rr.reconnection_fee THEN 'PAYMENT' ELSE NULL END AS "reconnectionSettlementMethod",
+        COALESCE((pay.payment_status='POSTED' AND pay.payment_type='RECONNECTION_FEE'
+          AND pay.amount>=rr.reconnection_fee) OR (rr.fee_payment_status='PAID' AND rr.fee_payment_id IS NULL
+          AND COALESCE(rr.decision_notes,'') ILIKE '%account credit%'),FALSE) AS "reconnectionPaymentConfirmed"
+      FROM aquaflow.customer_accounts ca
+      JOIN aquaflow.customers c ON c.customer_id=ca.customer_id
+      JOIN LATERAL (
+        SELECT current_assignment.* FROM aquaflow.meter_assignments current_assignment
+        WHERE current_assignment.account_id=ca.account_id
+          AND current_assignment.assignment_status='ACTIVE' AND current_assignment.removal_date IS NULL
+        ORDER BY current_assignment.assignment_date DESC,current_assignment.assignment_id DESC LIMIT 1
+      ) ma ON TRUE
+      JOIN aquaflow.meters m ON m.meter_id=ma.meter_id
+      LEFT JOIN aquaflow.system_settings settings ON settings.setting_id=1
+      LEFT JOIN LATERAL (
+        SELECT mr.current_reading,mr.reading_date FROM aquaflow.meter_readings mr
+        WHERE mr.meter_id=m.meter_id AND mr.approval_status='APPROVED'
+        ORDER BY mr.reading_date DESC,mr.reading_id DESC LIMIT 1
+      ) latest ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT r.* FROM aquaflow.reconnection_requests r
+        WHERE r.account_id=ca.account_id AND r.status IN ('SUBMITTED','APPROVED','WORK_ORDER_CREATED')
+        ORDER BY r.created_at DESC LIMIT 1
+      ) rr ON TRUE
+      LEFT JOIN aquaflow.payments pay ON pay.payment_id=rr.fee_payment_id
+      LEFT JOIN aquaflow.receipts rec ON rec.payment_id=pay.payment_id
+      WHERE ca.account_status IN ('ACTIVE','SUSPENDED','DISCONNECTED')
+        AND (${search}='' OR ca.account_number ILIKE ${pattern} OR m.meter_number ILIKE ${pattern}
+          OR COALESCE(m.serial_number,'') ILIKE ${pattern} OR c.customer_number ILIKE ${pattern}
+          OR COALESCE(c.phone_number,'') ILIKE ${pattern}
+          OR CONCAT_WS(' ',c.first_name,c.middle_name,c.last_name,c.organization_name) ILIKE ${pattern})
+      ORDER BY ca.account_number,ma.assignment_date DESC,ma.assignment_id DESC LIMIT 100`;
+    res.json({ items: rows });
+  } catch (error) { next(error); }
+});
+
+metersRouter.get("/service-actions/direct/history", directServiceRoles, async (req, res, next) => {
+  try {
+    const rows = await prisma.$queryRaw<any[]>`
+      SELECT aa.arrears_action_id AS "actionId",aa.action_type AS "actionType",aa.details,
+        aa.metadata,aa.created_at AS "createdAt",ca.account_number AS "accountNumber",
+        COALESCE(NULLIF(TRIM(CONCAT_WS(' ',c.first_name,c.middle_name,c.last_name)),''),c.organization_name,c.customer_number) AS "customerName",
+        COALESCE(NULLIF(TRIM(CONCAT_WS(' ',u.first_name,u.last_name)),''),u.username) AS "performedByName"
+      FROM aquaflow.arrears_actions aa
+      JOIN aquaflow.customer_accounts ca ON ca.account_id=aa.account_id
+      JOIN aquaflow.customers c ON c.customer_id=ca.customer_id
+      LEFT JOIN aquaflow.users u ON u.user_id=aa.performed_by
+      WHERE aa.action_type IN ('DIRECT_METER_DISCONNECTION','DIRECT_METER_RECONNECTION')
+      ORDER BY aa.created_at DESC LIMIT 50`;
+    res.json(rows);
+  } catch (error) { next(error); }
+});
+
+metersRouter.post("/service-actions/direct/disconnection/preview", directServiceRoles, async (req, res, next) => {
+  const parsed = directDisconnectionPreviewSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  try {
+    const data = parsed.data;
+    const accountId = BigInt(data.accountId);
+    const meterId = BigInt(data.meterId);
+    const context = await directServiceContext(prisma, accountId, meterId, data.actionDateTime);
+    if (!['ACTIVE', 'SUSPENDED'].includes(context.accountStatus)) {
+      return res.status(409).json({ error: "Only an active or suspended account can be disconnected" });
+    }
+    if (context.meterStatus === "DISCONNECTED") return res.status(409).json({ error: "This meter is already disconnected" });
+    if (data.currentReading < context.latestReading) {
+      return res.status(409).json({ error: `Current reading cannot be below the latest approved reading of ${context.latestReading}` });
+    }
+    const consumption = roundMoney(data.currentReading - context.latestReading);
+    const prepared = await prepareReplacementBill(prisma, accountId, data.actionDateTime, consumption);
+    res.json({
+      previousReading: context.latestReading, currentReading: data.currentReading, consumption,
+      tariffCode: prepared.tariff.tariffCode, tariffName: prepared.tariff.tariffName,
+      finalReadingCharge: prepared.calculation.totalCurrentCharges,
+      currentBalance: prepared.previousBalance,
+      balanceAfterDisconnection: roundMoney(prepared.previousBalance + prepared.calculation.totalCurrentCharges),
+      calculation: prepared.calculation,
+    });
+  } catch (error: any) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    next(error);
+  }
+});
+
+metersRouter.post("/service-actions/direct/disconnect", directServiceRoles, async (req, res, next) => {
+  const parsed = directDisconnectionSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      const data = parsed.data;
+      const accountId = BigInt(data.accountId);
+      const meterId = BigInt(data.meterId);
+      const actorId = userId(req)!;
+      const context = await directServiceContext(tx, accountId, meterId, data.actionDateTime, true);
+      if (!['ACTIVE', 'SUSPENDED'].includes(context.accountStatus)) throw Object.assign(new Error("Only an active or suspended account can be disconnected"), { status: 409 });
+      if (context.meterStatus === "DISCONNECTED") throw Object.assign(new Error("This meter is already disconnected"), { status: 409 });
+      if (data.currentReading < context.latestReading) throw Object.assign(new Error(`Current reading cannot be below the latest approved reading of ${context.latestReading}`), { status: 409 });
+      const consumption = roundMoney(data.currentReading - context.latestReading);
+      const prepared = await prepareReplacementBill(tx, accountId, data.actionDateTime, consumption);
+      const types = await tx.$queryRaw<any[]>`SELECT work_order_type_id FROM aquaflow.work_order_types WHERE type_code='DISCONNECTION' AND status='ACTIVE' LIMIT 1`;
+      if (!types[0]) throw Object.assign(new Error("The DISCONNECTION operation type is not configured"), { status: 409 });
+      const workOrderNumber = `WO-DD-${Date.now()}-${meterId}`;
+      const workOrders = await tx.$queryRaw<any[]>`
+        INSERT INTO aquaflow.work_orders(work_order_number,work_order_type_id,account_id,property_id,zone_id,
+          priority,description,scheduled_date,status,created_by,source_type,source_reference,
+          completion_notes,started_at,completed_at,verified_by,verified_at,closed_at)
+        VALUES(${workOrderNumber},${types[0].work_order_type_id},${accountId},${context.propertyId},${context.zoneId},
+          'HIGH',${data.reason},${data.actionDateTime},'CLOSED',${actorId},'MANUAL','DIRECT_METER_SERVICE',
+          ${data.remarks ?? data.reason},${data.actionDateTime},${data.actionDateTime},${actorId},${data.actionDateTime},${data.actionDateTime})
+        RETURNING work_order_id AS "workOrderId",work_order_number AS "workOrderNumber"`;
+      const workOrder = workOrders[0];
+      const reading = await tx.meterReading.create({ data: {
+        meterId, accountId, previousReading: context.latestReading, currentReading: data.currentReading,
+        readingType: "ACTUAL", readingDate: data.actionDateTime,
+        abnormalFlag: consumption === 0, exceptionType: consumption === 0 ? "ZERO" : "NONE",
+        approvalStatus: "APPROVED", approvedBy: actorId, approvedAt: new Date(),
+        approvalComments: `Approved during direct disconnection ${workOrder.workOrderNumber}`,
+        syncId: `DIRECT_DISCONNECTION:${workOrder.workOrderId}`,
+        events: { create: { eventType: "DISCONNECTION_READING_POSTED", remarks: data.remarks ?? data.reason, performedBy: actorId } },
+      } });
+      await tx.$executeRaw`
+        INSERT INTO aquaflow.disconnection_postings(work_order_id,account_id,meter_id,reading_id,
+          previous_reading,current_reading,default_disconnection_fee,disconnection_fee,
+          fee_overridden,fee_override_reason,fine_amount,fine_reason,posted_by)
+        VALUES(${workOrder.workOrderId},${accountId},${meterId},${reading.readingId},${context.latestReading},
+          ${data.currentReading},${prepared.calculation.totalCurrentCharges},${prepared.calculation.totalCurrentCharges},
+          FALSE,NULL,0,NULL,${actorId})`;
+      await tx.customerAccount.update({ where: { accountId }, data: {
+        currentBalance: { increment: prepared.calculation.totalCurrentCharges }, accountStatus: "DISCONNECTED", updatedAt: new Date(),
+      } });
+      await tx.meter.update({ where: { meterId }, data: { status: "DISCONNECTED", updatedAt: new Date() } });
+      await tx.meterEvent.create({ data: {
+        meterId, assignmentId: context.assignmentId, eventType: "STATUS_CHANGED",
+        previousStatus: context.meterStatus, newStatus: "DISCONNECTED", reading: data.currentReading,
+        reason: data.reason, remarks: data.remarks, performedBy: actorId,
+        metadata: { direct: true, action: "DISCONNECTION", workOrderId: workOrder.workOrderId.toString(), customerAcknowledgement: data.customerAcknowledgement },
+      } });
+      await tx.arrearsAction.create({ data: {
+        accountId, actionType: "DIRECT_METER_DISCONNECTION", referenceType: "WORK_ORDER",
+        referenceId: workOrder.workOrderId, details: data.reason, performedBy: actorId,
+        metadata: { meterId: meterId.toString(), meterNumber: context.meterNumber, readingId: reading.readingId.toString(), currentReading: data.currentReading, finalReadingCharge: prepared.calculation.totalCurrentCharges, remarks: data.remarks ?? null },
+      } });
+      return { action: "DISCONNECTED", workOrder, readingId: reading.readingId, finalReadingCharge: prepared.calculation.totalCurrentCharges };
+    }, { maxWait: 10_000, timeout: 30_000 });
+    res.status(201).json(result);
+  } catch (error: any) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    next(error);
+  }
+});
+
+metersRouter.post("/service-actions/direct/reconnection/request", directServiceRoles, async (req, res, next) => {
+  const parsed = z.object({
+    accountId: z.string().regex(/^\d+$/), meterId: z.string().regex(/^\d+$/),
+    reason: z.string().trim().min(3).max(1000).default("Direct meter reconnection"),
+    phoneNumber: z.string().trim().min(7).max(40).optional(),
+  }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      const context = await directServiceContext(tx, BigInt(parsed.data.accountId), BigInt(parsed.data.meterId), new Date(), true);
+      if (context.accountStatus !== "DISCONNECTED" || context.meterStatus !== "DISCONNECTED") {
+        throw Object.assign(new Error("The account and its current meter must both be disconnected"), { status: 409 });
+      }
+      const request = await ensureDirectReconnectionRequest(tx, context, userId(req)!, parsed.data.reason, parsed.data.phoneNumber);
+      if (request.workOrderId) throw Object.assign(new Error("This reconnection has already been dispatched through a work order"), { status: 409 });
+      return request;
+    });
+    res.status(201).json(result);
+  } catch (error: any) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    next(error);
+  }
+});
+
+metersRouter.post("/service-actions/direct/reconnection/payment/stk", directServiceRoles, async (req, res, next) => {
+  const parsed = z.object({
+    accountId: z.string().regex(/^\d+$/), meterId: z.string().regex(/^\d+$/),
+    phoneNumber: z.string().trim().min(7).max(40), reason: z.string().trim().min(3).max(1000).optional(),
+  }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  try {
+    const accountId = BigInt(parsed.data.accountId);
+    const meterId = BigInt(parsed.data.meterId);
+    const context = await directServiceContext(prisma, accountId, meterId, new Date());
+    if (context.accountStatus !== "DISCONNECTED" || context.meterStatus !== "DISCONNECTED") {
+      return res.status(409).json({ error: "The account and its current meter must both be disconnected" });
+    }
+    const request = await prisma.$transaction(async (tx) =>
+      ensureDirectReconnectionRequest(tx, context, userId(req)!, parsed.data.reason, parsed.data.phoneNumber));
+    if (request.workOrderId) return res.status(409).json({ error: "This reconnection has already been dispatched through a work order" });
+    if (request.feePaymentStatus === "PAID") return res.status(409).json({ error: "The reconnection fee has already been settled" });
+    if (request.feePaymentStatus === "PENDING") return res.status(409).json({ error: "An M-Pesa prompt is already pending. Check its status before retrying." });
+    const fee = Number(request.reconnectionFee);
+    if (!Number.isInteger(fee) || fee <= 0) return res.status(409).json({ error: "M-Pesa requires a positive whole-number reconnection fee" });
+    const stk = await initiateMpesaStk({
+      account: { accountId, accountNumber: context.accountNumber }, phoneNumber: parsed.data.phoneNumber,
+      amount: fee, initiatedBy: userId(req), accountReference: request.requestNumber,
+      description: "AquaFlow reconnection fee", purposeType: "RECONNECTION_FEE", purposeReference: request.requestNumber,
+    });
+    await prisma.$executeRaw`UPDATE aquaflow.reconnection_requests SET fee_payment_status='PENDING',
+      contact_phone=${parsed.data.phoneNumber},updated_at=NOW() WHERE reconnection_request_id=${request.reconnectionRequestId}`;
+    res.status(201).json({ requestNumber: request.requestNumber, reconnectionFee: fee,
+      feePaymentStatus: "PENDING", stkRequestId: stk.stkRequestId, customerMessage: stk.customerMessage });
+  } catch (error: any) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    next(error);
+  }
+});
+
+metersRouter.post("/service-actions/direct/reconnection/payment/status", directServiceRoles, async (req, res, next) => {
+  const parsed = z.object({ accountId: z.string().regex(/^\d+$/) }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  try {
+    const request = await paidDirectReconnectionRequest(prisma, BigInt(parsed.data.accountId));
+    if (!request) return res.status(404).json({ error: "No open reconnection request exists for this account" });
+    if (request.feePaymentStatus !== "PENDING") return res.json({ feePaymentStatus: request.feePaymentStatus, requestNumber: request.requestNumber });
+    const stk = await prisma.mpesaStkRequest.findFirst({
+      where: { purposeType: "RECONNECTION_FEE", purposeReference: request.requestNumber }, orderBy: { createdAt: "desc" },
+    });
+    if (!stk) {
+      await prisma.$executeRaw`UPDATE aquaflow.reconnection_requests SET fee_payment_status='UNPAID',updated_at=NOW()
+        WHERE reconnection_request_id=${request.reconnectionRequestId} AND fee_payment_status='PENDING'`;
+      return res.json({ feePaymentStatus: "UNPAID", requestNumber: request.requestNumber, message: "No pending M-Pesa request was found. You can retry." });
+    }
+    if (["FAILED", "CANCELLED"].includes(stk.status)) {
+      await prisma.$executeRaw`UPDATE aquaflow.reconnection_requests SET fee_payment_status='UNPAID',updated_at=NOW()
+        WHERE reconnection_request_id=${request.reconnectionRequestId} AND fee_payment_status='PENDING'`;
+      return res.json({ feePaymentStatus: "UNPAID", requestNumber: request.requestNumber, message: stk.resultDescription || "The M-Pesa prompt was not completed." });
+    }
+    if (stk.status === "COMPLETED") return res.json({ feePaymentStatus: "PAID", requestNumber: request.requestNumber, message: "Reconnection fee payment completed." });
+    if (!stk.checkoutRequestId) return res.status(409).json({ error: "The pending M-Pesa request has no checkout reference" });
+    const query = await queryStkPush(stk.checkoutRequestId);
+    const resultCode = query.ResultCode == null ? null : Number(query.ResultCode);
+    const message = String(query.ResultDesc ?? query.ResponseDescription ?? "M-Pesa request is still pending");
+    if (resultCode != null && resultCode !== 0) {
+      const nextStatus = resultCode === 1032 ? "CANCELLED" : "FAILED";
+      await prisma.$transaction(async (tx) => {
+        await tx.mpesaStkRequest.update({ where: { stkRequestId: stk.stkRequestId }, data: {
+          status: nextStatus, resultCode, resultDescription: message, completedAt: new Date(), updatedAt: new Date(),
+        } });
+        await tx.$executeRaw`UPDATE aquaflow.reconnection_requests SET fee_payment_status='UNPAID',updated_at=NOW()
+          WHERE reconnection_request_id=${request.reconnectionRequestId} AND fee_payment_status='PENDING'`;
+      });
+      return res.json({ feePaymentStatus: "UNPAID", requestNumber: request.requestNumber, message });
+    }
+    res.json({ feePaymentStatus: "PENDING", requestNumber: request.requestNumber,
+      message: resultCode === 0 ? "M-Pesa reports success; waiting for the payment callback." : message });
+  } catch (error: any) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    next(error);
+  }
+});
+
+metersRouter.post("/service-actions/direct/reconnection/payment/reset", directServiceRoles, async (req, res, next) => {
+  const parsed = z.object({
+    accountId: z.string().regex(/^\d+$/),
+    meterId: z.string().regex(/^\d+$/),
+    confirmNotPaid: z.literal(true),
+  }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  try {
+    const accountId = BigInt(parsed.data.accountId);
+    const meterId = BigInt(parsed.data.meterId);
+    const context = await directServiceContext(prisma, accountId, meterId, new Date());
+    if (context.accountStatus !== "DISCONNECTED" || context.meterStatus !== "DISCONNECTED") {
+      return res.status(409).json({ error: "The account and its current meter must both be disconnected" });
+    }
+    const request = await paidDirectReconnectionRequest(prisma, accountId);
+    if (!request) return res.status(404).json({ error: "No open reconnection request exists for this account" });
+    if (request.feePaymentStatus !== "PENDING") {
+      return res.status(409).json({ error: `The reconnection payment is ${String(request.feePaymentStatus).toLowerCase()}, not pending` });
+    }
+    const stk = await prisma.mpesaStkRequest.findFirst({
+      where: { purposeType: "RECONNECTION_FEE", purposeReference: request.requestNumber },
+      orderBy: { createdAt: "desc" },
+    });
+    if (!stk) return res.status(409).json({ error: "No pending M-Pesa request was found. Check the status to unlock this request." });
+    if (stk.status === "COMPLETED" || stk.paymentId || stk.mpesaReceiptNumber) {
+      return res.status(409).json({ error: "This M-Pesa request has payment evidence and cannot be reset" });
+    }
+    const minimumResetAgeMs = 2 * 60 * 1000;
+    if (Date.now() - stk.createdAt.getTime() < minimumResetAgeMs) {
+      return res.status(409).json({ error: "Wait at least two minutes and check the M-Pesa status before resetting the prompt" });
+    }
+    await prisma.$transaction(async (tx) => {
+      const resetAt = new Date();
+      await tx.mpesaStkRequest.update({
+        where: { stkRequestId: stk.stkRequestId },
+        data: {
+          status: "CANCELLED",
+          resultDescription: `Manually reset as not paid by user ${String(userId(req))}`,
+          completedAt: resetAt,
+          updatedAt: resetAt,
+        },
+      });
+      await tx.$executeRaw`UPDATE aquaflow.reconnection_requests SET fee_payment_status='UNPAID',updated_at=NOW()
+        WHERE reconnection_request_id=${request.reconnectionRequestId} AND fee_payment_status='PENDING'`;
+      await tx.arrearsAction.create({ data: {
+        accountId,
+        actionType: "RECONNECTION_STK_RESET",
+        referenceType: "RECONNECTION_REQUEST",
+        referenceId: request.reconnectionRequestId,
+        details: `Pending M-Pesa prompt reset as not paid for ${request.requestNumber}`,
+        performedBy: userId(req),
+        metadata: {
+          stkRequestId: stk.stkRequestId.toString(),
+          checkoutRequestId: stk.checkoutRequestId,
+          requestNumber: request.requestNumber,
+        },
+      } });
+    });
+    res.json({
+      feePaymentStatus: "UNPAID",
+      requestNumber: request.requestNumber,
+      message: "The unpaid prompt was reset. You can send a new M-Pesa prompt.",
+    });
+  } catch (error: any) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    next(error);
+  }
+});
+
+metersRouter.post("/service-actions/direct/reconnection/payment/credit", directServiceRoles, async (req, res, next) => {
+  const parsed = z.object({
+    accountId: z.string().regex(/^\d+$/), meterId: z.string().regex(/^\d+$/),
+    reason: z.string().trim().min(3).max(1000).default("Reconnection fee settled from account credit"),
+  }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      const accountId = BigInt(parsed.data.accountId);
+      const context = await directServiceContext(tx, accountId, BigInt(parsed.data.meterId), new Date(), true);
+      if (context.accountStatus !== "DISCONNECTED" || context.meterStatus !== "DISCONNECTED") {
+        throw Object.assign(new Error("The account and its current meter must both be disconnected"), { status: 409 });
+      }
+      const request = await ensureDirectReconnectionRequest(tx, context, userId(req)!, parsed.data.reason);
+      if (request.workOrderId) throw Object.assign(new Error("This reconnection has already been dispatched through a work order"), { status: 409 });
+      if (request.feePaymentStatus === "PAID") throw Object.assign(new Error("The reconnection fee has already been settled"), { status: 409 });
+      if (request.feePaymentStatus === "PENDING") throw Object.assign(new Error("Resolve the pending M-Pesa prompt before applying account credit"), { status: 409 });
+      const fee = Number(request.reconnectionFee);
+      const creditAvailable = Math.max(0, -Number(context.currentBalance));
+      if (creditAvailable < fee) throw Object.assign(new Error(`Available account credit is KSh ${creditAvailable.toFixed(2)}; KSh ${fee.toFixed(2)} is required`), { status: 409 });
+      const adjustmentNumber = `AADJ-RCF-${Date.now()}-${String(accountId).slice(-5)}`;
+      const adjustment = await tx.accountAdjustment.create({ data: {
+        adjustmentNumber, accountId, adjustmentType: "DEBIT", amount: fee,
+        reason: `${parsed.data.reason} for ${request.requestNumber}`, status: "APPROVED",
+        requestedBy: userId(req)!, approvedBy: userId(req), approvedAt: new Date(),
+        decisionComments: "Automatically approved because the customer chose to apply existing account credit",
+      } });
+      await tx.customerAccount.update({ where: { accountId }, data: { currentBalance: { increment: fee }, updatedAt: new Date() } });
+      await tx.$executeRaw`UPDATE aquaflow.reconnection_requests SET fee_payment_status='PAID',fee_payment_id=NULL,
+        fee_paid_at=NOW(),decision_notes=${`Reconnection fee settled from account credit via ${adjustmentNumber}`},
+        decided_by=${userId(req)},decided_at=COALESCE(decided_at,NOW()),updated_at=NOW()
+        WHERE reconnection_request_id=${request.reconnectionRequestId}`;
+      await tx.arrearsAction.create({ data: {
+        accountId, actionType: "RECONNECTION_FEE_CREDIT_APPLIED", referenceType: "ACCOUNT_ADJUSTMENT",
+        referenceId: adjustment.accountAdjustmentId, details: `${adjustmentNumber}: KSh ${fee.toFixed(2)} applied from customer credit`,
+        performedBy: userId(req), metadata: { reconnectionRequestId: request.reconnectionRequestId.toString(), requestNumber: request.requestNumber, creditBefore: creditAvailable, creditAfter: roundMoney(creditAvailable - fee) },
+      } });
+      return { requestNumber: request.requestNumber, reconnectionFee: fee, adjustmentNumber,
+        creditBefore: creditAvailable, creditAfter: roundMoney(creditAvailable - fee), feePaymentStatus: "PAID", settlementMethod: "ACCOUNT_CREDIT" };
+    }, { maxWait: 10_000, timeout: 30_000 });
+    res.status(201).json(result);
+  } catch (error: any) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    next(error);
+  }
+});
+
+metersRouter.post("/service-actions/direct/reconnect", directServiceRoles, async (req, res, next) => {
+  const parsed = directReconnectionSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      const data = parsed.data;
+      const accountId = BigInt(data.accountId);
+      const meterId = BigInt(data.meterId);
+      const actorId = userId(req)!;
+      const context = await directServiceContext(tx, accountId, meterId, data.actionDateTime, true);
+      if (context.accountStatus !== "DISCONNECTED" || context.meterStatus !== "DISCONNECTED") {
+        throw Object.assign(new Error("The account and its current meter must both be disconnected"), { status: 409 });
+      }
+      const request = await paidDirectReconnectionRequest(tx, accountId);
+      const paidFromAccountCredit = request?.feePaymentStatus === "PAID" && !request?.paymentId &&
+        String(request?.decisionNotes ?? "").toLowerCase().includes("account credit");
+      const paid = paidFromAccountCredit || (request?.feePaymentStatus === "PAID" && request?.paymentStatus === "POSTED" &&
+        request?.paymentType === "RECONNECTION_FEE" && Number(request?.paidAmount) >= Number(request?.reconnectionFee));
+      if (!paid) throw Object.assign(new Error("A posted reconnection-fee payment is required before direct reconnection"), { status: 409 });
+      if (request.workOrderId) throw Object.assign(new Error("This reconnection is already dispatched through a work order and must be completed there"), { status: 409 });
+      await tx.customerAccount.update({ where: { accountId }, data: { accountStatus: "ACTIVE", updatedAt: new Date() } });
+      await tx.meter.update({ where: { meterId }, data: { status: "ACTIVE", updatedAt: new Date() } });
+      await tx.$executeRaw`UPDATE aquaflow.reconnection_requests SET status='COMPLETED',decision_notes=${data.reason},
+        decided_by=${actorId},decided_at=COALESCE(decided_at,${data.actionDateTime}),updated_at=NOW()
+        WHERE reconnection_request_id=${request.reconnectionRequestId}`;
+      await tx.meterEvent.create({ data: {
+        meterId, assignmentId: context.assignmentId, eventType: "STATUS_CHANGED",
+        previousStatus: "DISCONNECTED", newStatus: "ACTIVE", reading: context.latestReading,
+        reason: data.reason, remarks: data.remarks, performedBy: actorId,
+        metadata: { direct: true, action: "RECONNECTION", reconnectionRequestId: request.reconnectionRequestId.toString(), receiptNumber: request.receiptNumber ?? null },
+      } });
+      await tx.arrearsAction.create({ data: {
+        accountId, actionType: "DIRECT_METER_RECONNECTION", referenceType: "RECONNECTION_REQUEST",
+        referenceId: request.reconnectionRequestId, details: data.reason, performedBy: actorId,
+        metadata: { meterId: meterId.toString(), meterNumber: context.meterNumber, receiptNumber: request.receiptNumber ?? null, remarks: data.remarks ?? null },
+      } });
+      return { action: "RECONNECTED", reconnectionRequestId: request.reconnectionRequestId, requestNumber: request.requestNumber, receiptNumber: request.receiptNumber };
     }, { maxWait: 10_000, timeout: 30_000 });
     res.status(201).json(result);
   } catch (error: any) {

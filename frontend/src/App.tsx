@@ -33,6 +33,7 @@ import {
   BulkMeterAssignmentImport,
   BulkMeterImport,
   DirectMeterReplacement,
+  DirectMeterService,
   ExceptionReport,
   InstallationDetails,
   MeterDashboard,
@@ -331,6 +332,7 @@ const METER_MENU = [
   ["Import Meters", "/meters/import"],
   ["Import Assignments", "/meters/import-assignments"],
   ["Direct Replacement", "/meters/direct-replacement"],
+  ["Disconnect / Reconnect", "/meters/direct-service"],
   ["Replacement Reviews", "/meters/replacements"],
   ["Exception Register", "/meters/reports/exceptions"],
   ["Alert Queue", "/meters/alerts"],
@@ -385,6 +387,7 @@ const NEW_SIDEBAR_ROUTES = new Set([
   "/billing/account-adjustments",
   "/billing/account-adjustments/approvals",
   "/meters/direct-replacement",
+  "/meters/direct-service",
   "/payments/reports/receipt-detail",
 ]);
 
@@ -2499,6 +2502,14 @@ export default function App() {
         element={
           <Protected>
             <Shell><DirectMeterReplacement /></Shell>
+          </Protected>
+        }
+      />
+      <Route
+        path="/meters/direct-service"
+        element={
+          <Protected>
+            <Shell><DirectMeterService /></Shell>
           </Protected>
         }
       />

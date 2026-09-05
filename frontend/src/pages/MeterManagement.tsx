@@ -3007,6 +3007,269 @@ export function DirectMeterReplacement() {
   </Page>;
 }
 
+type DirectServiceMode = "DISCONNECT" | "RECONNECT";
+
+export function DirectMeterService() {
+  const nowLocal = () => {
+    const date = new Date();
+    return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+  };
+  const [items, setItems] = useState<AnyRecord[]>([]);
+  const [historyItems, setHistoryItems] = useState<AnyRecord[]>([]);
+  const [search, setSearch] = useState("");
+  const [selected, setSelected] = useState<AnyRecord | null>(null);
+  const [mode, setMode] = useState<DirectServiceMode | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [paymentBusy, setPaymentBusy] = useState("");
+  const [paymentMessage, setPaymentMessage] = useState("");
+  const [paymentPhone, setPaymentPhone] = useState("");
+  const [preview, setPreview] = useState<AnyRecord | null>(null);
+  const [previewError, setPreviewError] = useState("");
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+  const [form, setForm] = useState({
+    actionDateTime: nowLocal(), currentReading: "", reason: "", remarks: "",
+    customerAcknowledgement: "ACKNOWLEDGED", confirmed: false,
+  });
+
+  async function load(searchValue = search, background = false) {
+    if (!background) setLoading(true);
+    try {
+      const [options, recent] = await Promise.all([
+        api.getDirectMeterServiceOptions(searchValue),
+        api.getDirectMeterServiceHistory(),
+      ]);
+      setItems(options.items ?? []);
+      setHistoryItems(recent ?? []);
+      if (selected) {
+        setSelected((options.items ?? []).find((row: AnyRecord) => String(row.meterId) === String(selected.meterId)) ?? null);
+      }
+    } catch (err: any) { setError(err.message); }
+    finally { if (!background) setLoading(false); }
+  }
+  useEffect(() => { void load("", false); }, []);
+  useEffect(() => {
+    const timer = window.setTimeout(() => void load(search, true), 300);
+    return () => window.clearTimeout(timer);
+  }, [search]);
+  useEffect(() => {
+    setPaymentPhone(String(selected?.customerPhone ?? ""));
+    setPaymentMessage("");
+  }, [selected?.meterId]);
+
+  function openAction(nextMode: DirectServiceMode) {
+    if (!selected) return;
+    setMode(nextMode); setError(""); setSuccess(""); setPreview(null); setPreviewError("");
+    setForm({
+      actionDateTime: nowLocal(),
+      currentReading: String(Number(selected.latestReading ?? 0)),
+      reason: "", remarks: "", customerAcknowledgement: "ACKNOWLEDGED", confirmed: false,
+    });
+  }
+  function closeAction() {
+    if (saving) return;
+    setMode(null); setPreview(null); setPreviewError("");
+  }
+
+  useEffect(() => {
+    if (mode !== "DISCONNECT" || !selected || form.currentReading === "" || !form.actionDateTime) {
+      setPreview(null); setPreviewError(""); return;
+    }
+    const currentReading = Number(form.currentReading);
+    if (!Number.isFinite(currentReading) || currentReading < Number(selected.latestReading ?? 0)) {
+      setPreview(null); setPreviewError(`Reading cannot be below ${Number(selected.latestReading ?? 0).toLocaleString()}.`); return;
+    }
+    const timer = window.setTimeout(async () => {
+      setPreviewLoading(true); setPreview(null); setPreviewError("");
+      try {
+        setPreview(await api.previewDirectMeterDisconnection({
+          accountId: String(selected.accountId), meterId: String(selected.meterId),
+          actionDateTime: new Date(form.actionDateTime).toISOString(), currentReading,
+        }));
+      } catch (err: any) { setPreviewError(err.message); }
+      finally { setPreviewLoading(false); }
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [mode, selected?.meterId, form.actionDateTime, form.currentReading]);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!selected || !mode || !form.confirmed) return setError("Confirm that the physical action has already been completed.");
+    setSaving(true); setError(""); setSuccess("");
+    try {
+      const common = {
+        accountId: String(selected.accountId), meterId: String(selected.meterId),
+        actionDateTime: new Date(form.actionDateTime).toISOString(), reason: form.reason,
+        remarks: form.remarks || undefined, confirmed: true,
+      };
+      if (mode === "DISCONNECT") {
+        if (!preview) throw new Error("Wait for a valid final-reading charge preview.");
+        const result = await api.createDirectMeterDisconnection({
+          ...common, currentReading: Number(form.currentReading),
+          customerAcknowledgement: form.customerAcknowledgement,
+        });
+        setSuccess(`${selected.meterNumber} disconnected. Final reading ${Number(form.currentReading).toLocaleString()} and KSh ${Number(result.finalReadingCharge).toLocaleString("en-KE", { minimumFractionDigits: 2 })} posted.`);
+      } else {
+        const result = await api.createDirectMeterReconnection(common);
+        setSuccess(`${selected.meterNumber} reconnected using paid request ${result.requestNumber}${result.receiptNumber ? ` · receipt ${result.receiptNumber}` : ""}.`);
+      }
+      setMode(null); setSelected(null); setSearch(""); setPreview(null);
+      await load("", false);
+    } catch (err: any) { setError(err.message); }
+    finally { setSaving(false); }
+  }
+
+  async function paymentAction(key: string, action: () => Promise<any>, successText: (result: AnyRecord) => string) {
+    if (!selected) return;
+    setPaymentBusy(key); setError(""); setPaymentMessage("");
+    try {
+      const result = await action();
+      setPaymentMessage(successText(result));
+      await load(search, true);
+    } catch (err: any) { setError(err.message); }
+    finally { setPaymentBusy(""); }
+  }
+
+  async function createPaymentReference() {
+    if (!selected) return;
+    await paymentAction("reference", () => api.createDirectReconnectionRequest({
+      accountId: String(selected.accountId), meterId: String(selected.meterId),
+      phoneNumber: paymentPhone || undefined, reason: "Direct meter reconnection payment",
+    }), (result) => `Payment reference ${result.requestNumber} created for KSh ${money(result.reconnectionFee)}.`);
+  }
+
+  async function sendStkPrompt() {
+    if (!selected) return;
+    await paymentAction("stk", () => api.requestDirectReconnectionStk({
+      accountId: String(selected.accountId), meterId: String(selected.meterId),
+      phoneNumber: paymentPhone, reason: "Direct meter reconnection payment",
+    }), (result) => result.customerMessage || `M-Pesa prompt sent for KSh ${money(result.reconnectionFee)}.`);
+  }
+
+  async function refreshPayment() {
+    if (!selected) return;
+    await paymentAction("refresh", () => api.refreshDirectReconnectionPayment(String(selected.accountId)),
+      (result) => result.message || `Payment status: ${pretty(result.feePaymentStatus)}.`);
+  }
+
+  async function resetPendingPayment() {
+    if (!selected) return;
+    if (!window.confirm("Reset this prompt only if the customer did not authorize it and no money was deducted. Continue?")) return;
+    await paymentAction("reset", () => api.resetDirectReconnectionPayment({
+      accountId: String(selected.accountId), meterId: String(selected.meterId), confirmNotPaid: true,
+    }), (result) => result.message || "The unpaid prompt was reset. You can send a new prompt.");
+  }
+
+  async function applyAccountCredit() {
+    if (!selected) return;
+    if (!window.confirm(`Apply KSh ${money(selected.reconnectionFee)} from this customer's account credit to the reconnection fee?`)) return;
+    await paymentAction("credit", () => api.applyDirectReconnectionCredit({
+      accountId: String(selected.accountId), meterId: String(selected.meterId),
+      reason: "Reconnection fee settled from existing customer overpayment",
+    }), (result) => `KSh ${money(result.reconnectionFee)} applied from account credit. Remaining credit: KSh ${money(result.creditAfter)}.`);
+  }
+
+  const disconnected = selected?.accountStatus === "DISCONNECTED" || selected?.meterStatus === "DISCONNECTED";
+  const canDisconnect = selected && ["ACTIVE", "SUSPENDED"].includes(selected.accountStatus) && selected.meterStatus !== "DISCONNECTED";
+  const canReconnect = selected && selected.accountStatus === "DISCONNECTED" && selected.meterStatus === "DISCONNECTED";
+  const paymentConfirmed = Boolean(selected?.reconnectionPaymentConfirmed);
+  const paymentPending = selected?.reconnectionFeePaymentStatus === "PENDING";
+  const reconnectionFee = Number(selected?.reconnectionFee ?? 0);
+  const accountCreditAvailable = Number(selected?.accountCreditAvailable ?? 0);
+  const creditCoversFee = reconnectionFee > 0 && accountCreditAvailable >= reconnectionFee;
+  const money = (value: any) => Number(value ?? 0).toLocaleString("en-KE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  return <Page title="Direct meter disconnection & reconnection"
+    subtitle="Record completed service changes immediately without dispatching field work"
+    actions={<LinkButton to="/work-orders" tone="orange">Open work orders</LinkButton>}>
+    {error && <Notice>{error}</Notice>}{success && <Notice kind="success">{success}</Notice>}
+    <div className="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(360px,.65fr)]">
+      <div className="space-y-4">
+        <Card title="Find customer meter">
+          <div className="relative">
+            <input className={`${INPUT} pl-10`} value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search account, meter, serial, customer or phone…" />
+            <svg className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" /><path d="m13 13 4 4" /></svg>
+          </div>
+          {loading ? <Spinner /> : <div className="mt-3 max-h-[430px] space-y-2 overflow-y-auto pr-1">
+            {items.map((row) => {
+              const active = String(selected?.meterId) === String(row.meterId);
+              return <button type="button" key={`${row.accountId}-${row.meterId}`} onClick={() => setSelected(row)}
+                className={`w-full rounded-xl border p-3 text-left transition ${active ? "border-aqua-500 bg-aqua-50 ring-2 ring-aqua-500/10" : "border-slate-200 hover:border-slate-300 hover:bg-slate-50"}`}>
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div><p className="font-extrabold text-slate-900">{row.accountNumber} · {row.meterNumber}</p><p className="mt-0.5 text-sm text-slate-500">{row.customerName || "Unnamed customer"}{row.serialNumber ? ` · S/N ${row.serialNumber}` : ""}</p></div>
+                  <div className="flex gap-1.5"><Status value={row.accountStatus} /><Status value={row.meterStatus} /></div>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-x-6 gap-y-1 text-xs text-slate-500"><span>Reading <strong className="text-slate-700">{Number(row.latestReading ?? 0).toLocaleString()}</strong></span><span>Balance <strong className="text-slate-700">KSh {money(row.currentBalance)}</strong></span>{row.reconnectionRequestNumber && <span>Request <strong className="text-slate-700">{row.reconnectionRequestNumber}</strong></span>}</div>
+              </button>;
+            })}
+            {!items.length && <div className="py-12 text-center text-sm text-slate-400">No current customer meter matches your search.</div>}
+          </div>}
+        </Card>
+        <Card title="Recent direct actions">
+          <div className="overflow-x-auto"><table className="min-w-full"><thead><tr className="border-b border-slate-100"><th className={TH}>Date</th><th className={TH}>Action</th><th className={TH}>Account / customer</th><th className={TH}>Meter</th><th className={TH}>Recorded by</th></tr></thead>
+            <tbody>{historyItems.map((row) => <tr key={row.actionId} className="border-b border-slate-50"><td className={TD}>{new Date(row.createdAt).toLocaleString()}</td><td className={TD}><Status value={row.actionType.includes("RECONNECTION") ? "ACTIVE" : "DISCONNECTED"} /></td><td className={TD}><strong className="text-slate-800">{row.accountNumber}</strong><div className="text-xs text-slate-400">{row.customerName}</div></td><td className={TD}>{row.metadata?.meterNumber ?? "—"}</td><td className={TD}>{row.performedByName ?? "System"}</td></tr>)}</tbody>
+          </table>{!historyItems.length && <div className="py-10 text-center text-sm text-slate-400">No direct service actions recorded yet.</div>}</div>
+        </Card>
+      </div>
+      <div className="xl:sticky xl:top-24 xl:self-start"><Card title="Selected service">
+        {!selected ? <div className="py-12 text-center"><div className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-slate-100 text-slate-400">↔</div><p className="mt-3 text-sm font-semibold text-slate-600">Select a customer meter</p><p className="mt-1 text-xs text-slate-400">Its available direct action will appear here.</p></div> : <>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <div className="flex items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase text-slate-400">{selected.accountNumber}</p><p className="mt-1 text-lg font-extrabold text-slate-900">{selected.meterNumber}</p><p className="text-sm text-slate-500">{selected.customerName}</p></div><Status value={disconnected ? "DISCONNECTED" : selected.accountStatus} /></div>
+            <dl className="mt-4 grid grid-cols-2 gap-3 border-t border-slate-200 pt-3 text-sm"><div><dt className="text-xs text-slate-400">Latest reading</dt><dd className="font-bold text-slate-800">{Number(selected.latestReading ?? 0).toLocaleString()}</dd></div><div><dt className="text-xs text-slate-400">Account balance</dt><dd className="font-bold text-slate-800">KSh {money(selected.currentBalance)}</dd></div></dl>
+          </div>
+          {canReconnect && <div className="mt-3 overflow-hidden rounded-xl border border-slate-200">
+            <div className={`p-3 text-sm ${paymentConfirmed ? "bg-emerald-50 text-emerald-800" : paymentPending ? "bg-blue-50 text-blue-800" : "bg-amber-50 text-amber-800"}`}>
+              <div className="flex items-start justify-between gap-3"><div><p className="font-bold">{paymentConfirmed ? "Reconnection fee confirmed" : paymentPending ? "Waiting for M-Pesa payment" : "Choose a payment option"}</p><p className="mt-1 text-xs">{selected.reconnectionRequestNumber ? `${selected.reconnectionRequestNumber} · KSh ${money(reconnectionFee)}${selected.reconnectionReceiptNumber ? ` · ${selected.reconnectionReceiptNumber}` : selected.reconnectionSettlementMethod === "ACCOUNT_CREDIT" ? " · account credit" : ""}` : `Configured fee: KSh ${money(reconnectionFee)}`}</p></div>{paymentPending && <span className="h-5 w-5 shrink-0 animate-spin rounded-full border-2 border-blue-200 border-t-blue-700" />}</div>
+            </div>
+            {!paymentConfirmed && <div className="space-y-3 bg-white p-3">
+              <div className="rounded-lg border border-violet-200 bg-violet-50 p-3">
+                <div className="flex items-center justify-between gap-3"><div><p className="text-sm font-bold text-violet-900">Use existing overpayment</p><p className="mt-0.5 text-xs text-violet-700">Available account credit: KSh {money(accountCreditAvailable)}</p></div><Button type="button" tone="teal" disabled={!creditCoversFee || Boolean(paymentBusy) || paymentPending} onClick={() => void applyAccountCredit()}>{paymentBusy === "credit" ? "Applying…" : "Use credit"}</Button></div>
+                {!creditCoversFee && <p className="mt-2 text-[11px] text-violet-600">Credit must cover the full KSh {money(reconnectionFee)} fee. Partial credit is retained on the account.</p>}
+              </div>
+              <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+                <p className="text-sm font-bold text-emerald-900">M-Pesa STK prompt</p>
+                <div className="mt-2 flex gap-2"><input className={`${INPUT} min-w-0 flex-1`} value={paymentPhone} onChange={(event) => setPaymentPhone(event.target.value)} placeholder="2547XXXXXXXX" disabled={paymentPending || Boolean(paymentBusy)} /><Button type="button" tone="green" disabled={paymentPending || Boolean(paymentBusy) || paymentPhone.trim().length < 7} onClick={() => void sendStkPrompt()}>{paymentBusy === "stk" ? "Sending…" : "Send prompt"}</Button></div>
+              </div>
+              {paymentPending ? <div className="grid gap-2 sm:grid-cols-2"><Button type="button" tone="blue" className="w-full" disabled={Boolean(paymentBusy)} onClick={() => void refreshPayment()}>{paymentBusy === "refresh" ? "Checking…" : "Check M-Pesa status"}</Button><Button type="button" tone="slate" className="w-full" disabled={Boolean(paymentBusy)} onClick={() => void resetPendingPayment()}>{paymentBusy === "reset" ? "Resetting…" : "Not paid — reset prompt"}</Button><p className="sm:col-span-2 text-[11px] leading-4 text-amber-700">Reset only after confirming there is no M-Pesa deduction. A reset is audit logged and enables a fresh prompt.</p></div> : selected.reconnectionRequestNumber ? <Button type="button" tone="blue" className="w-full" disabled={Boolean(paymentBusy)} onClick={() => void refreshPayment()}>{paymentBusy === "refresh" ? "Refreshing…" : "Refresh payment status"}</Button> : <Button type="button" tone="slate" className="w-full" disabled={Boolean(paymentBusy)} onClick={() => void createPaymentReference()}>{paymentBusy === "reference" ? "Creating…" : "Create C2B payment reference"}</Button>}
+              <div className="rounded-lg border border-sky-200 bg-sky-50 p-3 text-xs leading-5 text-sky-800"><strong>C2B / PayBill:</strong> create the reference above, then use it when paying. If the payment arrived unmatched, allocate it to this account first. Any excess becomes account credit and can be applied here. <Link className="font-bold underline" to="/payments/unmatched">Open unmatched payments</Link>.</div>
+            </div>}
+            {paymentMessage && <p className="border-t border-slate-100 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700">{paymentMessage}</p>}
+          </div>}
+          <div className="mt-4 grid gap-2">
+            <Button tone="red" disabled={!canDisconnect} onClick={() => openAction("DISCONNECT")}>Disconnect meter</Button>
+            <Button tone="green" disabled={!canReconnect || !paymentConfirmed || Boolean(selected.workOrderId)} onClick={() => openAction("RECONNECT")}>Reconnect meter</Button>
+          </div>
+          <p className="mt-3 text-xs leading-5 text-slate-400">These controls record work already completed on site. Reconnection never bypasses the posted-fee requirement.</p>
+        </>}
+      </Card></div>
+    </div>
+
+    {mode && selected && <div className="fixed inset-0 z-[1100] flex items-center justify-center bg-slate-950/55 p-4" role="dialog" aria-modal="true" aria-labelledby="direct-service-title" onMouseDown={(event) => { if (event.target === event.currentTarget) closeAction(); }}>
+      <form onSubmit={submit} className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white shadow-2xl">
+        <div className={`px-5 py-4 text-white ${mode === "DISCONNECT" ? "bg-red-600" : "bg-emerald-600"}`}><div className="flex items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-wider text-white/70">{selected.accountNumber} · {selected.meterNumber}</p><h2 id="direct-service-title" className="mt-1 text-xl font-extrabold">{mode === "DISCONNECT" ? "Record direct disconnection" : "Record direct reconnection"}</h2></div><button type="button" onClick={closeAction} className="rounded-lg p-1 text-2xl leading-none text-white/80 hover:bg-white/10">×</button></div></div>
+        <div className="space-y-4 p-5">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label={mode === "DISCONNECT" ? "Disconnection date and time" : "Reconnection date and time"} required><input type="datetime-local" max={nowLocal()} className={INPUT} value={form.actionDateTime} onChange={(e) => setForm({ ...form, actionDateTime: e.target.value, confirmed: false })} required /></Field>
+            {mode === "DISCONNECT" && <Field label="Final meter reading" required><input type="number" min={Number(selected.latestReading ?? 0)} step="0.001" className={INPUT} value={form.currentReading} onChange={(e) => setForm({ ...form, currentReading: e.target.value, confirmed: false })} required /></Field>}
+            {mode === "DISCONNECT" && <Field label="Customer acknowledgement" required><select className={INPUT} value={form.customerAcknowledgement} onChange={(e) => setForm({ ...form, customerAcknowledgement: e.target.value, confirmed: false })}><option value="ACKNOWLEDGED">Acknowledged</option><option value="UNAVAILABLE">Customer unavailable</option><option value="REFUSED_TO_SIGN">Refused to sign</option></select></Field>}
+            <Field label="Reason" required><input className={INPUT} minLength={3} value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value, confirmed: false })} placeholder={mode === "DISCONNECT" ? "Reason for disconnection" : "Supply restored after confirmed payment"} required /></Field>
+            <div className="sm:col-span-2"><Field label="Remarks"><textarea className={`${INPUT} min-h-20`} value={form.remarks} onChange={(e) => setForm({ ...form, remarks: e.target.value, confirmed: false })} placeholder="Optional operational notes" /></Field></div>
+          </div>
+          {mode === "DISCONNECT" && <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+            {previewLoading ? <div className="flex items-center gap-2 text-sm font-semibold text-slate-500"><span className="h-5 w-5 animate-spin rounded-full border-2 border-sky-200 border-t-aqua-700" />Calculating final-reading charge…</div> : preview ? <div><div className="flex items-end justify-between gap-3"><div><p className="text-xs font-bold uppercase text-slate-400">Charge posted on save</p><p className="mt-1 text-2xl font-black text-slate-900">KSh {money(preview.finalReadingCharge)}</p></div><p className="text-right text-xs text-slate-500">{preview.consumption.toLocaleString()} units<br />{preview.tariffCode} · {preview.tariffName}</p></div><div className="mt-3 flex justify-between border-t border-slate-200 pt-3 text-sm"><span className="text-slate-500">Balance after disconnection</span><strong>KSh {money(preview.balanceAfterDisconnection)}</strong></div></div> : <p className="text-sm text-slate-500">Enter the final reading to calculate the charge.</p>}
+            {previewError && <p className="mt-2 text-xs font-semibold text-red-600">{previewError}</p>}
+          </div>}
+          {mode === "RECONNECT" && <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800"><p className="font-extrabold">Payment verified</p><p className="mt-1">{selected.reconnectionRequestNumber} · KSh {money(selected.reconnectionFee)}{selected.reconnectionReceiptNumber ? ` · receipt ${selected.reconnectionReceiptNumber}` : ""}</p></div>}
+          <label className="flex cursor-pointer gap-3 rounded-xl border border-slate-200 p-3 text-sm text-slate-700"><input type="checkbox" className="mt-0.5 h-4 w-4" checked={form.confirmed} onChange={(e) => setForm({ ...form, confirmed: e.target.checked })} /><span>I confirm the physical {mode === "DISCONNECT" ? "disconnection" : "reconnection"} is complete and the details above are correct.</span></label>
+        </div>
+        <div className="flex justify-end gap-2 border-t border-slate-100 px-5 py-4"><Button type="button" tone="slate" onClick={closeAction} disabled={saving}>Cancel</Button><Button type="submit" tone={mode === "DISCONNECT" ? "red" : "green"} disabled={saving || !form.confirmed || (mode === "DISCONNECT" && (!preview || previewLoading))}>{saving ? "Saving…" : mode === "DISCONNECT" ? "Disconnect and post charge" : "Reconnect now"}</Button></div>
+      </form>
+    </div>}
+  </Page>;
+}
+
 export function MeterReplacement() {
   const id = useMeterParam();
   const isAdmin = Boolean(getSessionUser()?.roles.includes("SYSTEM_ADMIN"));

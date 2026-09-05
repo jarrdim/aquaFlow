@@ -19,12 +19,14 @@ export async function postOfflineNewConnectionPayment(
     amountPaid: unknown;
     amount: number;
     reference: string;
+    paymentMethod?: "CASH" | "BANK";
     actor: bigint;
     channelId: bigint;
     now?: Date;
   },
 ) {
   const now = input.now ?? new Date();
+  const paymentLabel = input.paymentMethod === "BANK" ? "Bank direct" : "Cash";
   const next = newConnectionPaymentState(input.quotationTotal, input.amountPaid, input.amount);
   const payment = await tx.payment.create({
     data: {
@@ -36,7 +38,7 @@ export async function postOfflineNewConnectionPayment(
       valueDate: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())),
       customerReference: input.applicationNumber,
       paymentType: "NEW_CONNECTION_FEE",
-      remarks: `Offline new connection payment for ${input.applicationNumber}`,
+      remarks: `${paymentLabel} new connection payment for ${input.applicationNumber}`,
       matchingStatus: "MATCHED",
       paymentStatus: "POSTED",
       unallocatedAmount: 0,
@@ -67,7 +69,7 @@ export async function postOfflineNewConnectionPayment(
     data: {
       connectionApplicationId: input.applicationId,
       activityType: "RECORD_PAYMENT",
-      notes: `Payment ${input.reference}: KSh ${input.amount.toFixed(2)}; receipt ${receipt.receiptNumber}`,
+      notes: `${paymentLabel} payment ${input.reference}: KSh ${input.amount.toFixed(2)}; receipt ${receipt.receiptNumber}`,
       performedBy: input.actor,
     },
   });
@@ -77,8 +79,9 @@ export async function postOfflineNewConnectionPayment(
       eventType: "NEW_CONNECTION_PAYMENT_POSTED",
       previousStatus: "RECEIVED",
       newStatus: "POSTED",
-      details: `Offline payment for ${input.applicationNumber}; receipt ${receipt.receiptNumber}`,
+      details: `${paymentLabel} payment for ${input.applicationNumber}; receipt ${receipt.receiptNumber}`,
       performedBy: input.actor,
+      metadata: { paymentMethod: input.paymentMethod ?? "CASH" },
     },
   });
   return { payment, receipt, ...next };

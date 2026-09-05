@@ -1388,6 +1388,7 @@ export function ConnectionProfile() {
   const balance =
     Number(application.quotationTotal) - Number(application.amountPaid);
   const status = application.status;
+  const paymentMethod = form.paymentMethod || "MPESA_STK";
   const staleStkRequest = stkRequestIsStale(stkRequest);
   const gpsPoints = applicationGpsPoints(application);
   const primaryGps = gpsPoints[0];
@@ -1714,7 +1715,20 @@ export function ConnectionProfile() {
             )}
             {(status === "QUOTED" || status === "PARTIALLY_PAID") && (
               <div className="space-y-3">
-                <div className="overflow-hidden rounded-xl border border-emerald-200 bg-emerald-50/40">
+                <Field label="Payment method" required>
+                  <select
+                    className={input}
+                    value={paymentMethod}
+                    onChange={(event) => set("paymentMethod", event.target.value)}
+                  >
+                    <option value="MPESA_STK">M-Pesa STK prompt</option>
+                    <option value="MPESA_C2B">M-Pesa PayBill / C2B</option>
+                    <option value="CASH">Cash</option>
+                    <option value="BANK">Bank direct deposit</option>
+                  </select>
+                </Field>
+
+                {paymentMethod === "MPESA_STK" && <div className="overflow-hidden rounded-xl border border-emerald-200 bg-emerald-50/40">
                   <div className="flex items-center gap-3 border-b border-emerald-100 bg-emerald-50 px-4 py-3">
                     <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-emerald-600 text-sm font-black text-white">M</div>
                     <div>
@@ -1791,9 +1805,9 @@ export function ConnectionProfile() {
                       </div>
                     )}
                   </div>
-                </div>
+                </div>}
 
-                <div className="overflow-hidden rounded-xl border border-sky-200 bg-sky-50/40">
+                {paymentMethod === "MPESA_C2B" && <div className="overflow-hidden rounded-xl border border-sky-200 bg-sky-50/40">
                   <div className="border-b border-sky-100 bg-sky-50 px-4 py-3">
                     <p className="text-sm font-bold text-sky-950">Paid through PayBill / C2B?</p>
                     <p className="mt-1 text-xs text-sky-700">
@@ -1874,33 +1888,53 @@ export function ConnectionProfile() {
                       </p>
                     )}
                   </div>
-                </div>
+                </div>}
 
-                <details className="rounded-xl border border-slate-200 bg-white p-4">
-                  <summary className="cursor-pointer text-sm font-semibold text-slate-700">Record a payment manually</summary>
-                  <div className="mt-3 space-y-3">
-                    <p className="text-xs text-slate-500">Use this only for a payment verified outside the STK prompt.</p>
-                    <Field label="Payment reference" required>
+                {(paymentMethod === "CASH" || paymentMethod === "BANK") && <div className="rounded-xl border border-slate-200 bg-white p-4">
+                  <div className="space-y-3">
+                    <div>
+                      <p className="text-sm font-bold text-slate-900">{paymentMethod === "BANK" ? "Record bank direct payment" : "Record cash payment"}</p>
+                      <p className="mt-1 text-xs text-slate-500">Only record funds already received and independently verified.</p>
+                    </div>
+                    <Field label="Amount received" required>
+                      <input
+                        type="number"
+                        min={0.01}
+                        max={Math.max(0.01, balance)}
+                        step="0.01"
+                        className={input}
+                        value={form.amount || ""}
+                        placeholder={String(balance)}
+                        onChange={(event) => set("amount", event.target.value)}
+                      />
+                    </Field>
+                    <Field label={paymentMethod === "BANK" ? "Bank transaction / deposit reference" : "Cash receipt / register reference"} required>
                       <input
                         className={input}
                         value={form.reference || ""}
                         onChange={(e) => set("reference", e.target.value)}
+                        placeholder={paymentMethod === "BANK" ? "Bank transaction or deposit slip number" : "Cash receipt or register number"}
                       />
                     </Field>
                     <button
                       className={`${primary} w-full`}
-                      disabled={saving || !form.amount || !form.reference}
+                      disabled={saving || Number(form.amount || 0) <= 0 || !form.reference?.trim()}
                       onClick={() =>
                         void action(
-                          { action: "RECORD_PAYMENT", ...form },
-                          "Payment recorded.",
+                          {
+                            action: "RECORD_PAYMENT",
+                            amount: form.amount,
+                            reference: form.reference,
+                            paymentMethod,
+                          },
+                          `${paymentMethod === "BANK" ? "Bank" : "Cash"} payment recorded.`,
                         )
                       }
                     >
-                      Record verified payment
+                      {saving ? "Recording…" : `Record ${paymentMethod === "BANK" ? "bank" : "cash"} payment`}
                     </button>
                   </div>
-                </details>
+                </div>}
               </div>
             )}
             {status === "PAID" && (

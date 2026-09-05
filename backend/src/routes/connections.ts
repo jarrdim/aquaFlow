@@ -413,7 +413,12 @@ const actionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("SCHEDULE_INSPECTION"), scheduledAt: z.coerce.date(), officerId: z.coerce.bigint().positive().optional().nullable(), notes: z.string().trim().max(1000).optional().nullable() }),
   z.object({ action: z.literal("RECORD_INSPECTION"), outcome: z.enum(["FEASIBLE", "NOT_FEASIBLE", "REVISIT"]), notes: z.string().trim().min(2).max(2000) }),
   z.object({ action: z.literal("ISSUE_QUOTATION"), materialsCost: z.coerce.number().min(0), labourCost: z.coerce.number().min(0), connectionFee: z.coerce.number().min(0).optional(), feeOverrideReason: z.string().trim().max(500).optional().nullable() }),
-  z.object({ action: z.literal("RECORD_PAYMENT"), amount: z.coerce.number().positive(), reference: z.string().trim().min(2).max(120) }),
+  z.object({
+    action: z.literal("RECORD_PAYMENT"),
+    amount: z.coerce.number().positive(),
+    reference: z.string().trim().min(2).max(120),
+    paymentMethod: z.enum(["CASH", "BANK"]),
+  }),
   z.object({ action: z.enum(["APPROVE", "REJECT", "MARK_INSTALLATION_ORDERED", "MARK_INSTALLATION_COMPLETED", "ACTIVATE"]), notes: z.string().trim().min(2).max(2000) }),
 ]);
 
@@ -466,17 +471,18 @@ connectionsRouter.patch("/:id/action", canProcess, async (req, res, next) => {
         if (data.amount > outstanding + 0.009)
           throw Object.assign(new Error(`Payment cannot exceed the outstanding quotation balance of KSh ${outstanding.toFixed(2)}`), { status: 409 });
 
+        const channelCode = data.paymentMethod;
         const channel = await tx.paymentChannel.findFirst({
           where: {
             status: "ACTIVE",
             OR: [
-              { channelCode: "CASH" },
-              { channelName: { equals: "Cash", mode: "insensitive" } },
+              { channelCode },
+              { channelName: { equals: channelCode === "BANK" ? "Bank" : "Cash", mode: "insensitive" } },
             ],
           },
         });
         if (!channel)
-          throw Object.assign(new Error("An active Cash payment channel is required for manual connection payments"), { status: 409 });
+          throw Object.assign(new Error(`An active ${channelCode === "BANK" ? "Bank" : "Cash"} payment channel is required`), { status: 409 });
 
         return postOfflineNewConnectionPayment(tx, {
           applicationId,
@@ -486,6 +492,7 @@ connectionsRouter.patch("/:id/action", canProcess, async (req, res, next) => {
           amountPaid: application.amount_paid,
           amount: data.amount,
           reference: data.reference,
+          paymentMethod: data.paymentMethod,
           actor: currentUserId(req),
           channelId: channel.channelId,
         });
