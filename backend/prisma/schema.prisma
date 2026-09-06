@@ -186,36 +186,36 @@ model CustomerAccount {
   createdAt      DateTime  @default(now()) @map("created_at")
   updatedAt      DateTime  @default(now()) @map("updated_at")
 
-  customer             Customer                @relation(fields: [customerId], references: [customerId])
-  property             Property                @relation(fields: [propertyId], references: [propertyId])
-  category             CustomerCategory        @relation(fields: [categoryId], references: [categoryId])
-  route                Route?                  @relation(fields: [routeId], references: [routeId])
-  meterAssignments     MeterAssignment[]
-  meterReplacements    MeterReplacement[]
-  meterReadings        MeterReading[]
-  bills                Bill[]
-  payments             Payment[]
-  receipts             Receipt[]
-  suspensePayments     SuspensePayment[]
-  mpesaStkRequests     MpesaStkRequest[]
-  generalNotifications Notification[]
-  paymentPlans         PaymentPlan[]
-  promisesToPay        PromiseToPay[]
-  debtNotices          DebtNotice[]
-  disconnectionItems   DisconnectionListItem[]
-  debtWriteOffs        DebtWriteOff[]
-  arrearsActions       ArrearsAction[]
-  serviceRequests      ServiceRequest[]
-  portalAccess         CustomerAccountAccess[]
+  customer               Customer                       @relation(fields: [customerId], references: [customerId])
+  property               Property                       @relation(fields: [propertyId], references: [propertyId])
+  category               CustomerCategory               @relation(fields: [categoryId], references: [categoryId])
+  route                  Route?                         @relation(fields: [routeId], references: [routeId])
+  meterAssignments       MeterAssignment[]
+  meterReplacements      MeterReplacement[]
+  meterReadings          MeterReading[]
+  bills                  Bill[]
+  payments               Payment[]
+  receipts               Receipt[]
+  suspensePayments       SuspensePayment[]
+  mpesaStkRequests       MpesaStkRequest[]
+  generalNotifications   Notification[]
+  paymentPlans           PaymentPlan[]
+  promisesToPay          PromiseToPay[]
+  debtNotices            DebtNotice[]
+  disconnectionItems     DisconnectionListItem[]
+  debtWriteOffs          DebtWriteOff[]
+  arrearsActions         ArrearsAction[]
+  serviceRequests        ServiceRequest[]
+  portalAccess           CustomerAccountAccess[]
   balanceReconciliations AccountBalanceReconciliation[]
-  accountAdjustments   AccountAdjustment[]
+  accountAdjustments     AccountAdjustment[]
 
   @@map("customer_accounts")
   @@schema("aquaflow")
 }
 
 model AccountBalanceReconciliation {
-  reconciliationId  BigInt   @id @default(autoincrement()) @map("reconciliation_id")
+  reconciliationId   BigInt   @id @default(autoincrement()) @map("reconciliation_id")
   accountId          BigInt   @map("account_id")
   storedBalance      Decimal  @map("stored_balance") @db.Decimal(18, 2)
   calculatedBalance  Decimal  @map("calculated_balance") @db.Decimal(18, 2)
@@ -252,61 +252,61 @@ model User {
   createdAt        DateTime  @default(now()) @map("created_at")
   updatedAt        DateTime  @default(now()) @map("updated_at")
 
-  customer                       Customer?                    @relation(fields: [customerId], references: [customerId])
+  customer                       Customer?                      @relation(fields: [customerId], references: [customerId])
   customerAccountAccess          CustomerAccountAccess[]
   accountBalanceReconciliations  AccountBalanceReconciliation[] @relation("AccountBalanceReconciler")
   userRoles                      UserRole[]
-  meterEvents                    MeterEvent[]                 @relation("MeterEventUser")
+  meterEvents                    MeterEvent[]                   @relation("MeterEventUser")
   fieldOfficer                   FieldOfficer?
-  createdReadingCycles           ReadingCycle[]               @relation("ReadingCycleCreator")
-  assignedReadingRoutes          RouteAssignment[]            @relation("ReadingRouteAssigner")
-  approvedReadings               MeterReading[]               @relation("ReadingApprover")
-  readingCorrections             ReadingCorrection[]          @relation("ReadingCorrectionUser")
-  readingEvents                  MeterReadingEvent[]          @relation("ReadingEventUser")
-  createdTariffs                 Tariff[]                     @relation("TariffCreator")
-  approvedTariffs                Tariff[]                     @relation("TariffApprover")
-  tariffEvents                   TariffEvent[]                @relation("TariffEventUser")
-  tariffSimulations              TariffSimulation[]           @relation("TariffSimulationUser")
-  tariffAssignments              TariffCategoryAssignment[]   @relation("TariffAssignmentUser")
-  createdBillingCycles           BillingCycle[]               @relation("BillingCycleCreator")
-  postedBillingCycles            BillingCycle[]               @relation("BillingCyclePoster")
-  generatedBills                 Bill[]                       @relation("BillGenerator")
-  approvedBills                  Bill[]                       @relation("BillApprover")
-  postedBills                    Bill[]                       @relation("BillPoster")
-  requestedBillingAdjustments    BillingAdjustment[]          @relation("BillingAdjustmentRequester")
-  approvedBillingAdjustments     BillingAdjustment[]          @relation("BillingAdjustmentApprover")
-  requestedAccountAdjustments    AccountAdjustment[]          @relation("AccountAdjustmentRequester")
-  approvedAccountAdjustments     AccountAdjustment[]          @relation("AccountAdjustmentApprover")
-  billingEvents                  BillingEvent[]               @relation("BillingEventUser")
-  sentBillNotifications          BillNotification[]           @relation("BillNotificationSender")
-  attemptedBillingAlerts         BillingSecurityAlert[]       @relation("BillingAlertAttemptUser")
-  resolvedBillingAlerts          BillingSecurityAlert[]       @relation("BillingAlertResolver")
-  receivedPayments               Payment[]                    @relation("PaymentReceiver")
-  paymentAllocations             PaymentAllocation[]          @relation("PaymentAllocator")
-  requestedPaymentReversals      PaymentReversal[]            @relation("PaymentReversalRequester")
-  approvedPaymentReversals       PaymentReversal[]            @relation("PaymentReversalApprover")
-  issuedReceipts                 Receipt[]                    @relation("ReceiptIssuer")
-  resolvedSuspensePayments       SuspensePayment[]            @relation("SuspenseResolver")
-  paymentEvents                  PaymentEvent[]               @relation("PaymentEventUser")
-  createdReconciliationBatches   PaymentReconciliationBatch[] @relation("ReconciliationCreator")
-  completedReconciliationBatches PaymentReconciliationBatch[] @relation("ReconciliationCompleter")
-  initiatedMpesaStkRequests      MpesaStkRequest[]            @relation("MpesaStkInitiator")
-  createdNotificationTemplates   NotificationTemplate[]       @relation("NotificationTemplateCreator")
-  createdNotificationProviders   NotificationProvider[]       @relation("NotificationProviderCreator")
-  requestedNotifications         Notification[]               @relation("NotificationRequester")
-  createdPaymentPlans            PaymentPlan[]                @relation("PaymentPlanCreator")
-  approvedPaymentPlans           PaymentPlan[]                @relation("PaymentPlanApprover")
-  recordedPromises               PromiseToPay[]               @relation("PromiseRecorder")
-  createdDebtNotices             DebtNotice[]                 @relation("DebtNoticeCreator")
-  approvedDebtNotices            DebtNotice[]                 @relation("DebtNoticeApprover")
-  createdDisconnectionLists      DisconnectionList[]          @relation("DisconnectionListCreator")
-  approvedDisconnectionLists     DisconnectionList[]          @relation("DisconnectionListApprover")
-  requestedDebtWriteOffs         DebtWriteOff[]               @relation("DebtWriteOffRequester")
-  decidedDebtWriteOffs           DebtWriteOff[]               @relation("DebtWriteOffApprover")
-  arrearsActions                 ArrearsAction[]              @relation("ArrearsActionUser")
-  createdServiceRequests         ServiceRequest[]             @relation("ServiceRequestCreator")
-  assignedServiceRequests        ServiceRequest[]             @relation("ServiceRequestAssignee")
-  serviceRequestEvents           ServiceRequestEvent[]        @relation("ServiceRequestEventUser")
+  createdReadingCycles           ReadingCycle[]                 @relation("ReadingCycleCreator")
+  assignedReadingRoutes          RouteAssignment[]              @relation("ReadingRouteAssigner")
+  approvedReadings               MeterReading[]                 @relation("ReadingApprover")
+  readingCorrections             ReadingCorrection[]            @relation("ReadingCorrectionUser")
+  readingEvents                  MeterReadingEvent[]            @relation("ReadingEventUser")
+  createdTariffs                 Tariff[]                       @relation("TariffCreator")
+  approvedTariffs                Tariff[]                       @relation("TariffApprover")
+  tariffEvents                   TariffEvent[]                  @relation("TariffEventUser")
+  tariffSimulations              TariffSimulation[]             @relation("TariffSimulationUser")
+  tariffAssignments              TariffCategoryAssignment[]     @relation("TariffAssignmentUser")
+  createdBillingCycles           BillingCycle[]                 @relation("BillingCycleCreator")
+  postedBillingCycles            BillingCycle[]                 @relation("BillingCyclePoster")
+  generatedBills                 Bill[]                         @relation("BillGenerator")
+  approvedBills                  Bill[]                         @relation("BillApprover")
+  postedBills                    Bill[]                         @relation("BillPoster")
+  requestedBillingAdjustments    BillingAdjustment[]            @relation("BillingAdjustmentRequester")
+  approvedBillingAdjustments     BillingAdjustment[]            @relation("BillingAdjustmentApprover")
+  requestedAccountAdjustments    AccountAdjustment[]            @relation("AccountAdjustmentRequester")
+  approvedAccountAdjustments     AccountAdjustment[]            @relation("AccountAdjustmentApprover")
+  billingEvents                  BillingEvent[]                 @relation("BillingEventUser")
+  sentBillNotifications          BillNotification[]             @relation("BillNotificationSender")
+  attemptedBillingAlerts         BillingSecurityAlert[]         @relation("BillingAlertAttemptUser")
+  resolvedBillingAlerts          BillingSecurityAlert[]         @relation("BillingAlertResolver")
+  receivedPayments               Payment[]                      @relation("PaymentReceiver")
+  paymentAllocations             PaymentAllocation[]            @relation("PaymentAllocator")
+  requestedPaymentReversals      PaymentReversal[]              @relation("PaymentReversalRequester")
+  approvedPaymentReversals       PaymentReversal[]              @relation("PaymentReversalApprover")
+  issuedReceipts                 Receipt[]                      @relation("ReceiptIssuer")
+  resolvedSuspensePayments       SuspensePayment[]              @relation("SuspenseResolver")
+  paymentEvents                  PaymentEvent[]                 @relation("PaymentEventUser")
+  createdReconciliationBatches   PaymentReconciliationBatch[]   @relation("ReconciliationCreator")
+  completedReconciliationBatches PaymentReconciliationBatch[]   @relation("ReconciliationCompleter")
+  initiatedMpesaStkRequests      MpesaStkRequest[]              @relation("MpesaStkInitiator")
+  createdNotificationTemplates   NotificationTemplate[]         @relation("NotificationTemplateCreator")
+  createdNotificationProviders   NotificationProvider[]         @relation("NotificationProviderCreator")
+  requestedNotifications         Notification[]                 @relation("NotificationRequester")
+  createdPaymentPlans            PaymentPlan[]                  @relation("PaymentPlanCreator")
+  approvedPaymentPlans           PaymentPlan[]                  @relation("PaymentPlanApprover")
+  recordedPromises               PromiseToPay[]                 @relation("PromiseRecorder")
+  createdDebtNotices             DebtNotice[]                   @relation("DebtNoticeCreator")
+  approvedDebtNotices            DebtNotice[]                   @relation("DebtNoticeApprover")
+  createdDisconnectionLists      DisconnectionList[]            @relation("DisconnectionListCreator")
+  approvedDisconnectionLists     DisconnectionList[]            @relation("DisconnectionListApprover")
+  requestedDebtWriteOffs         DebtWriteOff[]                 @relation("DebtWriteOffRequester")
+  decidedDebtWriteOffs           DebtWriteOff[]                 @relation("DebtWriteOffApprover")
+  arrearsActions                 ArrearsAction[]                @relation("ArrearsActionUser")
+  createdServiceRequests         ServiceRequest[]               @relation("ServiceRequestCreator")
+  assignedServiceRequests        ServiceRequest[]               @relation("ServiceRequestAssignee")
+  serviceRequestEvents           ServiceRequestEvent[]          @relation("ServiceRequestEventUser")
 
   @@map("users")
   @@schema("aquaflow")
@@ -897,34 +897,33 @@ model BillingPeriodGroup {
 }
 
 model BillingCycle {
-  billingCycleId      BigInt    @id @default(autoincrement()) @map("billing_cycle_id")
-  billingPeriodGroupId BigInt   @map("billing_period_group_id")
-  cycleCode           String    @unique @map("cycle_code")
-  cycleName           String    @map("cycle_name")
-  cycleType           String    @default("ROUTINE") @map("cycle_type")
-  periodStart         DateTime  @map("period_start") @db.Date
-  periodEnd           DateTime  @map("period_end") @db.Date
-  dueDate             DateTime  @map("due_date") @db.Date
-  penaltyDate         DateTime? @map("penalty_date") @db.Date
-  frequency           String
-  status              String    @default("DRAFT")
-  defaultNotification String    @default("SMS_APP") @map("default_notification")
-  remarks             String?
-  postedBy            BigInt?   @map("posted_by")
-  postedAt            DateTime? @map("posted_at")
-  createdBy           BigInt?   @map("created_by")
-  createdAt           DateTime  @default(now()) @map("created_at")
-  updatedAt           DateTime  @default(now()) @map("updated_at")
+  billingCycleId       BigInt    @id @default(autoincrement()) @map("billing_cycle_id")
+  billingPeriodGroupId BigInt    @map("billing_period_group_id")
+  cycleCode            String    @unique @map("cycle_code")
+  cycleName            String    @map("cycle_name")
+  cycleType            String    @default("ROUTINE") @map("cycle_type")
+  periodStart          DateTime  @map("period_start") @db.Date
+  periodEnd            DateTime  @map("period_end") @db.Date
+  dueDate              DateTime  @map("due_date") @db.Date
+  penaltyDate          DateTime? @map("penalty_date") @db.Date
+  frequency            String
+  status               String    @default("DRAFT")
+  defaultNotification  String    @default("SMS_APP") @map("default_notification")
+  remarks              String?
+  postedBy             BigInt?   @map("posted_by")
+  postedAt             DateTime? @map("posted_at")
+  createdBy            BigInt?   @map("created_by")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @default(now()) @map("updated_at")
 
   billingPeriodGroup BillingPeriodGroup @relation(fields: [billingPeriodGroupId], references: [billingPeriodGroupId])
-  creator       User?          @relation("BillingCycleCreator", fields: [createdBy], references: [userId])
-  poster        User?          @relation("BillingCyclePoster", fields: [postedBy], references: [userId])
-  readingCycles ReadingCycle[]
-  bills         Bill[]
-  events        BillingEvent[]
+  creator            User?              @relation("BillingCycleCreator", fields: [createdBy], references: [userId])
+  poster             User?              @relation("BillingCyclePoster", fields: [postedBy], references: [userId])
+  readingCycles      ReadingCycle[]
+  bills              Bill[]
+  events             BillingEvent[]
 
   @@index([billingPeriodGroupId])
-
   @@map("billing_cycles")
   @@schema("aquaflow")
 }
@@ -1003,17 +1002,19 @@ model BillItem {
 }
 
 model ReadingCorrection {
-  correctionId            BigInt   @id @default(autoincrement()) @map("correction_id")
-  readingId               BigInt   @map("reading_id")
-  billId                  BigInt   @map("bill_id")
-  originalCurrentReading  Decimal  @map("original_current_reading") @db.Decimal(18, 3)
-  correctedCurrentReading Decimal  @map("corrected_current_reading") @db.Decimal(18, 3)
-  adjustmentAmount        Decimal  @map("adjustment_amount") @db.Decimal(18, 2)
-  reason                  String
-  beforeSnapshot          Json     @map("before_snapshot")
-  afterSnapshot           Json     @map("after_snapshot")
-  correctedBy             BigInt   @map("corrected_by")
-  correctedAt             DateTime @default(now()) @map("corrected_at")
+  correctionId             BigInt   @id @default(autoincrement()) @map("correction_id")
+  readingId                BigInt   @map("reading_id")
+  billId                   BigInt   @map("bill_id")
+  originalPreviousReading  Decimal? @map("original_previous_reading") @db.Decimal(18, 3)
+  correctedPreviousReading Decimal? @map("corrected_previous_reading") @db.Decimal(18, 3)
+  originalCurrentReading   Decimal  @map("original_current_reading") @db.Decimal(18, 3)
+  correctedCurrentReading  Decimal  @map("corrected_current_reading") @db.Decimal(18, 3)
+  adjustmentAmount         Decimal  @map("adjustment_amount") @db.Decimal(18, 2)
+  reason                   String
+  beforeSnapshot           Json     @map("before_snapshot")
+  afterSnapshot            Json     @map("after_snapshot")
+  correctedBy              BigInt   @map("corrected_by")
+  correctedAt              DateTime @default(now()) @map("corrected_at")
 
   reading   MeterReading @relation(fields: [readingId], references: [readingId])
   bill      Bill         @relation(fields: [billId], references: [billId])
@@ -1458,16 +1459,16 @@ model PaymentChannel {
 }
 
 model MpesaC2bRegistration {
-  registrationId          BigInt   @id @default(autoincrement()) @map("registration_id")
+  registrationId           BigInt   @id @default(autoincrement()) @map("registration_id")
   configurationFingerprint String   @unique @map("configuration_fingerprint")
-  environment             String
-  shortCode               String   @map("short_code")
-  validationUrl           String   @map("validation_url")
-  confirmationUrl         String   @map("confirmation_url")
-  responseCode            String?  @map("response_code")
-  responseDescription     String?  @map("response_description")
-  registeredBy            BigInt?  @map("registered_by")
-  registeredAt            DateTime @default(now()) @map("registered_at")
+  environment              String
+  shortCode                String   @map("short_code")
+  validationUrl            String   @map("validation_url")
+  confirmationUrl          String   @map("confirmation_url")
+  responseCode             String?  @map("response_code")
+  responseDescription      String?  @map("response_description")
+  registeredBy             BigInt?  @map("registered_by")
+  registeredAt             DateTime @default(now()) @map("registered_at")
 
   @@map("mpesa_c2b_registrations")
   @@schema("aquaflow")
@@ -1497,17 +1498,17 @@ model Payment {
   createdAt            DateTime  @default(now()) @map("created_at")
   updatedAt            DateTime  @default(now()) @map("updated_at")
 
-  account     CustomerAccount?    @relation(fields: [accountId], references: [accountId])
-  channel     PaymentChannel      @relation(fields: [channelId], references: [channelId])
-  receiver    User?               @relation("PaymentReceiver", fields: [receivedBy], references: [userId])
-  allocations PaymentAllocation[]
-  suspense    SuspensePayment?
-  reversals   PaymentReversal[]
-  receipt     Receipt?
-  events      PaymentEvent[]
-  stkRequest  MpesaStkRequest?
-  parentPayment Payment?         @relation("PaymentSplits", fields: [parentPaymentId], references: [paymentId])
-  splitPayments Payment[]        @relation("PaymentSplits")
+  account       CustomerAccount?    @relation(fields: [accountId], references: [accountId])
+  channel       PaymentChannel      @relation(fields: [channelId], references: [channelId])
+  receiver      User?               @relation("PaymentReceiver", fields: [receivedBy], references: [userId])
+  allocations   PaymentAllocation[]
+  suspense      SuspensePayment?
+  reversals     PaymentReversal[]
+  receipt       Receipt?
+  events        PaymentEvent[]
+  stkRequest    MpesaStkRequest?
+  parentPayment Payment?            @relation("PaymentSplits", fields: [parentPaymentId], references: [paymentId])
+  splitPayments Payment[]           @relation("PaymentSplits")
 
   @@index([parentPaymentId])
   @@map("payments")
@@ -1539,8 +1540,8 @@ model MpesaStkRequest {
   updatedAt           DateTime  @default(now()) @map("updated_at")
 
   account   CustomerAccount? @relation(fields: [accountId], references: [accountId])
-  payment   Payment?        @relation(fields: [paymentId], references: [paymentId])
-  initiator User?           @relation("MpesaStkInitiator", fields: [initiatedBy], references: [userId])
+  payment   Payment?         @relation(fields: [paymentId], references: [paymentId])
+  initiator User?            @relation("MpesaStkInitiator", fields: [initiatedBy], references: [userId])
 
   @@index([accountId, createdAt(sort: Desc)])
   @@index([status, createdAt(sort: Desc)])
@@ -1681,26 +1682,26 @@ model PaymentReconciliationBatch {
 }
 
 model MeterReplacement {
-  replacementId     BigInt    @id @default(autoincrement()) @map("replacement_id")
-  accountId         BigInt    @map("account_id")
-  oldMeterId        BigInt    @map("old_meter_id")
-  newMeterId        BigInt    @map("new_meter_id")
-  replacementDate   DateTime  @map("replacement_date") @db.Date
-  oldFinalReading   Decimal   @map("old_final_reading") @db.Decimal(18, 3)
-  newOpeningReading Decimal   @default(0) @map("new_opening_reading") @db.Decimal(18, 3)
-  retainedMeterNumber Boolean @default(false) @map("retained_meter_number")
-  replacementReason String    @map("replacement_reason")
-  workOrderId       BigInt?   @map("work_order_id")
-  approvedBy        BigInt?   @map("approved_by")
-  createdAt         DateTime  @default(now()) @map("created_at")
-  requestStatus     String    @default("PENDING") @map("request_status")
-  requestedBy       BigInt?   @map("requested_by")
-  replacedBy        BigInt?   @map("replaced_by")
-  decisionComments  String?   @map("decision_comments")
-  decidedAt         DateTime? @map("decided_at")
-  gpsLatitude       Decimal?  @map("gps_latitude") @db.Decimal(10, 7)
-  gpsLongitude      Decimal?  @map("gps_longitude") @db.Decimal(10, 7)
-  remarks           String?
+  replacementId       BigInt    @id @default(autoincrement()) @map("replacement_id")
+  accountId           BigInt    @map("account_id")
+  oldMeterId          BigInt    @map("old_meter_id")
+  newMeterId          BigInt    @map("new_meter_id")
+  replacementDate     DateTime  @map("replacement_date") @db.Date
+  oldFinalReading     Decimal   @map("old_final_reading") @db.Decimal(18, 3)
+  newOpeningReading   Decimal   @default(0) @map("new_opening_reading") @db.Decimal(18, 3)
+  retainedMeterNumber Boolean   @default(false) @map("retained_meter_number")
+  replacementReason   String    @map("replacement_reason")
+  workOrderId         BigInt?   @map("work_order_id")
+  approvedBy          BigInt?   @map("approved_by")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  requestStatus       String    @default("PENDING") @map("request_status")
+  requestedBy         BigInt?   @map("requested_by")
+  replacedBy          BigInt?   @map("replaced_by")
+  decisionComments    String?   @map("decision_comments")
+  decidedAt           DateTime? @map("decided_at")
+  gpsLatitude         Decimal?  @map("gps_latitude") @db.Decimal(10, 7)
+  gpsLongitude        Decimal?  @map("gps_longitude") @db.Decimal(10, 7)
+  remarks             String?
 
   account  CustomerAccount @relation(fields: [accountId], references: [accountId])
   oldMeter Meter           @relation("OldMeter", fields: [oldMeterId], references: [meterId])

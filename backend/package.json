@@ -16,6 +16,7 @@
     "db:billing-upgrade": "prisma db execute --file prisma/migrations/20260714210000_billing_management/migration.sql --schema prisma/schema.prisma",
     "db:billing-period-group-upgrade": "prisma db execute --file prisma/migrations/20260906120000_billing_period_groups/migration.sql --schema prisma/schema.prisma",
     "db:reading-correction-upgrade": "prisma db execute --file prisma/migrations/20260906150000_reading_corrections/migration.sql --schema prisma/schema.prisma",
+    "db:reading-correction-previous-upgrade": "prisma db execute --file prisma/migrations/20260906160000_reading_correction_previous/migration.sql --schema prisma/schema.prisma",
     "db:account-adjustment-upgrade": "prisma db execute --file prisma/migrations/20260901100000_account_adjustments/migration.sql --schema prisma/schema.prisma",
     "db:payment-upgrade": "prisma db execute --file prisma/migrations/20260715100000_payment_revenue_management/migration.sql --schema prisma/schema.prisma",
     "db:payment-admin-reversal-upgrade": "prisma db execute --file prisma/migrations/20260823150000_system_admin_payment_reversal_override/migration.sql --schema prisma/schema.prisma",

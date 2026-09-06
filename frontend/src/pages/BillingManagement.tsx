@@ -1598,6 +1598,7 @@ export function ReadingCorrections() {
   const [search, setSearch] = useState("");
   const [candidates, setCandidates] = useState<Row[]>([]);
   const [selected, setSelected] = useState<Row | null>(null);
+  const [correctedPreviousReading, setCorrectedPreviousReading] = useState("");
   const [correctedCurrentReading, setCorrectedCurrentReading] = useState("");
   const [reason, setReason] = useState("");
   const [sendCorrectedBill, setSendCorrectedBill] = useState(true);
@@ -1622,6 +1623,7 @@ export function ReadingCorrections() {
   useEffect(() => { loadHistory().catch((e) => setError(e.message)); }, []);
   function chooseBill(bill: Row) {
     setSelected(bill);
+    setCorrectedPreviousReading(String(Number(bill.reading?.previousReading ?? 0)));
     setCorrectedCurrentReading(String(Number(bill.reading?.currentReading ?? 0)));
     setReason("");
     setPreview(null);
@@ -1633,7 +1635,7 @@ export function ReadingCorrections() {
     setWorking(true);
     setError("");
     try {
-      setPreview(await api.previewReadingCorrection({ billId: selected.billId, correctedCurrentReading }));
+      setPreview(await api.previewReadingCorrection({ billId: selected.billId, correctedPreviousReading, correctedCurrentReading }));
     } catch (e: any) { setError(e.message); }
     finally { setWorking(false); }
   }
@@ -1651,7 +1653,7 @@ export function ReadingCorrections() {
     setWorking(true);
     setError("");
     try {
-      const result = await api.correctReading({ billId: selected.billId, correctedCurrentReading, reason });
+      const result = await api.correctReading({ billId: selected.billId, correctedPreviousReading, correctedCurrentReading, reason });
       let notificationWarning = "";
       if (sendCorrectedBill) {
         const byCycle = new Map<string, string[]>();
@@ -1667,6 +1669,7 @@ export function ReadingCorrections() {
       setMessage(`Reading corrected successfully. Account adjustment: ${money(result.adjustmentAmount)}.${notificationWarning}`);
       setSelected(null);
       setPreview(null);
+      setCorrectedPreviousReading("");
       setCorrectedCurrentReading("");
       setReason("");
       const [candidateRows] = await Promise.all([api.listReadingCorrectionCandidates(search), loadHistory()]);
@@ -1701,13 +1704,16 @@ export function ReadingCorrections() {
               <div className="rounded-xl bg-red-50 p-4"><div className="text-xs font-bold uppercase text-red-500">Original current</div><div className="mt-1 text-xl font-extrabold text-red-700">{Number(selected.reading.currentReading).toLocaleString()}</div></div>
               <div className="rounded-xl bg-sky-50 p-4"><div className="text-xs font-bold uppercase text-sky-600">Original charge</div><div className="mt-1 text-xl font-extrabold text-sky-800">{money(selected.totalCurrentCharges)}</div></div>
             </div>
-            <Field label="Corrected current reading" required><input type="number" min="0" step="0.001" className={INPUT} value={correctedCurrentReading} onChange={(event) => { setCorrectedCurrentReading(event.target.value); setPreview(null); }} /></Field>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Corrected previous reading" required><input type="number" min="0" step="0.001" className={INPUT} value={correctedPreviousReading} onChange={(event) => { setCorrectedPreviousReading(event.target.value); setPreview(null); }} /></Field>
+              <Field label="Corrected current reading" required><input type="number" min="0" step="0.001" className={INPUT} value={correctedCurrentReading} onChange={(event) => { setCorrectedCurrentReading(event.target.value); setPreview(null); }} /></Field>
+            </div>
             <Field label="Correction reason" required><textarea rows={3} className={INPUT} value={reason} placeholder="Why was the original reading incorrect?" onChange={(event) => setReason(event.target.value)} /></Field>
             <label className="flex items-center gap-2 text-sm font-semibold text-slate-700"><input type="checkbox" checked={sendCorrectedBill} onChange={(event) => setSendCorrectedBill(event.target.checked)} /> Queue corrected bill SMS after saving</label>
-            <Button tone="slate" disabled={working || !correctedCurrentReading} onClick={previewCorrection}>{working ? "Calculating…" : "Preview correction"}</Button>
+            <Button tone="slate" disabled={working || correctedPreviousReading === "" || correctedCurrentReading === ""} onClick={previewCorrection}>{working ? "Calculating…" : "Preview correction"}</Button>
             {preview && <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
               <div className="font-bold text-amber-900">Correction impact</div>
-              <div className="mt-3 grid gap-3 sm:grid-cols-3"><div><div className="text-xs text-amber-700">Corrected reading</div><strong>{Number(preview.correctedCurrentReading).toLocaleString()}</strong></div><div><div className="text-xs text-amber-700">Account difference</div><strong>{money(preview.adjustmentAmount)}</strong></div><div><div className="text-xs text-amber-700">Bills affected</div><strong>{preview.impactedBills?.length ?? 1}</strong></div></div>
+              <div className="mt-3 grid gap-3 sm:grid-cols-3"><div><div className="text-xs text-amber-700">Corrected readings</div><strong>{Number(preview.correctedPreviousReading).toLocaleString()} → {Number(preview.correctedCurrentReading).toLocaleString()}</strong></div><div><div className="text-xs text-amber-700">Account difference</div><strong>{money(preview.adjustmentAmount)}</strong></div><div><div className="text-xs text-amber-700">Bills affected</div><strong>{preview.impactedBills?.length ?? 1}</strong></div></div>
               {preview.affectsNextReading && <p className="mt-3 text-sm text-amber-800">The next reading depends on this value and will be adjusted automatically.</p>}
               <div className="mt-3 space-y-2">{preview.impactedBills?.map((bill: Row) => <div key={bill.billId} className="flex justify-between gap-4 rounded-lg bg-white/70 px-3 py-2 text-sm"><span>{bill.billNumber}: {Number(bill.previousConsumptionUnits).toLocaleString()} → {Number(bill.correctedConsumptionUnits).toLocaleString()} units</span><strong>{money(bill.previousCurrentCharges)} → {money(bill.correctedCurrentCharges)}</strong></div>)}</div>
               <Button className="mt-4 w-full" tone="green" disabled={working || reason.trim().length < 3} onClick={applyCorrection}>{working ? "Correcting…" : "Correct reading and revise bill"}</Button>
@@ -1717,7 +1723,7 @@ export function ReadingCorrections() {
       </div>
       <Card title="Correction history" className="mt-4">
         <div className="overflow-x-auto"><table className="w-full min-w-[800px]"><thead><tr><th className={TH}>Date</th><th className={TH}>Bill / account</th><th className={TH}>Meter</th><th className={TH}>Reading change</th><th className={TH}>Adjustment</th><th className={TH}>Reason</th><th className={TH}>Admin</th></tr></thead><tbody>
-          {history.map((item) => <tr key={item.correctionId} className="border-t"><td className={TD}>{dateTime(item.correctedAt)}</td><td className={TD}><strong>{item.bill?.billNumber}</strong><div className="text-xs">{item.bill?.account?.accountNumber}</div></td><td className={TD}>{item.reading?.meter?.meterNumber}</td><td className={TD}>{Number(item.originalCurrentReading).toLocaleString()} → {Number(item.correctedCurrentReading).toLocaleString()}</td><td className={`${TD} font-bold`}>{money(item.adjustmentAmount)}</td><td className={TD}>{item.reason}</td><td className={TD}>{person(item.corrector)}</td></tr>)}
+          {history.map((item) => <tr key={item.correctionId} className="border-t"><td className={TD}>{dateTime(item.correctedAt)}</td><td className={TD}><strong>{item.bill?.billNumber}</strong><div className="text-xs">{item.bill?.account?.accountNumber}</div></td><td className={TD}>{item.reading?.meter?.meterNumber}</td><td className={TD}><div>{Number(item.originalPreviousReading ?? item.reading?.previousReading).toLocaleString()} → {Number(item.originalCurrentReading).toLocaleString()}</div><div className="text-xs font-semibold text-emerald-700">{Number(item.correctedPreviousReading ?? item.reading?.previousReading).toLocaleString()} → {Number(item.correctedCurrentReading).toLocaleString()}</div></td><td className={`${TD} font-bold`}>{money(item.adjustmentAmount)}</td><td className={TD}>{item.reason}</td><td className={TD}>{person(item.corrector)}</td></tr>)}
           {!history.length && <tr><td colSpan={7} className="p-10 text-center text-slate-400">No reading corrections have been recorded.</td></tr>}
         </tbody></table></div>
       </Card>
