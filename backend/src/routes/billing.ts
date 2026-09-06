@@ -612,7 +612,7 @@ billingRouter.get("/bills", async (req, res, next) => {
         ...(cycleId ? { billingCycleId: cycleId } : groupId ? { billingCycle: { billingPeriodGroupId: groupId } } : {}),
         ...(accountId ? { accountId } : {}),
         ...(status ? { status } : {}),
-        ...(search ? { OR: [{ billNumber: { contains: search, mode: "insensitive" } }, { account: { accountNumber: { contains: search, mode: "insensitive" } } }, { account: { customer: { firstName: { contains: search, mode: "insensitive" } } } }, { account: { customer: { lastName: { contains: search, mode: "insensitive" } } } }] } : {}),
+        ...(search ? { OR: [{ billNumber: { contains: search, mode: "insensitive" } }, { account: { accountNumber: { contains: search, mode: "insensitive" } } }, { account: { customer: { customerNumber: { contains: search, mode: "insensitive" } } } }, { account: { customer: { firstName: { contains: search, mode: "insensitive" } } } }, { account: { customer: { middleName: { contains: search, mode: "insensitive" } } } }, { account: { customer: { lastName: { contains: search, mode: "insensitive" } } } }, { account: { customer: { organizationName: { contains: search, mode: "insensitive" } } } }] } : {}),
       },
       include: billInclude,
       orderBy: { createdAt: "desc" }, take,

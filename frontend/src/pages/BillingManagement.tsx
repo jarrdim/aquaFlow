@@ -3940,19 +3940,27 @@ export function BillNotifications() {
   useEffect(() => {
     let active = true;
     setSelectedBillIds([]);
-    if (!cycleId) {
+    const globalSearch = search.trim();
+    if (!cycleId && !globalSearch) {
       setBills([]);
       setLoadingBills(false);
       return () => { active = false; };
     }
     setLoadingBills(true);
     setError("");
-    api.listBills({ billingCycleId: cycleId, limit: "10000" })
-      .then((rows) => active && setBills(rows))
-      .catch((e) => active && setError(e.message))
-      .finally(() => active && setLoadingBills(false));
-    return () => { active = false; };
-  }, [cycleId]);
+    const timer = window.setTimeout(() => {
+      api.listBills(globalSearch
+        ? { search: globalSearch, limit: "10000" }
+        : { billingCycleId: cycleId, limit: "10000" })
+        .then((rows) => active && setBills(rows.filter((bill: Row) =>
+          bill.billingCycle?.cycleType !== "METER_REPLACEMENT" &&
+          !String(bill.billingCycle?.cycleCode ?? "").toUpperCase().startsWith("MR-"),
+        )))
+        .catch((e) => active && setError(e.message))
+        .finally(() => active && setLoadingBills(false));
+    }, globalSearch ? 250 : 0);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [cycleId, search]);
   async function send() {
     if (!selectedBillIds.length) return;
     const confirmation = await Swal.fire({
@@ -3989,17 +3997,31 @@ export function BillNotifications() {
       setError("");
       setMessage("");
       setQueueing(true);
-      const result = await api.sendBillNotifications({
-        billingCycleId: cycleId,
-        billIds: selectedBillIds,
-        channels,
-      });
+      const selectedIdSet = new Set(selectedBillIds);
+      const billsByCycle = new Map<string, string[]>();
+      for (const bill of bills.filter((item) => selectedIdSet.has(String(item.billId)))) {
+        const actualCycleId = String(bill.billingCycleId);
+        billsByCycle.set(actualCycleId, [...(billsByCycle.get(actualCycleId) ?? []), String(bill.billId)]);
+      }
+      const results = await Promise.all(Array.from(billsByCycle, ([billingCycleId, billIds]) =>
+        api.sendBillNotifications({ billingCycleId, billIds, channels }),
+      ));
+      const result = results.reduce((total, item) => ({
+        notifications: total.notifications + Number(item.notifications ?? 0),
+        bills: total.bills + Number(item.bills ?? 0),
+      }), { notifications: 0, bills: 0 });
       setMessage(
         `${result.notifications} notification(s) queued for ${result.bills} bill(s). Open the delivery queue when you are ready to send them.`,
       );
       setSelectedBillIds([]);
       setLoadingBills(true);
-      setBills(await api.listBills({ billingCycleId: cycleId, limit: "10000" }));
+      const refreshed = await api.listBills(search.trim()
+        ? { search: search.trim(), limit: "10000" }
+        : { billingCycleId: cycleId, limit: "10000" });
+      setBills(refreshed.filter((bill: Row) =>
+        bill.billingCycle?.cycleType !== "METER_REPLACEMENT" &&
+        !String(bill.billingCycle?.cycleCode ?? "").toUpperCase().startsWith("MR-"),
+      ));
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -4009,13 +4031,13 @@ export function BillNotifications() {
   }
   async function sendNow(bill: Row) {
     if (!channels.length || sendingBillId) return;
-    const billId = String(bill.billId);
+      const billId = String(bill.billId);
     setSendingBillId(billId);
     setError("");
     setMessage("");
     try {
       const queued = await api.sendBillNotifications({
-        billingCycleId: cycleId,
+        billingCycleId: bill.billingCycleId,
         billIds: [billId],
         channels,
         resend: String(bill.notificationStatus) !== "NOT_SENT",
@@ -4027,10 +4049,9 @@ export function BillNotifications() {
       const failed = processed.filter((item: Row) => item?.deliveryStatus === "FAILED");
       if (!delivered) throw new Error(failed[0]?.failureReason ?? "The notification could not be delivered.");
       setMessage(`${delivered} notification(s) sent immediately for ${bill.billNumber}.`);
-      setBills(await api.listBills({ billingCycleId: cycleId, limit: "10000" }));
+      setBills((current) => current.map((item) => String(item.billId) === billId ? { ...item, notificationStatus: "SENT" } : item));
     } catch (e: any) {
       setError(e.message);
-      setBills(await api.listBills({ billingCycleId: cycleId, limit: "10000" }));
     } finally {
       setSendingBillId("");
     }
@@ -4084,6 +4105,12 @@ export function BillNotifications() {
   const selectedCycle = cycles.find((cycle) => String(cycle.billingCycleId) === cycleId);
   const readingCycle = selectedCycle?.readingCycles?.[0];
   const readingCycleClosed = readingCycle?.status === "CLOSED";
+  const selectedBillCyclesClosed = selectedBillIds.every((billId) => {
+    const bill = bills.find((item) => String(item.billId) === billId);
+    const billCycle = cycles.find((cycle) => String(cycle.billingCycleId) === String(bill?.billingCycleId));
+    return billCycle?.readingCycles?.[0]?.status === "CLOSED";
+  });
+  const notificationCyclesReady = search.trim() ? selectedBillCyclesClosed : readingCycleClosed;
   return (
     <Page
       title="Bill notifications"
@@ -4143,14 +4170,16 @@ export function BillNotifications() {
               </div>
               {!!selectedBillIds.length && <button type="button" className="mt-2 text-sm font-semibold text-slate-600 hover:text-slate-900" onClick={() => setSelectedBillIds([])}>Clear selection</button>}
             </Field>
-            <div className={`rounded-lg p-3 text-sm ${readingCycleClosed ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-800"}`}>
-              {readingCycle
+            <div className={`rounded-lg p-3 text-sm ${notificationCyclesReady ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-800"}`}>
+              {search.trim()
+                ? "Search results cover all regular billing periods."
+                : readingCycle
                 ? `Reading cycle: ${readingCycle.cycleName} · ${readingCycle.status}`
                 : "No reading cycle is linked to this billing period."}
             </div>
             <Button
               className="w-full"
-              disabled={!cycleId || !channels.length || !selectedBillIds.length || !readingCycleClosed || loadingBills || queueing}
+              disabled={!channels.length || !selectedBillIds.length || !notificationCyclesReady || loadingBills || queueing}
               onClick={send}
             >
               {queueing ? (
@@ -4158,7 +4187,7 @@ export function BillNotifications() {
                   <span className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden />
                   Queueing notifications…
                 </span>
-              ) : readingCycleClosed ? `Queue ${selectedBillIds.length} selected bill(s)` : "Close reading cycle first"}
+              ) : notificationCyclesReady ? `Queue ${selectedBillIds.length} selected bill(s)` : "Close reading cycle first"}
             </Button>
             <Link
               to="/notifications/queue"
