@@ -3907,6 +3907,7 @@ export function BillNotifications() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [search, setSearch] = useState("");
+  const [appliedSearch, setAppliedSearch] = useState("");
   const [billStatus, setBillStatus] = useState("");
   const [notificationStatus, setNotificationStatus] = useState(searchParams.get("notificationStatus") ?? "NOT_SENT");
   const [batchSize, setBatchSize] = useState("2000");
@@ -3940,7 +3941,7 @@ export function BillNotifications() {
   useEffect(() => {
     let active = true;
     setSelectedBillIds([]);
-    const globalSearch = search.trim();
+    const globalSearch = appliedSearch;
     if (!cycleId && !globalSearch) {
       setBills([]);
       setLoadingBills(false);
@@ -3960,7 +3961,7 @@ export function BillNotifications() {
         .finally(() => active && setLoadingBills(false));
     }, globalSearch ? 250 : 0);
     return () => { active = false; window.clearTimeout(timer); };
-  }, [cycleId, search]);
+  }, [cycleId, appliedSearch]);
   async function send() {
     if (!selectedBillIds.length) return;
     const confirmation = await Swal.fire({
@@ -4015,8 +4016,8 @@ export function BillNotifications() {
       );
       setSelectedBillIds([]);
       setLoadingBills(true);
-      const refreshed = await api.listBills(search.trim()
-        ? { search: search.trim(), limit: "10000" }
+      const refreshed = await api.listBills(appliedSearch
+        ? { search: appliedSearch, limit: "10000" }
         : { billingCycleId: cycleId, limit: "10000" });
       setBills(refreshed.filter((bill: Row) =>
         bill.billingCycle?.cycleType !== "METER_REPLACEMENT" &&
@@ -4061,7 +4062,7 @@ export function BillNotifications() {
     Boolean(bill.readingId ?? bill.reading),
   );
   const filteredBills = useMemo(() => {
-    const query = search.trim().toLowerCase();
+    const query = appliedSearch.toLowerCase();
     return selected.filter((bill) => {
       const matchesSearch = !query || [
         bill.billNumber,
@@ -4072,7 +4073,7 @@ export function BillNotifications() {
         (!billStatus || bill.status === billStatus) &&
         (!notificationStatus || bill.notificationStatus === notificationStatus);
     });
-  }, [selected, search, billStatus, notificationStatus]);
+  }, [selected, appliedSearch, billStatus, notificationStatus]);
   const selectableBills = filteredBills.filter(
     (bill) => !["QUEUED", "SENT"].includes(String(bill.notificationStatus)),
   );
@@ -4110,7 +4111,7 @@ export function BillNotifications() {
     const billCycle = cycles.find((cycle) => String(cycle.billingCycleId) === String(bill?.billingCycleId));
     return billCycle?.readingCycles?.[0]?.status === "CLOSED";
   });
-  const notificationCyclesReady = search.trim() ? selectedBillCyclesClosed : readingCycleClosed;
+  const notificationCyclesReady = appliedSearch ? selectedBillCyclesClosed : readingCycleClosed;
   return (
     <Page
       title="Bill notifications"
@@ -4171,7 +4172,7 @@ export function BillNotifications() {
               {!!selectedBillIds.length && <button type="button" className="mt-2 text-sm font-semibold text-slate-600 hover:text-slate-900" onClick={() => setSelectedBillIds([])}>Clear selection</button>}
             </Field>
             <div className={`rounded-lg p-3 text-sm ${notificationCyclesReady ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-800"}`}>
-              {search.trim()
+              {appliedSearch
                 ? "Search results cover all regular billing periods."
                 : readingCycle
                 ? `Reading cycle: ${readingCycle.cycleName} · ${readingCycle.status}`
@@ -4204,7 +4205,24 @@ export function BillNotifications() {
           </div>
           <div className="mt-4 grid gap-3 md:grid-cols-3">
             <Field label="Search bill, customer or account">
-              <input className={INPUT} disabled={loadingBills || queueing} value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search records" />
+              <div className="flex gap-2">
+                <input
+                  className={INPUT}
+                  disabled={loadingBills || queueing}
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && search.trim()) setAppliedSearch(search.trim());
+                  }}
+                  placeholder="Search records"
+                />
+                <Button
+                  disabled={loadingBills || queueing || !search.trim()}
+                  onClick={() => setAppliedSearch(search.trim())}
+                >
+                  Search
+                </Button>
+              </div>
             </Field>
             <Field label="Bill status">
               <SearchableSelect className={INPUT} disabled={loadingBills || queueing} value={billStatus} onChange={(e) => setBillStatus(e.target.value)}>
@@ -4227,7 +4245,7 @@ export function BillNotifications() {
           </div>
           <div className="mt-3 flex items-center justify-between text-sm text-slate-500">
             <span>Showing {filteredBills.length} of {selected.length} eligible bills</span>
-            {(search || billStatus || notificationStatus !== "NOT_SENT") && <button type="button" className="font-semibold text-aqua-700 hover:text-aqua-600" onClick={() => { setSearch(""); setBillStatus(""); setNotificationStatus("NOT_SENT"); }}>Reset filters</button>}
+            {(search || appliedSearch || billStatus || notificationStatus !== "NOT_SENT") && <button type="button" className="font-semibold text-aqua-700 hover:text-aqua-600" onClick={() => { setSearch(""); setAppliedSearch(""); setBillStatus(""); setNotificationStatus("NOT_SENT"); }}>Reset filters</button>}
           </div>
           <div className="relative mt-4 min-h-[260px] overflow-x-auto">
             {loadingBills && (
