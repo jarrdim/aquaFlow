@@ -416,7 +416,10 @@ const actionSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("RECORD_PAYMENT"),
     amount: z.coerce.number().positive(),
-    reference: z.string().trim().min(2).max(120),
+    reference: z.string().trim().min(2).max(120).regex(
+      /^[A-Za-z0-9](?:[A-Za-z0-9 ./_-]*[A-Za-z0-9])?$/,
+      "Payment reference must start and end with a letter or number",
+    ),
     paymentMethod: z.enum(["CASH", "BANK"]),
   }),
   z.object({ action: z.enum(["APPROVE", "REJECT", "MARK_INSTALLATION_ORDERED", "MARK_INSTALLATION_COMPLETED", "ACTIVATE"]), notes: z.string().trim().min(2).max(2000) }),

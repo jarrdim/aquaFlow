@@ -1389,6 +1389,10 @@ export function ConnectionProfile() {
     Number(application.quotationTotal) - Number(application.amountPaid);
   const status = application.status;
   const paymentMethod = form.paymentMethod || "MPESA_STK";
+  const manualPaymentReference = String(form.reference ?? "").trim();
+  const manualPaymentReferenceValid =
+    manualPaymentReference.length >= 2 &&
+    /^[A-Za-z0-9](?:[A-Za-z0-9 ./_-]*[A-Za-z0-9])?$/.test(manualPaymentReference);
   const staleStkRequest = stkRequestIsStale(stkRequest);
   const gpsPoints = applicationGpsPoints(application);
   const primaryGps = gpsPoints[0];
@@ -1912,13 +1916,19 @@ export function ConnectionProfile() {
                       <input
                         className={input}
                         value={form.reference || ""}
+                        maxLength={120}
                         onChange={(e) => set("reference", e.target.value)}
                         placeholder={paymentMethod === "BANK" ? "Bank transaction or deposit slip number" : "Cash receipt or register number"}
                       />
+                      {manualPaymentReference && !manualPaymentReferenceValid && (
+                        <p className="mt-1.5 text-xs font-semibold text-red-600">
+                          Enter a valid reference beginning and ending with a letter or number.
+                        </p>
+                      )}
                     </Field>
                     <button
                       className={`${primary} w-full`}
-                      disabled={saving || Number(form.amount || 0) <= 0 || !form.reference?.trim()}
+                      disabled={saving || Number(form.amount || 0) <= 0 || !manualPaymentReferenceValid}
                       onClick={() =>
                         void action(
                           {

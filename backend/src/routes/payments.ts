@@ -1353,7 +1353,10 @@ paymentsRouter.post("/record", staff, async (req, res, next) => {
     z.object({
       accountId: id,
       channelId: id,
-      transactionReference: z.string().trim().min(2).max(100),
+      transactionReference: z.string().trim().min(2).max(100).regex(
+        /^[A-Za-z0-9](?:[A-Za-z0-9 ./_-]*[A-Za-z0-9])?$/,
+        "Payment reference must start and end with a letter or number",
+      ),
       amount,
       paymentDate: z.string().min(10),
       payerName: z.string().max(200).optional(),

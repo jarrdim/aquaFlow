@@ -460,6 +460,11 @@ export function PaymentChannels() {
   }, []);
   async function submit(e: FormEvent) {
     e.preventDefault();
+    const reference = String(form.transactionReference ?? "").trim();
+    if (reference.length < 2 || !/^[A-Za-z0-9](?:[A-Za-z0-9 ./_-]*[A-Za-z0-9])?$/.test(reference)) {
+      setError("Payment reference must start and end with a letter or number.");
+      return;
+    }
     setSaving(true);
     setError("");
     setMessage("");
@@ -625,6 +630,10 @@ export function RecordPayment() {
   const account = accounts.find((a) => String(a.accountId) === form.accountId);
   const selectedChannel = channels.find((channel) => String(channel.channelId) === form.channelId);
   const amount = Number(form.amount || 0);
+  const transactionReference = String(form.transactionReference ?? "").trim();
+  const transactionReferenceValid =
+    transactionReference.length >= 2 &&
+    /^[A-Za-z0-9](?:[A-Za-z0-9 ./_-]*[A-Za-z0-9])?$/.test(transactionReference);
   const projectedBalance = account ? Number(account.currentBalance ?? 0) - amount : 0;
   const paymentInput = `${INPUT} rounded-xl border-slate-200 px-3.5 py-2.5 transition duration-200 hover:border-slate-300 focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10`;
   async function submit(e: FormEvent) {
@@ -698,10 +707,16 @@ export function RecordPayment() {
               required
               className={paymentInput}
               value={form.transactionReference}
+              maxLength={100}
               onChange={(e) =>
                 setForm({ ...form, transactionReference: e.target.value })
               }
             />
+            {transactionReference && !transactionReferenceValid && (
+              <p className="mt-1.5 text-xs font-semibold text-red-600">
+                Enter a valid reference beginning and ending with a letter or number.
+              </p>
+            )}
           </Field>
           <Field label="Amount paid (KSh)">
             <div className="relative"><span className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-sm font-bold text-slate-400">KSh</span><input
@@ -760,7 +775,7 @@ export function RecordPayment() {
             />
             <span><span className="block text-sm font-bold text-slate-700">Allocate automatically</span><span className="mt-0.5 block text-xs leading-5 text-slate-500">Apply this payment to the customer’s oldest outstanding bills first.</span></span>
           </label>
-          <Button disabled={saving} className="md:col-span-2 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3 shadow-sm transition hover:-translate-y-0.5 hover:bg-emerald-700 hover:shadow-md disabled:hover:translate-y-0">
+          <Button disabled={saving || !transactionReferenceValid} className="md:col-span-2 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3 shadow-sm transition hover:-translate-y-0.5 hover:bg-emerald-700 hover:shadow-md disabled:hover:translate-y-0">
             {saving ? <><span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />Saving payment…</> : <><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="M5 12l4 4L19 6" /></svg>Save payment and generate receipt</>}
           </Button>
         </div>
