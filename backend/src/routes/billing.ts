@@ -202,6 +202,75 @@ function hasValidBillAmounts(calculation: ReturnType<typeof calculateTariff>) {
   ].every((value) => Number.isFinite(value) && value >= 0);
 }
 
+const correctableBillStatuses = ["APPROVED", "POSTED", "PARTIALLY_PAID", "PAID"];
+
+function correctedBillImpact(bill: any, consumptionUnits: number) {
+  if (!Number.isFinite(consumptionUnits) || consumptionUnits < 0) {
+    throw Object.assign(new Error("The correction would produce negative billed consumption"), { status: 409 });
+  }
+  const calculation = calculateTariff(bill.tariff, consumptionUnits);
+  const totalCurrentCharges = round(calculation.totalCurrentCharges + Number(bill.adjustmentAmount ?? 0));
+  const adjustmentAmount = round(totalCurrentCharges - Number(bill.totalCurrentCharges));
+  const totalAmountDue = round(Math.max(0, Number(bill.totalAmountDue) + adjustmentAmount));
+  const paidAmount = Number(bill.paidAmount ?? 0);
+  const status = bill.status === "APPROVED"
+    ? "APPROVED"
+    : paidAmount >= totalAmountDue
+      ? "PAID"
+      : paidAmount > 0
+        ? "PARTIALLY_PAID"
+        : "POSTED";
+  return { bill, consumptionUnits: round(consumptionUnits, 3), calculation, totalCurrentCharges, totalAmountDue, adjustmentAmount, status };
+}
+
+async function prepareReadingCorrection(client: any, billId: bigint, correctedCurrentReading: number) {
+  const bill = await client.bill.findUnique({ where: { billId }, include: billInclude });
+  if (!bill) throw Object.assign(new Error("Bill not found"), { status: 404 });
+  if (!bill.reading) throw Object.assign(new Error("This bill has no meter reading to correct"), { status: 409 });
+  if (!correctableBillStatuses.includes(bill.status)) throw Object.assign(new Error("Only approved or posted bills can be corrected"), { status: 409 });
+  const previousReading = Number(bill.reading.previousReading);
+  const originalCurrentReading = Number(bill.reading.currentReading);
+  if (correctedCurrentReading < previousReading) {
+    throw Object.assign(new Error(`Corrected reading cannot be below the previous reading of ${previousReading}`), { status: 400 });
+  }
+  if (correctedCurrentReading === originalCurrentReading) {
+    throw Object.assign(new Error("Enter a corrected reading that differs from the original reading"), { status: 400 });
+  }
+  const readingDelta = round(correctedCurrentReading - originalCurrentReading, 3);
+  const targetImpact = correctedBillImpact(bill, Number(bill.consumptionUnits) + readingDelta);
+  const nextReading = await client.meterReading.findFirst({
+    where: {
+      meterId: bill.reading.meterId,
+      accountId: bill.accountId,
+      approvalStatus: "APPROVED",
+      previousReading: bill.reading.currentReading,
+      OR: [
+        { readingDate: { gt: bill.reading.readingDate } },
+        { readingDate: bill.reading.readingDate, readingId: { gt: bill.reading.readingId } },
+      ],
+    },
+    include: {
+      bills: {
+        where: { status: { in: correctableBillStatuses } },
+        include: { tariff: { include: { bands: { orderBy: { bandSequence: "asc" } } } }, items: true },
+      },
+    },
+    orderBy: [{ readingDate: "asc" }, { readingId: "asc" }],
+  });
+  const nextBill = nextReading?.bills?.[0];
+  const nextImpact = nextBill ? correctedBillImpact(nextBill, Number(nextBill.consumptionUnits) - readingDelta) : null;
+  const impacts = [targetImpact, ...(nextImpact ? [nextImpact] : [])];
+  return {
+    bill,
+    nextReading,
+    impacts,
+    readingDelta,
+    originalCurrentReading,
+    correctedCurrentReading,
+    adjustmentAmount: round(impacts.reduce((sum, impact) => sum + impact.adjustmentAmount, 0)),
+  };
+}
+
 function isSkippableBillRowError(error: any) {
   const text = `${error?.message ?? ""} ${error?.meta?.message ?? ""}`;
   return error?.code === "P2002" || text.includes("23514") || text.includes("ck_bill_amounts");
@@ -552,6 +621,170 @@ billingRouter.get("/bills/:id", async (req, res, next) => {
     const bill = await prisma.bill.findUnique({ where: { billId }, include: billInclude });
     if (!bill) return res.status(404).json({ error: "Bill not found" });
     res.json({ ...bill, customerName: customerName((bill as any).account.customer) });
+  } catch (error) { next(error); }
+});
+
+billingRouter.get("/reading-corrections/candidates", requireRole("SYSTEM_ADMIN"), async (req, res, next) => {
+  try {
+    const search = String(req.query.search ?? "").trim();
+    const bills = await prisma.bill.findMany({
+      where: {
+        readingId: { not: null },
+        status: { in: correctableBillStatuses },
+        ...(search ? { OR: [
+          { billNumber: { contains: search, mode: "insensitive" } },
+          { account: { accountNumber: { contains: search, mode: "insensitive" } } },
+          { account: { customer: { firstName: { contains: search, mode: "insensitive" } } } },
+          { account: { customer: { lastName: { contains: search, mode: "insensitive" } } } },
+          { reading: { meter: { meterNumber: { contains: search, mode: "insensitive" } } } },
+        ] } : {}),
+      },
+      include: billInclude,
+      orderBy: [{ issueDate: "desc" }, { billId: "desc" }],
+      take: 100,
+    });
+    res.json(bills.map((bill: any) => ({ ...bill, customerName: customerName(bill.account.customer) })));
+  } catch (error) { next(error); }
+});
+
+billingRouter.post("/reading-corrections/preview", requireRole("SYSTEM_ADMIN"), async (req, res, next) => {
+  const data = parse(z.object({ billId: id, correctedCurrentReading: z.coerce.number().min(0) }), req.body, res);
+  if (!data) return;
+  try {
+    const preview = await prepareReadingCorrection(prisma, data.billId, data.correctedCurrentReading);
+    res.json({
+      bill: preview.bill,
+      originalCurrentReading: preview.originalCurrentReading,
+      correctedCurrentReading: preview.correctedCurrentReading,
+      readingDelta: preview.readingDelta,
+      adjustmentAmount: preview.adjustmentAmount,
+      affectsNextReading: Boolean(preview.nextReading),
+      impactedBills: preview.impacts.map((impact) => ({
+        billId: impact.bill.billId,
+        billNumber: impact.bill.billNumber,
+        billingCycleId: impact.bill.billingCycleId,
+        previousConsumptionUnits: Number(impact.bill.consumptionUnits),
+        correctedConsumptionUnits: impact.consumptionUnits,
+        previousCurrentCharges: Number(impact.bill.totalCurrentCharges),
+        correctedCurrentCharges: impact.totalCurrentCharges,
+        adjustmentAmount: impact.adjustmentAmount,
+      })),
+    });
+  } catch (error: any) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    next(error);
+  }
+});
+
+billingRouter.post("/reading-corrections", requireRole("SYSTEM_ADMIN"), async (req, res, next) => {
+  const data = parse(z.object({
+    billId: id,
+    correctedCurrentReading: z.coerce.number().min(0),
+    reason: z.string().trim().min(3).max(2000),
+  }), req.body, res);
+  if (!data) return;
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      const correction = await prepareReadingCorrection(tx, data.billId, data.correctedCurrentReading);
+      const correctedAt = new Date();
+      const beforeSnapshot = {
+        readings: [
+          { readingId: correction.bill.reading.readingId.toString(), previousReading: Number(correction.bill.reading.previousReading), currentReading: correction.originalCurrentReading },
+          ...(correction.nextReading ? [{ readingId: correction.nextReading.readingId.toString(), previousReading: Number(correction.nextReading.previousReading), currentReading: Number(correction.nextReading.currentReading) }] : []),
+        ],
+        bills: correction.impacts.map((impact) => ({ billId: impact.bill.billId.toString(), billNumber: impact.bill.billNumber, consumptionUnits: Number(impact.bill.consumptionUnits), totalCurrentCharges: Number(impact.bill.totalCurrentCharges), totalAmountDue: Number(impact.bill.totalAmountDue), status: impact.bill.status })),
+      };
+      await tx.meterReading.update({
+        where: { readingId: correction.bill.reading.readingId },
+        data: { currentReading: data.correctedCurrentReading, updatedAt: correctedAt },
+      });
+      if (correction.nextReading) {
+        await tx.meterReading.update({
+          where: { readingId: correction.nextReading.readingId },
+          data: { previousReading: data.correctedCurrentReading, updatedAt: correctedAt },
+        });
+      }
+      for (const impact of correction.impacts) {
+        await tx.billItem.deleteMany({ where: { billId: impact.bill.billId } });
+        await tx.bill.update({
+          where: { billId: impact.bill.billId },
+          data: {
+            consumptionUnits: impact.consumptionUnits,
+            consumptionCharge: impact.calculation.consumptionCharge,
+            minimumChargeAdjustment: impact.calculation.minimumChargeAdjustment,
+            standingCharge: impact.calculation.standingCharge,
+            meterRent: impact.calculation.meterRent,
+            fixedCharges: impact.calculation.fixedCharges,
+            totalCurrentCharges: impact.totalCurrentCharges,
+            totalAmountDue: impact.totalAmountDue,
+            status: impact.status,
+            notificationStatus: "NOT_SENT",
+            revisionNumber: { increment: 1 },
+            correctedAt,
+            updatedAt: correctedAt,
+            items: { create: impact.calculation.items },
+          },
+        });
+        await tx.billingEvent.create({ data: {
+          billingCycleId: impact.bill.billingCycleId,
+          billId: impact.bill.billId,
+          eventType: "READING_CORRECTED",
+          previousStatus: impact.bill.status,
+          newStatus: impact.status,
+          details: data.reason,
+          performedBy: uid(req),
+          createdAt: correctedAt,
+          metadata: { adjustmentAmount: impact.adjustmentAmount, correctedConsumptionUnits: impact.consumptionUnits },
+        } });
+      }
+      const postedAdjustment = correction.impacts
+        .filter((impact) => ["POSTED", "PARTIALLY_PAID", "PAID"].includes(impact.bill.status))
+        .reduce((sum, impact) => sum + impact.adjustmentAmount, 0);
+      if (postedAdjustment) {
+        await tx.customerAccount.update({
+          where: { accountId: correction.bill.accountId },
+          data: { currentBalance: { increment: round(postedAdjustment) }, updatedAt: correctedAt },
+        });
+      }
+      const afterSnapshot = {
+        readings: [
+          { readingId: correction.bill.reading.readingId.toString(), previousReading: Number(correction.bill.reading.previousReading), currentReading: data.correctedCurrentReading },
+          ...(correction.nextReading ? [{ readingId: correction.nextReading.readingId.toString(), previousReading: data.correctedCurrentReading, currentReading: Number(correction.nextReading.currentReading) }] : []),
+        ],
+        bills: correction.impacts.map((impact) => ({ billId: impact.bill.billId.toString(), billNumber: impact.bill.billNumber, consumptionUnits: impact.consumptionUnits, totalCurrentCharges: impact.totalCurrentCharges, totalAmountDue: impact.totalAmountDue, status: impact.status })),
+      };
+      const audit = await tx.readingCorrection.create({ data: {
+        readingId: correction.bill.reading.readingId,
+        billId: correction.bill.billId,
+        originalCurrentReading: correction.originalCurrentReading,
+        correctedCurrentReading: data.correctedCurrentReading,
+        adjustmentAmount: correction.adjustmentAmount,
+        reason: data.reason,
+        beforeSnapshot,
+        afterSnapshot,
+        correctedBy: uid(req)!,
+        correctedAt,
+      } });
+      return {
+        audit,
+        adjustmentAmount: correction.adjustmentAmount,
+        impactedBills: correction.impacts.map((impact) => ({ billId: impact.bill.billId, billingCycleId: impact.bill.billingCycleId, billNumber: impact.bill.billNumber })),
+      };
+    }, { maxWait: 10_000, timeout: 30_000 });
+    res.status(201).json(result);
+  } catch (error: any) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    next(error);
+  }
+});
+
+billingRouter.get("/reading-corrections", requireRole("SYSTEM_ADMIN"), async (_req, res, next) => {
+  try {
+    res.json(await prisma.readingCorrection.findMany({
+      include: { bill: { include: { account: { include: { customer: true } } } }, reading: { include: { meter: true } }, corrector: true },
+      orderBy: { correctedAt: "desc" },
+      take: 500,
+    }));
   } catch (error) { next(error); }
 });
 

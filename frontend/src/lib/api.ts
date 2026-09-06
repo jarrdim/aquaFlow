@@ -594,6 +594,10 @@ export const api = {
     return request(`/billing/bills${query ? `?${query}` : ""}`);
   },
   getBill: (id: string) => request(`/billing/bills/${id}`),
+  listReadingCorrectionCandidates: (search = "") => request(`/billing/reading-corrections/candidates${search ? `?search=${encodeURIComponent(search)}` : ""}`),
+  previewReadingCorrection: (data: Record<string, unknown>) => request("/billing/reading-corrections/preview", { method: "POST", body: JSON.stringify(data) }),
+  correctReading: (data: Record<string, unknown>) => request("/billing/reading-corrections", { method: "POST", body: JSON.stringify(data) }),
+  listReadingCorrections: () => request("/billing/reading-corrections"),
   decideBills: (
     billIds: string[],
     decision: "APPROVE" | "REJECT" | "RETURN",

@@ -85,6 +85,7 @@ import {
   BillNotifications,
   BillingPeriods,
   BillingPeriodRecords,
+  ReadingCorrections,
   BillingSecurityAlerts,
   CustomerStatements,
   InvoiceRegister,
@@ -195,6 +196,12 @@ class PageErrorBoundary extends Component<
 
 function Protected({ children }: { children: React.ReactNode }) {
   if (!getToken()) return <Navigate to="/login" replace />;
+  return <>{children}</>;
+}
+
+function SystemAdminOnly({ children }: { children: React.ReactNode }) {
+  const roles = getSessionUser()?.roles ?? [];
+  if (!roles.includes("SYSTEM_ADMIN")) return <Navigate to="/billing" replace />;
   return <>{children}</>;
 }
 
@@ -372,6 +379,7 @@ const BILLING_MENU = [
   ["Individual Billing", "/billing/individual"],
   ["Bill Approval", "/billing/approvals"],
   ["Invoices", "/billing/invoices"],
+  ["Reading Corrections", "/billing/reading-corrections"],
   ["Send Bills", "/billing/notifications"],
   ["Customer Statements", "/billing/statements"],
   ["Bill Adjustments", "/billing/adjustments"],
@@ -385,6 +393,7 @@ const BILLING_MENU = [
 
 const NEW_SIDEBAR_ROUTES = new Set([
   "/billing/individual",
+  "/billing/reading-corrections",
   "/billing/account-adjustments",
   "/billing/account-adjustments/approvals",
   "/meters/direct-replacement",
@@ -982,7 +991,9 @@ function Shell({ children }: { children: React.ReactNode }) {
                 )}
                 {!sidebarCollapsed && label === "Billing" && active && (
                   <div className="ml-7 mt-1 space-y-0.5 border-l border-white/10 pl-2">
-                    {BILLING_MENU.map(([itemLabel, itemPath]) => {
+                    {BILLING_MENU.filter(([, itemPath]) =>
+                      itemPath !== "/billing/reading-corrections" || sessionUser?.roles?.includes("SYSTEM_ADMIN"),
+                    ).map(([itemLabel, itemPath]) => {
                       const itemActive =
                         itemPath === "/billing"
                           ? location.pathname === itemPath
@@ -1985,6 +1996,18 @@ export default function App() {
             <Shell>
               <CollectionReport />
             </Shell>
+          </Protected>
+        }
+      />
+      <Route
+        path="/billing/reading-corrections"
+        element={
+          <Protected>
+            <SystemAdminOnly>
+              <Shell>
+                <ReadingCorrections />
+              </Shell>
+            </SystemAdminOnly>
           </Protected>
         }
       />

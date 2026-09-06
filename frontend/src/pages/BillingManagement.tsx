@@ -1594,6 +1594,137 @@ export function BillingPeriodRecords() {
   );
 }
 
+export function ReadingCorrections() {
+  const [search, setSearch] = useState("");
+  const [candidates, setCandidates] = useState<Row[]>([]);
+  const [selected, setSelected] = useState<Row | null>(null);
+  const [correctedCurrentReading, setCorrectedCurrentReading] = useState("");
+  const [reason, setReason] = useState("");
+  const [sendCorrectedBill, setSendCorrectedBill] = useState(true);
+  const [preview, setPreview] = useState<Row | null>(null);
+  const [history, setHistory] = useState<Row[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const loadHistory = () => api.listReadingCorrections().then(setHistory);
+  useEffect(() => {
+    let active = true;
+    const timer = window.setTimeout(() => {
+      setLoading(true);
+      api.listReadingCorrectionCandidates(search)
+        .then((rows) => active && setCandidates(rows))
+        .catch((e) => active && setError(e.message))
+        .finally(() => active && setLoading(false));
+    }, 250);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [search]);
+  useEffect(() => { loadHistory().catch((e) => setError(e.message)); }, []);
+  function chooseBill(bill: Row) {
+    setSelected(bill);
+    setCorrectedCurrentReading(String(Number(bill.reading?.currentReading ?? 0)));
+    setReason("");
+    setPreview(null);
+    setMessage("");
+    setError("");
+  }
+  async function previewCorrection() {
+    if (!selected) return;
+    setWorking(true);
+    setError("");
+    try {
+      setPreview(await api.previewReadingCorrection({ billId: selected.billId, correctedCurrentReading }));
+    } catch (e: any) { setError(e.message); }
+    finally { setWorking(false); }
+  }
+  async function applyCorrection() {
+    if (!selected || !preview || reason.trim().length < 3) return setError("Enter a correction reason of at least 3 characters.");
+    const confirmation = await Swal.fire({
+      icon: "warning",
+      title: "Apply reading correction?",
+      text: `This will revise ${preview.impactedBills?.length ?? 1} bill(s) and change the account by ${money(preview.adjustmentAmount)}.`,
+      showCancelButton: true,
+      confirmButtonText: "Correct reading",
+      confirmButtonColor: "#047857",
+    });
+    if (!confirmation.isConfirmed) return;
+    setWorking(true);
+    setError("");
+    try {
+      const result = await api.correctReading({ billId: selected.billId, correctedCurrentReading, reason });
+      let notificationWarning = "";
+      if (sendCorrectedBill) {
+        const byCycle = new Map<string, string[]>();
+        for (const bill of result.impactedBills ?? []) {
+          const cycleId = String(bill.billingCycleId);
+          byCycle.set(cycleId, [...(byCycle.get(cycleId) ?? []), String(bill.billId)]);
+        }
+        const notifications = await Promise.allSettled(Array.from(byCycle, ([billingCycleId, billIds]) =>
+          api.sendBillNotifications({ billingCycleId, billIds, channels: ["SMS"], resend: true }),
+        ));
+        if (notifications.some((item) => item.status === "rejected")) notificationWarning = " The correction was saved, but one or more corrected bill notifications could not be queued.";
+      }
+      setMessage(`Reading corrected successfully. Account adjustment: ${money(result.adjustmentAmount)}.${notificationWarning}`);
+      setSelected(null);
+      setPreview(null);
+      setCorrectedCurrentReading("");
+      setReason("");
+      const [candidateRows] = await Promise.all([api.listReadingCorrectionCandidates(search), loadHistory()]);
+      setCandidates(candidateRows);
+    } catch (e: any) { setError(e.message); }
+    finally { setWorking(false); }
+  }
+  return (
+    <Page title="Reading corrections" subtitle="Correct an approved or posted billed reading in one audited transaction">
+      {error && <Notice>{error}</Notice>}
+      {message && <Notice tone="green">{message}</Notice>}
+      <div className="grid gap-4 xl:grid-cols-[minmax(360px,0.8fr)_minmax(0,1.2fr)]">
+        <Card title="Select billed reading">
+          <Field label="Search bill, account, customer or meter">
+            <input className={INPUT} value={search} placeholder="Start typing to filter" onChange={(event) => setSearch(event.target.value)} />
+          </Field>
+          <div className="mt-4 max-h-[520px] overflow-y-auto rounded-xl border border-slate-200">
+            {loading ? <Spinner /> : candidates.map((bill) => (
+              <button key={bill.billId} type="button" onClick={() => chooseBill(bill)} className={`block w-full border-b border-slate-100 px-4 py-3 text-left transition hover:bg-sky-50 ${selected?.billId === bill.billId ? "bg-sky-50 ring-1 ring-inset ring-sky-300" : ""}`}>
+                <div className="flex items-center justify-between gap-3"><strong className="text-slate-800">{bill.billNumber}</strong><Badge value={bill.status} /></div>
+                <div className="mt-1 text-sm text-slate-600">{bill.customerName} · {bill.account?.accountNumber}</div>
+                <div className="mt-1 text-xs text-slate-400">Meter {bill.reading?.meter?.meterNumber} · {Number(bill.reading?.previousReading).toLocaleString()} → {Number(bill.reading?.currentReading).toLocaleString()}</div>
+              </button>
+            ))}
+            {!loading && !candidates.length && <div className="p-8 text-center text-sm text-slate-400">No correctable billed readings found.</div>}
+          </div>
+        </Card>
+        <Card title="Correct reading">
+          {!selected ? <div className="grid min-h-[300px] place-items-center text-slate-400">Select a billed reading to continue.</div> : <div className="space-y-4">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div className="rounded-xl bg-slate-50 p-4"><div className="text-xs font-bold uppercase text-slate-400">Previous</div><div className="mt-1 text-xl font-extrabold text-slate-900">{Number(selected.reading.previousReading).toLocaleString()}</div></div>
+              <div className="rounded-xl bg-red-50 p-4"><div className="text-xs font-bold uppercase text-red-500">Original current</div><div className="mt-1 text-xl font-extrabold text-red-700">{Number(selected.reading.currentReading).toLocaleString()}</div></div>
+              <div className="rounded-xl bg-sky-50 p-4"><div className="text-xs font-bold uppercase text-sky-600">Original charge</div><div className="mt-1 text-xl font-extrabold text-sky-800">{money(selected.totalCurrentCharges)}</div></div>
+            </div>
+            <Field label="Corrected current reading" required><input type="number" min="0" step="0.001" className={INPUT} value={correctedCurrentReading} onChange={(event) => { setCorrectedCurrentReading(event.target.value); setPreview(null); }} /></Field>
+            <Field label="Correction reason" required><textarea rows={3} className={INPUT} value={reason} placeholder="Why was the original reading incorrect?" onChange={(event) => setReason(event.target.value)} /></Field>
+            <label className="flex items-center gap-2 text-sm font-semibold text-slate-700"><input type="checkbox" checked={sendCorrectedBill} onChange={(event) => setSendCorrectedBill(event.target.checked)} /> Queue corrected bill SMS after saving</label>
+            <Button tone="slate" disabled={working || !correctedCurrentReading} onClick={previewCorrection}>{working ? "Calculating…" : "Preview correction"}</Button>
+            {preview && <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+              <div className="font-bold text-amber-900">Correction impact</div>
+              <div className="mt-3 grid gap-3 sm:grid-cols-3"><div><div className="text-xs text-amber-700">Corrected reading</div><strong>{Number(preview.correctedCurrentReading).toLocaleString()}</strong></div><div><div className="text-xs text-amber-700">Account difference</div><strong>{money(preview.adjustmentAmount)}</strong></div><div><div className="text-xs text-amber-700">Bills affected</div><strong>{preview.impactedBills?.length ?? 1}</strong></div></div>
+              {preview.affectsNextReading && <p className="mt-3 text-sm text-amber-800">The next reading depends on this value and will be adjusted automatically.</p>}
+              <div className="mt-3 space-y-2">{preview.impactedBills?.map((bill: Row) => <div key={bill.billId} className="flex justify-between gap-4 rounded-lg bg-white/70 px-3 py-2 text-sm"><span>{bill.billNumber}: {Number(bill.previousConsumptionUnits).toLocaleString()} → {Number(bill.correctedConsumptionUnits).toLocaleString()} units</span><strong>{money(bill.previousCurrentCharges)} → {money(bill.correctedCurrentCharges)}</strong></div>)}</div>
+              <Button className="mt-4 w-full" tone="green" disabled={working || reason.trim().length < 3} onClick={applyCorrection}>{working ? "Correcting…" : "Correct reading and revise bill"}</Button>
+            </div>}
+          </div>}
+        </Card>
+      </div>
+      <Card title="Correction history" className="mt-4">
+        <div className="overflow-x-auto"><table className="w-full min-w-[800px]"><thead><tr><th className={TH}>Date</th><th className={TH}>Bill / account</th><th className={TH}>Meter</th><th className={TH}>Reading change</th><th className={TH}>Adjustment</th><th className={TH}>Reason</th><th className={TH}>Admin</th></tr></thead><tbody>
+          {history.map((item) => <tr key={item.correctionId} className="border-t"><td className={TD}>{dateTime(item.correctedAt)}</td><td className={TD}><strong>{item.bill?.billNumber}</strong><div className="text-xs">{item.bill?.account?.accountNumber}</div></td><td className={TD}>{item.reading?.meter?.meterNumber}</td><td className={TD}>{Number(item.originalCurrentReading).toLocaleString()} → {Number(item.correctedCurrentReading).toLocaleString()}</td><td className={`${TD} font-bold`}>{money(item.adjustmentAmount)}</td><td className={TD}>{item.reason}</td><td className={TD}>{person(item.corrector)}</td></tr>)}
+          {!history.length && <tr><td colSpan={7} className="p-10 text-center text-slate-400">No reading corrections have been recorded.</td></tr>}
+        </tbody></table></div>
+      </Card>
+    </Page>
+  );
+}
+
 export function BillGeneration() {
   const [searchParams] = useSearchParams();
   const requestedCycleId = searchParams.get("billingCycleId") ?? "";
@@ -2571,6 +2702,11 @@ export function BillInvoice() {
     >
       {error && <Notice>{error}</Notice>}
       {message && <Notice tone="green">{message}</Notice>}
+      {Number(bill.revisionNumber ?? 0) > 0 && (
+        <Notice tone="blue">
+          Corrected bill · Revision {bill.revisionNumber} · Updated {dateTime(bill.correctedAt)}
+        </Notice>
+      )}
       <Card className="invoice-print-document mx-auto max-w-4xl">
         <div className="border-b pb-4">
           <div className="flex flex-wrap items-start justify-between gap-4">
@@ -2580,8 +2716,9 @@ export function BillInvoice() {
               className="invoice-brand-logo h-auto w-[280px] max-w-[55%] object-contain"
             />
             <div className="text-right">
-              <div className="text-xl font-bold">WATER BILL</div>
+              <div className="text-xl font-bold">{Number(bill.revisionNumber ?? 0) > 0 ? "CORRECTED WATER BILL" : "WATER BILL"}</div>
               <div>{bill.billNumber}</div>
+              {Number(bill.revisionNumber ?? 0) > 0 && <div className="text-sm font-semibold text-sky-700">Revision {bill.revisionNumber}</div>}
               <Badge value={bill.status} />
             </div>
           </div>

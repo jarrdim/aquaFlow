@@ -261,6 +261,7 @@ model User {
   createdReadingCycles           ReadingCycle[]               @relation("ReadingCycleCreator")
   assignedReadingRoutes          RouteAssignment[]            @relation("ReadingRouteAssigner")
   approvedReadings               MeterReading[]               @relation("ReadingApprover")
+  readingCorrections             ReadingCorrection[]          @relation("ReadingCorrectionUser")
   readingEvents                  MeterReadingEvent[]          @relation("ReadingEventUser")
   createdTariffs                 Tariff[]                     @relation("TariffCreator")
   approvedTariffs                Tariff[]                     @relation("TariffApprover")
@@ -727,6 +728,7 @@ model MeterReading {
   evidence     MeterReadingEvidence[]
   events       MeterReadingEvent[]
   bills        Bill[]
+  corrections  ReadingCorrection[]
 
   @@map("meter_readings")
   @@schema("aquaflow")
@@ -957,6 +959,8 @@ model Bill {
   postedAt                DateTime? @map("posted_at")
   notificationStatus      String    @default("NOT_SENT") @map("notification_status")
   exceptionType           String    @default("NONE") @map("exception_type")
+  revisionNumber          Int       @default(0) @map("revision_number")
+  correctedAt             DateTime? @map("corrected_at")
   createdAt               DateTime  @default(now()) @map("created_at")
   updatedAt               DateTime  @default(now()) @map("updated_at")
 
@@ -974,6 +978,7 @@ model Bill {
   generalNotifications Notification[]
   securityAlerts       BillingSecurityAlert[]
   paymentAllocations   PaymentAllocation[]
+  readingCorrections   ReadingCorrection[]
 
   @@unique([accountId, billingCycleId])
   @@map("bills")
@@ -994,6 +999,29 @@ model BillItem {
   tariffBand TariffBand? @relation(fields: [tariffBandId], references: [tariffBandId])
 
   @@map("bill_items")
+  @@schema("aquaflow")
+}
+
+model ReadingCorrection {
+  correctionId            BigInt   @id @default(autoincrement()) @map("correction_id")
+  readingId               BigInt   @map("reading_id")
+  billId                  BigInt   @map("bill_id")
+  originalCurrentReading  Decimal  @map("original_current_reading") @db.Decimal(18, 3)
+  correctedCurrentReading Decimal  @map("corrected_current_reading") @db.Decimal(18, 3)
+  adjustmentAmount        Decimal  @map("adjustment_amount") @db.Decimal(18, 2)
+  reason                  String
+  beforeSnapshot          Json     @map("before_snapshot")
+  afterSnapshot           Json     @map("after_snapshot")
+  correctedBy             BigInt   @map("corrected_by")
+  correctedAt             DateTime @default(now()) @map("corrected_at")
+
+  reading   MeterReading @relation(fields: [readingId], references: [readingId])
+  bill      Bill         @relation(fields: [billId], references: [billId])
+  corrector User         @relation("ReadingCorrectionUser", fields: [correctedBy], references: [userId])
+
+  @@index([readingId, correctedAt])
+  @@index([billId, correctedAt])
+  @@map("reading_corrections")
   @@schema("aquaflow")
 }
 
