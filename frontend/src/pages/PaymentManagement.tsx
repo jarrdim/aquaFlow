@@ -1619,8 +1619,8 @@ export function UnmatchedPayments() {
             <div><div className="font-semibold text-slate-800">Select a transaction to allocate</div><div className="mt-0.5 text-xs text-slate-500">Match unresolved deposits to the correct customer account.</div></div>
             <div className="relative sm:w-72"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></svg><input className={`${allocationInput} pl-10`} placeholder="Search payments" value={search} onChange={(e) => setSearch(e.target.value)} /></div>
           </div>
-          <div className="overflow-hidden rounded-xl border border-slate-200">
-            <table className="w-full table-fixed">
+          <div className="overflow-x-auto rounded-xl border border-slate-200 [scrollbar-gutter:stable]">
+            <table className="w-full min-w-[920px] table-fixed">
               <thead><tr className="bg-slate-50/80"><th className={`${TH} w-[14%]`}>Reference</th><th className={`${TH} w-[15%]`}>Safaricom payer</th><th className={`${TH} w-[29%]`}>Suggested customer</th><th className={`${TH} w-[19%]`}>Payment details</th><th className={`${TH} w-[12%]`}>Amount</th><th className={`${TH} w-[11%]`}>Action</th></tr></thead>
               <tbody>
                 {loading && <tr><td colSpan={6} className="px-4 py-16 text-center"><div className="mx-auto h-9 w-9 animate-spin rounded-full border-4 border-sky-100 border-t-aqua-700" /><div className="mt-3 text-sm font-semibold text-slate-600">Loading unmatched payments…</div><div className="mt-1 text-xs text-slate-400">Checking transactions and customer accounts</div></td></tr>}
