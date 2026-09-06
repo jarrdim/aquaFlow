@@ -446,29 +446,51 @@ function CycleSelect({
   );
 }
 
+function BillingPeriodGroupSelect({
+  groups,
+  value,
+  onChange,
+}: {
+  groups: Row[];
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <SearchableSelect className={INPUT} value={value} onChange={(event) => onChange(event.target.value)}>
+      <option value="">Select billing group</option>
+      {groups.map((group) => (
+        <option key={group.billingPeriodGroupId} value={group.billingPeriodGroupId}>
+          {group.groupName} Â· {pretty(group.status)} Â· {Number(group.totals?.bills ?? 0).toLocaleString()} bills
+          {Number(group.replacementCount ?? 0) ? ` (${Number(group.replacementCount).toLocaleString()} replacements)` : ""}
+        </option>
+      ))}
+    </SearchableSelect>
+  );
+}
+
 export function BillingDashboard() {
-  const [cycles, setCycles] = useState<Row[]>([]);
-  const [cycleId, setCycleId] = useState("");
+  const [groups, setGroups] = useState<Row[]>([]);
+  const [groupId, setGroupId] = useState("");
   const [data, setData] = useState<Row | null>(null);
   const [error, setError] = useState("");
   useEffect(() => {
     api
-      .listBillingCycles()
+      .listBillingPeriodGroups()
       .then((rows) => {
-        setCycles(rows);
-        if (rows[0]) setCycleId(String(rows[0].billingCycleId));
+        setGroups(rows);
+        if (rows[0]) setGroupId(String(rows[0].billingPeriodGroupId));
       })
       .catch((e) => setError(e.message));
   }, []);
   useEffect(() => {
     api
-      .billingDashboard(cycleId)
+      .billingDashboard("", groupId)
       .then((row) => {
         setData(row);
         setError("");
       })
       .catch((e) => setError(e.message));
-  }, [cycleId]);
+  }, [groupId]);
   const generated = Number(data?.billsGenerated ?? 0);
   const approved = Number(data?.approved ?? 0);
   const readyToPost = Number(data?.readyToPost ?? 0);
@@ -494,7 +516,7 @@ export function BillingDashboard() {
       {error && <Notice>{error}</Notice>}
       <Card className="mb-4">
         <Field label="Billing period">
-          <CycleSelect cycles={cycles} value={cycleId} onChange={setCycleId} />
+          <BillingPeriodGroupSelect groups={groups} value={groupId} onChange={setGroupId} />
         </Field>
       </Card>
       {!data ? (
@@ -502,37 +524,37 @@ export function BillingDashboard() {
       ) : (
         <>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <Kpi label="Bills generated" value={generated} to={`/billing/invoices?billingCycleId=${cycleId}`} />
+            <Kpi label="Bills generated" value={generated} to={`/billing/invoices?billingPeriodGroupId=${groupId}`} />
             <Kpi
               label="Pending approval"
               value={data.pending}
               tone="text-amber-600"
-              to={`/billing/approvals?billingCycleId=${cycleId}`}
+              to="/billing/approvals"
             />
             <Kpi
               label="Approved / posted"
               value={approved}
               tone="text-emerald-700"
-              to={`/billing/invoices?billingCycleId=${cycleId}`}
+              to={`/billing/invoices?billingPeriodGroupId=${groupId}`}
             />
             <Kpi
               label="Total current billing"
               value={money(data.totalBilling)}
               tone="text-aqua-700"
-              to={`/billing/invoices?billingCycleId=${cycleId}`}
+              to={`/billing/invoices?billingPeriodGroupId=${groupId}`}
             />
-            <Kpi label="Notifications sent" value={notified} to={`/billing/notifications?billingCycleId=${cycleId}&notificationStatus=SENT`} />
+            <Kpi label="Notifications sent" value={notified} to="/billing/notifications" />
             <Kpi
               label="Eligible readings not billed"
               value={eligibleNotBilled}
               tone="text-amber-600"
-              to={`/billing/generate?billingCycleId=${cycleId}`}
+              to="/billing/generate"
             />
             <Kpi
               label="Eligible bills not notified"
               value={eligibleNotNotified}
               tone="text-orange-600"
-              to={`/billing/notifications?billingCycleId=${cycleId}&notificationStatus=NOT_SENT`}
+              to="/billing/notifications?notificationStatus=NOT_SENT"
             />
             <Kpi
               label="Pending adjustments"
@@ -546,7 +568,7 @@ export function BillingDashboard() {
               tone="text-red-600"
               to="/billing/alerts"
             />
-            <Kpi label="Cancelled bills" value={data.cancelled} to={`/billing/invoices?billingCycleId=${cycleId}&status=CANCELLED`} />
+            <Kpi label="Cancelled bills" value={data.cancelled} to={`/billing/invoices?billingPeriodGroupId=${groupId}&status=CANCELLED`} />
           </div>
           <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
             <BillingStatusChart
@@ -2163,6 +2185,7 @@ export function BillApprovals() {
 
 export function InvoiceRegister() {
   const [searchParams] = useSearchParams();
+  const billingPeriodGroupId = searchParams.get("billingPeriodGroupId") ?? "";
   const [cycles, setCycles] = useState<Row[]>([]);
   const [cycleId, setCycleId] = useState(searchParams.get("billingCycleId") ?? "");
   const [status, setStatus] = useState(searchParams.get("status") ?? "");
@@ -2174,13 +2197,13 @@ export function InvoiceRegister() {
   }, []);
   useEffect(() => {
     api
-      .listBills({ billingCycleId: cycleId, status, search })
+      .listBills({ billingCycleId: cycleId, billingPeriodGroupId, status, search })
       .then((value) => {
         setRows(value);
         setError("");
       })
       .catch((e) => setError(e.message));
-  }, [cycleId, status, search]);
+  }, [cycleId, billingPeriodGroupId, status, search]);
   return (
     <Page
       title="Invoice register"

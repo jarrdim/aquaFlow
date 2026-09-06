@@ -558,10 +558,11 @@ export const api = {
     }),
   listTariffAssignments: () => request("/tariffs/assignments"),
 
-  billingDashboard: (billingCycleId = "") =>
+  billingDashboard: (billingCycleId = "", billingPeriodGroupId = "") =>
     request(
-      `/billing/dashboard${billingCycleId ? `?billingCycleId=${encodeURIComponent(billingCycleId)}` : ""}`,
+      `/billing/dashboard${billingCycleId ? `?billingCycleId=${encodeURIComponent(billingCycleId)}` : billingPeriodGroupId ? `?billingPeriodGroupId=${encodeURIComponent(billingPeriodGroupId)}` : ""}`,
     ),
+  listBillingPeriodGroups: () => request("/billing/period-groups"),
   listBillingCycles: (status = "") =>
     request(
       `/billing/cycles${status ? `?status=${encodeURIComponent(status)}` : ""}`,
