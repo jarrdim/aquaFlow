@@ -563,6 +563,8 @@ export const api = {
       `/billing/dashboard${billingCycleId ? `?billingCycleId=${encodeURIComponent(billingCycleId)}` : billingPeriodGroupId ? `?billingPeriodGroupId=${encodeURIComponent(billingPeriodGroupId)}` : ""}`,
     ),
   listBillingPeriodGroups: () => request("/billing/period-groups"),
+  createBillingPeriodGroup: (data: Record<string, unknown>) =>
+    request("/billing/period-groups", { method: "POST", body: JSON.stringify(data) }),
   listBillingCycles: (status = "") =>
     request(
       `/billing/cycles${status ? `?status=${encodeURIComponent(status)}` : ""}`,

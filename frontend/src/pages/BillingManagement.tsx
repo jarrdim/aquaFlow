@@ -1095,10 +1095,22 @@ export function BillingPeriods() {
   const iso = (value: Date) => value.toISOString().slice(0, 10);
   const [cycles, setCycles] = useState<Row[]>([]);
   const [readingCycles, setReadingCycles] = useState<Row[]>([]);
+  const [periodGroups, setPeriodGroups] = useState<Row[]>([]);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
+  const [groupModalOpen, setGroupModalOpen] = useState(false);
+  const [savingGroup, setSavingGroup] = useState(false);
+  const groupStart = new Date(due.getFullYear(), due.getMonth(), 1);
+  const groupEnd = new Date(due.getFullYear(), due.getMonth() + 1, 0);
+  const [groupForm, setGroupForm] = useState<Row>({
+    groupCode: `BPG-${due.getFullYear()}-${String(due.getMonth() + 1).padStart(2, "0")}`,
+    groupName: `${due.toLocaleString(undefined, { month: "long", year: "numeric" })} Billing`,
+    periodStart: iso(groupStart),
+    periodEnd: iso(groupEnd),
+  });
   const [form, setForm] = useState<Row>({
+    billingPeriodGroupId: "",
     cycleCode: `BC-${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`,
     cycleName: now.toLocaleString(undefined, {
       month: "long",
@@ -1115,10 +1127,19 @@ export function BillingPeriods() {
     remarks: "",
   });
   const load = () =>
-    Promise.all([api.listBillingCycles(), api.listReadingCycles()]).then(
-      ([b, r]) => {
+    Promise.all([api.listBillingCycles(), api.listReadingCycles(), api.listBillingPeriodGroups()]).then(
+      ([b, r, groups]) => {
         setCycles(b);
         setReadingCycles(r);
+        setPeriodGroups(groups);
+        setForm((current: Row) => {
+          if (current.billingPeriodGroupId) return current;
+          const dueDate = String(current.dueDate);
+          const matchingGroup = groups.find((group: Row) =>
+            dueDate >= String(group.periodStart).slice(0, 10) && dueDate <= String(group.periodEnd).slice(0, 10),
+          );
+          return matchingGroup ? { ...current, billingPeriodGroupId: String(matchingGroup.billingPeriodGroupId) } : current;
+        });
         setError("");
       },
     );
@@ -1200,6 +1221,36 @@ export function BillingPeriods() {
       setSaving(false);
     }
   }
+  async function createGroup(e: FormEvent) {
+    e.preventDefault();
+    setSavingGroup(true);
+    setError("");
+    try {
+      const created = await api.createBillingPeriodGroup(groupForm);
+      const groups = await api.listBillingPeriodGroups();
+      setPeriodGroups(groups);
+      setForm((current: Row) => ({ ...current, billingPeriodGroupId: String(created.billingPeriodGroupId) }));
+      setGroupModalOpen(false);
+      setMessage(`Billing period group ${created.groupName} created and selected.`);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setSavingGroup(false);
+    }
+  }
+  function openGroupModal() {
+    const dueDate = new Date(`${form.dueDate}T00:00:00`);
+    const base = Number.isNaN(dueDate.getTime()) ? new Date() : dueDate;
+    const firstDay = new Date(base.getFullYear(), base.getMonth(), 1);
+    const lastDay = new Date(base.getFullYear(), base.getMonth() + 1, 0);
+    setGroupForm({
+      groupCode: `BPG-${base.getFullYear()}-${String(base.getMonth() + 1).padStart(2, "0")}`,
+      groupName: `${base.toLocaleString(undefined, { month: "long", year: "numeric" })} Billing`,
+      periodStart: iso(firstDay),
+      periodEnd: iso(lastDay),
+    });
+    setGroupModalOpen(true);
+  }
   async function status(cycle: Row, next: string) {
     const reason = window.prompt(
       `Reason for changing ${cycle.cycleCode} to ${next.toLowerCase()}:`,
@@ -1232,6 +1283,30 @@ export function BillingPeriods() {
           className="shadow-md shadow-slate-200/50 xl:sticky xl:top-24"
         >
           <form onSubmit={submit} className="space-y-4">
+            <Field label="Billing period group" required>
+              <div className="flex gap-2">
+                <SearchableSelect
+                  required
+                  className={INPUT}
+                  value={form.billingPeriodGroupId}
+                  onChange={(e) => setForm({ ...form, billingPeriodGroupId: e.target.value })}
+                >
+                  <option value="">Select billing period group</option>
+                  {periodGroups.map((group) => (
+                    <option key={group.billingPeriodGroupId} value={group.billingPeriodGroupId}>
+                      {group.groupName} · {group.groupCode}
+                    </option>
+                  ))}
+                </SearchableSelect>
+                <button
+                  type="button"
+                  onClick={openGroupModal}
+                  className="shrink-0 rounded-xl border border-emerald-600 bg-white px-3.5 py-2 text-sm font-bold text-emerald-700 transition hover:bg-emerald-50"
+                >
+                  + New
+                </button>
+              </div>
+            </Field>
             <div className="grid grid-cols-2 gap-3">
               <Field label="Period code" required>
                 <input
@@ -1362,7 +1437,7 @@ export function BillingPeriods() {
               />
             </Field>
             <Button
-              disabled={saving || !form.readingCycleId}
+              disabled={saving || !form.billingPeriodGroupId || !form.readingCycleId}
               className="w-full bg-emerald-600 py-3 hover:bg-emerald-700"
             >
               {saving ? "Creating…" : "Create period"}
@@ -1507,6 +1582,35 @@ export function BillingPeriods() {
           </div>
         </Card>
       </div>
+      {groupModalOpen && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="create-billing-group-title"
+          onMouseDown={(event) => { if (event.target === event.currentTarget && !savingGroup) setGroupModalOpen(false); }}
+        >
+          <div className="w-full max-w-lg overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+              <div><h2 id="create-billing-group-title" className="text-lg font-bold text-slate-900">Create billing period group</h2><p className="mt-0.5 text-sm text-slate-500">Group related billing periods under one billing month.</p></div>
+              <button type="button" disabled={savingGroup} onClick={() => setGroupModalOpen(false)} className="rounded-lg px-2 py-1 text-xl text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label="Close">×</button>
+            </div>
+            <form onSubmit={createGroup} className="space-y-4 p-5">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field label="Group code" required><input required maxLength={40} className={INPUT} value={groupForm.groupCode} onChange={(e) => setGroupForm({ ...groupForm, groupCode: e.target.value })} /></Field>
+                <Field label="Group name" required><input required maxLength={150} className={INPUT} value={groupForm.groupName} onChange={(e) => setGroupForm({ ...groupForm, groupName: e.target.value })} /></Field>
+                <Field label="Start date" required><DateInput required className={INPUT} value={groupForm.periodStart} onChange={(e) => setGroupForm({ ...groupForm, periodStart: e.target.value })} /></Field>
+                <Field label="End date" required><DateInput required className={INPUT} value={groupForm.periodEnd} onChange={(e) => setGroupForm({ ...groupForm, periodEnd: e.target.value })} /></Field>
+              </div>
+              <p className="rounded-xl bg-sky-50 px-3.5 py-3 text-sm text-sky-700">A billing period can join this group when its due date falls between these dates.</p>
+              <div className="flex justify-end gap-2 border-t border-slate-100 pt-4">
+                <Button type="button" tone="slate" disabled={savingGroup} onClick={() => setGroupModalOpen(false)}>Cancel</Button>
+                <Button disabled={savingGroup}>{savingGroup ? "Creating…" : "Create and select"}</Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </Page>
   );
 }

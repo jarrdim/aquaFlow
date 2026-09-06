@@ -20,6 +20,14 @@ export async function ensureBillingPeriodGroup(
   tx: Pick<Prisma.TransactionClient, "billingPeriodGroup">,
   dueDate: Date,
 ) {
+  const existing = await tx.billingPeriodGroup.findFirst({
+    where: {
+      periodStart: { lte: dueDate },
+      periodEnd: { gte: dueDate },
+    },
+    orderBy: [{ periodStart: "desc" }, { billingPeriodGroupId: "asc" }],
+  });
+  if (existing) return existing;
   const identity = billingPeriodGroupIdentity(dueDate);
   return tx.billingPeriodGroup.upsert({
     where: { groupCode: identity.groupCode },

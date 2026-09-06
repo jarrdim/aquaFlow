@@ -432,8 +432,44 @@ billingRouter.get("/period-groups", async (_req, res, next) => {
   } catch (error) { next(error); }
 });
 
+billingRouter.post("/period-groups", requireRole("SYSTEM_ADMIN", "BILLING_OFFICER", "BILLING_SUPERVISOR"), async (req, res, next) => {
+  const data = parse(z.object({
+    groupCode: z.string().trim().min(2).max(40),
+    groupName: z.string().trim().min(3).max(150),
+    periodStart: dayText,
+    periodEnd: dayText,
+  }).superRefine((value, ctx) => {
+    if (value.periodEnd < value.periodStart) ctx.addIssue({ code: "custom", path: ["periodEnd"], message: "Group end date must be on or after its start date" });
+  }), req.body, res);
+  if (!data) return;
+  try {
+    const periodStart = day(data.periodStart);
+    const periodEnd = day(data.periodEnd);
+    const overlapping = await prisma.billingPeriodGroup.findFirst({
+      where: {
+        periodStart: { lte: periodEnd },
+        periodEnd: { gte: periodStart },
+      },
+    });
+    if (overlapping) {
+      return res.status(409).json({ error: `The selected dates overlap ${overlapping.groupName} (${overlapping.groupCode})` });
+    }
+    const group = await prisma.billingPeriodGroup.create({ data: {
+      groupCode: data.groupCode,
+      groupName: data.groupName,
+      periodStart,
+      periodEnd,
+    } });
+    res.status(201).json(group);
+  } catch (error: any) {
+    if (error.code === "P2002") return res.status(409).json({ error: "Billing period group code already exists" });
+    next(error);
+  }
+});
+
 billingRouter.post("/cycles", requireRole("SYSTEM_ADMIN", "BILLING_OFFICER", "BILLING_SUPERVISOR"), async (req, res, next) => {
   const data = parse(z.object({
+    billingPeriodGroupId: optionalId,
     cycleCode: z.string().trim().min(2).max(30),
     cycleName: z.string().trim().min(3).max(150),
     readingCycleId: id,
@@ -457,7 +493,13 @@ billingRouter.post("/cycles", requireRole("SYSTEM_ADMIN", "BILLING_OFFICER", "BI
     if (readingCycle.billingCycleId) return res.status(409).json({ error: "This reading cycle is already linked to a billing period" });
     const created = await prisma.$transaction(async (tx) => {
       const dueDate = day(data.dueDate);
-      const group = await ensureBillingPeriodGroup(tx, dueDate);
+      const group = data.billingPeriodGroupId
+        ? await tx.billingPeriodGroup.findUnique({ where: { billingPeriodGroupId: BigInt(String(data.billingPeriodGroupId)) } })
+        : await ensureBillingPeriodGroup(tx, dueDate);
+      if (!group) throw Object.assign(new Error("Selected billing period group was not found"), { status: 404 });
+      if (dueDate < group.periodStart || dueDate > group.periodEnd) {
+        throw Object.assign(new Error("The billing period due date must fall within the selected billing period group"), { status: 400 });
+      }
       const cycle = await tx.billingCycle.create({ data: {
         billingPeriodGroupId: group.billingPeriodGroupId, cycleType: billingCycleType(data.cycleCode),
         cycleCode: data.cycleCode, cycleName: data.cycleName, periodStart: day(data.periodStart), periodEnd: day(data.periodEnd), dueDate,
@@ -470,6 +512,7 @@ billingRouter.post("/cycles", requireRole("SYSTEM_ADMIN", "BILLING_OFFICER", "BI
     });
     res.status(201).json(created);
   } catch (error: any) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
     if (error.code === "P2002") return res.status(409).json({ error: "Billing period code already exists" });
     next(error);
   }
