@@ -3921,8 +3921,17 @@ export function BillNotifications() {
     api.listBillingCycles()
       .then((rows) => {
         if (!active) return;
-        setCycles(rows);
-        if (!cycleId && rows[0]) setCycleId(String(rows[0].billingCycleId));
+        const customerBillingCycles = rows.filter((cycle: Row) =>
+          cycle.cycleType !== "METER_REPLACEMENT" &&
+          !String(cycle.cycleCode ?? "").toUpperCase().startsWith("MR-"),
+        );
+        setCycles(customerBillingCycles);
+        const requestedCycleIsVisible = customerBillingCycles.some(
+          (cycle: Row) => String(cycle.billingCycleId) === cycleId,
+        );
+        if (!requestedCycleIsVisible) {
+          setCycleId(customerBillingCycles[0] ? String(customerBillingCycles[0].billingCycleId) : "");
+        }
       })
       .catch((e) => active && setError(e.message))
       .finally(() => active && setLoadingCycles(false));
