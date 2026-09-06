@@ -541,7 +541,7 @@ export function BillingDashboard() {
               label="Total current billing"
               value={money(data.totalBilling)}
               tone="text-aqua-700"
-              to={`/billing/invoices?billingPeriodGroupId=${groupId}`}
+              to={`/billing/periods?view=register&billingPeriodGroupId=${groupId}`}
             />
             <Kpi label="Notifications sent" value={notified} to="/billing/notifications" />
             <Kpi
@@ -1084,6 +1084,9 @@ export function IndividualBillingWorkspace() {
 }
 
 export function BillingPeriods() {
+  const [searchParams] = useSearchParams();
+  const registerOnly = searchParams.get("view") === "register";
+  const selectedGroupId = searchParams.get("billingPeriodGroupId") ?? "";
   const now = new Date();
   const start = new Date(now.getFullYear(), now.getMonth(), 1);
   const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
@@ -1122,10 +1125,16 @@ export function BillingPeriods() {
   useEffect(() => {
     load().catch((e) => setError(e.message));
   }, []);
+  const visibleCycles = useMemo(
+    () => selectedGroupId
+      ? cycles.filter((cycle) => String(cycle.billingPeriodGroupId) === selectedGroupId)
+      : cycles,
+    [cycles, selectedGroupId],
+  );
   const registerRows = useMemo(() => {
     const rows: Row[] = [];
     const replacementGroups = new Map<string, Row[]>();
-    for (const cycle of cycles) {
+    for (const cycle of visibleCycles) {
       if (cycle.cycleType !== "METER_REPLACEMENT") {
         rows.push({ ...cycle, registerKey: `cycle-${cycle.billingCycleId}` });
         continue;
@@ -1157,19 +1166,19 @@ export function BillingPeriods() {
       });
     }
     return rows.sort((left, right) => String(right.periodStart).localeCompare(String(left.periodStart)));
-  }, [cycles]);
+  }, [visibleCycles]);
   const registerTotals = useMemo(() => ({
-    periods: cycles.length,
+    periods: visibleCycles.length,
     displayedRows: registerRows.length,
-    readingCycles: cycles.reduce((sum, cycle) => sum + Number(cycle.readingCycles?.length ?? 0), 0),
-    bills: cycles.reduce((sum, cycle) => sum + Number(cycle._count?.bills ?? 0), 0),
-    amount: cycles.reduce((sum, cycle) => sum + Number(cycle.totals?.amount ?? 0), 0),
-    statuses: cycles.reduce((counts: Record<string, number>, cycle) => {
+    readingCycles: visibleCycles.reduce((sum, cycle) => sum + Number(cycle.readingCycles?.length ?? 0), 0),
+    bills: visibleCycles.reduce((sum, cycle) => sum + Number(cycle._count?.bills ?? 0), 0),
+    amount: visibleCycles.reduce((sum, cycle) => sum + Number(cycle.totals?.amount ?? 0), 0),
+    statuses: visibleCycles.reduce((counts: Record<string, number>, cycle) => {
       const value = String(cycle.status);
       counts[value] = (counts[value] ?? 0) + 1;
       return counts;
     }, {}),
-  }), [cycles, registerRows.length]);
+  }), [visibleCycles, registerRows.length]);
   async function submit(e: FormEvent) {
     e.preventDefault();
     setSaving(true);
@@ -1210,13 +1219,15 @@ export function BillingPeriods() {
   return (
     <Page
       title="Billing periods"
-      subtitle="Create, link and control billing periods"
-      actions={<LinkButton to="/billing/generate">Generate bills</LinkButton>}
+      subtitle={registerOnly ? "Review billing periods and their consolidated totals" : "Create, link and control billing periods"}
+      actions={registerOnly
+        ? <LinkButton to="/billing/periods" tone="slate">Manage billing periods</LinkButton>
+        : <LinkButton to="/billing/generate">Generate bills</LinkButton>}
     >
       {error && <Notice>{error}</Notice>}
       {message && <Notice tone="green">{message}</Notice>}
-      <div className="grid gap-5 xl:grid-cols-[430px_1fr] xl:items-start">
-        <Card
+      <div className={registerOnly ? "grid gap-5" : "grid gap-5 xl:grid-cols-[430px_1fr] xl:items-start"}>
+        {!registerOnly && <Card
           title="Create billing period"
           className="shadow-md shadow-slate-200/50 xl:sticky xl:top-24"
         >
@@ -1357,7 +1368,7 @@ export function BillingPeriods() {
               {saving ? "Creating…" : "Create period"}
             </Button>
           </form>
-        </Card>
+        </Card>}
         <Card
           title="Billing period register"
           className="min-w-0 shadow-md shadow-slate-200/50"
@@ -1398,7 +1409,18 @@ export function BillingPeriods() {
                         ? `${c.readingCycles?.length ?? 0} replacement reading cycles`
                         : c.readingCycles?.[0]?.cycleCode ?? "—"}
                     </td>
-                    <td className={TD}><span className="inline-flex rounded-full bg-sky-50 px-2.5 py-1 text-xs font-bold text-sky-700">{c._count?.bills ?? 0}</span></td>
+                    <td className={TD}>
+                      <Link
+                        aria-label={`View ${Number(c._count?.bills ?? 0).toLocaleString()} bills for ${c.cycleName}`}
+                        title="View bills"
+                        className="inline-flex rounded-full bg-sky-50 px-2.5 py-1 text-xs font-bold text-sky-700 ring-1 ring-sky-100 transition hover:bg-sky-600 hover:text-white hover:ring-sky-600 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2"
+                        to={c.cycleType === "METER_REPLACEMENT_GROUP" && c.billingPeriodGroupId
+                          ? `/billing/period-records?billingPeriodGroupId=${c.billingPeriodGroupId}`
+                          : `/billing/period-records?billingCycleId=${c.billingCycleId}`}
+                      >
+                        {Number(c._count?.bills ?? 0).toLocaleString()}
+                      </Link>
+                    </td>
                     <td className={`${TD} font-bold text-slate-900`}>{money(c.totals?.amount)}</td>
                     <td className={TD}>
                       <Badge value={c.status} />
@@ -1408,7 +1430,7 @@ export function BillingPeriods() {
                         {c.cycleType === "METER_REPLACEMENT_GROUP" && c.billingPeriodGroupId && (
                           <Link
                             className="rounded-lg bg-sky-50 px-2.5 py-1.5 text-sm font-bold text-sky-700 transition hover:bg-sky-600 hover:text-white"
-                            to={`/billing/invoices?billingPeriodGroupId=${c.billingPeriodGroupId}`}
+                            to={`/billing/period-records?billingPeriodGroupId=${c.billingPeriodGroupId}`}
                           >
                             View bills
                           </Link>
@@ -1461,7 +1483,18 @@ export function BillingPeriods() {
                     </td>
                     <td className={TD}>All displayed periods</td>
                     <td className={`${TD} font-bold text-slate-700`}>{registerTotals.readingCycles.toLocaleString()}</td>
-                    <td className={TD}><span className="inline-flex rounded-full bg-sky-100 px-2.5 py-1 text-xs font-extrabold text-sky-800">{registerTotals.bills.toLocaleString()}</span></td>
+                    <td className={TD}>
+                      <Link
+                        aria-label={`View all ${registerTotals.bills.toLocaleString()} displayed bills`}
+                        title="View all displayed bills"
+                        className="inline-flex rounded-full bg-sky-100 px-2.5 py-1 text-xs font-extrabold text-sky-800 ring-1 ring-sky-200 transition hover:bg-sky-700 hover:text-white focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2"
+                        to={selectedGroupId
+                          ? `/billing/period-records?billingPeriodGroupId=${selectedGroupId}`
+                          : "/billing/period-records"}
+                      >
+                        {registerTotals.bills.toLocaleString()}
+                      </Link>
+                    </td>
                     <td className={`${TD} text-base font-extrabold text-slate-950`}>{money(registerTotals.amount)}</td>
                     <td className={`${TD} text-xs font-semibold text-slate-600`}>
                       {Object.entries(registerTotals.statuses).map(([value, count]) => `${count} ${pretty(value)}`).join(" · ")}
@@ -1474,6 +1507,89 @@ export function BillingPeriods() {
           </div>
         </Card>
       </div>
+    </Page>
+  );
+}
+
+export function BillingPeriodRecords() {
+  const [searchParams] = useSearchParams();
+  const billingCycleId = searchParams.get("billingCycleId") ?? "";
+  const billingPeriodGroupId = searchParams.get("billingPeriodGroupId") ?? "";
+  const [status, setStatus] = useState("");
+  const [search, setSearch] = useState("");
+  const [rows, setRows] = useState<Row[]>([]);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(1);
+  const pageSize = 50;
+  useEffect(() => {
+    setLoading(true);
+    api.listBills({ billingCycleId, billingPeriodGroupId, status, search, limit: "10000" })
+      .then((records) => {
+        setRows(records);
+        setError("");
+      })
+      .catch((e) => setError(e.message))
+      .finally(() => setLoading(false));
+  }, [billingCycleId, billingPeriodGroupId, status, search]);
+  useEffect(() => setPage(1), [billingCycleId, billingPeriodGroupId, status, search]);
+  const totalCurrentCharges = rows.reduce((sum, row) => sum + Number(row.totalCurrentCharges ?? 0), 0);
+  const totalAmountDue = rows.reduce((sum, row) => sum + Number(row.totalAmountDue ?? 0), 0);
+  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+  const visibleRows = rows.slice((page - 1) * pageSize, page * pageSize);
+  const backQuery = billingPeriodGroupId
+    ? `?view=register&billingPeriodGroupId=${billingPeriodGroupId}`
+    : "?view=register";
+  return (
+    <Page
+      title="Billing period records"
+      subtitle="Records included in the selected billing-period count"
+      actions={<LinkButton to={`/billing/periods${backQuery}`} tone="slate">Back to period register</LinkButton>}
+    >
+      {error && <Notice>{error}</Notice>}
+      <div className="mb-4 grid gap-3 sm:grid-cols-3">
+        <Kpi label="Records" value={rows.length.toLocaleString()} />
+        <Kpi label="Current charges" value={money(totalCurrentCharges)} />
+        <Kpi label="Amount due" value={money(totalAmountDue)} />
+      </div>
+      <Card>
+        <div className="mb-4 grid gap-3 md:grid-cols-2">
+          <Field label="Status">
+            <SearchableSelect className={INPUT} value={status} onChange={(event) => setStatus(event.target.value)}>
+              <option value="">All statuses</option>
+              {["DRAFT", "PENDING_APPROVAL", "APPROVED", "POSTED", "PARTIALLY_PAID", "PAID", "CANCELLED"].map((value) => <option key={value}>{value}</option>)}
+            </SearchableSelect>
+          </Field>
+          <Field label="Search records">
+            <input className={INPUT} value={search} placeholder="Bill, account or customer" onChange={(event) => setSearch(event.target.value)} />
+          </Field>
+        </div>
+        {loading ? <Spinner /> : (
+          <div className="overflow-x-auto rounded-xl border border-slate-200">
+            <table className="w-full min-w-[900px]">
+              <thead><tr className="bg-slate-50/90">
+                <th className={TH}>Record</th><th className={TH}>Customer account</th><th className={TH}>Billing period</th><th className={TH}>Units</th><th className={TH}>Current charge</th><th className={TH}>Amount due</th><th className={TH}>Status</th>
+              </tr></thead>
+              <tbody>
+                {visibleRows.map((record) => <tr key={record.billId} className="border-t border-slate-100 hover:bg-sky-50/30">
+                  <td className={TD}><strong className="text-slate-800">{record.billNumber}</strong><div className="text-xs text-slate-400">Issued {date(record.issueDate)}</div></td>
+                  <td className={TD}><strong className="text-slate-800">{record.account?.accountNumber}</strong><div className="text-xs">{record.customerName}</div></td>
+                  <td className={TD}>{record.billingCycle?.cycleName}<div className="font-mono text-xs text-slate-400">{record.billingCycle?.cycleCode}</div></td>
+                  <td className={`${TD} font-semibold`}>{Number(record.consumptionUnits ?? 0).toLocaleString("en-KE", { maximumFractionDigits: 3 })}</td>
+                  <td className={`${TD} font-semibold text-slate-800`}>{money(record.totalCurrentCharges)}</td>
+                  <td className={`${TD} font-bold text-slate-900`}>{money(record.totalAmountDue)}</td>
+                  <td className={TD}><Badge value={record.status} /></td>
+                </tr>)}
+                {!rows.length && <tr><td colSpan={7} className="p-12 text-center text-slate-400">No billing records match this selection.</td></tr>}
+              </tbody>
+              {!!rows.length && <tfoot><tr className="border-t-2 border-slate-300 bg-slate-50/90">
+                <td className={`${TD} font-extrabold text-slate-900`}>{rows.length.toLocaleString()} records</td><td colSpan={3} className={TD}>Displayed totals</td><td className={`${TD} font-extrabold text-slate-900`}>{money(totalCurrentCharges)}</td><td className={`${TD} font-extrabold text-slate-900`}>{money(totalAmountDue)}</td><td className={TD}>—</td>
+              </tr></tfoot>}
+            </table>
+            <div className="px-4 pb-4"><Pagination page={page} totalPages={totalPages} total={rows.length} pageSize={pageSize} onPageChange={setPage} label="billing records" /></div>
+          </div>
+        )}
+      </Card>
     </Page>
   );
 }

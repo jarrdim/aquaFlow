@@ -84,6 +84,7 @@ import {
   BillingHistory,
   BillNotifications,
   BillingPeriods,
+  BillingPeriodRecords,
   BillingSecurityAlerts,
   CustomerStatements,
   InvoiceRegister,
@@ -1983,6 +1984,16 @@ export default function App() {
           <Protected>
             <Shell>
               <CollectionReport />
+            </Shell>
+          </Protected>
+        }
+      />
+      <Route
+        path="/billing/period-records"
+        element={
+          <Protected>
+            <Shell>
+              <BillingPeriodRecords />
             </Shell>
           </Protected>
         }
