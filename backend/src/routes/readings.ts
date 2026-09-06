@@ -9,6 +9,7 @@ import {
   requestedRoutesAreAllowed,
   resolveReadableAssignments,
 } from "../lib/readingEligibility";
+import { SYSTEM_GENERATED_REPLACEMENT_CYCLE_PREFIXES } from "../lib/readingBilling";
 
 const prisma = new PrismaClient();
 export const readingsRouter = Router();
@@ -209,7 +210,12 @@ readingsRouter.get("/cycles", async (req, res, next) => {
   try {
     const status = String(req.query.status ?? "");
     const cycles = await prisma.readingCycle.findMany({
-      where: status ? { status } : undefined,
+      where: {
+        ...(status ? { status } : {}),
+        NOT: SYSTEM_GENERATED_REPLACEMENT_CYCLE_PREFIXES.map((prefix) => ({
+          cycleCode: { startsWith: prefix },
+        })),
+      },
       include: { creator: true, _count: { select: { readings: true, routeAssignments: true } } },
       orderBy: [{ startDate: "desc" }, { readingCycleId: "desc" }],
     });
