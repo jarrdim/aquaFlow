@@ -1122,6 +1122,54 @@ export function BillingPeriods() {
   useEffect(() => {
     load().catch((e) => setError(e.message));
   }, []);
+  const registerRows = useMemo(() => {
+    const rows: Row[] = [];
+    const replacementGroups = new Map<string, Row[]>();
+    for (const cycle of cycles) {
+      if (cycle.cycleType !== "METER_REPLACEMENT") {
+        rows.push({ ...cycle, registerKey: `cycle-${cycle.billingCycleId}` });
+        continue;
+      }
+      const key = String(cycle.billingPeriodGroupId ?? `due-${String(cycle.dueDate).slice(0, 7)}`);
+      replacementGroups.set(key, [...(replacementGroups.get(key) ?? []), cycle]);
+    }
+    for (const [key, members] of replacementGroups) {
+      const starts = members.map((cycle) => String(cycle.periodStart)).sort();
+      const ends = members.map((cycle) => String(cycle.periodEnd)).sort();
+      const dueDates = [...new Set(members.map((cycle) => String(cycle.dueDate)))].sort();
+      const statuses = [...new Set(members.map((cycle) => String(cycle.status)))];
+      const statusPriority = ["RETURNED", "PENDING_APPROVAL", "PROCESSING", "OPEN", "DRAFT", "APPROVED", "POSTED", "CLOSED", "CANCELLED"];
+      const combinedStatus = statusPriority.find((value) => statuses.includes(value)) ?? statuses[0] ?? "EMPTY";
+      const dueLabel = new Date(dueDates[dueDates.length - 1]).toLocaleString(undefined, { month: "long", year: "numeric" });
+      rows.push({
+        registerKey: `replacement-${key}`,
+        billingPeriodGroupId: members[0].billingPeriodGroupId,
+        cycleName: `Meter replacements · ${dueLabel}`,
+        cycleCode: `${members.length} replacement period${members.length === 1 ? "" : "s"}`,
+        cycleType: "METER_REPLACEMENT_GROUP",
+        periodStart: starts[0],
+        periodEnd: ends[ends.length - 1],
+        dueDate: dueDates[dueDates.length - 1],
+        status: combinedStatus,
+        readingCycles: members.flatMap((cycle) => cycle.readingCycles ?? []),
+        _count: { bills: members.reduce((sum, cycle) => sum + Number(cycle._count?.bills ?? 0), 0) },
+        totals: { amount: members.reduce((sum, cycle) => sum + Number(cycle.totals?.amount ?? 0), 0) },
+      });
+    }
+    return rows.sort((left, right) => String(right.periodStart).localeCompare(String(left.periodStart)));
+  }, [cycles]);
+  const registerTotals = useMemo(() => ({
+    periods: cycles.length,
+    displayedRows: registerRows.length,
+    readingCycles: cycles.reduce((sum, cycle) => sum + Number(cycle.readingCycles?.length ?? 0), 0),
+    bills: cycles.reduce((sum, cycle) => sum + Number(cycle._count?.bills ?? 0), 0),
+    amount: cycles.reduce((sum, cycle) => sum + Number(cycle.totals?.amount ?? 0), 0),
+    statuses: cycles.reduce((counts: Record<string, number>, cycle) => {
+      const value = String(cycle.status);
+      counts[value] = (counts[value] ?? 0) + 1;
+      return counts;
+    }, {}),
+  }), [cycles, registerRows.length]);
   async function submit(e: FormEvent) {
     e.preventDefault();
     setSaving(true);
@@ -1328,9 +1376,9 @@ export function BillingPeriods() {
                 </tr>
               </thead>
               <tbody>
-                {cycles.map((c) => (
+                {registerRows.map((c) => (
                   <tr
-                    key={c.billingCycleId}
+                    key={c.registerKey}
                     className="border-t border-slate-100 transition hover:bg-emerald-50/30"
                   >
                     <td className={TD}>
@@ -1346,7 +1394,9 @@ export function BillingPeriods() {
                       <div className="text-xs">Due {date(c.dueDate)}</div>
                     </td>
                     <td className={TD}>
-                      {c.readingCycles?.[0]?.cycleCode ?? "—"}
+                      {c.cycleType === "METER_REPLACEMENT_GROUP"
+                        ? `${c.readingCycles?.length ?? 0} replacement reading cycles`
+                        : c.readingCycles?.[0]?.cycleCode ?? "—"}
                     </td>
                     <td className={TD}><span className="inline-flex rounded-full bg-sky-50 px-2.5 py-1 text-xs font-bold text-sky-700">{c._count?.bills ?? 0}</span></td>
                     <td className={`${TD} font-bold text-slate-900`}>{money(c.totals?.amount)}</td>
@@ -1355,7 +1405,15 @@ export function BillingPeriods() {
                     </td>
                     <td className={TD}>
                       <div className="flex flex-wrap gap-2">
-                        {c.status === "DRAFT" && (
+                        {c.cycleType === "METER_REPLACEMENT_GROUP" && c.billingPeriodGroupId && (
+                          <Link
+                            className="rounded-lg bg-sky-50 px-2.5 py-1.5 text-sm font-bold text-sky-700 transition hover:bg-sky-600 hover:text-white"
+                            to={`/billing/invoices?billingPeriodGroupId=${c.billingPeriodGroupId}`}
+                          >
+                            View bills
+                          </Link>
+                        )}
+                        {c.cycleType !== "METER_REPLACEMENT_GROUP" && c.status === "DRAFT" && (
                           <button
                             className="rounded-lg bg-emerald-50 px-2.5 py-1.5 text-sm font-bold text-emerald-700 transition hover:bg-emerald-600 hover:text-white"
                             onClick={() => status(c, "OPEN")}
@@ -1363,7 +1421,7 @@ export function BillingPeriods() {
                             Open
                           </button>
                         )}
-                        {c.status === "POSTED" && (
+                        {c.cycleType !== "METER_REPLACEMENT_GROUP" && c.status === "POSTED" && (
                           <button
                             className="rounded-lg bg-slate-100 px-2.5 py-1.5 text-sm font-bold text-slate-700 transition hover:bg-slate-700 hover:text-white"
                             onClick={() => status(c, "CLOSED")}
@@ -1371,7 +1429,7 @@ export function BillingPeriods() {
                             Close
                           </button>
                         )}
-                        {["DRAFT", "OPEN"].includes(c.status) &&
+                        {c.cycleType !== "METER_REPLACEMENT_GROUP" && ["DRAFT", "OPEN"].includes(c.status) &&
                           !c._count?.bills && (
                             <button
                               className="rounded-lg bg-red-50 px-2.5 py-1.5 text-sm font-bold text-red-600 transition hover:bg-red-600 hover:text-white"
@@ -1384,7 +1442,7 @@ export function BillingPeriods() {
                     </td>
                   </tr>
                 ))}
-                {!cycles.length && (
+                {!registerRows.length && (
                   <tr>
                     <td colSpan={7} className="p-14 text-center text-slate-400">
                       <div className="font-semibold text-slate-600">No billing periods created</div><div className="mt-1 text-sm">New billing periods will appear here.</div>
@@ -1392,6 +1450,26 @@ export function BillingPeriods() {
                   </tr>
                 )}
               </tbody>
+              {!!registerRows.length && (
+                <tfoot>
+                  <tr className="border-t-2 border-slate-300 bg-slate-50/90">
+                    <td className={`${TD} font-extrabold text-slate-900`}>
+                      Register totals
+                      <div className="mt-0.5 text-xs font-semibold text-slate-500">
+                        {registerTotals.periods.toLocaleString()} periods grouped into {registerTotals.displayedRows.toLocaleString()} rows
+                      </div>
+                    </td>
+                    <td className={TD}>All displayed periods</td>
+                    <td className={`${TD} font-bold text-slate-700`}>{registerTotals.readingCycles.toLocaleString()}</td>
+                    <td className={TD}><span className="inline-flex rounded-full bg-sky-100 px-2.5 py-1 text-xs font-extrabold text-sky-800">{registerTotals.bills.toLocaleString()}</span></td>
+                    <td className={`${TD} text-base font-extrabold text-slate-950`}>{money(registerTotals.amount)}</td>
+                    <td className={`${TD} text-xs font-semibold text-slate-600`}>
+                      {Object.entries(registerTotals.statuses).map(([value, count]) => `${count} ${pretty(value)}`).join(" · ")}
+                    </td>
+                    <td className={TD}>—</td>
+                  </tr>
+                </tfoot>
+              )}
             </table>
           </div>
         </Card>
