@@ -4,6 +4,7 @@ import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { isSystemAdmin, requireAuth, requireRole } from "../middleware/auth";
 import { createPaymentLinkToken, publicAppUrl } from "../lib/paymentLink";
+import { readingRequiresBill } from "../lib/readingBilling";
 
 export const billingRouter = Router();
 billingRouter.use(requireAuth);
@@ -63,6 +64,7 @@ async function ensureEarlierReadingsAreBilled(billingCycleId: bigint, accountIds
     select: {
       readingId: true,
       accountId: true,
+      syncId: true,
       cycle: { select: { readingCycleId: true, cycleCode: true, billingCycleId: true } },
       account: { select: { accountNumber: true } },
       bills: { where: { status: { in: postedBillStatuses } }, select: { billId: true } },
@@ -81,7 +83,9 @@ async function ensureEarlierReadingsAreBilled(billingCycleId: bigint, accountIds
   }) : [];
   const postedKeys = new Set(postedBills.map((bill) => `${bill.accountId}:${bill.billingCycleId}`));
   const blockers = earlierReadings.filter((reading) =>
-    !reading.bills.length && (!reading.cycle?.billingCycleId || !postedKeys.has(`${reading.accountId}:${reading.cycle.billingCycleId}`)),
+    readingRequiresBill(reading) &&
+    !reading.bills.length &&
+    (!reading.cycle?.billingCycleId || !postedKeys.has(`${reading.accountId}:${reading.cycle.billingCycleId}`)),
   );
   if (!blockers.length) return;
 
@@ -89,7 +93,7 @@ async function ensureEarlierReadingsAreBilled(billingCycleId: bigint, accountIds
     `${reading.account?.accountNumber ?? `account ${reading.accountId}`} (${reading.cycle?.cycleCode ?? "older cycle"})`,
   ))).slice(0, 5);
   throw Object.assign(new Error(
-    `Posting blocked: older approved readings are still unbilled for ${examples.join(", ")}${blockers.length > examples.length ? " and others" : ""}. Post the older bills first.`,
+    `Posting blocked: older billable approved readings are still unbilled for ${examples.join(", ")}${blockers.length > examples.length ? " and others" : ""}. Post the older bills first.`,
   ), { status: 409 });
 }
 function smsDate(value: Date) {
