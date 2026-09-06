@@ -5,6 +5,7 @@ import { prisma } from "../lib/prisma";
 import { queryStkPush } from "../lib/mpesa";
 import { initiateMpesaStk } from "../lib/mpesaStk";
 import { requireAuth, requireRole } from "../middleware/auth";
+import { ensureBillingPeriodGroup } from "../lib/billingPeriodGroup";
 
 export const metersRouter = Router();
 metersRouter.use(requireAuth);
@@ -1080,7 +1081,9 @@ metersRouter.post("/replacements/direct", requireRole("ADMIN", "SYSTEM_ADMIN", "
       const preparedBill = await prepareReplacementBill(tx, ids.accountId, replacementDate, consumption);
       const { account, tariff, calculation, dueDate, previousBalance, totalAmountDue } = preparedBill;
       const postedAt = new Date();
+      const periodGroup = await ensureBillingPeriodGroup(tx, dueDate);
       const billingCycle = await tx.billingCycle.create({ data: {
+        billingPeriodGroupId: periodGroup.billingPeriodGroupId, cycleType: "METER_REPLACEMENT",
         cycleCode: `MR-${replacement.replacementId}`,
         cycleName: `Meter replacement ${account.accountNumber}`,
         periodStart: replacementDate, periodEnd: replacementDate, dueDate, frequency: "CUSTOM",

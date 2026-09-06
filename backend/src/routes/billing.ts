@@ -5,6 +5,7 @@ import { prisma } from "../lib/prisma";
 import { isSystemAdmin, requireAuth, requireRole } from "../middleware/auth";
 import { createPaymentLinkToken, publicAppUrl } from "../lib/paymentLink";
 import { readingRequiresBill } from "../lib/readingBilling";
+import { aggregateBillingGroupStatus, billingCycleType, ensureBillingPeriodGroup } from "../lib/billingPeriodGroup";
 
 export const billingRouter = Router();
 billingRouter.use(requireAuth);
@@ -327,6 +328,35 @@ billingRouter.get("/cycles", async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+billingRouter.get("/period-groups", async (_req, res, next) => {
+  try {
+    const groups = await prisma.billingPeriodGroup.findMany({
+      include: {
+        billingCycles: {
+          include: { bills: { select: { status: true, totalCurrentCharges: true, notificationStatus: true } } },
+          orderBy: [{ cycleType: "asc" }, { billingCycleId: "asc" }],
+        },
+      },
+      orderBy: [{ periodStart: "desc" }, { billingPeriodGroupId: "desc" }],
+    });
+    res.json(groups.map((group) => {
+      const bills = group.billingCycles.flatMap((cycle) => cycle.bills);
+      const { billingCycles, ...groupDetails } = group;
+      return {
+        ...groupDetails,
+        billingCycles: billingCycles.map(({ bills: cycleBills, ...cycle }) => ({ ...cycle, billCount: cycleBills.length })),
+        status: aggregateBillingGroupStatus(billingCycles.map((cycle) => cycle.status)),
+        memberCount: billingCycles.length,
+        replacementCount: billingCycles.filter((cycle) => cycle.cycleType === "METER_REPLACEMENT").length,
+        totals: {
+          bills: bills.length,
+          amount: round(bills.reduce((sum, bill) => sum + Number(bill.totalCurrentCharges), 0)),
+        },
+      };
+    }));
+  } catch (error) { next(error); }
+});
+
 billingRouter.post("/cycles", requireRole("SYSTEM_ADMIN", "BILLING_OFFICER", "BILLING_SUPERVISOR"), async (req, res, next) => {
   const data = parse(z.object({
     cycleCode: z.string().trim().min(2).max(30),
@@ -351,8 +381,11 @@ billingRouter.post("/cycles", requireRole("SYSTEM_ADMIN", "BILLING_OFFICER", "BI
     if (!readingCycle) return res.status(404).json({ error: "Reading cycle not found" });
     if (readingCycle.billingCycleId) return res.status(409).json({ error: "This reading cycle is already linked to a billing period" });
     const created = await prisma.$transaction(async (tx) => {
+      const dueDate = day(data.dueDate);
+      const group = await ensureBillingPeriodGroup(tx, dueDate);
       const cycle = await tx.billingCycle.create({ data: {
-        cycleCode: data.cycleCode, cycleName: data.cycleName, periodStart: day(data.periodStart), periodEnd: day(data.periodEnd), dueDate: day(data.dueDate),
+        billingPeriodGroupId: group.billingPeriodGroupId, cycleType: billingCycleType(data.cycleCode),
+        cycleCode: data.cycleCode, cycleName: data.cycleName, periodStart: day(data.periodStart), periodEnd: day(data.periodEnd), dueDate,
         penaltyDate: data.penaltyDate ? day(data.penaltyDate) : null, frequency: data.frequency, status: data.status,
         defaultNotification: data.defaultNotification, remarks: data.remarks, createdBy: uid(req),
       } });
@@ -494,13 +527,14 @@ billingRouter.post("/generate", requireRole("SYSTEM_ADMIN", "BILLING_OFFICER"), 
 billingRouter.get("/bills", async (req, res, next) => {
   try {
     const cycleId = req.query.billingCycleId ? BigInt(String(req.query.billingCycleId)) : undefined;
+    const groupId = req.query.billingPeriodGroupId ? BigInt(String(req.query.billingPeriodGroupId)) : undefined;
     const accountId = req.query.accountId ? BigInt(String(req.query.accountId)) : undefined;
     const status = String(req.query.status ?? "");
     const search = String(req.query.search ?? "");
     const take = Math.min(10_000, Math.max(1, Number(req.query.limit) || 2_000));
     const rows = await prisma.bill.findMany({
       where: {
-        ...(cycleId ? { billingCycleId: cycleId } : {}),
+        ...(cycleId ? { billingCycleId: cycleId } : groupId ? { billingCycle: { billingPeriodGroupId: groupId } } : {}),
         ...(accountId ? { accountId } : {}),
         ...(status ? { status } : {}),
         ...(search ? { OR: [{ billNumber: { contains: search, mode: "insensitive" } }, { account: { accountNumber: { contains: search, mode: "insensitive" } } }, { account: { customer: { firstName: { contains: search, mode: "insensitive" } } } }, { account: { customer: { lastName: { contains: search, mode: "insensitive" } } } }] } : {}),
@@ -1337,16 +1371,24 @@ billingRouter.get("/audit", async (req, res, next) => {
 
 billingRouter.get("/dashboard", async (req, res, next) => {
   try {
+    const groupId = req.query.billingPeriodGroupId ? BigInt(String(req.query.billingPeriodGroupId)) : undefined;
     const cycleId = req.query.billingCycleId ? BigInt(String(req.query.billingCycleId)) : undefined;
-    const cycle = cycleId ? await prisma.billingCycle.findUnique({ where: { billingCycleId: cycleId } }) : await prisma.billingCycle.findFirst({ orderBy: { periodStart: "desc" } });
-    const where = cycle ? { billingCycleId: cycle.billingCycleId } : { billingCycleId: -1n };
-    const candidatesPromise = cycle
-      ? cycleCandidates(cycle.billingCycleId, { includePreviousBalance: true }).catch((error: any) => {
-          if (error.status === 409) return null;
-          throw error;
-        })
-      : Promise.resolve(null);
-    const [bills, alerts, adjustments, recent, candidates] = await Promise.all([
+    const group = groupId
+      ? await prisma.billingPeriodGroup.findUnique({ where: { billingPeriodGroupId: groupId }, include: { billingCycles: true } })
+      : !cycleId
+        ? await prisma.billingPeriodGroup.findFirst({ include: { billingCycles: true }, orderBy: { periodStart: "desc" } })
+        : null;
+    const cycle = cycleId ? await prisma.billingCycle.findUnique({ where: { billingCycleId: cycleId } }) : null;
+    const selectedCycles = group?.billingCycles ?? (cycle ? [cycle] : []);
+    const selectedCycleIds = selectedCycles.map((item) => item.billingCycleId);
+    const where = selectedCycleIds.length ? { billingCycleId: { in: selectedCycleIds } } : { billingCycleId: { in: [-1n] } };
+    const candidatesPromise = Promise.all(selectedCycles.filter((item) => item.cycleType !== "METER_REPLACEMENT").map((item) =>
+      cycleCandidates(item.billingCycleId, { includePreviousBalance: true }).catch((error: any) => {
+        if (error.status === 409) return null;
+        throw error;
+      }),
+    ));
+    const [bills, alerts, adjustments, recent, candidateSets] = await Promise.all([
       prisma.bill.findMany({
         where,
         select: {
@@ -1359,14 +1401,14 @@ billingRouter.get("/dashboard", async (req, res, next) => {
           readingId: true,
         },
       }),
-      prisma.billingSecurityAlert.count({ where: { status: "OPEN", ...(cycle ? { bill: { billingCycleId: cycle.billingCycleId } } : {}) } }),
-      prisma.billingAdjustment.count({ where: { status: "PENDING", ...(cycle ? { bill: { billingCycleId: cycle.billingCycleId } } : {}) } }),
-      prisma.billingEvent.findMany({ where: cycle ? { billingCycleId: cycle.billingCycleId } : undefined, include: { bill: { include: { account: { include: { customer: true } } } }, performer: true }, orderBy: { createdAt: "desc" }, take: 8 }),
+      prisma.billingSecurityAlert.count({ where: { status: "OPEN", bill: where } }),
+      prisma.billingAdjustment.count({ where: { status: "PENDING", bill: where } }),
+      prisma.billingEvent.findMany({ where, include: { bill: { include: { account: { include: { customer: true } } } }, performer: true }, orderBy: { createdAt: "desc" }, take: 8 }),
       candidatesPromise,
     ]);
     const approved = bills.filter((bill) => ["APPROVED", "POSTED", "PARTIALLY_PAID", "PAID"].includes(bill.status)).length;
     const readyToPost = bills.filter((bill) => bill.status === "APPROVED").length;
-    const eligibleNotBilled = candidates?.rows.filter((row) => row.eligible).length ?? 0;
+    const eligibleNotBilled = candidateSets.reduce((total, candidates) => total + (candidates?.rows.filter((row) => row.eligible).length ?? 0), 0);
     const eligibleNotNotified = bills.filter((bill) =>
       bill.readingId != null &&
       ["APPROVED", "POSTED", "PARTIALLY_PAID", "PAID"].includes(bill.status) &&
@@ -1376,6 +1418,6 @@ billingRouter.get("/dashboard", async (req, res, next) => {
       (sum, bill) => sum + Number(bill.totalCurrentCharges),
       0,
     ));
-    res.json({ cycle, customersToBill: bills.length + eligibleNotBilled, billsGenerated: bills.length, eligibleNotBilled, eligibleNotNotified, pending: bills.filter((bill) => bill.status === "PENDING_APPROVAL").length, approved, readyToPost, totalBilling: totalCurrentBilling, notified: bills.filter((bill) => bill.notificationStatus === "SENT").length, cancelled: bills.filter((bill) => bill.status === "CANCELLED").length, alerts, adjustments, recent: recent.map((row: any) => ({ ...row, customerName: customerName(row.bill?.account?.customer) })) });
+    res.json({ group, cycle, customersToBill: bills.length + eligibleNotBilled, billsGenerated: bills.length, eligibleNotBilled, eligibleNotNotified, pending: bills.filter((bill) => bill.status === "PENDING_APPROVAL").length, approved, readyToPost, totalBilling: totalCurrentBilling, notified: bills.filter((bill) => bill.notificationStatus === "SENT").length, cancelled: bills.filter((bill) => bill.status === "CANCELLED").length, alerts, adjustments, recent: recent.map((row: any) => ({ ...row, customerName: customerName(row.bill?.account?.customer) })) });
   } catch (error) { next(error); }
 });

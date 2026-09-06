@@ -879,10 +879,27 @@ model TariffEvent {
   @@schema("aquaflow")
 }
 
+model BillingPeriodGroup {
+  billingPeriodGroupId BigInt   @id @default(autoincrement()) @map("billing_period_group_id")
+  groupCode            String   @unique @map("group_code")
+  groupName            String   @map("group_name")
+  periodStart          DateTime @map("period_start") @db.Date
+  periodEnd            DateTime @map("period_end") @db.Date
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @default(now()) @map("updated_at")
+
+  billingCycles BillingCycle[]
+
+  @@map("billing_period_groups")
+  @@schema("aquaflow")
+}
+
 model BillingCycle {
   billingCycleId      BigInt    @id @default(autoincrement()) @map("billing_cycle_id")
+  billingPeriodGroupId BigInt   @map("billing_period_group_id")
   cycleCode           String    @unique @map("cycle_code")
   cycleName           String    @map("cycle_name")
+  cycleType           String    @default("ROUTINE") @map("cycle_type")
   periodStart         DateTime  @map("period_start") @db.Date
   periodEnd           DateTime  @map("period_end") @db.Date
   dueDate             DateTime  @map("due_date") @db.Date
@@ -897,11 +914,14 @@ model BillingCycle {
   createdAt           DateTime  @default(now()) @map("created_at")
   updatedAt           DateTime  @default(now()) @map("updated_at")
 
+  billingPeriodGroup BillingPeriodGroup @relation(fields: [billingPeriodGroupId], references: [billingPeriodGroupId])
   creator       User?          @relation("BillingCycleCreator", fields: [createdBy], references: [userId])
   poster        User?          @relation("BillingCyclePoster", fields: [postedBy], references: [userId])
   readingCycles ReadingCycle[]
   bills         Bill[]
   events        BillingEvent[]
+
+  @@index([billingPeriodGroupId])
 
   @@map("billing_cycles")
   @@schema("aquaflow")
