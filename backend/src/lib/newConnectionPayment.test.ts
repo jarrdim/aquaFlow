@@ -81,6 +81,40 @@ test("offline new-connection persistence stops before application update when re
   assert.equal(applicationUpdated, false);
 });
 
+test("M-Pesa Send Money records the payment method and transaction reference", async () => {
+  const calls: Record<string, any>[] = [];
+  const operation = (name: string, result: Record<string, unknown> = {}) => async (args: any) => {
+    calls.push({ operation: name, args });
+    return { ...result, ...args.data };
+  };
+  const tx = {
+    payment: { create: operation("payment.create", { paymentId: 42n }) },
+    receipt: { create: operation("receipt.create", { receiptId: 52n }) },
+    newConnectionApplication: { update: operation("application.update") },
+    newConnectionActivity: { create: operation("activity.create") },
+    paymentEvent: { create: operation("event.create") },
+  };
+
+  await postOfflineNewConnectionPayment(tx as any, {
+    applicationId: 10n,
+    applicationNumber: "NC-2026-00010",
+    accountId: null,
+    quotationTotal: 15_000,
+    amountPaid: 0,
+    amount: 15_000,
+    reference: "UI3AB59S7S",
+    paymentMethod: "MPESA_SEND_MONEY",
+    actor: 2n,
+    channelId: 1n,
+    now: new Date("2026-09-04T08:00:00.000Z"),
+  });
+
+  assert.equal(calls[0].args.data.transactionReference, "UI3AB59S7S");
+  assert.match(calls[0].args.data.remarks, /M-Pesa Send Money/);
+  assert.equal(calls[4].args.data.eventType, "MPESA_SEND_MONEY_NEW_CONNECTION_PAYMENT_POSTED");
+  assert.equal(calls[4].args.data.metadata.paymentMethod, "MPESA_SEND_MONEY");
+});
+
 test("an unmatched C2B payment is posted, receipted, removed from suspense, and applied to a connection", async () => {
   const calls: Record<string, any>[] = [];
   const operation = (name: string, result: Record<string, unknown> = {}) => async (args: any) => {

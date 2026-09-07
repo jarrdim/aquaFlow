@@ -1028,9 +1028,10 @@ paymentsRouter.get("/accounts/count", async (_req, res, next) => {
 paymentsRouter.get("/accounts", async (req, res, next) => {
   try {
     const q = String(req.query.q ?? "").trim();
+    const includeAll = String(req.query.includeAll ?? "").toLowerCase() === "true";
     const rows = await prisma.customerAccount.findMany({
       where: {
-        accountStatus: "ACTIVE",
+        ...(includeAll ? {} : { accountStatus: "ACTIVE" as const }),
         ...(q
           ? {
               OR: [
@@ -1055,9 +1056,9 @@ paymentsRouter.get("/accounts", async (req, res, next) => {
       },
       include: { customer: true },
       orderBy: { accountNumber: "asc" },
-      // The M-Pesa selector must expose the complete active account directory.
-      // Typed searches remain capped because they are only autocomplete results.
-      take: q ? 100 : 20_000,
+      // Record Payment requests the complete directory, including non-active
+      // accounts. Other payment workflows remain restricted to active accounts.
+      ...(q ? { take: 100 } : includeAll ? {} : { take: 20_000 }),
     });
     res.json(rows.map((a: any) => ({ ...a, customerName: name(a.customer) })));
   } catch (e) {

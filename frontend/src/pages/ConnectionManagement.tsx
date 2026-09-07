@@ -1389,6 +1389,11 @@ export function ConnectionProfile() {
     Number(application.quotationTotal) - Number(application.amountPaid);
   const status = application.status;
   const paymentMethod = form.paymentMethod || "MPESA_STK";
+  const manualPaymentLabel = paymentMethod === "BANK"
+    ? "bank"
+    : paymentMethod === "MPESA_SEND_MONEY"
+      ? "M-Pesa Send Money"
+      : "cash";
   const manualPaymentReference = String(form.reference ?? "").trim();
   const manualPaymentReferenceValid =
     manualPaymentReference.length >= 2 &&
@@ -1727,6 +1732,7 @@ export function ConnectionProfile() {
                   >
                     <option value="MPESA_STK">M-Pesa STK prompt</option>
                     <option value="MPESA_C2B">M-Pesa PayBill / C2B</option>
+                    <option value="MPESA_SEND_MONEY">M-Pesa Send Money</option>
                     <option value="CASH">Cash</option>
                     <option value="BANK">Bank direct deposit</option>
                   </select>
@@ -1894,10 +1900,10 @@ export function ConnectionProfile() {
                   </div>
                 </div>}
 
-                {(paymentMethod === "CASH" || paymentMethod === "BANK") && <div className="rounded-xl border border-slate-200 bg-white p-4">
+                {(paymentMethod === "CASH" || paymentMethod === "BANK" || paymentMethod === "MPESA_SEND_MONEY") && <div className="rounded-xl border border-slate-200 bg-white p-4">
                   <div className="space-y-3">
                     <div>
-                      <p className="text-sm font-bold text-slate-900">{paymentMethod === "BANK" ? "Record bank direct payment" : "Record cash payment"}</p>
+                      <p className="text-sm font-bold text-slate-900">Record {manualPaymentLabel} payment</p>
                       <p className="mt-1 text-xs text-slate-500">Only record funds already received and independently verified.</p>
                     </div>
                     <Field label="Amount received" required>
@@ -1912,13 +1918,24 @@ export function ConnectionProfile() {
                         onChange={(event) => set("amount", event.target.value)}
                       />
                     </Field>
-                    <Field label={paymentMethod === "BANK" ? "Bank transaction / deposit reference" : "Cash receipt / register reference"} required>
+                    <Field label={paymentMethod === "BANK"
+                      ? "Bank transaction / deposit reference"
+                      : paymentMethod === "MPESA_SEND_MONEY"
+                        ? "M-Pesa transaction reference"
+                        : "Cash receipt / register reference"} required>
                       <input
                         className={input}
                         value={form.reference || ""}
                         maxLength={120}
-                        onChange={(e) => set("reference", e.target.value)}
-                        placeholder={paymentMethod === "BANK" ? "Bank transaction or deposit slip number" : "Cash receipt or register number"}
+                        onChange={(e) => set(
+                          "reference",
+                          paymentMethod === "MPESA_SEND_MONEY" ? e.target.value.toUpperCase() : e.target.value,
+                        )}
+                        placeholder={paymentMethod === "BANK"
+                          ? "Bank transaction or deposit slip number"
+                          : paymentMethod === "MPESA_SEND_MONEY"
+                            ? "M-Pesa code, e.g. UI3AB59S7S"
+                            : "Cash receipt or register number"}
                       />
                       {manualPaymentReference && !manualPaymentReferenceValid && (
                         <p className="mt-1.5 text-xs font-semibold text-red-600">
@@ -1937,11 +1954,11 @@ export function ConnectionProfile() {
                             reference: form.reference,
                             paymentMethod,
                           },
-                          `${paymentMethod === "BANK" ? "Bank" : "Cash"} payment recorded.`,
+                          `${manualPaymentLabel} payment recorded.`,
                         )
                       }
                     >
-                      {saving ? "Recording…" : `Record ${paymentMethod === "BANK" ? "bank" : "cash"} payment`}
+                      {saving ? "Recording…" : `Record ${manualPaymentLabel} payment`}
                     </button>
                   </div>
                 </div>}

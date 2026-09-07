@@ -420,7 +420,7 @@ const actionSchema = z.discriminatedUnion("action", [
       /^[A-Za-z0-9](?:[A-Za-z0-9 ./_-]*[A-Za-z0-9])?$/,
       "Payment reference must start and end with a letter or number",
     ),
-    paymentMethod: z.enum(["CASH", "BANK"]),
+    paymentMethod: z.enum(["CASH", "BANK", "MPESA_SEND_MONEY"]),
   }),
   z.object({ action: z.enum(["APPROVE", "REJECT", "MARK_INSTALLATION_ORDERED", "MARK_INSTALLATION_COMPLETED", "ACTIVATE"]), notes: z.string().trim().min(2).max(2000) }),
 ]);
@@ -475,17 +475,22 @@ connectionsRouter.patch("/:id/action", canProcess, async (req, res, next) => {
           throw Object.assign(new Error(`Payment cannot exceed the outstanding quotation balance of KSh ${outstanding.toFixed(2)}`), { status: 409 });
 
         const channelCode = data.paymentMethod;
+        const channelName = data.paymentMethod === "MPESA_SEND_MONEY"
+          ? "M-Pesa"
+          : data.paymentMethod === "BANK"
+            ? "Bank"
+            : "Cash";
         const channel = await tx.paymentChannel.findFirst({
           where: {
             status: "ACTIVE",
             OR: [
               { channelCode },
-              { channelName: { equals: channelCode === "BANK" ? "Bank" : "Cash", mode: "insensitive" } },
+              { channelName: { equals: channelName, mode: "insensitive" } },
             ],
           },
         });
         if (!channel)
-          throw Object.assign(new Error(`An active ${channelCode === "BANK" ? "Bank" : "Cash"} payment channel is required`), { status: 409 });
+          throw Object.assign(new Error(`An active ${channelName} payment channel is required`), { status: 409 });
 
         return postOfflineNewConnectionPayment(tx, {
           applicationId,

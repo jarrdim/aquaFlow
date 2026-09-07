@@ -620,7 +620,7 @@ export function RecordPayment() {
     remarks: "",
   });
   useEffect(() => {
-    Promise.all([api.listPaymentAccounts(), api.listPaymentChannels()])
+    Promise.all([api.listPaymentAccounts("", true), api.listPaymentChannels()])
       .then(([a, c]) => {
         setAccounts(a);
         setChannels(c.filter((x: Row) => x.status === "ACTIVE"));
@@ -678,7 +678,7 @@ export function RecordPayment() {
               <option value="">Select customer account</option>
               {accounts.map((a) => (
                 <option key={a.accountId} value={a.accountId}>
-                  {a.accountNumber} · {a.customerName}
+                  {a.accountNumber} · {a.customerName} · {pretty(a.accountStatus)}
                 </option>
               ))}
             </SearchableSelect>

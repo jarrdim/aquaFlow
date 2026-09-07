@@ -702,8 +702,13 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(data),
     }),
-  listPaymentAccounts: (q = "") =>
-    request(`/payments/accounts${q ? `?q=${encodeURIComponent(q)}` : ""}`),
+  listPaymentAccounts: (q = "", includeAll = false) => {
+    const query = new URLSearchParams();
+    if (q) query.set("q", q);
+    if (includeAll) query.set("includeAll", "true");
+    const suffix = query.toString();
+    return request(`/payments/accounts${suffix ? `?${suffix}` : ""}`);
+  },
   paymentAccountCount: () => request("/payments/accounts/count"),
   listPayments: (filters: Record<string, string> = {}) => {
     const query = new URLSearchParams(

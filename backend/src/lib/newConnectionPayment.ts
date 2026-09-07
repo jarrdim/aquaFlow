@@ -19,14 +19,18 @@ export async function postOfflineNewConnectionPayment(
     amountPaid: unknown;
     amount: number;
     reference: string;
-    paymentMethod?: "CASH" | "BANK";
+    paymentMethod?: "CASH" | "BANK" | "MPESA_SEND_MONEY";
     actor: bigint;
     channelId: bigint;
     now?: Date;
   },
 ) {
   const now = input.now ?? new Date();
-  const paymentLabel = input.paymentMethod === "BANK" ? "Bank direct" : "Cash";
+  const paymentLabel = input.paymentMethod === "BANK"
+    ? "Bank direct"
+    : input.paymentMethod === "MPESA_SEND_MONEY"
+      ? "M-Pesa Send Money"
+      : "Cash";
   const next = newConnectionPaymentState(input.quotationTotal, input.amountPaid, input.amount);
   const payment = await tx.payment.create({
     data: {
@@ -76,7 +80,9 @@ export async function postOfflineNewConnectionPayment(
   await tx.paymentEvent.create({
     data: {
       paymentId: payment.paymentId,
-      eventType: "NEW_CONNECTION_PAYMENT_POSTED",
+      eventType: input.paymentMethod === "MPESA_SEND_MONEY"
+        ? "MPESA_SEND_MONEY_NEW_CONNECTION_PAYMENT_POSTED"
+        : "NEW_CONNECTION_PAYMENT_POSTED",
       previousStatus: "RECEIVED",
       newStatus: "POSTED",
       details: `${paymentLabel} payment for ${input.applicationNumber}; receipt ${receipt.receiptNumber}`,
