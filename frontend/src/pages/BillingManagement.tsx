@@ -4024,6 +4024,19 @@ export function BillNotifications() {
   const [loadingBills, setLoadingBills] = useState(false);
   const [queueing, setQueueing] = useState(false);
   const [sendingBillId, setSendingBillId] = useState("");
+  function notificationBillFilters(searchValue = "") {
+    return {
+      ...(searchValue
+        ? { ...(groupId ? { billingPeriodGroupId: groupId } : {}), search: searchValue }
+        : groupId
+          ? { billingPeriodGroupId: groupId }
+          : { billingCycleId: cycleId }),
+      ...(billStatus ? { status: billStatus } : {}),
+      ...(notificationStatus ? { notificationStatus } : {}),
+      notificationEligible: "true",
+      limit: "10000",
+    };
+  }
   useEffect(() => {
     let active = true;
     setLoadingCycles(true);
@@ -4067,11 +4080,7 @@ export function BillNotifications() {
     setLoadingBills(true);
     setError("");
     const timer = window.setTimeout(() => {
-      api.listBills(globalSearch
-        ? { ...(groupId ? { billingPeriodGroupId: groupId } : {}), search: globalSearch, limit: "10000" }
-        : groupId
-          ? { billingPeriodGroupId: groupId, limit: "10000" }
-          : { billingCycleId: cycleId, limit: "10000" })
+      api.listBills(notificationBillFilters(globalSearch))
         .then((rows) => active && setBills(rows.filter((bill: Row) =>
           Boolean(groupId) || (
             bill.billingCycle?.cycleType !== "METER_REPLACEMENT" &&
@@ -4082,7 +4091,7 @@ export function BillNotifications() {
         .finally(() => active && setLoadingBills(false));
     }, globalSearch ? 250 : 0);
     return () => { active = false; window.clearTimeout(timer); };
-  }, [groupId, cycleId, appliedSearch]);
+  }, [groupId, cycleId, appliedSearch, billStatus, notificationStatus]);
   async function send() {
     if (!selectedBillIds.length) return;
     const confirmation = await Swal.fire({
@@ -4137,11 +4146,7 @@ export function BillNotifications() {
       );
       setSelectedBillIds([]);
       setLoadingBills(true);
-      const refreshed = await api.listBills(appliedSearch
-        ? { ...(groupId ? { billingPeriodGroupId: groupId } : {}), search: appliedSearch, limit: "10000" }
-        : groupId
-          ? { billingPeriodGroupId: groupId, limit: "10000" }
-          : { billingCycleId: cycleId, limit: "10000" });
+      const refreshed = await api.listBills(notificationBillFilters(appliedSearch));
       setBills(refreshed.filter((bill: Row) =>
         Boolean(groupId) || (
           bill.billingCycle?.cycleType !== "METER_REPLACEMENT" &&

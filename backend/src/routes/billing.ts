@@ -148,6 +148,14 @@ const billInclude = {
   events: { include: { performer: true }, orderBy: { createdAt: "desc" as const } },
 } as const;
 
+// Notification selection only needs the bill, account/customer and period.
+// Avoid loading tariffs, bill items, audit events and notification histories
+// for thousands of rows on the Send Bills screen.
+const notificationBillInclude = {
+  account: { include: { customer: true } },
+  billingCycle: true,
+} as const;
+
 type ChargeItem = {
   chargeType: string;
   description: string;
@@ -648,16 +656,28 @@ billingRouter.get("/bills", async (req, res, next) => {
     const groupId = req.query.billingPeriodGroupId ? BigInt(String(req.query.billingPeriodGroupId)) : undefined;
     const accountId = req.query.accountId ? BigInt(String(req.query.accountId)) : undefined;
     const status = String(req.query.status ?? "");
+    const notificationStatus = String(req.query.notificationStatus ?? "");
+    const notificationEligible = String(req.query.notificationEligible ?? "").toLowerCase() === "true";
     const search = String(req.query.search ?? "");
     const take = Math.min(10_000, Math.max(1, Number(req.query.limit) || 2_000));
     const rows = await prisma.bill.findMany({
       where: {
         ...(cycleId ? { billingCycleId: cycleId } : groupId ? { billingCycle: { billingPeriodGroupId: groupId } } : {}),
         ...(accountId ? { accountId } : {}),
-        ...(status ? { status } : {}),
+        ...(status
+          ? { status }
+          : notificationEligible
+            ? { status: { in: ["APPROVED", "POSTED", "PARTIALLY_PAID", "PAID"] } }
+            : {}),
+        ...(notificationEligible ? { readingId: { not: null } } : {}),
+        ...(notificationStatus === "NOT_NOTIFIED"
+          ? { notificationStatus: { notIn: ["QUEUED", "SENT"] } }
+          : notificationStatus
+            ? { notificationStatus }
+            : {}),
         ...(search ? { OR: [{ billNumber: { contains: search, mode: "insensitive" } }, { account: { accountNumber: { contains: search, mode: "insensitive" } } }, { account: { customer: { customerNumber: { contains: search, mode: "insensitive" } } } }, { account: { customer: { firstName: { contains: search, mode: "insensitive" } } } }, { account: { customer: { middleName: { contains: search, mode: "insensitive" } } } }, { account: { customer: { lastName: { contains: search, mode: "insensitive" } } } }, { account: { customer: { organizationName: { contains: search, mode: "insensitive" } } } }] } : {}),
       },
-      include: billInclude,
+      include: notificationEligible ? notificationBillInclude : billInclude,
       orderBy: { createdAt: "desc" }, take,
     });
     res.json(rows.map((row: any) => ({ ...row, customerName: customerName(row.account.customer) })));
