@@ -450,13 +450,15 @@ function BillingPeriodGroupSelect({
   groups,
   value,
   onChange,
+  disabled = false,
 }: {
   groups: Row[];
   value: string;
   onChange: (value: string) => void;
+  disabled?: boolean;
 }) {
   return (
-    <SearchableSelect className={INPUT} value={value} onChange={(event) => onChange(event.target.value)}>
+    <SearchableSelect className={INPUT} value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)}>
       <option value="">Select billing group</option>
       {groups.map((group) => (
         <option key={group.billingPeriodGroupId} value={group.billingPeriodGroupId}>
@@ -554,7 +556,7 @@ export function BillingDashboard() {
               label="Eligible bills not notified"
               value={eligibleNotNotified}
               tone="text-orange-600"
-              to="/billing/notifications?notificationStatus=NOT_SENT"
+              to={`/billing/notifications?billingPeriodGroupId=${groupId}&notificationStatus=NOT_NOTIFIED`}
             />
             <Kpi
               label="Pending adjustments"
@@ -4005,6 +4007,8 @@ export function CustomerStatements() {
 export function BillNotifications() {
   const [searchParams] = useSearchParams();
   const [cycles, setCycles] = useState<Row[]>([]);
+  const [groups, setGroups] = useState<Row[]>([]);
+  const [groupId, setGroupId] = useState(searchParams.get("billingPeriodGroupId") ?? "");
   const [cycleId, setCycleId] = useState(searchParams.get("billingCycleId") ?? "");
   const [channels, setChannels] = useState<string[]>(["SMS", "APP"]);
   const [bills, setBills] = useState<Row[]>([]);
@@ -4023,14 +4027,23 @@ export function BillNotifications() {
   useEffect(() => {
     let active = true;
     setLoadingCycles(true);
-    api.listBillingCycles()
-      .then((rows) => {
+    Promise.all([api.listBillingCycles(), api.listBillingPeriodGroups()])
+      .then(([rows, periodGroups]) => {
         if (!active) return;
         const customerBillingCycles = rows.filter((cycle: Row) =>
           cycle.cycleType !== "METER_REPLACEMENT" &&
           !String(cycle.cycleCode ?? "").toUpperCase().startsWith("MR-"),
         );
-        setCycles(customerBillingCycles);
+        setCycles(rows);
+        setGroups(periodGroups);
+        const requestedGroupIsVisible = periodGroups.some(
+          (group: Row) => String(group.billingPeriodGroupId) === groupId,
+        );
+        if (requestedGroupIsVisible) {
+          setCycleId("");
+          return;
+        }
+        setGroupId("");
         const requestedCycleIsVisible = customerBillingCycles.some(
           (cycle: Row) => String(cycle.billingCycleId) === cycleId,
         );
@@ -4046,7 +4059,7 @@ export function BillNotifications() {
     let active = true;
     setSelectedBillIds([]);
     const globalSearch = appliedSearch;
-    if (!cycleId && !globalSearch) {
+    if (!groupId && !cycleId && !globalSearch) {
       setBills([]);
       setLoadingBills(false);
       return () => { active = false; };
@@ -4055,17 +4068,21 @@ export function BillNotifications() {
     setError("");
     const timer = window.setTimeout(() => {
       api.listBills(globalSearch
-        ? { search: globalSearch, limit: "10000" }
-        : { billingCycleId: cycleId, limit: "10000" })
+        ? { ...(groupId ? { billingPeriodGroupId: groupId } : {}), search: globalSearch, limit: "10000" }
+        : groupId
+          ? { billingPeriodGroupId: groupId, limit: "10000" }
+          : { billingCycleId: cycleId, limit: "10000" })
         .then((rows) => active && setBills(rows.filter((bill: Row) =>
-          bill.billingCycle?.cycleType !== "METER_REPLACEMENT" &&
-          !String(bill.billingCycle?.cycleCode ?? "").toUpperCase().startsWith("MR-"),
+          Boolean(groupId) || (
+            bill.billingCycle?.cycleType !== "METER_REPLACEMENT" &&
+            !String(bill.billingCycle?.cycleCode ?? "").toUpperCase().startsWith("MR-")
+          ),
         )))
         .catch((e) => active && setError(e.message))
         .finally(() => active && setLoadingBills(false));
     }, globalSearch ? 250 : 0);
     return () => { active = false; window.clearTimeout(timer); };
-  }, [cycleId, appliedSearch]);
+  }, [groupId, cycleId, appliedSearch]);
   async function send() {
     if (!selectedBillIds.length) return;
     const confirmation = await Swal.fire({
@@ -4121,11 +4138,15 @@ export function BillNotifications() {
       setSelectedBillIds([]);
       setLoadingBills(true);
       const refreshed = await api.listBills(appliedSearch
-        ? { search: appliedSearch, limit: "10000" }
-        : { billingCycleId: cycleId, limit: "10000" });
+        ? { ...(groupId ? { billingPeriodGroupId: groupId } : {}), search: appliedSearch, limit: "10000" }
+        : groupId
+          ? { billingPeriodGroupId: groupId, limit: "10000" }
+          : { billingCycleId: cycleId, limit: "10000" });
       setBills(refreshed.filter((bill: Row) =>
-        bill.billingCycle?.cycleType !== "METER_REPLACEMENT" &&
-        !String(bill.billingCycle?.cycleCode ?? "").toUpperCase().startsWith("MR-"),
+        Boolean(groupId) || (
+          bill.billingCycle?.cycleType !== "METER_REPLACEMENT" &&
+          !String(bill.billingCycle?.cycleCode ?? "").toUpperCase().startsWith("MR-")
+        ),
       ));
     } catch (e: any) {
       setError(e.message);
@@ -4175,7 +4196,10 @@ export function BillNotifications() {
       ].some((value) => String(value ?? "").toLowerCase().includes(query));
       return matchesSearch &&
         (!billStatus || bill.status === billStatus) &&
-        (!notificationStatus || bill.notificationStatus === notificationStatus);
+        (!notificationStatus ||
+          (notificationStatus === "NOT_NOTIFIED"
+            ? !["QUEUED", "SENT"].includes(String(bill.notificationStatus))
+            : bill.notificationStatus === notificationStatus));
     });
   }, [selected, appliedSearch, billStatus, notificationStatus]);
   const selectableBills = filteredBills.filter(
@@ -4207,6 +4231,13 @@ export function BillNotifications() {
       ? [...new Set([...current, value])]
       : current.filter((id) => id !== value));
   }
+  const regularCycles = cycles.filter((cycle) =>
+    cycle.cycleType !== "METER_REPLACEMENT" &&
+    !String(cycle.cycleCode ?? "").toUpperCase().startsWith("MR-"),
+  );
+  const availableCycles = groupId
+    ? regularCycles.filter((cycle) => String(cycle.billingPeriodGroupId) === groupId)
+    : regularCycles;
   const selectedCycle = cycles.find((cycle) => String(cycle.billingCycleId) === cycleId);
   const readingCycle = selectedCycle?.readingCycles?.[0];
   const readingCycleClosed = readingCycle?.status === "CLOSED";
@@ -4215,7 +4246,7 @@ export function BillNotifications() {
     const billCycle = cycles.find((cycle) => String(cycle.billingCycleId) === String(bill?.billingCycleId));
     return billCycle?.readingCycles?.[0]?.status === "CLOSED";
   });
-  const notificationCyclesReady = appliedSearch ? selectedBillCyclesClosed : readingCycleClosed;
+  const notificationCyclesReady = appliedSearch || groupId ? selectedBillCyclesClosed : readingCycleClosed;
   return (
     <Page
       title="Bill notifications"
@@ -4226,11 +4257,26 @@ export function BillNotifications() {
       <div className="grid gap-4 lg:grid-cols-[420px_1fr]">
         <Card title="Notification setup">
           <div className="space-y-4">
+            <Field label="Billing group">
+              <BillingPeriodGroupSelect
+                groups={groups}
+                value={groupId}
+                disabled={loadingCycles || loadingBills || queueing}
+                onChange={(value) => {
+                  setGroupId(value);
+                  if (value) setCycleId("");
+                }}
+              />
+            </Field>
             <Field label="Billing period">
               <CycleSelect
-                cycles={cycles}
+                cycles={availableCycles}
                 value={cycleId}
-                onChange={setCycleId}
+                includeBlank={Boolean(groupId)}
+                onChange={(value) => {
+                  setCycleId(value);
+                  if (value) setGroupId("");
+                }}
                 disabled={loadingCycles || loadingBills || queueing}
               />
             </Field>
@@ -4277,7 +4323,11 @@ export function BillNotifications() {
             </Field>
             <div className={`rounded-lg p-3 text-sm ${notificationCyclesReady ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-800"}`}>
               {appliedSearch
-                ? "Search results cover all regular billing periods."
+                ? groupId
+                  ? "Search results are limited to the selected billing group."
+                  : "Search results cover all regular billing periods."
+                : groupId
+                ? `Billing group: ${groups.find((group) => String(group.billingPeriodGroupId) === groupId)?.groupName ?? "Selected group"}. Select bills from any period in this group.`
                 : readingCycle
                 ? `Reading cycle: ${readingCycle.cycleName} · ${readingCycle.status}`
                 : "No reading cycle is linked to this billing period."}
@@ -4340,6 +4390,7 @@ export function BillNotifications() {
             <Field label="Notification status">
               <SearchableSelect className={INPUT} disabled={loadingBills || queueing} value={notificationStatus} onChange={(e) => setNotificationStatus(e.target.value)}>
                 <option value="">All notification statuses</option>
+                <option value="NOT_NOTIFIED">Not notified (not sent or failed)</option>
                 <option value="NOT_SENT">Not sent</option>
                 <option value="QUEUED">Queued</option>
                 <option value="SENT">Sent</option>
