@@ -658,11 +658,24 @@ billingRouter.get("/bills", async (req, res, next) => {
     const status = String(req.query.status ?? "");
     const notificationStatus = String(req.query.notificationStatus ?? "");
     const notificationEligible = String(req.query.notificationEligible ?? "").toLowerCase() === "true";
+    const requestedBillingCategory = String(req.query.billingCategory ?? "").toUpperCase();
+    const billingCategory = ["MR", "OTHER"].includes(requestedBillingCategory) ? requestedBillingCategory : "";
     const search = String(req.query.search ?? "");
     const take = Math.min(10_000, Math.max(1, Number(req.query.limit) || 2_000));
     const rows = await prisma.bill.findMany({
       where: {
-        ...(cycleId ? { billingCycleId: cycleId } : groupId ? { billingCycle: { billingPeriodGroupId: groupId } } : {}),
+        ...(cycleId
+          ? { billingCycleId: cycleId }
+          : groupId || billingCategory
+            ? { billingCycle: {
+                ...(groupId ? { billingPeriodGroupId: groupId } : {}),
+                ...(billingCategory === "MR"
+                  ? { cycleType: "METER_REPLACEMENT" }
+                  : billingCategory === "OTHER"
+                    ? { cycleType: { not: "METER_REPLACEMENT" } }
+                    : {}),
+              } }
+            : {}),
         ...(accountId ? { accountId } : {}),
         ...(status
           ? { status }
@@ -1706,6 +1719,7 @@ billingRouter.get("/dashboard", async (req, res, next) => {
           paidAmount: true,
           notificationStatus: true,
           readingId: true,
+          billingCycleId: true,
         },
       }),
       prisma.billingSecurityAlert.count({ where: { status: "OPEN", bill: where } }),
@@ -1716,15 +1730,25 @@ billingRouter.get("/dashboard", async (req, res, next) => {
     const approved = bills.filter((bill) => ["APPROVED", "POSTED", "PARTIALLY_PAID", "PAID"].includes(bill.status)).length;
     const readyToPost = bills.filter((bill) => bill.status === "APPROVED").length;
     const eligibleNotBilled = candidateSets.reduce((total, candidates) => total + (candidates?.rows.filter((row) => row.eligible).length ?? 0), 0);
-    const eligibleNotNotified = bills.filter((bill) =>
+    const eligibleNotNotifiedBills = bills.filter((bill) =>
       bill.readingId != null &&
       ["APPROVED", "POSTED", "PARTIALLY_PAID", "PAID"].includes(bill.status) &&
       !["QUEUED", "SENT"].includes(bill.notificationStatus),
+    );
+    const meterReplacementCycleIds = new Set(
+      selectedCycles
+        .filter((item) => item.cycleType === "METER_REPLACEMENT")
+        .map((item) => item.billingCycleId),
+    );
+    const eligibleNotNotifiedMeterReplacement = eligibleNotNotifiedBills.filter(
+      (bill) => meterReplacementCycleIds.has(bill.billingCycleId),
     ).length;
+    const eligibleNotNotifiedOther = eligibleNotNotifiedBills.length - eligibleNotNotifiedMeterReplacement;
+    const eligibleNotNotified = eligibleNotNotifiedBills.length;
     const totalCurrentBilling = round(bills.reduce(
       (sum, bill) => sum + Number(bill.totalCurrentCharges),
       0,
     ));
-    res.json({ group, cycle, customersToBill: bills.length + eligibleNotBilled, billsGenerated: bills.length, eligibleNotBilled, eligibleNotNotified, pending: bills.filter((bill) => bill.status === "PENDING_APPROVAL").length, approved, readyToPost, totalBilling: totalCurrentBilling, notified: bills.filter((bill) => bill.notificationStatus === "SENT").length, cancelled: bills.filter((bill) => bill.status === "CANCELLED").length, alerts, adjustments, recent: recent.map((row: any) => ({ ...row, customerName: customerName(row.bill?.account?.customer) })) });
+    res.json({ group, cycle, customersToBill: bills.length + eligibleNotBilled, billsGenerated: bills.length, eligibleNotBilled, eligibleNotNotified, eligibleNotNotifiedMeterReplacement, eligibleNotNotifiedOther, pending: bills.filter((bill) => bill.status === "PENDING_APPROVAL").length, approved, readyToPost, totalBilling: totalCurrentBilling, notified: bills.filter((bill) => bill.notificationStatus === "SENT").length, cancelled: bills.filter((bill) => bill.status === "CANCELLED").length, alerts, adjustments, recent: recent.map((row: any) => ({ ...row, customerName: customerName(row.bill?.account?.customer) })) });
   } catch (error) { next(error); }
 });
