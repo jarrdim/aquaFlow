@@ -1669,18 +1669,30 @@ export function UnmatchedPayments() {
                   <button type="button" onClick={() => setAllocationRows((current) => [...current, { accountId: "", amount: "" }])} className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700 transition hover:bg-emerald-100">+ Add account</button>
                 </div>
                 <div className="space-y-3">
-                  {allocationRows.map((allocation, index) => (
+                  {allocationRows.map((allocation, index) => {
+                    const selectedAccount = accounts.find((account) => String(account.accountId) === allocation.accountId);
+                    const accountBalance = Number(selectedAccount?.currentBalance ?? 0);
+                    const allocationAmount = Number(allocation.amount || 0);
+                    const projectedAccountBalance = accountBalance - allocationAmount;
+                    return (
                     <div key={index} className="rounded-xl border border-slate-200 bg-slate-50/70 p-3">
                       <div className="mb-2 flex items-center justify-between"><span className="text-xs font-bold uppercase tracking-wide text-slate-500">Allocation {index + 1}</span>{allocationRows.length > 1 && <button type="button" onClick={() => setAllocationRows((current) => current.filter((_, rowIndex) => rowIndex !== index))} className="text-xs font-bold text-rose-600 hover:text-rose-700">Remove</button>}</div>
                       <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_130px]">
                         <SearchableSelect className={allocationInput} value={allocation.accountId} onChange={(event) => setAllocationRows((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, accountId: event.target.value } : row))}>
                           <option value="">Select account</option>
-                          {accounts.map((account) => <option value={account.accountId} key={account.accountId}>{account.accountNumber} · {account.customerName} · {account.customer?.customerNumber} · {account.customer?.phoneNumber}</option>)}
+                          {accounts.map((account) => <option value={account.accountId} key={account.accountId}>{account.accountNumber} · {account.customerName} · Amount due {money(account.currentBalance)} · {account.customer?.customerNumber} · {account.customer?.phoneNumber}</option>)}
                         </SearchableSelect>
                         <input type="number" min="0.01" step="0.01" className={allocationInput} aria-label={`Amount for allocation ${index + 1}`} placeholder="Amount" value={allocation.amount} onChange={(event) => setAllocationRows((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, amount: event.target.value } : row))} />
                       </div>
+                      {selectedAccount && <div className="mt-3 grid grid-cols-3 gap-2 rounded-lg border border-sky-100 bg-white p-2.5 text-xs">
+                        <div><span className="block text-slate-400">Account amount due</span><strong className={accountBalance > 0 ? "text-rose-700" : "text-emerald-700"}>{money(accountBalance)}</strong></div>
+                        <div><span className="block text-slate-400">Allocated here</span><strong className="text-slate-800">{money(allocationAmount)}</strong></div>
+                        <div><span className="block text-slate-400">Balance afterward</span><strong className={projectedAccountBalance > 0 ? "text-amber-700" : "text-emerald-700"}>{money(projectedAccountBalance)}</strong></div>
+                        {allocationAmount > Math.max(0, accountBalance) && <p className="col-span-3 border-t border-slate-100 pt-2 font-semibold text-sky-700">The amount above this account’s balance will remain as account credit.</p>}
+                      </div>}
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
                 <div className={`mt-3 flex items-center justify-between rounded-xl border px-3.5 py-3 text-sm ${remainingCents === 0 ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-amber-200 bg-amber-50 text-amber-800"}`}>
                   <span className="font-semibold">{remainingCents >= 0 ? "Remaining to allocate" : "Over allocated"}</span><strong>{money(Math.abs(remainingCents) / 100)}</strong>
