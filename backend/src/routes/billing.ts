@@ -697,6 +697,91 @@ billingRouter.get("/bills", async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+billingRouter.get("/period-records", async (req, res, next) => {
+  try {
+    const cycleId = req.query.billingCycleId ? BigInt(String(req.query.billingCycleId)) : undefined;
+    const groupId = req.query.billingPeriodGroupId ? BigInt(String(req.query.billingPeriodGroupId)) : undefined;
+    const status = String(req.query.status ?? "");
+    const search = String(req.query.search ?? "").trim();
+    const requestedBillingCategory = String(req.query.billingCategory ?? "").toUpperCase();
+    const billingCategory = ["MR", "OTHER"].includes(requestedBillingCategory) ? requestedBillingCategory : "";
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const pageSize = Math.min(100, Math.max(10, Number(req.query.pageSize) || 50));
+    const where: Prisma.BillWhereInput = {
+      ...(cycleId
+        ? { billingCycleId: cycleId }
+        : groupId || billingCategory
+          ? { billingCycle: {
+              ...(groupId ? { billingPeriodGroupId: groupId } : {}),
+              ...(billingCategory === "MR"
+                ? { cycleType: "METER_REPLACEMENT" }
+                : billingCategory === "OTHER"
+                  ? { cycleType: { not: "METER_REPLACEMENT" } }
+                  : {}),
+            } }
+          : {}),
+      ...(status ? { status } : {}),
+      ...(search ? { OR: [
+        { billNumber: { contains: search, mode: "insensitive" } },
+        { account: { accountNumber: { contains: search, mode: "insensitive" } } },
+        { account: { customer: { customerNumber: { contains: search, mode: "insensitive" } } } },
+        { account: { customer: { firstName: { contains: search, mode: "insensitive" } } } },
+        { account: { customer: { middleName: { contains: search, mode: "insensitive" } } } },
+        { account: { customer: { lastName: { contains: search, mode: "insensitive" } } } },
+        { account: { customer: { organizationName: { contains: search, mode: "insensitive" } } } },
+      ] } : {}),
+    };
+    const [total, totals, rows] = await Promise.all([
+      prisma.bill.count({ where }),
+      prisma.bill.aggregate({
+        where,
+        _sum: { totalCurrentCharges: true, totalAmountDue: true },
+      }),
+      prisma.bill.findMany({
+        where,
+        select: {
+          billId: true,
+          billNumber: true,
+          issueDate: true,
+          consumptionUnits: true,
+          totalCurrentCharges: true,
+          totalAmountDue: true,
+          status: true,
+          account: {
+            select: {
+              accountNumber: true,
+              customer: {
+                select: {
+                  customerType: true,
+                  organizationName: true,
+                  firstName: true,
+                  middleName: true,
+                  lastName: true,
+                },
+              },
+            },
+          },
+          billingCycle: { select: { cycleName: true, cycleCode: true, cycleType: true } },
+        },
+        orderBy: { billId: "desc" },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+    ]);
+    res.json({
+      items: rows.map((row) => ({ ...row, customerName: customerName(row.account.customer) })),
+      total,
+      page,
+      pageSize,
+      pages: Math.max(1, Math.ceil(total / pageSize)),
+      totals: {
+        currentCharges: Number(totals._sum.totalCurrentCharges ?? 0),
+        amountDue: Number(totals._sum.totalAmountDue ?? 0),
+      },
+    });
+  } catch (error) { next(error); }
+});
+
 billingRouter.get("/bills/:id", async (req, res, next) => {
   const billId = parse(id, req.params.id, res); if (!billId) return;
   try {

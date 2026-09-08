@@ -595,6 +595,12 @@ export const api = {
     ).toString();
     return request(`/billing/bills${query ? `?${query}` : ""}`);
   },
+  listBillingPeriodRecords: (filters: Record<string, string> = {}) => {
+    const query = new URLSearchParams(
+      Object.entries(filters).filter(([, value]) => value),
+    ).toString();
+    return request(`/billing/period-records${query ? `?${query}` : ""}`);
+  },
   getBill: (id: string) => request(`/billing/bills/${id}`),
   listReadingCorrectionCandidates: (search = "") => request(`/billing/reading-corrections/candidates${search ? `?search=${encodeURIComponent(search)}` : ""}`),
   previewReadingCorrection: (data: Record<string, unknown>) => request("/billing/reading-corrections/preview", { method: "POST", body: JSON.stringify(data) }),
