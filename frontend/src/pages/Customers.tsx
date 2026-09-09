@@ -20,6 +20,7 @@ interface Customer {
   status: string;
   registrationDate: string;
   accountCount: number;
+  accounts: Array<{ accountId: string; accountNumber: string; hasActiveMeter: boolean }>;
   activeMeters: Array<{ meterId: string; meterNumber: string }>;
 }
 
@@ -1012,6 +1013,8 @@ export default function Customers() {
                 customers.map((customer) => {
                   const id = String(customer.customerId);
                   const detailPath = `/customers/${encodeId(id)}`;
+                  const unmeteredAccounts = (customer.accounts ?? []).filter((account) => !account.hasActiveMeter);
+                  const meterAccount = unmeteredAccounts.length === 1 ? unmeteredAccounts[0] : null;
                   return (
                     <tr
                       key={id}
@@ -1076,10 +1079,29 @@ export default function Customers() {
                             </div>
                           </div>
                         ) : (
-                          <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700">
-                            <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
-                            No active meter
-                          </span>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700">
+                              <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+                              No active meter
+                            </span>
+                            {meterAccount ? (
+                              <Link
+                                to={`/meters/register?accountId=${encodeURIComponent(String(meterAccount.accountId))}&accountNumber=${encodeURIComponent(meterAccount.accountNumber)}`}
+                                className="rounded-lg bg-aqua-700 px-2.5 py-1.5 text-xs font-bold text-white transition hover:bg-aqua-800"
+                                title={`Create meter ${meterAccount.accountNumber}`}
+                              >
+                                Create meter
+                              </Link>
+                            ) : unmeteredAccounts.length > 1 ? (
+                              <Link to={detailPath} className="rounded-lg border border-sky-200 bg-sky-50 px-2.5 py-1.5 text-xs font-bold text-sky-700 hover:bg-sky-100">
+                                Choose account
+                              </Link>
+                            ) : (
+                              <Link to={detailPath} className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-50">
+                                Create account first
+                              </Link>
+                            )}
+                          </div>
                         )}
                       </td>
                       <td className="px-4 py-3.5 text-sm text-slate-600">

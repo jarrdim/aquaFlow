@@ -47,7 +47,9 @@ const meterSchema = z.object({
   path: ["warrantyExpiryDate"], message: "Warranty expiry must be on or after the purchase date",
 });
 
-const registerMeterSchema = meterSchema.innerType().omit({ meterNumber: true }).refine(
+const registerMeterSchema = meterSchema.innerType().omit({ meterNumber: true }).extend({
+  accountId: z.string().regex(/^\d+$/).optional(),
+}).refine(
   (data) => !data.purchaseDate || !data.warrantyExpiryDate || data.warrantyExpiryDate >= data.purchaseDate,
   { path: ["warrantyExpiryDate"], message: "Warranty expiry must be on or after the purchase date" },
 );
@@ -309,12 +311,16 @@ metersRouter.get("/dashboard", async (req, res) => {
 
 metersRouter.get("/accounts", async (req, res) => {
   const q = String(req.query.q ?? "");
+  const accountId = String(req.query.accountId ?? "");
   const accounts = await prisma.customerAccount.findMany({
-    where: q ? { OR: [
-      { accountNumber: { contains: q, mode: "insensitive" } }, { customer: { customerNumber: { contains: q, mode: "insensitive" } } },
-      { customer: { firstName: { contains: q, mode: "insensitive" } } }, { customer: { lastName: { contains: q, mode: "insensitive" } } },
-      { customer: { organizationName: { contains: q, mode: "insensitive" } } }, { customer: { phoneNumber: { contains: q } } },
-    ] } : undefined,
+    where: accountId && /^\d+$/.test(accountId)
+      ? { accountId: BigInt(accountId) }
+      : q ? { OR: [
+          { accountNumber: { contains: q, mode: "insensitive" } }, { customer: { customerNumber: { contains: q, mode: "insensitive" } } },
+          { customer: { firstName: { contains: q, mode: "insensitive" } } }, { customer: { middleName: { contains: q, mode: "insensitive" } } },
+          { customer: { lastName: { contains: q, mode: "insensitive" } } }, { customer: { organizationName: { contains: q, mode: "insensitive" } } },
+          { customer: { phoneNumber: { contains: q } } },
+        ] } : undefined,
     include: { customer: true, property: { include: { zone: true, route: true } } }, orderBy: { accountNumber: "asc" }, take: 100,
   });
   res.json(accounts.map((account) => ({ ...account, customerName: customerName(account.customer) })));
@@ -473,11 +479,24 @@ metersRouter.post("/", async (req, res) => {
   const data = parsed.data;
   try {
     const meter = await prisma.$transaction(async (tx) => {
+      const { accountId, ...meterData } = data;
+      const targetAccount = accountId
+        ? await tx.customerAccount.findUnique({
+            where: { accountId: BigInt(accountId) },
+            include: { meterAssignments: { where: { assignmentStatus: "ACTIVE" }, take: 1 } },
+          })
+        : null;
+      if (accountId && !targetAccount)
+        throw Object.assign(new Error("Customer account not found"), { status: 404 });
+      if (targetAccount?.meterAssignments.length)
+        throw Object.assign(new Error("This customer account already has an active meter"), { status: 409 });
       const created = await tx.meter.create({ data: {
-        ...data, meterNumber: await nextMeterNumber(), brand: data.brand, model: data.model, serialNumber: data.serialNumber,
-        installationDate: data.installationDate ? new Date(data.installationDate) : null,
-        purchaseDate: data.purchaseDate ? new Date(data.purchaseDate) : null,
-        warrantyExpiryDate: data.warrantyExpiryDate ? new Date(data.warrantyExpiryDate) : null,
+        ...meterData,
+        ...(targetAccount ? { meterType: "CUSTOMER" as const, status: "IN_STOCK" as const, installationStatus: "IN_STORE" as const } : {}),
+        meterNumber: targetAccount?.accountNumber ?? await nextMeterNumber(), brand: meterData.brand, model: meterData.model, serialNumber: meterData.serialNumber,
+        installationDate: meterData.installationDate ? new Date(meterData.installationDate) : null,
+        purchaseDate: meterData.purchaseDate ? new Date(meterData.purchaseDate) : null,
+        warrantyExpiryDate: meterData.warrantyExpiryDate ? new Date(meterData.warrantyExpiryDate) : null,
       } });
       await tx.meterEvent.create({ data: { meterId: created.meterId, eventType: "REGISTERED", newStatus: created.status, reading: created.openingReading, remarks: created.remarks, performedBy: userId(req) } });
       return created;
@@ -485,6 +504,7 @@ metersRouter.post("/", async (req, res) => {
     res.status(201).json(meter);
   } catch (error: any) {
     if (error?.code === "P2002") return res.status(409).json({ error: "Meter number or serial number already exists" });
+    if (error?.status) return res.status(error.status).json({ error: error.message });
     throw error;
   }
 });

@@ -16,7 +16,7 @@ const TH =
 const TD = "px-4 py-3 text-[15px] text-slate-600";
 const isoToday = () => new Date().toISOString().slice(0, 10);
 const NOTICE_MESSAGE_TEMPLATE =
-  "Dear {{customerName}},\n\nWe are excited to introduce our system, designed to make our services faster, easier, and more convenient.\n\nYour water account {{accountNumber}} has an outstanding balance of {{balance}}. Kindly make payment by {{paymentDeadline}} to avoid service disruption.\n\nIGNORE this text if you have paid.";
+  "Dear {{customerName}},\n\nFINAL REMINDER: Your water account {{accountNumber}} has an outstanding balance of {{balance}}.\n\nKindly settle the balance by {{paymentDeadline}} to avoid disconnection of your water service.\n\nIf you have already paid, please disregard this message.\n\nWe make it safe because water is life.\n\nThank you for your cooperation.";
 const messageDate = (value: any) => {
   const match = String(value ?? "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
   return match ? `${match[3]}/${match[2]}/${match[1]}` : "DD/MM/YYYY";

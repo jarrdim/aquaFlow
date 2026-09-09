@@ -321,8 +321,13 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(data),
     }),
-  listMeterAccounts: (q = "") =>
-    request(`/meters/accounts${q ? `?q=${encodeURIComponent(q)}` : ""}`),
+  listMeterAccounts: (q = "", accountId = "") => {
+    const query = new URLSearchParams();
+    if (q) query.set("q", q);
+    if (accountId) query.set("accountId", accountId);
+    const suffix = query.toString();
+    return request(`/meters/accounts${suffix ? `?${suffix}` : ""}`);
+  },
   listBoreholes: () => request("/meters/boreholes"),
   createBorehole: (data: Record<string, unknown>) =>
     request("/meters/boreholes", {

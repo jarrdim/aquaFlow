@@ -555,6 +555,9 @@ const emptyMeter = {
 };
 
 export function RegisterMeter() {
+  const [params] = useSearchParams();
+  const requestedAccountId = params.get("accountId") ?? "";
+  const requestedAccountNumber = params.get("accountNumber") ?? "";
   const [form, setForm] = useState<AnyRecord>(emptyMeter);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -568,6 +571,7 @@ export function RegisterMeter() {
     try {
       const meter = await api.createMeter({
         ...form,
+        accountId: requestedAccountId || undefined,
         meterSizeMm: Number(form.meterSizeMm),
         openingReading: Number(form.openingReading),
         gpsLatitude: form.gpsLatitude ? Number(form.gpsLatitude) : undefined,
@@ -575,7 +579,9 @@ export function RegisterMeter() {
         installationDate: form.installationDate || undefined,
       });
       if (another) setForm(emptyMeter);
-      else navigate(meterUrl(meter));
+      else navigate(requestedAccountId
+        ? `/meters/assign?meterId=${encodeURIComponent(String(meter.meterId))}&accountId=${encodeURIComponent(requestedAccountId)}`
+        : meterUrl(meter));
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -583,12 +589,14 @@ export function RegisterMeter() {
     }
   }
   return (
-    <Page title="Register water meter" subtitle="Add a new meter to inventory">
+    <Page title="Register water meter" subtitle={requestedAccountId ? "Create a meter for this customer account, then complete its assignment" : "Add a new meter to inventory"}>
       <Card title="Meter information">
         <form onSubmit={(e) => submit(e)}>
           {error && <Notice>{error}</Notice>}
           <div className="mb-4 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800">
-            The meter number will be generated automatically when this meter is saved.
+            {requestedAccountId
+              ? <>The meter number will match customer account <strong>{requestedAccountNumber || requestedAccountId}</strong>. After saving, complete the installation assignment.</>
+              : "The meter number will be generated automatically when this meter is saved."}
           </div>
           <div className="grid gap-x-4 gap-y-3 md:grid-cols-2 xl:grid-cols-3">
             <Field label="Meter type" required>
@@ -761,16 +769,18 @@ export function RegisterMeter() {
               Cancel
             </Button>
             <Button disabled={saving}>
-              {saving ? "Saving…" : "Save meter"}
+              {saving ? "Saving…" : requestedAccountId ? "Save meter & continue" : "Save meter"}
             </Button>
-            <Button
-              type="button"
-              tone="green"
-              disabled={saving}
-              onClick={(e) => submit(e as any, true)}
-            >
-              Save & add another
-            </Button>
+            {!requestedAccountId && (
+              <Button
+                type="button"
+                tone="green"
+                disabled={saving}
+                onClick={(e) => submit(e as any, true)}
+              >
+                Save & add another
+              </Button>
+            )}
           </div>
         </form>
       </Card>
@@ -1015,10 +1025,11 @@ export function AssignMeter({
   });
   const navigate = useNavigate();
   const [params] = useSearchParams();
+  const requestedAccountId = params.get("accountId") ?? "";
   const [form, setForm] = useState<AnyRecord>({
     meterId: params.get("meterId") ?? "",
     targetType: nonCustomer ? "zone" : "account",
-    accountId: "",
+    accountId: requestedAccountId,
     zoneId: "",
     boreholeId: "",
     assignmentDate: new Date().toISOString().slice(0, 10),
@@ -1032,7 +1043,7 @@ export function AssignMeter({
   useEffect(() => {
     Promise.all([
       api.listMeters({ status: "IN_STOCK" }),
-      api.listMeterAccounts(),
+      api.listMeterAccounts("", requestedAccountId),
       api.listZones(),
       api.listBoreholes(),
     ])
@@ -1193,6 +1204,10 @@ export function AssignMeter({
                   required
                   className={INPUT}
                   value={form.accountId}
+                  onSearchQuery={(query) => {
+                    setAccountSearch(query);
+                    api.listMeterAccounts(query).then(setAccounts).catch((e) => setError(e.message));
+                  }}
                   onChange={(e) =>
                     setForm({ ...form, accountId: e.target.value })
                   }
@@ -1200,7 +1215,7 @@ export function AssignMeter({
                   <option value="">Select customer account</option>
                   {accounts.map((a) => (
                     <option key={a.accountId} value={a.accountId}>
-                      {a.accountNumber} · {a.customerName}
+                      {a.accountNumber} · {a.customerName} · {a.customer?.customerNumber}
                     </option>
                   ))}
                 </SearchableSelect>

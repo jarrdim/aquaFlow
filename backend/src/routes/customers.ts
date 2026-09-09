@@ -94,6 +94,7 @@ customersRouter.get("/", async (req, res) => {
         accounts: {
           select: {
             accountId: true,
+            accountNumber: true,
             meterAssignments: {
               where: { assignmentStatus: "ACTIVE" },
               select: {
@@ -124,6 +125,11 @@ customersRouter.get("/", async (req, res) => {
     items: items.map(({ accounts, ...customer }) => ({
       ...customer,
       accountCount: accounts.length,
+      accounts: accounts.map((account) => ({
+        accountId: account.accountId,
+        accountNumber: account.accountNumber,
+        hasActiveMeter: account.meterAssignments.length > 0,
+      })),
       activeMeters: accounts.flatMap((account) =>
         account.meterAssignments.map((assignment) => ({
           meterId: assignment.meterId,

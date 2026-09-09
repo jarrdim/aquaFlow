@@ -327,7 +327,7 @@ async function debtNoticeSmsMessage(notice: any, db: any = prisma) {
   const name = customerName(notice.account.customer);
   const accountNumber = notice.account.accountNumber;
   const balance = moneyForMessage(notice.outstandingAmount);
-  return `Dear ${name},\n\nWe are excited to introduce our system, designed to make our services faster, easier, and more convenient.\n\nYour water account ${accountNumber} has an outstanding balance of ${balance}. Kindly make payment by ${dateForMessage(deadline)} to avoid service disruption.\n\nIGNORE this text if you have paid.\n\nClick the link below to pay\n${paymentUrl}\n\nReconnection Fee is KSh ${reconnectionFee}.\n\nWe make it safe because water is life.\n\nThanks.`;
+  return `Dear ${name},\n\nFINAL REMINDER: Your water account ${accountNumber} has an outstanding balance of ${balance}.\n\nKindly settle the balance by ${dateForMessage(deadline)} to avoid disconnection of your water service.\n\nPay conveniently using the link below:\n${paymentUrl}\n\nReconnection fee: KSh ${reconnectionFee}.\n\nIf you have already paid, please disregard this message.\n\nWe make it safe because water is life.\n\nThank you for your cooperation.`;
 }
 
 async function refreshStatuses() {

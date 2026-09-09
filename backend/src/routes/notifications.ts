@@ -52,7 +52,7 @@ function withBalancePaymentLink(
     minimumFractionDigits: 0,
     maximumFractionDigits: 2,
   });
-  return `Dear ${details.customerName},\n\nWe are excited to introduce our system, designed to make our services faster, easier, and more convenient.\n\nYour water account ${details.accountNumber} has an outstanding balance of ${details.balance}. Kindly make payment by ${messageDate(deadline)} to avoid service disruption.\n\nIGNORE this text if you have paid.\n\nClick the link below to pay\n${url}\n\nReconnection Fee is KSh ${fee}.\n\nWe make it safe because water is life.\n\nThanks.`;
+  return `Dear ${details.customerName},\n\nFINAL REMINDER: Your water account ${details.accountNumber} has an outstanding balance of KSh ${details.balance}.\n\nKindly settle the balance by ${messageDate(deadline)} to avoid disconnection of your water service.\n\nPay conveniently using the link below:\n${url}\n\nReconnection fee: KSh ${fee}.\n\nIf you have already paid, please disregard this message.\n\nWe make it safe because water is life.\n\nThank you for your cooperation.`;
 }
 
 const onfonConfigurationSchema = z.object({
@@ -350,7 +350,7 @@ async function activeTemplate(notificationType: string, channel: string) {
     BALANCE_REMINDER_SMS: {
       subject: null,
       messageBody:
-        "Dear {{customer_name}},\nYour water account {{account_number}} has an outstanding balance of KSh {{balance}}. Kindly make payment to avoid service disruption.\nIGNORE this text if you have paid.",
+        "Dear {{customer_name}},\n\nFINAL REMINDER: Your water account {{account_number}} has an outstanding balance of KSh {{balance}}.\n\nKindly settle the balance to avoid disconnection of your water service.\n\nIf you have already paid, please disregard this message.\n\nWe make it safe because water is life.\n\nThank you for your cooperation.",
     },
     BALANCE_REMINDER_EMAIL: {
       subject: "Outstanding balance for {{account_number}}",
