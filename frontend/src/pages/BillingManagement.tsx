@@ -9,6 +9,7 @@ import { SweetAlertToast } from "../components/SweetAlertToast";
 import { maskAddress, maskEmail, maskIdentifier, maskName, maskPhone, usePrivacyMode } from "../lib/privacyMode";
 import Swal from "sweetalert2";
 import { DateInput } from "../components/DateInput";
+import { DeliveryQueueLink } from "../components/DeliveryQueueLink";
 
 type Row = Record<string, any>;
 const INPUT =
@@ -4383,12 +4384,7 @@ export function BillNotifications() {
                 </span>
               ) : notificationCyclesReady ? `Queue ${selectedBillIds.length} selected bill(s)` : "Close reading cycle first"}
             </Button>
-            <Link
-              to="/notifications/queue"
-              className="flex w-full items-center justify-center rounded-xl border border-emerald-600 bg-white px-4 py-2.5 text-[15px] font-semibold text-emerald-700 transition hover:bg-emerald-50"
-            >
-              Open delivery queue
-            </Link>
+            <DeliveryQueueLink className="flex w-full rounded-xl border border-emerald-600 bg-white px-4 py-2.5 text-[15px] font-semibold text-emerald-700 transition hover:bg-emerald-50" />
           </div>
         </Card>
         <Card title="Message preview">

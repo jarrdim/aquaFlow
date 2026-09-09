@@ -3010,13 +3010,18 @@ export function DirectMeterReplacement() {
 type DirectServiceMode = "DISCONNECT" | "RECONNECT";
 
 export function DirectMeterService() {
+  const [serviceParams] = useSearchParams();
+  const linkedAccountId = serviceParams.get("accountId") ?? "";
+  const linkedAccountNumber = serviceParams.get("accountNumber") ?? "";
+  const linkedListItemId = serviceParams.get("listItemId") ?? "";
+  const linkedListReference = serviceParams.get("listReference") ?? "";
   const nowLocal = () => {
     const date = new Date();
     return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
   };
   const [items, setItems] = useState<AnyRecord[]>([]);
   const [historyItems, setHistoryItems] = useState<AnyRecord[]>([]);
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(linkedAccountNumber);
   const [selected, setSelected] = useState<AnyRecord | null>(null);
   const [mode, setMode] = useState<DirectServiceMode | null>(null);
   const [loading, setLoading] = useState(true);
@@ -3041,15 +3046,18 @@ export function DirectMeterService() {
         api.getDirectMeterServiceOptions(searchValue),
         api.getDirectMeterServiceHistory(),
       ]);
-      setItems(options.items ?? []);
+      const nextItems = options.items ?? [];
+      setItems(nextItems);
       setHistoryItems(recent ?? []);
-      if (selected) {
-        setSelected((options.items ?? []).find((row: AnyRecord) => String(row.meterId) === String(selected.meterId)) ?? null);
-      }
+      setSelected((current) => {
+        if (current) return nextItems.find((row: AnyRecord) => String(row.meterId) === String(current.meterId)) ?? null;
+        if (linkedAccountId) return nextItems.find((row: AnyRecord) => String(row.accountId) === linkedAccountId) ?? null;
+        return null;
+      });
     } catch (err: any) { setError(err.message); }
     finally { if (!background) setLoading(false); }
   }
-  useEffect(() => { void load("", false); }, []);
+  useEffect(() => { void load(linkedAccountNumber, false); }, []);
   useEffect(() => {
     const timer = window.setTimeout(() => void load(search, true), 300);
     return () => window.clearTimeout(timer);
@@ -3109,6 +3117,7 @@ export function DirectMeterService() {
         const result = await api.createDirectMeterDisconnection({
           ...common, currentReading: Number(form.currentReading),
           customerAcknowledgement: form.customerAcknowledgement,
+          disconnectionListItemId: linkedListItemId || undefined,
         });
         setSuccess(`${selected.meterNumber} disconnected. Final reading ${Number(form.currentReading).toLocaleString()} and KSh ${Number(result.finalReadingCharge).toLocaleString("en-KE", { minimumFractionDigits: 2 })} posted.`);
       } else {
@@ -3183,8 +3192,13 @@ export function DirectMeterService() {
 
   return <Page title="Direct meter disconnection & reconnection"
     subtitle="Record completed service changes immediately without dispatching field work"
-    actions={<LinkButton to="/work-orders" tone="orange">Open work orders</LinkButton>}>
+    actions={<>{linkedListItemId && <LinkButton to="/arrears/disconnections">Back to disconnection list</LinkButton>}<LinkButton to="/work-orders" tone="orange">Open work orders</LinkButton></>}>
     {error && <Notice>{error}</Notice>}{success && <Notice kind="success">{success}</Notice>}
+    {linkedListItemId && (
+      <Notice kind="success">
+        Linked to approved list <strong>{linkedListReference || linkedListItemId}</strong>. Completing the direct disconnection will update this list item automatically.
+      </Notice>
+    )}
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(360px,.65fr)]">
       <div className="space-y-4">
         <Card title="Find customer meter">

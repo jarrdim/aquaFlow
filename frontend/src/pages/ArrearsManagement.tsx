@@ -6,6 +6,7 @@ import { SearchableSelect } from "../components/SearchableSelect";
 import { CheckboxMultiSelect } from "../components/CheckboxMultiSelect";
 import { SweetAlertToast } from "../components/SweetAlertToast";
 import { DateInput } from "../components/DateInput";
+import { DeliveryQueueLink } from "../components/DeliveryQueueLink";
 
 type Row = Record<string, any>;
 const INPUT =
@@ -108,10 +109,12 @@ function LinkButton({
   to,
   children,
   tone = "blue",
+  className = "",
 }: {
   to: string;
   children: ReactNode;
   tone?: "blue" | "green" | "slate" | "orange";
+  className?: string;
 }) {
   const tones = {
     blue: "bg-aqua-700",
@@ -122,7 +125,7 @@ function LinkButton({
   return (
     <Link
       to={to}
-      className={`rounded-lg px-4 py-2 font-semibold text-white ${tones[tone]}`}
+      className={`rounded-lg px-4 py-2 font-semibold text-white ${tones[tone]} ${className}`}
     >
       {children}
     </Link>
@@ -890,9 +893,7 @@ export function PaymentReminders() {
       title="Send payment reminders"
       subtitle="Target overdue customers and queue controlled multi-channel reminders"
       actions={
-        <LinkButton to="/notifications/queue" tone="green">
-          Open delivery queue
-        </LinkButton>
+        <DeliveryQueueLink className="rounded-lg bg-emerald-600 px-4 py-2 font-semibold text-white hover:bg-emerald-700" />
       }
     >
       {error && <Alert>{error}</Alert>}
@@ -1116,6 +1117,7 @@ export function PaymentReminders() {
 }
 
 export function DemandNotices() {
+  const NOTICE_BATCH_SIZE = 1000;
   const queryAccount =
     new URLSearchParams(window.location.search).get("accountId") ?? "";
   const [rows, setRows] = useState<Row[]>([]);
@@ -1128,14 +1130,14 @@ export function DemandNotices() {
     queryAccount ? [queryAccount] : [],
   );
   const [selected, setSelected] = useState<Row>();
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [comments, setComments] = useState("");
+  const [selectedNoticeIds, setSelectedNoticeIds] = useState<string[]>([]);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(true);
-  const [acting, setActing] = useState<"APPROVE" | "REJECT" | "RETURN" | "">(
-    "",
-  );
+  const [accountsLoading, setAccountsLoading] = useState(true);
+  const [accountBatch, setAccountBatch] = useState(1);
+  const [submitting, setSubmitting] = useState(false);
+  const [noticeAction, setNoticeAction] = useState<"REQUEUE" | "DELETE" | "">("");
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
   const [page, setPage] = useState(1);
@@ -1147,39 +1149,56 @@ export function DemandNotices() {
     deliveryChannel: "SMS",
     messageBody: NOTICE_MESSAGE_TEMPLATE,
   });
-  const load = async (pageValue = page, includeAccounts = false) => {
+  const load = async (pageValue = page) => {
     setLoading(true);
     setError("");
     try {
-      const [noticeResult, accountRows] = await Promise.all([
-        api.listDebtNotices({
-          page: String(pageValue),
-          pageSize: "25",
-          search,
-          status,
-        }),
-        includeAccounts ? api.listArrearsAccounts() : Promise.resolve(null),
-      ]);
+      const noticeResult = await api.listDebtNotices({
+        page: String(pageValue),
+        pageSize: "25",
+        search,
+        deliveryStatus: status,
+      });
       const noticeRows = noticeResult.rows ?? [];
       setRows(noticeRows);
       setTotal(Number(noticeResult.total ?? 0));
       setPage(Number(noticeResult.page ?? pageValue));
       setTotalPages(Number(noticeResult.totalPages ?? 1));
-      if (accountRows) setAccounts(accountRows);
       setSelected(
         (current) =>
           noticeRows.find((row: Row) => row.noticeId === current?.noticeId) ??
           noticeRows[0],
       );
-      setSelectedIds([]);
+      setSelectedNoticeIds([]);
     } catch (e: any) {
       setError(e.message);
     } finally {
       setLoading(false);
     }
   };
+  const loadAudience = async (noticeType = String(form.noticeType)) => {
+    setAccountsLoading(true);
+    setError("");
+    try {
+      const accountRows = await api.listArrearsAccounts({
+        excludeNoticeType: noticeType,
+      });
+      setAccounts(accountRows);
+      setRecipientIds((current) =>
+        current.filter((accountId) =>
+          accountRows.some((row: Row) => String(row.accountId) === accountId),
+        ),
+      );
+      setAccountBatch(1);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setAccountsLoading(false);
+    }
+  };
   useEffect(() => {
-    void load(1, true);
+    void load(1);
+    void loadAudience("DEMAND");
     Promise.all([api.listZones(), api.listCategories()])
       .then(([zoneRows, categoryRows]) => {
         setZones(zoneRows);
@@ -1196,6 +1215,15 @@ export function DemandNotices() {
             categoryIds.includes(String(account.category?.categoryId))),
       ),
     [accounts, zoneIds, categoryIds],
+  );
+  const accountBatchCount = Math.max(
+    1,
+    Math.ceil(filteredAccounts.length / NOTICE_BATCH_SIZE),
+  );
+  const accountBatchStart = (accountBatch - 1) * NOTICE_BATCH_SIZE;
+  const accountBatchAccounts = filteredAccounts.slice(
+    accountBatchStart,
+    accountBatchStart + NOTICE_BATCH_SIZE,
   );
   const recipientAccounts = useMemo(
     () =>
@@ -1222,6 +1250,7 @@ export function DemandNotices() {
   ) {
     setZoneIds(nextZoneIds);
     setCategoryIds(nextCategoryIds);
+    setAccountBatch(1);
     setRecipientIds((current) =>
       current.filter((accountId) => {
         const account = accounts.find(
@@ -1240,63 +1269,77 @@ export function DemandNotices() {
   async function submit(event: FormEvent) {
     event.preventDefault();
     try {
+      setSubmitting(true);
+      setError("");
       const result = await api.createDebtNotice({
         ...form,
         accountIds: recipientIds,
       });
       setMessage(
-        `${Number(result.created ?? recipientIds.length)} demand notice(s) submitted for independent approval.`,
+        `${Number(result.queued ?? result.created ?? recipientIds.length)} demand notice(s) created and queued for delivery.`,
       );
       setRecipientIds([]);
-      await load(1);
-    } catch (e: any) {
-      setError(e.message);
-    }
-  }
-  async function decide(decision: "APPROVE" | "REJECT" | "RETURN") {
-    const noticeIds = selectedIds.length
-      ? selectedIds
-      : selected
-        ? [String(selected.noticeId)]
-        : [];
-    if (!noticeIds.length) return;
-    try {
-      setActing(decision);
-      setError("");
-      if (noticeIds.length === 1 && !selectedIds.length)
-        await api.decideDebtNotice(noticeIds[0], decision, comments);
-      else await api.decideDebtNotices(noticeIds, decision, comments);
-      setMessage(
-        decision === "APPROVE"
-          ? `${noticeIds.length} notice(s) approved and sent to the notification queue.`
-          : `${noticeIds.length} notice(s) ${decision.toLowerCase()}d.`,
-      );
-      setComments("");
-      await load();
+      await Promise.all([load(1), loadAudience(String(form.noticeType))]);
     } catch (e: any) {
       setError(e.message);
     } finally {
-      setActing("");
+      setSubmitting(false);
     }
   }
-  const pendingRows = rows.filter(
-    (row) => row.noticeStatus === "PENDING_APPROVAL",
+  async function requeueNotice(notice: Row) {
+    try {
+      setNoticeAction("REQUEUE");
+      setError("");
+      const updated = await api.requeueDebtNotice(String(notice.noticeId));
+      setMessage(
+        updated.deliveryStatus === "FAILED"
+          ? "The notice could not be queued because the customer has no valid delivery recipient."
+          : "Demand notice returned to the delivery queue.",
+      );
+      await load(page);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setNoticeAction("");
+    }
+  }
+  async function deleteNotices(noticeIds: string[], label?: string) {
+    if (!noticeIds.length) return;
+    const confirmed = window.confirm(
+      `Delete ${label ?? `${noticeIds.length} selected unsent notices`}? This removes the notice${noticeIds.length === 1 ? "" : "s"} and any queued delivery jobs. The customers will return to the unnotified account list.`,
+    );
+    if (!confirmed) return;
+    try {
+      setNoticeAction("DELETE");
+      setError("");
+      const result = await api.deleteDebtNotices(noticeIds);
+      setMessage(`${Number(result.deleted ?? noticeIds.length)} unsent notice(s) deleted. The customers are available for selection again.`);
+      setSelected(undefined);
+      setSelectedNoticeIds([]);
+      await Promise.all([load(page), loadAudience(String(form.noticeType))]);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setNoticeAction("");
+    }
+  }
+  const deleteNotice = (notice: Row) =>
+    deleteNotices([String(notice.noticeId)], notice.noticeNumber);
+  const deletableRows = rows.filter(
+    (row) => !["SENT", "DELIVERED"].includes(row.deliveryStatus),
   );
-  const allPendingOnPageSelected =
-    pendingRows.length > 0 &&
-    pendingRows.every((row) => selectedIds.includes(String(row.noticeId)));
-  const decisionRows = selectedIds.length
-    ? rows.filter((row) => selectedIds.includes(String(row.noticeId)))
-    : selected
-      ? [selected]
-      : [];
-  const decisionPending =
-    decisionRows.length > 0 &&
-    decisionRows.every((row) => row.noticeStatus === "PENDING_APPROVAL");
+  const allDeletableOnPageSelected =
+    deletableRows.length > 0 &&
+    deletableRows.every((row) => selectedNoticeIds.includes(String(row.noticeId)));
   return (
     <Page
       title="Demand notices"
-      subtitle="Generate, approve and track formal recovery notices"
+      subtitle="Generate, queue and track formal recovery notices"
+      actions={
+        <DeliveryQueueLink
+          className="fixed right-4 top-28 z-40 rounded-lg border border-emerald-400/40 bg-emerald-600 px-4 py-2 font-semibold text-white shadow-xl shadow-emerald-950/20 ring-4 ring-white/80 transition hover:-translate-y-0.5 hover:bg-emerald-700 sm:right-6"
+        />
+      }
     >
       {error && <Alert>{error}</Alert>}
       {message && <Alert success>{message}</Alert>}
@@ -1331,41 +1374,16 @@ export function DemandNotices() {
                 />
               </Field>
             </div>
-            <Field label="Customer accounts *">
-              <CheckboxMultiSelect
-                className={INPUT}
-                maxSelected={500}
-                value={recipientIds}
-                onChange={(values) => setRecipientIds(values.slice(0, 500))}
-                placeholder="Select customer accounts"
-                options={filteredAccounts.map((account) => ({
-                  value: String(account.accountId),
-                  label: `${account.accountNumber} · ${account.customerName} · ${money(account.currentBalance)}`,
-                }))}
-              />
-            </Field>
-            <div className="rounded-xl bg-blue-50 p-3 text-sm text-blue-700">
-              <div className="flex items-center justify-between gap-3">
-                <span>
-                  <strong>{recipientIds.length}</strong> account(s) selected
-                </span>
-                <span>
-                  Combined balance: <strong>{money(combinedBalance)}</strong>
-                </span>
-              </div>
-              <div className="mt-1 text-xs text-blue-600">
-                Maximum 500 notices per submission. Use the zone and category
-                filters to narrow the customer list.
-              </div>
-            </div>
             <div className="grid grid-cols-2 gap-3">
               <Field label="Notice type *">
                 <SearchableSelect
                   className={INPUT}
                   value={form.noticeType}
-                  onChange={(e) =>
-                    setForm({ ...form, noticeType: e.target.value })
-                  }
+                  onChange={(e) => {
+                    setForm({ ...form, noticeType: e.target.value });
+                    setRecipientIds([]);
+                    void loadAudience(e.target.value);
+                  }}
                 >
                   <option value="DEMAND">Demand</option>
                   <option value="FINAL_DEMAND">Final demand</option>
@@ -1383,6 +1401,94 @@ export function DemandNotices() {
                   }
                 />
               </Field>
+            </div>
+            <Field label="Customer accounts *">
+              <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+                <div className="border-b border-slate-200 bg-slate-50 p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-bold text-slate-800">
+                        Unnotified accounts · {pretty(form.noticeType)}
+                      </div>
+                      <div className="mt-0.5 text-xs text-slate-500">
+                        Accounts with a pending or completed notice of this type are automatically excluded.
+                      </div>
+                    </div>
+                    <span className="rounded-full bg-white px-3 py-1 text-xs font-bold text-aqua-700 shadow-sm">
+                      {accountsLoading ? "Loading…" : `${filteredAccounts.length.toLocaleString()} remaining`}
+                    </span>
+                  </div>
+                </div>
+                <div className="p-3">
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <div className="text-sm font-semibold text-slate-700">
+                        Batch {accountBatch} of {accountBatchCount}
+                      </div>
+                      <div className="text-xs text-slate-500">
+                        {filteredAccounts.length
+                          ? `Accounts ${(accountBatchStart + 1).toLocaleString()}–${Math.min(accountBatchStart + NOTICE_BATCH_SIZE, filteredAccounts.length).toLocaleString()} of ${filteredAccounts.length.toLocaleString()}`
+                          : "No accounts remain for the selected audience"}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                        disabled={accountsLoading || accountBatch <= 1}
+                        onClick={() => { setRecipientIds([]); setAccountBatch((value) => Math.max(1, value - 1)); }}
+                      >
+                        Previous {NOTICE_BATCH_SIZE.toLocaleString()}
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                        disabled={accountsLoading || accountBatch >= accountBatchCount}
+                        onClick={() => { setRecipientIds([]); setAccountBatch((value) => Math.min(accountBatchCount, value + 1)); }}
+                      >
+                        Next {NOTICE_BATCH_SIZE.toLocaleString()}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+                    <CheckboxMultiSelect
+                      className={INPUT}
+                      disabled={accountsLoading || !accountBatchAccounts.length}
+                      loading={accountsLoading}
+                      maxSelected={NOTICE_BATCH_SIZE}
+                      value={recipientIds}
+                      onChange={(values) => setRecipientIds(values.slice(0, NOTICE_BATCH_SIZE))}
+                      placeholder="Choose accounts from this batch"
+                      emptyMessage="No unnotified accounts in this batch"
+                      options={accountBatchAccounts.map((account) => ({
+                        value: String(account.accountId),
+                        label: `${account.accountNumber} · ${account.customerName} · ${money(account.currentBalance)}`,
+                      }))}
+                    />
+                    <button
+                      type="button"
+                      className="rounded-lg bg-aqua-700 px-4 py-2 text-sm font-bold text-white transition hover:bg-aqua-800 disabled:cursor-not-allowed disabled:opacity-40"
+                      disabled={accountsLoading || !accountBatchAccounts.length}
+                      onClick={() => setRecipientIds(accountBatchAccounts.map((account) => String(account.accountId)))}
+                    >
+                      Select this batch ({accountBatchAccounts.length})
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </Field>
+            <div className="rounded-xl border border-blue-100 bg-blue-50 p-3 text-sm text-blue-700">
+              <div className="flex items-center justify-between gap-3">
+                <span>
+                  <strong>{recipientIds.length}</strong> account(s) selected
+                </span>
+                <span>
+                  Combined balance: <strong>{money(combinedBalance)}</strong>
+                </span>
+              </div>
+              <div className="mt-1 text-xs text-blue-600">
+                Submit this batch, then the selected accounts are removed from the unnotified audience and the next batch is ready automatically.
+              </div>
             </div>
             <Field label="Delivery channel">
               <SearchableSelect
@@ -1426,13 +1532,15 @@ export function DemandNotices() {
               type="submit"
               className="w-full"
               disabled={
+                submitting ||
                 !recipientIds.length ||
                 !form.paymentDeadline ||
                 String(form.messageBody).trim().length < 10
               }
             >
-              Submit {recipientIds.length || ""} notice
-              {recipientIds.length === 1 ? "" : "s"} for approval
+              {submitting
+                ? `Submitting ${recipientIds.length} notices…`
+                : `Create & queue ${recipientIds.length || ""} notice${recipientIds.length === 1 ? "" : "s"}`}
             </Button>
           </form>
         </Card>
@@ -1456,29 +1564,26 @@ export function DemandNotices() {
                 value={status}
                 onChange={(event) => setStatus(event.target.value)}
               >
-                <option value="">All statuses</option>
-                <option value="PENDING_APPROVAL">Pending approval</option>
-                <option value="APPROVED">Approved</option>
-                <option value="RETURNED">Returned</option>
-                <option value="REJECTED">Rejected</option>
+                <option value="">All delivery statuses</option>
+                <option value="QUEUED">Queued</option>
+                <option value="SENT">Sent</option>
+                <option value="DELIVERED">Delivered</option>
+                <option value="FAILED">Failed</option>
+                <option value="READY_TO_PRINT">Ready to print</option>
               </SearchableSelect>
               <Button type="submit" disabled={loading}>
                 {loading ? "Loading…" : "Search"}
               </Button>
             </form>
-            {selectedIds.length > 0 && (
-              <div className="mb-3 flex items-center justify-between rounded-xl bg-blue-50 px-3 py-2 text-sm text-blue-800">
-                <span>
-                  <strong>{selectedIds.length}</strong> pending notice(s)
-                  selected on this page
-                </span>
-                <button
-                  type="button"
-                  className="font-semibold"
-                  onClick={() => setSelectedIds([])}
-                >
-                  Clear selection
-                </button>
+            {selectedNoticeIds.length > 0 && (
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-100 bg-red-50 px-3 py-2.5 text-sm text-red-800">
+                <span><strong>{selectedNoticeIds.length}</strong> unsent notice(s) selected on this page</span>
+                <div className="flex items-center gap-3">
+                  <button type="button" className="font-semibold text-slate-600" onClick={() => setSelectedNoticeIds([])}>Clear</button>
+                  <button type="button" disabled={!!noticeAction} className="rounded-lg bg-red-600 px-3 py-1.5 font-bold text-white disabled:opacity-40" onClick={() => void deleteNotices(selectedNoticeIds)}>
+                    {noticeAction === "DELETE" ? "Deleting…" : `Delete selected (${selectedNoticeIds.length})`}
+                  </button>
+                </div>
               </div>
             )}
             <div className="max-h-80 overflow-auto">
@@ -1488,13 +1593,13 @@ export function DemandNotices() {
                     <th className={TH}>
                       <input
                         type="checkbox"
-                        aria-label="Select all pending notices on this page"
-                        disabled={loading || !pendingRows.length}
-                        checked={allPendingOnPageSelected}
+                        aria-label="Select all deletable notices on this page"
+                        disabled={loading || !deletableRows.length}
+                        checked={allDeletableOnPageSelected}
                         onChange={(event) =>
-                          setSelectedIds(
+                          setSelectedNoticeIds(
                             event.target.checked
-                              ? pendingRows.map((row) => String(row.noticeId))
+                              ? deletableRows.map((row) => String(row.noticeId))
                               : [],
                           )
                         }
@@ -1504,7 +1609,7 @@ export function DemandNotices() {
                     <th className={TH}>Account</th>
                     <th className={TH}>Amount</th>
                     <th className={TH}>Deadline</th>
-                    <th className={TH}>Status</th>
+                    <th className={TH}>Delivery</th>
                     <th className={TH}>Action</th>
                   </tr>
                 </thead>
@@ -1524,28 +1629,26 @@ export function DemandNotices() {
                   ) : (
                     <>
                       {rows.map((row) => {
-                        const id = String(row.noticeId);
-                        const pending = row.noticeStatus === "PENDING_APPROVAL";
                         return (
                           <tr
                             key={row.noticeId}
-                            className={`border-t ${selectedIds.includes(id) ? "bg-blue-50" : ""}`}
+                            className={`border-t transition hover:bg-slate-50 ${selected?.noticeId === row.noticeId ? "bg-blue-50" : ""}`}
                           >
                             <td className={TD}>
-                              <input
-                                type="checkbox"
-                                aria-label={`Select ${row.noticeNumber}`}
-                                disabled={!pending}
-                                checked={selectedIds.includes(id)}
-                                onChange={() => {
-                                  setSelected(row);
-                                  setSelectedIds((values) =>
-                                    values.includes(id)
-                                      ? values.filter((value) => value !== id)
-                                      : [...values, id],
-                                  );
-                                }}
-                              />
+                              {!["SENT", "DELIVERED"].includes(row.deliveryStatus) ? (
+                                <input
+                                  type="checkbox"
+                                  aria-label={`Select ${row.noticeNumber} for deletion`}
+                                  checked={selectedNoticeIds.includes(String(row.noticeId))}
+                                  onChange={(event) =>
+                                    setSelectedNoticeIds((values) =>
+                                      event.target.checked
+                                        ? [...values, String(row.noticeId)]
+                                        : values.filter((value) => value !== String(row.noticeId)),
+                                    )
+                                  }
+                                />
+                              ) : <span className="text-slate-300">—</span>}
                             </td>
                             <td className={TD}>
                               <strong>{row.noticeNumber}</strong>
@@ -1564,19 +1667,18 @@ export function DemandNotices() {
                             </td>
                             <td className={TD}>{date(row.paymentDeadline)}</td>
                             <td className={TD}>
-                              <Badge value={row.noticeStatus} />
+                              <Badge value={row.deliveryStatus} />
                             </td>
                             <td className={TD}>
-                              <button
-                                type="button"
-                                className="font-semibold text-aqua-700"
-                                onClick={() => {
-                                  setSelectedIds([]);
-                                  setSelected(row);
-                                }}
-                              >
-                                Review
-                              </button>
+                              <div className="flex items-center gap-2 whitespace-nowrap">
+                                <button type="button" className="font-semibold text-aqua-700" onClick={() => setSelected(row)}>Review</button>
+                                {["PENDING", "FAILED"].includes(row.deliveryStatus) && (
+                                  <button type="button" disabled={!!noticeAction} className="font-semibold text-emerald-700 disabled:opacity-40" onClick={() => void requeueNotice(row)}>Queue again</button>
+                                )}
+                                {!["SENT", "DELIVERED"].includes(row.deliveryStatus) && (
+                                  <button type="button" disabled={!!noticeAction} className="font-semibold text-red-600 disabled:opacity-40" onClick={() => void deleteNotice(row)}>Delete</button>
+                                )}
+                              </div>
                             </td>
                           </tr>
                         );
@@ -1600,8 +1702,7 @@ export function DemandNotices() {
               <span>
                 {total
                   ? `Showing ${(page - 1) * 25 + 1}–${Math.min(page * 25, total)} of ${total}`
-                  : "No notices"}{" "}
-                · Bulk selection is limited to the current page.
+                  : "No notices"}
               </span>
               <div className="flex items-center gap-2">
                 <Button
@@ -1622,100 +1723,44 @@ export function DemandNotices() {
               </div>
             </div>
           </Card>
-          {decisionRows.length > 0 && (
-            <Card
-              title={
-                decisionRows.length > 1
-                  ? `Approval decision · ${decisionRows.length} notices selected`
-                  : `Approval decision · ${decisionRows[0].noticeNumber}`
-              }
-            >
-              {decisionRows.length > 1 ? (
-                <div className="mb-3 rounded-xl bg-blue-50 p-3">
-                  <div className="font-semibold">
-                    Reviewing {decisionRows.length} pending notices
-                  </div>
-                  <div className="mt-1 text-sm text-slate-600">
-                    Combined amount:{" "}
-                    <strong>
-                      {money(
-                        decisionRows.reduce(
-                          (sum, row) =>
-                            sum + Number(row.outstandingAmount ?? 0),
-                          0,
-                        ),
-                      )}
-                    </strong>
-                    . The same decision and comment will be recorded against
-                    each notice.
-                  </div>
-                  <div className="mt-2 max-h-28 overflow-y-auto rounded-lg bg-white px-3">
-                    {decisionRows.map((row) => (
-                      <div
-                        key={row.noticeId}
-                        className="flex justify-between gap-3 border-b py-2 text-sm last:border-0"
-                      >
-                        <span>
-                          {row.noticeNumber} · {row.account?.accountNumber}
-                        </span>
-                        <strong>{money(row.outstandingAmount)}</strong>
-                      </div>
-                    ))}
-                  </div>
+          {selected && (
+            <Card title={`Notice details · ${selected.noticeNumber}`}>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div className="rounded-xl bg-slate-50 p-3">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">Account</div>
+                  <div className="mt-1 font-bold text-slate-800">{selected.account?.accountNumber}</div>
+                  <div className="text-sm text-slate-500">{customerName(selected.account?.customer)}</div>
                 </div>
-              ) : (
-                <div className="mb-3 rounded-xl bg-slate-50 p-3">
-                  <div className="font-semibold">
-                    {pretty(decisionRows[0].noticeType)} ·{" "}
-                    {money(decisionRows[0].outstandingAmount)}
-                  </div>
-                  <div className="mt-1 text-sm text-slate-600">
-                    {decisionRows[0].messageBody}
-                  </div>
+                <div className="rounded-xl bg-slate-50 p-3">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">Amount</div>
+                  <div className="mt-1 font-bold text-slate-800">{money(selected.outstandingAmount)}</div>
+                  <div className="text-sm text-slate-500">Due {date(selected.paymentDeadline)}</div>
+                </div>
+                <div className="rounded-xl bg-slate-50 p-3">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">Delivery</div>
+                  <div className="mt-1"><Badge value={selected.deliveryStatus} /></div>
+                  <div className="mt-1 text-sm text-slate-500">via {pretty(selected.deliveryChannel)}</div>
+                </div>
+              </div>
+              <div className="mt-3 rounded-xl border border-slate-200 bg-white p-4">
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <strong>{pretty(selected.noticeType)}</strong>
+                  <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700">No approval required</span>
+                </div>
+                <p className="whitespace-pre-line text-sm leading-6 text-slate-600">{selected.messageBody}</p>
+              </div>
+              {!["SENT", "DELIVERED"].includes(selected.deliveryStatus) && (
+                <div className="mt-3 flex flex-wrap justify-end gap-2 border-t border-slate-100 pt-3">
+                  {["PENDING", "FAILED"].includes(selected.deliveryStatus) && (
+                    <Button tone="green" disabled={!!noticeAction} onClick={() => void requeueNotice(selected)}>
+                      {noticeAction === "REQUEUE" ? "Queueing…" : "Queue again"}
+                    </Button>
+                  )}
+                  <Button tone="red" disabled={!!noticeAction} onClick={() => void deleteNotice(selected)}>
+                    {noticeAction === "DELETE" ? "Deleting…" : "Delete unsent notice"}
+                  </Button>
                 </div>
               )}
-              <Field
-                label={
-                  decisionRows.length > 1
-                    ? `Shared decision comment for ${decisionRows.length} notices *`
-                    : "Decision comments *"
-                }
-              >
-                <textarea
-                  className={`${INPUT} min-h-20`}
-                  value={comments}
-                  onChange={(e) => setComments(e.target.value)}
-                />
-              </Field>
-              <div className="mt-3 flex flex-wrap justify-end gap-2">
-                <Button
-                  tone="red"
-                  disabled={!!acting || comments.length < 3 || !decisionPending}
-                  onClick={() => decide("REJECT")}
-                >
-                  {acting === "REJECT"
-                    ? "Rejecting…"
-                    : `Reject${decisionRows.length > 1 ? ` (${decisionRows.length})` : ""}`}
-                </Button>
-                <Button
-                  tone="orange"
-                  disabled={!!acting || comments.length < 3 || !decisionPending}
-                  onClick={() => decide("RETURN")}
-                >
-                  {acting === "RETURN"
-                    ? "Returning…"
-                    : `Return${decisionRows.length > 1 ? ` (${decisionRows.length})` : ""}`}
-                </Button>
-                <Button
-                  tone="green"
-                  disabled={!!acting || comments.length < 3 || !decisionPending}
-                  onClick={() => decide("APPROVE")}
-                >
-                  {acting === "APPROVE"
-                    ? "Approving…"
-                    : `Approve & queue${decisionRows.length > 1 ? ` (${decisionRows.length})` : ""}`}
-                </Button>
-              </div>
             </Card>
           )}
         </div>
@@ -2333,7 +2378,19 @@ async function exportDisconnectionListExcel(list: Row) {
 
 export function DisconnectionLists() {
   const [eligible, setEligible] = useState<Row[]>([]);
+  const [eligibility, setEligibility] = useState<Row>({
+    thresholdMatches: 0,
+    eligibleAccounts: 0,
+    pendingNoticeAccounts: 0,
+    unapprovedNoticeAccounts: 0,
+    missingFormalNoticeAccounts: 0,
+  });
   const [lists, setLists] = useState<Row[]>([]);
+  const [selectedListIds, setSelectedListIds] = useState<string[]>([]);
+  const [listSearch, setListSearch] = useState("");
+  const [listStatus, setListStatus] = useState("");
+  const [bulkComments, setBulkComments] = useState("");
+  const [bulkAction, setBulkAction] = useState<"APPROVE" | "REJECT" | "RETURN" | "">("");
   const [zones, setZones] = useState<Row[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
   const [review, setReview] = useState<Row>();
@@ -2353,12 +2410,34 @@ export function DisconnectionLists() {
     setLoading(true);
     setError("");
     try {
-      const [eligibleRows, listRows] = await Promise.all([
+      const [eligibilityResult, listRows] = await Promise.all([
         api.disconnectionEligible(filters),
         api.listDisconnectionLists(String(filters.zoneId || "")),
       ]);
+      // Accept the legacy array response while the API deployment rolls forward.
+      const eligibleRows = Array.isArray(eligibilityResult)
+        ? eligibilityResult
+        : eligibilityResult.items ?? [];
       setEligible(eligibleRows);
+      setEligibility(
+        Array.isArray(eligibilityResult)
+          ? {
+              thresholdMatches: eligibleRows.length,
+              eligibleAccounts: eligibleRows.length,
+              pendingNoticeAccounts: 0,
+              unapprovedNoticeAccounts: 0,
+              missingFormalNoticeAccounts: 0,
+            }
+          : eligibilityResult.summary,
+      );
       setLists(listRows);
+      setSelectedListIds((values) =>
+        values.filter((value) =>
+          listRows.some(
+            (row: Row) => String(row.disconnectionListId) === value && row.status === "PENDING_APPROVAL",
+          ),
+        ),
+      );
       setReview(
         (current) =>
           listRows.find(
@@ -2392,7 +2471,7 @@ export function DisconnectionLists() {
         minimumAgeDays: filters.minimumAgeDays,
         minimumBalance: filters.minimumBalance,
         zoneId: filters.zoneId || undefined,
-        remarks: "Generated from approved final demand notices",
+        remarks: "Generated from queued formal recovery notices",
       });
       setMessage("Disconnection list submitted for Finance Manager approval.");
       setSelected([]);
@@ -2422,21 +2501,99 @@ export function DisconnectionLists() {
       setAction("");
     }
   }
+  async function decideMany(decision: "APPROVE" | "REJECT" | "RETURN") {
+    if (!selectedListIds.length || bulkComments.trim().length < 3) return;
+    if (!window.confirm(`${decision === "APPROVE" ? "Approve" : decision === "RETURN" ? "Return" : "Reject"} ${selectedListIds.length} selected disconnection list(s)?`)) return;
+    try {
+      setBulkAction(decision);
+      setError("");
+      const result = await api.decideDisconnectionLists(selectedListIds, decision, bulkComments);
+      setMessage(`${Number(result.updated ?? selectedListIds.length)} disconnection list(s) ${decision.toLowerCase()}d.`);
+      setSelectedListIds([]);
+      setBulkComments("");
+      await load();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setBulkAction("");
+    }
+  }
   const selectedZoneName = zones.find((zone) => String(zone.zoneId) === String(filters.zoneId))?.zoneName;
+  const accountsNeedingNotice = Math.max(
+    0,
+    Number(eligibility.thresholdMatches ?? 0) -
+      Number(eligibility.eligibleAccounts ?? 0),
+  );
+  const filterDescription = `${Number(filters.minimumAgeDays || 0)}+ days · ${money(filters.minimumBalance)}+`;
+  const visibleLists = useMemo(() => {
+    const query = listSearch.trim().toLowerCase();
+    return lists.filter((row) => {
+      const matchesStatus = !listStatus || row.status === listStatus;
+      const matchesSearch = !query || [
+        row.listReference,
+        row.zone?.zoneName,
+        ...(row.items ?? []).flatMap((item: Row) => [
+          item.account?.accountNumber,
+          customerName(item.account?.customer),
+        ]),
+      ].some((value) => String(value ?? "").toLowerCase().includes(query));
+      return matchesStatus && matchesSearch;
+    });
+  }, [lists, listSearch, listStatus]);
+  const pendingVisibleListIds = visibleLists
+    .filter((row) => row.status === "PENDING_APPROVAL")
+    .map((row) => String(row.disconnectionListId));
+  const allPendingVisibleSelected = pendingVisibleListIds.length > 0 &&
+    pendingVisibleListIds.every((id) => selectedListIds.includes(id));
   return (
     <Page
-      title={`Disconnection lists${selectedZoneName ? ` — ${selectedZoneName}` : " — All zones"}`}
-      subtitle="Escalate eligible accounts only after formal recovery notices"
-      actions={<><Button tone="slate" disabled={!review?.items?.length} onClick={() => review && void exportDisconnectionListExcel(review)}>Export Excel</Button><LinkButton to="/arrears/notices">Demand notices</LinkButton></>}
+      title="Disconnection control"
+      subtitle={`${selectedZoneName ?? "All zones"} · Controlled escalation after formal recovery notices`}
+      actions={<><Button tone="slate" disabled={!review?.items?.length} onClick={() => review && void exportDisconnectionListExcel(review)}>Export selected list</Button><LinkButton to="/arrears/notices">Manage demand notices</LinkButton></>}
     >
       {error && <Alert>{error}</Alert>}
       {message && <Alert success>{message}</Alert>}
-      <Card title="Create disconnection list">
-        <div className="mb-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+      <section className="mb-4 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-bold text-slate-800">Eligibility path</span>
+              <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-bold text-emerald-700">
+                Demand notices do not require approval
+              </span>
+            </div>
+            <p className="mt-1 text-xs text-slate-500">
+              Match arrears rules <span className="px-1 text-slate-300">→</span> create and queue a final notice <span className="px-1 text-slate-300">→</span> select the account for a disconnection list
+            </p>
+          </div>
+          <div className="grid shrink-0 grid-cols-3 divide-x divide-slate-200 rounded-lg bg-slate-50 px-2 py-1.5">
+            {[
+              [eligibility.thresholdMatches, "Match rules", "text-slate-800"],
+              [eligibility.eligibleAccounts, "Ready", "text-emerald-700"],
+              [accountsNeedingNotice, "Need queued notice", "text-amber-700"],
+            ].map(([value, label, color]) => (
+              <div key={String(label)} className="min-w-24 px-3 text-center">
+                <div className={`text-lg font-extrabold leading-5 ${color}`}>{loading ? "—" : Number(value ?? 0).toLocaleString()}</div>
+                <div className="mt-0.5 whitespace-nowrap text-[10px] font-semibold uppercase tracking-wide text-slate-500">{label}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+      <Card title="Build a disconnection list" className="overflow-hidden">
+        <div className="-m-4 mb-4 border-b border-slate-200 bg-slate-50/80 p-4">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div className="text-sm font-bold text-slate-800">Eligibility filters</div>
+              <div className="text-xs text-slate-500">Current rule: {filterDescription}</div>
+            </div>
+            <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600">{selected.length} selected</span>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <Field label="Minimum arrears age (days)">
             <input
               type="number"
-              min="1"
+              min="0"
               className={INPUT}
               value={filters.minimumAgeDays}
               onChange={(e) =>
@@ -2464,7 +2621,7 @@ export function DisconnectionLists() {
           <div className="flex items-end">
             <Button
               className="w-full"
-              tone="orange"
+              tone="blue"
               disabled={loading || !!action || !selected.length}
               onClick={create}
             >
@@ -2478,10 +2635,11 @@ export function DisconnectionLists() {
               )}
             </Button>
           </div>
+          </div>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full min-w-[1150px]">
-            <thead>
+            <thead className="bg-slate-50">
               <tr>
                 <th className={TH}>
                   <input
@@ -2521,7 +2679,7 @@ export function DisconnectionLists() {
               ) : (
                 <>
                   {eligible.map((row) => (
-                    <tr className="border-t" key={row.accountId}>
+                    <tr className="border-t border-slate-100 transition hover:bg-cyan-50/40" key={row.accountId}>
                       <td className={TD}>
                         <input
                           type="checkbox"
@@ -2565,10 +2723,24 @@ export function DisconnectionLists() {
                     <tr>
                       <td
                         colSpan={8}
-                        className="p-8 text-center text-slate-400"
+                        className="px-6 py-12 text-center"
                       >
-                        No account meets the rule with an approved final demand
-                        or disconnection notice.
+                        <div className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-amber-50 text-xl text-amber-700">!</div>
+                        <div className="mt-3 text-base font-bold text-slate-800">
+                          {eligibility.thresholdMatches
+                            ? `${Number(eligibility.thresholdMatches).toLocaleString()} account(s) match the financial rule, but none has cleared the notice gate.`
+                            : "No accounts match these age and balance filters."}
+                        </div>
+                        <p className="mx-auto mt-1 max-w-xl text-sm leading-6 text-slate-500">
+                          {eligibility.thresholdMatches
+                            ? "Create and queue a Final Demand or Disconnection Notice. The account becomes eligible automatically; there is no demand-notice approval step."
+                            : "Lower the minimum age or balance, or choose a different zone to broaden the result."}
+                        </p>
+                        {!!eligibility.thresholdMatches && (
+                          <Link to="/arrears/notices" className="mt-4 inline-flex rounded-lg bg-aqua-700 px-4 py-2 text-sm font-bold text-white transition hover:bg-aqua-800">
+                            Open demand notices
+                          </Link>
+                        )}
                       </td>
                     </tr>
                   )}
@@ -2578,9 +2750,65 @@ export function DisconnectionLists() {
           </table>
         </div>
       </Card>
-      <div className="mt-4 grid gap-4 xl:grid-cols-[1.1fr_.9fr]">
-        <Card title={`${lists.length} disconnection list(s)`}>
-          <div className="space-y-2">
+      <div className="mt-4 grid items-start gap-4 xl:grid-cols-[1.25fr_.75fr]">
+        <Card title={`Disconnection list register · ${lists.length}`}>
+          <div className="mb-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_190px]">
+            <input
+              className={INPUT}
+              value={listSearch}
+              onChange={(event) => setListSearch(event.target.value)}
+              placeholder="Search reference, account or customer"
+            />
+            <SearchableSelect className={INPUT} value={listStatus} onChange={(event) => setListStatus(event.target.value)}>
+              <option value="">All statuses</option>
+              <option value="PENDING_APPROVAL">Pending approval</option>
+              <option value="APPROVED">Approved</option>
+              <option value="RETURNED">Returned</option>
+              <option value="REJECTED">Rejected</option>
+              <option value="WORK_ORDERS_CREATED">Processed</option>
+            </SearchableSelect>
+          </div>
+          {selectedListIds.length > 0 && (
+            <div className="mb-3 rounded-xl border border-aqua-200 bg-aqua-50 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <strong className="text-sm text-aqua-900">{selectedListIds.length} pending list(s) selected</strong>
+                <button type="button" className="text-xs font-semibold text-slate-600" onClick={() => setSelectedListIds([])}>Clear selection</button>
+              </div>
+              <textarea
+                className={`${INPUT} mt-2 min-h-16 bg-white`}
+                value={bulkComments}
+                onChange={(event) => setBulkComments(event.target.value)}
+                placeholder="Shared decision comment (required)"
+              />
+              <div className="mt-2 flex flex-wrap justify-end gap-2">
+                <Button tone="red" disabled={!!bulkAction || bulkComments.trim().length < 3} onClick={() => void decideMany("REJECT")}>Reject selected</Button>
+                <Button tone="orange" disabled={!!bulkAction || bulkComments.trim().length < 3} onClick={() => void decideMany("RETURN")}>Return selected</Button>
+                <Button tone="green" disabled={!!bulkAction || bulkComments.trim().length < 3} onClick={() => void decideMany("APPROVE")}>
+                  {bulkAction === "APPROVE" ? "Approving…" : `Approve selected (${selectedListIds.length})`}
+                </Button>
+              </div>
+            </div>
+          )}
+          <div className="overflow-x-auto">
+            <div className="min-w-[680px] overflow-hidden rounded-xl border border-slate-200">
+              <div className="grid grid-cols-[44px_minmax(190px,1fr)_90px_130px_120px] items-center bg-slate-50 px-2 text-[11px] font-bold uppercase tracking-wide text-slate-500">
+                <div className="px-2 py-3">
+                  <input
+                    type="checkbox"
+                    aria-label="Select all pending lists shown"
+                    disabled={!pendingVisibleListIds.length}
+                    checked={allPendingVisibleSelected}
+                    onChange={(event) => setSelectedListIds((values) => event.target.checked
+                      ? Array.from(new Set([...values, ...pendingVisibleListIds]))
+                      : values.filter((id) => !pendingVisibleListIds.includes(id)))}
+                  />
+                </div>
+                <div className="px-2 py-3">Reference</div>
+                <div className="px-2 py-3 text-center">Accounts</div>
+                <div className="px-2 py-3">Zone</div>
+                <div className="px-2 py-3">Status</div>
+              </div>
+              <div className="max-h-[480px] overflow-y-auto">
             {loading ? (
               <div className="p-10 text-center text-slate-500">
                 <span className="inline-flex items-center">
@@ -2590,32 +2818,46 @@ export function DisconnectionLists() {
               </div>
             ) : (
               <>
-                {lists.map((row) => (
-                  <button
+                {visibleLists.map((row) => (
+                  <div
                     key={row.disconnectionListId}
-                    className={`flex w-full items-center justify-between rounded-xl border p-3 text-left ${review?.disconnectionListId === row.disconnectionListId ? "border-aqua-500 bg-blue-50" : ""}`}
-                    onClick={() => setReview(row)}
+                    className={`grid grid-cols-[44px_minmax(190px,1fr)_90px_130px_120px] items-center border-t px-2 text-sm transition first:border-t-0 ${review?.disconnectionListId === row.disconnectionListId ? "bg-cyan-50" : "bg-white hover:bg-slate-50"}`}
                   >
-                    <div>
-                      <strong>{row.listReference}</strong>
-                      <div className="text-xs text-slate-500">
-                        {row.items?.length ?? 0} account(s) ·{" "}
-                        {row.zone?.zoneName ?? "All zones"} · {date(row.createdAt)}
-                      </div>
+                    <div className="px-2 py-3">
+                      {row.status === "PENDING_APPROVAL" ? (
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${row.listReference}`}
+                          checked={selectedListIds.includes(String(row.disconnectionListId))}
+                          onChange={(event) => setSelectedListIds((values) => event.target.checked
+                            ? [...values, String(row.disconnectionListId)]
+                            : values.filter((id) => id !== String(row.disconnectionListId)))}
+                        />
+                      ) : <span className="text-slate-300">—</span>}
                     </div>
-                    <Badge value={row.status} />
-                  </button>
+                    <button type="button" className="px-2 py-3 text-left" onClick={() => setReview(row)}>
+                      <strong className="text-slate-800">{row.listReference}</strong>
+                      <div className="text-xs text-slate-500">{date(row.createdAt)}</div>
+                    </button>
+                    <div className="px-2 py-3 text-center font-semibold">{row.items?.length ?? 0}</div>
+                    <div className="truncate px-2 py-3 text-slate-600">{row.zone?.zoneName ?? "All zones"}</div>
+                    <div className="px-2 py-3"><Badge value={row.status} /></div>
+                  </div>
                 ))}
-                {!lists.length && (
-                  <div className="p-8 text-center text-slate-400">
-                    No lists created.
+                {!visibleLists.length && (
+                  <div className="px-6 py-10 text-center">
+                    <div className="mx-auto grid h-11 w-11 place-items-center rounded-xl bg-slate-100 text-lg text-slate-500">≡</div>
+                    <div className="mt-3 font-bold text-slate-700">No matching lists</div>
+                    <p className="mt-1 text-sm text-slate-500">Adjust the search or status filter.</p>
                   </div>
                 )}
               </>
             )}
+              </div>
+            </div>
           </div>
         </Card>
-        <Card title="Approval decision">
+        <Card title="Review & approval" className="xl:sticky xl:top-24">
           {loading ? (
             <div className="p-10 text-center text-slate-500">
               <span className="inline-flex items-center">
@@ -2624,8 +2866,10 @@ export function DisconnectionLists() {
               </span>
             </div>
           ) : !review ? (
-            <div className="p-8 text-center text-slate-400">
-              Select a list to review.
+            <div className="px-6 py-10 text-center">
+              <div className="mx-auto grid h-11 w-11 place-items-center rounded-xl bg-slate-100 text-lg text-slate-500">✓</div>
+              <div className="mt-3 font-bold text-slate-700">Nothing to review</div>
+              <p className="mt-1 text-sm text-slate-500">Select a submitted list to inspect its accounts and record a decision.</p>
             </div>
           ) : (
             <>
@@ -2641,58 +2885,52 @@ export function DisconnectionLists() {
                 {(review.items ?? []).map((item: Row) => (
                   <div
                     key={item.disconnectionItemId}
-                    className="grid gap-1 border-b py-2 text-sm sm:grid-cols-[minmax(0,1fr)_auto]"
+                    className="grid items-center gap-2 border-b py-2 text-sm sm:grid-cols-[minmax(0,1fr)_auto_auto]"
                   >
                     <span>
                       {item.account?.accountNumber} ·{" "}
                       {customerName(item.account?.customer)}
                     </span>
                     <div className="text-right"><strong>{money(item.accountBalance ?? item.outstandingAmount)}</strong><div className="text-xs text-slate-400">Previous: {item.previousReading == null ? "—" : Number(item.previousReading).toLocaleString("en-KE", { maximumFractionDigits: 3 })}</div></div>
+                    {review.status === "APPROVED" && item.status === "APPROVED" ? (
+                      <Link
+                        to={`/meters/direct-service?accountId=${encodeURIComponent(String(item.accountId))}&accountNumber=${encodeURIComponent(String(item.account?.accountNumber ?? ""))}&listItemId=${encodeURIComponent(String(item.disconnectionItemId))}&listReference=${encodeURIComponent(String(review.listReference))}`}
+                        className="whitespace-nowrap rounded-lg bg-red-600 px-3 py-2 text-xs font-bold text-white transition hover:bg-red-700"
+                      >
+                        Record disconnection
+                      </Link>
+                    ) : (
+                      <Badge value={item.status} />
+                    )}
                   </div>
                 ))}
               </div>
-              <Field label="Decision comments *">
-                <textarea
-                  className={`${INPUT} min-h-20`}
-                  value={comments}
-                  onChange={(e) => setComments(e.target.value)}
-                />
-              </Field>
-              <div className="mt-3 flex justify-end gap-2">
-                <Button
-                  tone="red"
-                  disabled={
-                    !!action ||
-                    comments.length < 3 ||
-                    review.status !== "PENDING_APPROVAL"
-                  }
-                  onClick={() => decide("REJECT")}
-                >
-                  {action === "REJECT" ? "Rejecting…" : "Reject"}
-                </Button>
-                <Button
-                  tone="orange"
-                  disabled={
-                    !!action ||
-                    comments.length < 3 ||
-                    review.status !== "PENDING_APPROVAL"
-                  }
-                  onClick={() => decide("RETURN")}
-                >
-                  {action === "RETURN" ? "Returning…" : "Return"}
-                </Button>
-                <Button
-                  tone="green"
-                  disabled={
-                    !!action ||
-                    comments.length < 3 ||
-                    review.status !== "PENDING_APPROVAL"
-                  }
-                  onClick={() => decide("APPROVE")}
-                >
-                  {action === "APPROVE" ? "Approving…" : "Approve list"}
-                </Button>
-              </div>
+              {review.status === "PENDING_APPROVAL" ? (
+                <>
+                  <Field label="Decision comments *">
+                    <textarea
+                      className={`${INPUT} min-h-20`}
+                      value={comments}
+                      onChange={(e) => setComments(e.target.value)}
+                    />
+                  </Field>
+                  <div className="mt-3 flex justify-end gap-2">
+                    <Button tone="red" disabled={!!action || comments.length < 3} onClick={() => decide("REJECT")}>
+                      {action === "REJECT" ? "Rejecting…" : "Reject"}
+                    </Button>
+                    <Button tone="orange" disabled={!!action || comments.length < 3} onClick={() => decide("RETURN")}>
+                      {action === "RETURN" ? "Returning…" : "Return"}
+                    </Button>
+                    <Button tone="green" disabled={!!action || comments.length < 3} onClick={() => decide("APPROVE")}>
+                      {action === "APPROVE" ? "Approving…" : "Approve list"}
+                    </Button>
+                  </div>
+                </>
+              ) : review.status === "APPROVED" ? (
+                <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
+                  <strong>Ready for field recording.</strong> Use “Record disconnection” beside an account after the physical service has been disconnected.
+                </div>
+              ) : null}
             </>
           )}
         </Card>

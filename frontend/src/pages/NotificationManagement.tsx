@@ -5,6 +5,7 @@ import { SearchableSelect } from "../components/SearchableSelect";
 import { CheckboxMultiSelect } from "../components/CheckboxMultiSelect";
 import { SweetAlertToast } from "../components/SweetAlertToast";
 import { DateTimeInput } from "../components/DateInput";
+import { DeliveryQueueLink } from "../components/DeliveryQueueLink";
 
 type Row = Record<string, any>;
 const INPUT =
@@ -129,12 +130,7 @@ const nav = (
     >
       Send notification
     </Link>
-    <Link
-      className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white"
-      to="/notifications/queue"
-    >
-      Open queue
-    </Link>
+    <DeliveryQueueLink label="Open queue" className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white" />
   </>
 );
 
@@ -342,6 +338,7 @@ function NotificationTable({
   rows,
   compact = false,
   onRetry,
+  onRemove,
   selected,
   onSelectionChange,
   queueMode = false,
@@ -349,6 +346,7 @@ function NotificationTable({
   rows: Row[];
   compact?: boolean;
   onRetry?: (id: string) => void;
+  onRemove?: (id: string) => void;
   selected?: string[];
   onSelectionChange?: (ids: string[]) => void;
   queueMode?: boolean;
@@ -388,7 +386,7 @@ function NotificationTable({
             <th className={TH}>Type / channel</th>
             {!compact && <th className={TH}>Message</th>}
             <th className={TH}>Status</th>
-            {onRetry && <th className={TH}>Action</th>}
+            {(onRetry || onRemove) && <th className={TH}>Action</th>}
           </tr>
         </thead>
         <tbody>
@@ -453,20 +451,29 @@ function NotificationTable({
               <td className={TD}>
                 <Badge value={row.deliveryStatus} />
               </td>
-              {onRetry && (
+              {(onRetry || onRemove) && (
                 <td className={TD}>
-                  {row.deliveryStatus === "FAILED" &&
-                  row.retryCount < row.maxRetries ? (
-                    <button
-                      className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 font-semibold text-emerald-700 transition hover:bg-emerald-50"
-                      onClick={() => onRetry(String(row.notificationId))}
-                    >
-                      <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="M20 12a8 8 0 1 1-2.3-5.7L20 8" /><path d="M20 3v5h-5" /></svg>
-                      Retry
-                    </button>
-                  ) : (
-                    "—"
-                  )}
+                  <div className="flex items-center gap-1">
+                    {onRetry && row.deliveryStatus === "FAILED" && row.retryCount < row.maxRetries && (
+                      <button
+                        className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 font-semibold text-emerald-700 transition hover:bg-emerald-50"
+                        onClick={() => onRetry(String(row.notificationId))}
+                      >
+                        <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="M20 12a8 8 0 1 1-2.3-5.7L20 8" /><path d="M20 3v5h-5" /></svg>
+                        Retry
+                      </button>
+                    )}
+                    {onRemove && ["QUEUED", "FAILED"].includes(row.deliveryStatus) && (
+                      <button
+                        className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 font-semibold text-red-600 transition hover:bg-red-50"
+                        onClick={() => onRemove(String(row.notificationId))}
+                      >
+                        <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="M3 6h18" /><path d="M8 6V4h8v2M19 6l-1 14H6L5 6" /></svg>
+                        Remove
+                      </button>
+                    )}
+                    {!(["QUEUED", "FAILED"].includes(row.deliveryStatus)) && "—"}
+                  </div>
                 </td>
               )}
             </tr>
@@ -475,7 +482,7 @@ function NotificationTable({
             <tr>
               <td
                 colSpan={
-                  (onRetry ? 6 : compact ? 4 : 5) +
+                  (onRetry || onRemove ? 6 : compact ? 4 : 5) +
                   (selectionEnabled ? 1 : 0)
                 }
                 className="px-4 py-16 text-center text-slate-400"
@@ -497,7 +504,7 @@ function NotificationTable({
 }
 
 export function NotificationSend() {
-  const [mode, setMode] = useState<"SINGLE" | "BULK" | "BROADCAST">("BROADCAST");
+  const [mode, setMode] = useState<"SINGLE" | "BULK" | "BROADCAST">("BULK");
   const modeSwitch = (
     <div className="inline-flex rounded-xl border border-slate-200 bg-white p-1 shadow-sm">
       <button
@@ -570,15 +577,9 @@ function GeneralSmsBroadcast({ modeSwitch }: { modeSwitch: ReactNode }) {
   return <Page
     title="General customer SMS broadcast"
     subtitle="Compose one service announcement and queue it for every active customer with a mobile number"
-    actions={<>{modeSwitch}<Link to="/notifications/queue" className="rounded-lg bg-aqua-700 px-4 py-2 text-sm font-semibold text-white hover:bg-aqua-600">Open delivery queue</Link></>}
+    actions={<>{modeSwitch}<DeliveryQueueLink className="rounded-lg bg-aqua-700 px-4 py-2 text-sm font-semibold text-white hover:bg-aqua-600" /></>}
   >
     <Notice error={error} success={success} />
-    <div className="mb-5 overflow-hidden rounded-2xl border border-navy-700 bg-navy-800 p-6 text-white shadow-sm">
-      <div className="flex flex-col justify-between gap-5 lg:flex-row lg:items-center">
-        <div><div className="text-xs font-bold uppercase tracking-[0.2em] text-aqua-100">Utility-wide communication</div><h2 className="mt-2 text-2xl font-extrabold text-white">Reach all active customers in one controlled campaign</h2><p className="mt-2 max-w-2xl text-sm leading-6 text-blue-100">Messages are queued for audit and provider processing. Customers without a mobile number are excluded automatically.</p></div>
-        <div className="rounded-2xl border border-aqua-500/40 bg-aqua-700 px-5 py-4 shadow-sm"><div className="text-xs uppercase tracking-wider text-aqua-100">SMS-ready audience</div><div className="mt-1 text-3xl font-extrabold text-white">{loading ? "Loading..." : Number(audience.smsReady).toLocaleString()}</div></div>
-      </div>
-    </div>
     <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
       <Card title="Compose announcement">
         <form onSubmit={submit} className="space-y-5">
@@ -738,12 +739,7 @@ function BulkNotificationSend({ modeSwitch }: { modeSwitch: ReactNode }) {
       actions={
         <>
           {modeSwitch}
-          <Link
-            to="/notifications/queue"
-            className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white"
-          >
-            Open delivery queue
-          </Link>
+          <DeliveryQueueLink className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white" />
         </>
       }
     >
@@ -1587,6 +1583,25 @@ function NotificationRegister({ queueOnly = false }: { queueOnly?: boolean }) {
       setBusy(false);
     }
   }
+  async function removeFromQueue(ids: string[]) {
+    if (!ids.length) return;
+    const confirmed = window.confirm(
+      `Remove ${ids.length} notification${ids.length === 1 ? "" : "s"} from the delivery queue? Messages already sent or delivered cannot be removed.`,
+    );
+    if (!confirmed) return;
+    setBusy(true);
+    setError("");
+    try {
+      const result = await api.removeQueuedNotifications(ids);
+      setSuccess(`${Number(result.removed ?? ids.length)} notification(s) removed from the delivery queue.`);
+      setSelected([]);
+      await load();
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  }
   return (
     <Page
       title={queueOnly ? <span className="flex items-center gap-3"><span className="grid h-10 w-10 place-items-center rounded-xl bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5"><path d="M22 2 11 13" /><path d="m22 2-7 20-4-9-9-4Z" /></svg></span>Delivery queue</span> : "Notification history"}
@@ -1597,14 +1612,22 @@ function NotificationRegister({ queueOnly = false }: { queueOnly?: boolean }) {
       }
       actions={
         queueOnly ? (
-          <Button tone="green" disabled={busy || loading} onClick={processQueue} className="inline-flex items-center gap-2">
-            <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`h-4 w-4 ${busy ? "animate-spin" : ""}`}><path d="M20 12a8 8 0 1 1-2.3-5.7L20 8" /><path d="M20 3v5h-5" /></svg>
-            {busy
-              ? "Processing…"
-              : selected.length
-                ? `Process selected (${selected.length})`
-                : "Process due queue"}
-          </Button>
+          <>
+            {selected.length > 0 && (
+              <Button tone="red" disabled={busy || loading} onClick={() => void removeFromQueue(selected)} className="inline-flex items-center gap-2">
+                <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="M3 6h18" /><path d="M8 6V4h8v2M19 6l-1 14H6L5 6" /></svg>
+                Remove selected ({selected.length})
+              </Button>
+            )}
+            <Button tone="green" disabled={busy || loading} onClick={processQueue} className="inline-flex items-center gap-2">
+              <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`h-4 w-4 ${busy ? "animate-spin" : ""}`}><path d="M20 12a8 8 0 1 1-2.3-5.7L20 8" /><path d="M20 3v5h-5" /></svg>
+              {busy
+                ? "Processing…"
+                : selected.length
+                  ? `Process selected (${selected.length})`
+                  : "Process due queue"}
+            </Button>
+          </>
         ) : (
           nav
         )
@@ -1719,6 +1742,7 @@ function NotificationRegister({ queueOnly = false }: { queueOnly?: boolean }) {
             <NotificationTable
               rows={rows}
               onRetry={retry}
+              onRemove={queueOnly ? (id) => void removeFromQueue([id]) : undefined}
               selected={queueOnly ? selected : undefined}
               onSelectionChange={queueOnly ? setSelected : undefined}
               queueMode={queueOnly}

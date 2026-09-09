@@ -148,6 +148,18 @@ async function onfonRequest(provider: any, recipient: string, message: string) {
   return { number, messageId, returnedMessageId, result };
 }
 
+async function syncDebtNoticeDeliveryStatus(notification: any) {
+  if (!notification || notification.notificationType !== "DEBT_NOTICE") return;
+  const rawNoticeId = (notification.metadata as any)?.debtNoticeId;
+  if (!rawNoticeId || !/^\d+$/.test(String(rawNoticeId))) return;
+  const deliveryStatus = String(notification.deliveryStatus ?? "").toUpperCase();
+  if (!["PENDING", "QUEUED", "SENT", "DELIVERED", "FAILED"].includes(deliveryStatus)) return;
+  await prisma.debtNotice.updateMany({
+    where: { noticeId: BigInt(String(rawNoticeId)) },
+    data: { deliveryStatus, updatedAt: new Date() },
+  });
+}
+
 // Onfon calls this route without an AquaFlow login. The per-provider token is
 // checked before any delivery state is changed.
 notificationsRouter.get("/onfon/dlr", async (req, res, next) => {
@@ -187,7 +199,7 @@ notificationsRouter.get("/onfon/dlr", async (req, res, next) => {
     const delivered = ["DELIVERED", "DELIVRD", "SUCCESS"].includes(providerStatus);
     const failed = ["FAILED", "UNDELIV", "UNDELIVERED", "EXPIRED", "REJECTD", "REJECTED"].includes(providerStatus);
     const now = new Date();
-    await prisma.$transaction([
+    const [updatedNotification] = await prisma.$transaction([
       prisma.notification.update({
         where: { notificationId: notification.notificationId },
         data: {
@@ -207,6 +219,7 @@ notificationsRouter.get("/onfon/dlr", async (req, res, next) => {
         },
       }),
     ]);
+    await syncDebtNoticeDeliveryStatus(updatedNotification);
     res.status(200).json({ received: true });
   } catch (error) { next(error); }
 });
@@ -222,6 +235,8 @@ const managers = requireRole(
   "FINANCE_MANAGER",
   "CASHIER",
   "ACCOUNTANT",
+  "CREDIT_CONTROL_SUPERVISOR",
+  "CREDIT_CONTROL_OFFICER",
 );
 const administrators = requireRole("SYSTEM_ADMIN");
 const uid = (req: any) => (req.user?.userId ? BigInt(req.user.userId) : null);
@@ -400,7 +415,7 @@ async function failAttempt(
   });
 }
 
-export async function processOne(notificationId: bigint) {
+async function processOneDelivery(notificationId: bigint) {
   let notification = await prisma.notification.findUnique({
     where: { notificationId },
     include: { provider: true, account: { include: { customer: true } } },
@@ -651,6 +666,12 @@ export async function processOne(notificationId: bigint) {
   return delivered;
 }
 
+export async function processOne(notificationId: bigint) {
+  const notification = await processOneDelivery(notificationId);
+  await syncDebtNoticeDeliveryStatus(notification);
+  return notification;
+}
+
 notificationsRouter.get("/dashboard", async (_req, res, next) => {
   try {
     const [total, queued, sent, delivered, failed, recent, groups] =
@@ -709,6 +730,17 @@ notificationsRouter.get("/dashboard", async (_req, res, next) => {
         return (left === -1 ? order.length : left) - (right === -1 ? order.length : right) || a.channel.localeCompare(b.channel);
       }),
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+notificationsRouter.get("/queue/count", async (_req, res, next) => {
+  try {
+    const queued = await prisma.notification.count({
+      where: { deliveryStatus: "QUEUED" },
+    });
+    res.json({ queued });
   } catch (error) {
     next(error);
   }
@@ -1793,6 +1825,80 @@ notificationsRouter.post("/process", managers, async (req, res, next) => {
       await prisma.bill.updateMany({ where: { billId: { in: deliveredBillIds } }, data: { notificationStatus: "SENT", updatedAt: new Date() } });
     }
     res.json({ processed });
+  } catch (error) {
+    next(error);
+  }
+});
+
+notificationsRouter.delete("/queue", managers, async (req, res, next) => {
+  const parsed = z.object({ notificationIds: z.array(id).min(1).max(1000) }).safeParse(req.body);
+  if (!parsed.success)
+    return res.status(400).json({ error: parsed.error.flatten() });
+  try {
+    const notificationIds = [...new Set(parsed.data.notificationIds.map(String))].map(BigInt);
+    const notifications = await prisma.notification.findMany({
+      where: { notificationId: { in: notificationIds } },
+      select: {
+        notificationId: true,
+        accountId: true,
+        billId: true,
+        notificationType: true,
+        deliveryStatus: true,
+        metadata: true,
+      },
+    });
+    if (notifications.length !== notificationIds.length)
+      return res.status(404).json({ error: "One or more queued notifications were not found" });
+    const locked = notifications.filter(
+      (notification) => !["QUEUED", "FAILED"].includes(notification.deliveryStatus),
+    );
+    if (locked.length)
+      return res.status(409).json({
+        error: `${locked.length} notification(s) can no longer be removed because delivery has started`,
+      });
+
+    const debtNotices = notifications
+      .map((notification) => {
+        const value = (notification.metadata as any)?.debtNoticeId;
+        return value && /^\d+$/.test(String(value))
+          ? { noticeId: BigInt(String(value)), accountId: notification.accountId }
+          : null;
+      })
+      .filter((value): value is { noticeId: bigint; accountId: bigint | null } => Boolean(value));
+    const billIds = notifications
+      .map((notification) => notification.billId)
+      .filter((value): value is bigint => value !== null);
+
+    await prisma.$transaction(async (tx) => {
+      if (debtNotices.length) {
+        await tx.debtNotice.updateMany({
+          where: { noticeId: { in: debtNotices.map((notice) => notice.noticeId) } },
+          data: { deliveryStatus: "PENDING", updatedAt: new Date() },
+        });
+        await tx.arrearsAction.createMany({
+          data: debtNotices.map((notice) => ({
+            accountId: notice.accountId,
+            actionType: "DEBT_NOTICE_REMOVED_FROM_QUEUE",
+            details: "Debt notice delivery removed from the notification queue",
+            performedBy: uid(req),
+            referenceType: "DEBT_NOTICE",
+            referenceId: notice.noticeId,
+          })),
+        });
+      }
+      if (billIds.length)
+        await tx.bill.updateMany({
+          where: { billId: { in: billIds } },
+          data: { notificationStatus: "NOT_SENT", updatedAt: new Date() },
+        });
+      await tx.notification.deleteMany({
+        where: {
+          notificationId: { in: notificationIds },
+          deliveryStatus: { in: ["QUEUED", "FAILED"] },
+        },
+      });
+    });
+    res.json({ removed: notifications.length });
   } catch (error) {
     next(error);
   }

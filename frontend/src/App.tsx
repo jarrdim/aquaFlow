@@ -1550,7 +1550,7 @@ function Shell({ children }: { children: React.ReactNode }) {
                       className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:border-sky-200 hover:text-sky-700"
                       onClick={() => navigate("/notifications/queue")}
                     >
-                      Open queue
+                      Open queue ({Number(notificationData.queued ?? 0).toLocaleString()})
                     </button>
                     <button
                       type="button"

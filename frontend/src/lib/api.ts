@@ -795,6 +795,7 @@ export const api = {
       body: JSON.stringify(data),
     }),
   notificationDashboard: () => request("/notifications/dashboard"),
+  notificationQueueCount: () => request("/notifications/queue/count"),
   notificationTargets: () => request("/notifications/targets"),
   notificationAudience: (filters: Record<string, string>) => {
     const query = new URLSearchParams(
@@ -828,6 +829,11 @@ export const api = {
     request("/notifications/process", {
       method: "POST",
       body: JSON.stringify({ notificationIds, batchSize }),
+    }),
+  removeQueuedNotifications: (notificationIds: string[]) =>
+    request("/notifications/queue", {
+      method: "DELETE",
+      body: JSON.stringify({ notificationIds }),
     }),
   retryNotification: (id: string) =>
     request(`/notifications/${id}/retry`, { method: "POST" }),
@@ -905,6 +911,15 @@ export const api = {
       method: "POST",
       body: JSON.stringify(data),
     }),
+  requeueDebtNotice: (id: string) =>
+    request(`/arrears/notices/${id}/requeue`, { method: "POST" }),
+  deleteDebtNotice: (id: string) =>
+    request(`/arrears/notices/${id}`, { method: "DELETE" }),
+  deleteDebtNotices: (noticeIds: string[]) =>
+    request("/arrears/notices", {
+      method: "DELETE",
+      body: JSON.stringify({ noticeIds }),
+    }),
   decideDebtNotice: (
     id: string,
     decision: "APPROVE" | "REJECT" | "RETURN",
@@ -960,7 +975,10 @@ export const api = {
     }),
   disconnectionEligible: (filters: Record<string, string> = {}) => {
     const query = new URLSearchParams(
-      Object.entries(filters).filter(([, value]) => value),
+      [
+        ...Object.entries(filters).filter(([, value]) => value),
+        ["includeSummary", "true"],
+      ],
     ).toString();
     return request(`/arrears/disconnections/eligible${query ? `?${query}` : ""}`);
   },
@@ -978,6 +996,15 @@ export const api = {
     request(`/arrears/disconnections/${id}/decision`, {
       method: "PATCH",
       body: JSON.stringify({ decision, comments }),
+    }),
+  decideDisconnectionLists: (
+    disconnectionListIds: string[],
+    decision: "APPROVE" | "REJECT" | "RETURN",
+    comments: string,
+  ) =>
+    request("/arrears/disconnections/decision", {
+      method: "PATCH",
+      body: JSON.stringify({ disconnectionListIds, decision, comments }),
     }),
   listDebtWriteOffs: (status = "") =>
     request(`/arrears/write-offs${status ? `?status=${encodeURIComponent(status)}` : ""}`),

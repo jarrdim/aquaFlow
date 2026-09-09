@@ -1536,7 +1536,7 @@ export function UnmatchedPayments() {
       if (accountsResult.status === "fulfilled") {
         setAvailableAccountCount(Number(accountsResult.value.count ?? 0));
       } else {
-        failures.push(`Could not count active customer accounts: ${accountsResult.reason?.message ?? "Request failed"}`);
+        failures.push(`Could not count customer accounts: ${accountsResult.reason?.message ?? "Request failed"}`);
       }
       setError(failures.join(" "));
     }).finally(() => setLoading(false));
@@ -1548,7 +1548,7 @@ export function UnmatchedPayments() {
     if (accounts.length || accountsLoading) return;
     setAccountsLoading(true);
     try {
-      setAccounts(await api.listPaymentAccounts());
+      setAccounts(await api.listPaymentAccounts("", true));
     } catch (e: any) {
       setError(`Could not load customer accounts for allocation: ${e.message}`);
     } finally {
@@ -1662,7 +1662,7 @@ export function UnmatchedPayments() {
                 <p className="mt-3 text-xs leading-5 text-amber-800">Suggested from the payment account reference. Confirm these details before allocating.</p>
               </div>}
               <div className="rounded-xl border border-sky-100 bg-sky-50 px-3.5 py-3 text-xs leading-5 text-sky-700">Allocate the full transaction to one account, or add rows to split it across multiple accounts. Each account receives its own payment and receipt.</div>
-              {accountsLoading && <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3 text-xs font-semibold text-slate-600"><span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-200 border-t-aqua-700" />Loading active customer accounts...</div>}
+              {accountsLoading && <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3 text-xs font-semibold text-slate-600"><span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-200 border-t-aqua-700" />Loading customer accounts...</div>}
               <div>
                 <div className="mb-2 flex items-center justify-between gap-3">
                   <div><div className="text-sm font-semibold text-slate-700">Account allocations</div><div className="text-xs text-slate-400">Each account can be selected once.</div></div>
@@ -1680,7 +1680,7 @@ export function UnmatchedPayments() {
                       <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_130px]">
                         <SearchableSelect className={allocationInput} value={allocation.accountId} onChange={(event) => setAllocationRows((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, accountId: event.target.value } : row))}>
                           <option value="">Select account</option>
-                          {accounts.map((account) => <option value={account.accountId} key={account.accountId}>{account.accountNumber} · {account.customerName} · Amount due {money(account.currentBalance)} · {account.customer?.customerNumber} · {account.customer?.phoneNumber}</option>)}
+                          {accounts.map((account) => <option value={account.accountId} key={account.accountId}>{account.accountNumber} · {account.customerName} · {account.accountStatus || "UNKNOWN"} · Amount due {money(account.currentBalance)} · {account.customer?.customerNumber} · {account.customer?.phoneNumber}</option>)}
                         </SearchableSelect>
                         <input type="number" min="0.01" step="0.01" className={allocationInput} aria-label={`Amount for allocation ${index + 1}`} placeholder="Amount" value={allocation.amount} onChange={(event) => setAllocationRows((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, amount: event.target.value } : row))} />
                       </div>

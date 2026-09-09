@@ -99,14 +99,24 @@ const accountInclude = {
     orderBy: [{ readingDate: "desc" as const }, { readingId: "desc" as const }],
     take: 1,
   },
+  debtNotices: {
+    where: {
+      noticeStatus: {
+        in: ["PENDING_APPROVAL", "APPROVED", "SENT", "EXPIRED"],
+      },
+    },
+    select: { noticeType: true, noticeDate: true },
+  },
 } satisfies Prisma.CustomerAccountInclude;
 
 async function arrearsRows(asOf: Date, filters: any = {}) {
+  const accountIds = selectedIds(filters.accountIds);
   const zoneIds = selectedIds(filters.zoneIds);
   const categoryIds = selectedIds(filters.categoryIds);
   const accounts = await prisma.customerAccount.findMany({
     where: {
       currentBalance: { gt: 0 },
+      ...(accountIds.length ? { accountId: { in: accountIds } } : {}),
       ...(zoneIds.length
         ? { property: { zoneId: { in: zoneIds } } }
         : filters.zoneId
@@ -150,6 +160,19 @@ async function arrearsRows(asOf: Date, filters: any = {}) {
         ),
       );
       const oldestDueDate = overdueBills[0]?.dueDate as Date | undefined;
+      // A notice suppresses duplicates only for the current continuous arrears
+      // episode. Once those overdue bills are cleared, a later overdue bill has
+      // a newer episode start and the account becomes eligible again without
+      // deleting the historical notice.
+      const arrearsEpisodeStartedAt =
+        oldestDueDate ?? day(account.createdAt.toISOString().slice(0, 10));
+      const excludedByCurrentEpisodeNotice = filters.excludeNoticeType
+        ? account.debtNotices.some(
+            (notice: any) =>
+              notice.noticeType === String(filters.excludeNoticeType) &&
+              notice.noticeDate >= arrearsEpisodeStartedAt,
+          )
+        : false;
       const days = oldestDueDate ? ageDays(oldestDueDate, asOf) : 0;
       return {
         accountId: account.accountId,
@@ -188,9 +211,11 @@ async function arrearsRows(asOf: Date, filters: any = {}) {
           : null,
         previousReadingDate: account.meterReadings[0]?.readingDate ?? null,
         meterNumber: account.meterReadings[0]?.meter?.meterNumber ?? null,
+        excludedByCurrentEpisodeNotice,
       };
     })
     .filter((row) => row.arrearsBalance > 0)
+    .filter((row) => !row.excludedByCurrentEpisodeNotice)
     .filter((row) => !filters.minimumBalance || row.arrearsBalance >= Number(filters.minimumBalance))
     .filter((row) => !filters.minimumAgeDays || row.ageDays >= Number(filters.minimumAgeDays))
     .filter((row) => !filters.ageBucket || row.ageBucket === filters.ageBucket);
@@ -514,11 +539,13 @@ arrearsRouter.post("/reminders", officer, async (req, res, next) => {
 arrearsRouter.get("/notices", async (req, res, next) => {
   try {
     const status = String(req.query.status ?? "");
+    const deliveryStatus = String(req.query.deliveryStatus ?? "");
     const search = String(req.query.search ?? "").trim();
     const page = Math.max(1, Number(req.query.page) || 1);
     const pageSize = Math.min(50, Math.max(10, Number(req.query.pageSize) || 25));
     const where: Prisma.DebtNoticeWhereInput = {
       ...(status ? { noticeStatus: status } : {}),
+      ...(deliveryStatus ? { deliveryStatus } : {}),
       ...(search
         ? {
             OR: [
@@ -556,7 +583,7 @@ arrearsRouter.post("/notices", officer, async (req, res, next) => {
   const data = parse(
     z.object({
       accountId: id.optional(),
-      accountIds: z.array(id).max(500).optional(),
+      accountIds: z.array(id).max(1000).optional(),
       noticeType: z.enum(["DEMAND", "FINAL_DEMAND", "DISCONNECTION_NOTICE"]),
       paymentDeadline: z.string().min(1),
       deliveryChannel: z.enum(["SMS", "EMAIL", "PUSH", "PRINT", "SMS_PDF"]),
@@ -574,8 +601,8 @@ arrearsRouter.post("/notices", officer, async (req, res, next) => {
       ...(data.accountIds ?? []).map(String),
       ...(data.accountId ? [String(data.accountId)] : []),
     ])].map(BigInt);
-    if (accountIds.length > 500)
-      return res.status(400).json({ error: "A notice batch can contain at most 500 accounts" });
+    if (accountIds.length > 1000)
+      return res.status(400).json({ error: "A notice batch can contain at most 1,000 accounts" });
     const accounts = await prisma.customerAccount.findMany({
       where: { accountId: { in: accountIds } },
       include: { customer: true },
@@ -587,10 +614,25 @@ arrearsRouter.post("/notices", officer, async (req, res, next) => {
       return res.status(409).json({
         error: `${withoutBalance.length} selected account(s) have no outstanding balance`,
       });
+    const eligibleAccountIds = new Set(
+      (await arrearsRows(today(), {
+        accountIds,
+        excludeNoticeType: data.noticeType,
+      })).map((row) => String(row.accountId)),
+    );
+    const noLongerEligible = accountIds.filter(
+      (accountId) => !eligibleAccountIds.has(String(accountId)),
+    );
+    if (noLongerEligible.length)
+      return res.status(409).json({
+        error: `${noLongerEligible.length} selected account(s) are no longer eligible for this notice type. Refresh the account list and try again.`,
+      });
 
     const timestamp = Date.now();
     const notices = await prisma.$transaction(async (tx) => {
       const created = [];
+      const queueable = [];
+      const queuedAt = new Date();
       for (const account of accounts) {
         const personalizedMessage = data.messageBody
           .replace(/\{\{customerName\}\}/g, customerName(account.customer))
@@ -606,26 +648,31 @@ arrearsRouter.post("/notices", officer, async (req, res, next) => {
             outstandingAmount: account.currentBalance,
             deliveryChannel: data.deliveryChannel,
             deliveryStatus: "PENDING",
-            noticeStatus: "PENDING_APPROVAL",
+            noticeStatus: "APPROVED",
             messageBody: personalizedMessage,
             createdBy: uid(req),
+            approvedBy: uid(req),
+            approvedAt: queuedAt,
+            decisionComments: "Created and queued directly",
           },
         });
         await tx.arrearsAction.create({
           data: {
             accountId: account.accountId,
-            actionType: "DEBT_NOTICE_SUBMITTED",
-            details: `${data.noticeType} submitted for approval`,
+            actionType: "DEBT_NOTICE_QUEUED",
+            details: `${data.noticeType} created and queued for delivery`,
             performedBy: uid(req),
             referenceType: "DEBT_NOTICE",
             referenceId: notice.noticeId,
           },
         });
         created.push(notice);
+        queueable.push({ ...notice, account });
       }
+      await queueApprovedDebtNotices(tx, queueable, uid(req));
       return created;
-    }, { maxWait: 10_000, timeout: 120_000 });
-    res.status(201).json({ created: notices.length, notices });
+    }, { maxWait: 10_000, timeout: 300_000 });
+    res.status(201).json({ created: notices.length, queued: notices.length, notices });
   } catch (error) {
     next(error);
   }
@@ -746,6 +793,161 @@ arrearsRouter.patch("/notices/:id/decision", supervisor, async (req, res, next) 
         queueApprovedDebtNotices(tx, [notice], uid(req)),
       );
     res.json(updated);
+  } catch (error) {
+    next(error);
+  }
+});
+
+arrearsRouter.post("/notices/:id/requeue", officer, async (req, res, next) => {
+  const noticeId = parse(id, req.params.id, res);
+  if (!noticeId) return;
+  try {
+    const notice = await prisma.debtNotice.findUnique({
+      where: { noticeId },
+      include: { account: { include: { customer: true } } },
+    });
+    if (!notice) return res.status(404).json({ error: "Notice not found" });
+    if (!["PENDING", "FAILED"].includes(notice.deliveryStatus))
+      return res.status(409).json({
+        error: `Only pending or failed notices can be queued again; this notice is ${notice.deliveryStatus.toLowerCase()}`,
+      });
+    if (notice.noticeStatus !== "APPROVED")
+      return res.status(409).json({ error: "Only active notices can be queued" });
+
+    await prisma.$transaction(async (tx) => {
+      const failedNotification = await tx.notification.findFirst({
+        where: {
+          externalReference: notice.noticeNumber,
+          deliveryStatus: "FAILED",
+        },
+        orderBy: { createdAt: "desc" },
+      });
+      if (failedNotification) {
+        await tx.notification.update({
+          where: { notificationId: failedNotification.notificationId },
+          data: {
+            deliveryStatus: "QUEUED",
+            failureReason: null,
+            scheduledAt: null,
+            updatedAt: new Date(),
+          },
+        });
+        await tx.debtNotice.update({
+          where: { noticeId },
+          data: { deliveryStatus: "QUEUED", updatedAt: new Date() },
+        });
+      } else {
+        await queueApprovedDebtNotices(tx, [notice], uid(req));
+      }
+      await tx.arrearsAction.create({
+        data: {
+          accountId: notice.accountId,
+          actionType: "DEBT_NOTICE_REQUEUED",
+          details: `${notice.noticeType} returned to the delivery queue`,
+          performedBy: uid(req),
+          referenceType: "DEBT_NOTICE",
+          referenceId: notice.noticeId,
+        },
+      });
+    });
+    const updated = await prisma.debtNotice.findUnique({ where: { noticeId } });
+    res.json(updated);
+  } catch (error) {
+    next(error);
+  }
+});
+
+arrearsRouter.delete("/notices", officer, async (req, res, next) => {
+  const data = parse(
+    z.object({ noticeIds: z.array(id).min(1).max(500) }),
+    req.body,
+    res,
+  );
+  if (!data) return;
+  try {
+    const noticeIds = [...new Set(data.noticeIds.map(String))].map(BigInt);
+    const notices = await prisma.debtNotice.findMany({
+      where: { noticeId: { in: noticeIds } },
+    });
+    if (notices.length !== noticeIds.length)
+      return res.status(404).json({ error: "One or more notices were not found" });
+    const delivered = notices.filter((notice) =>
+      ["SENT", "DELIVERED"].includes(notice.deliveryStatus),
+    );
+    if (delivered.length)
+      return res.status(409).json({
+        error: `${delivered.length} selected notice(s) cannot be deleted because delivery has started`,
+      });
+    const [listReferences, notifications] = await Promise.all([
+      prisma.disconnectionListItem.count({
+        where: { lastNoticeId: { in: noticeIds } },
+      }),
+      prisma.notification.findMany({
+        where: { externalReference: { in: notices.map((notice) => notice.noticeNumber) } },
+        select: { notificationId: true, deliveryStatus: true },
+      }),
+    ]);
+    if (listReferences)
+      return res.status(409).json({
+        error: `${listReferences} selected notice reference(s) are used by disconnection lists and cannot be deleted`,
+      });
+    const startedNotifications = notifications.filter(
+      (notification) => !["QUEUED", "FAILED"].includes(notification.deliveryStatus),
+    );
+    if (startedNotifications.length)
+      return res.status(409).json({
+        error: `${startedNotifications.length} selected delivery job(s) have already started and cannot be deleted`,
+      });
+
+    await prisma.$transaction(async (tx) => {
+      if (notifications.length)
+        await tx.notification.deleteMany({
+          where: { notificationId: { in: notifications.map((row) => row.notificationId) } },
+        });
+      await tx.arrearsAction.deleteMany({
+        where: { referenceType: "DEBT_NOTICE", referenceId: { in: noticeIds } },
+      });
+      await tx.debtNotice.deleteMany({ where: { noticeId: { in: noticeIds } } });
+    });
+    res.json({ deleted: notices.length });
+  } catch (error) {
+    next(error);
+  }
+});
+
+arrearsRouter.delete("/notices/:id", officer, async (req, res, next) => {
+  const noticeId = parse(id, req.params.id, res);
+  if (!noticeId) return;
+  try {
+    const notice = await prisma.debtNotice.findUnique({ where: { noticeId } });
+    if (!notice) return res.status(404).json({ error: "Notice not found" });
+    if (["SENT", "DELIVERED"].includes(notice.deliveryStatus))
+      return res.status(409).json({ error: "Sent or delivered notices cannot be deleted" });
+    const [listReferences, notifications] = await Promise.all([
+      prisma.disconnectionListItem.count({ where: { lastNoticeId: noticeId } }),
+      prisma.notification.findMany({
+        where: { externalReference: notice.noticeNumber },
+        select: { notificationId: true, deliveryStatus: true },
+      }),
+    ]);
+    if (listReferences)
+      return res.status(409).json({
+        error: "This notice is already referenced by a disconnection list and cannot be deleted",
+      });
+    if (notifications.some((row) => !["QUEUED", "FAILED"].includes(row.deliveryStatus)))
+      return res.status(409).json({ error: "Delivery has already started; this notice cannot be deleted" });
+
+    await prisma.$transaction(async (tx) => {
+      if (notifications.length)
+        await tx.notification.deleteMany({
+          where: { notificationId: { in: notifications.map((row) => row.notificationId) } },
+        });
+      await tx.arrearsAction.deleteMany({
+        where: { referenceType: "DEBT_NOTICE", referenceId: noticeId },
+      });
+      await tx.debtNotice.delete({ where: { noticeId } });
+    });
+    res.json({ deleted: true, noticeNumber: notice.noticeNumber });
   } catch (error) {
     next(error);
   }
@@ -1133,18 +1335,53 @@ arrearsRouter.get("/disconnections/eligible", async (req, res, next) => {
       where: {
         accountId: { in: rows.map((row) => row.accountId) },
         noticeType: { in: ["FINAL_DEMAND", "DISCONNECTION_NOTICE"] },
-        noticeStatus: { in: ["APPROVED", "SENT", "EXPIRED"] },
       },
       orderBy: { createdAt: "desc" },
     });
-    res.json(
-      rows
-        .map((row) => ({
-          ...row,
-          lastNotice: notices.find((notice) => notice.accountId === row.accountId),
-        }))
-        .filter((row) => row.lastNotice),
-    );
+    const qualifyingStatuses = new Set(["APPROVED", "SENT", "EXPIRED"]);
+    const latestNoticeByAccount = new Map<string, (typeof notices)[number]>();
+    const qualifyingNoticeByAccount = new Map<string, (typeof notices)[number]>();
+    for (const notice of notices) {
+      const accountId = String(notice.accountId);
+      if (!latestNoticeByAccount.has(accountId))
+        latestNoticeByAccount.set(accountId, notice);
+      if (
+        qualifyingStatuses.has(notice.noticeStatus) &&
+        !qualifyingNoticeByAccount.has(accountId)
+      )
+        qualifyingNoticeByAccount.set(accountId, notice);
+    }
+    const items = rows
+      .map((row) => ({
+        ...row,
+        lastNotice: qualifyingNoticeByAccount.get(String(row.accountId)),
+      }))
+      .filter((row) => row.lastNotice);
+    const pendingNoticeAccounts = rows.filter(
+      (row) =>
+        !qualifyingNoticeByAccount.has(String(row.accountId)) &&
+        latestNoticeByAccount.get(String(row.accountId))?.noticeStatus ===
+        "PENDING_APPROVAL",
+    ).length;
+    const unapprovedNoticeAccounts = rows.filter((row) => {
+      if (qualifyingNoticeByAccount.has(String(row.accountId))) return false;
+      const notice = latestNoticeByAccount.get(String(row.accountId));
+      return (
+        notice &&
+        notice.noticeStatus !== "PENDING_APPROVAL" &&
+        !qualifyingStatuses.has(notice.noticeStatus)
+      );
+    }).length;
+    const summary = {
+        thresholdMatches: rows.length,
+        eligibleAccounts: items.length,
+        pendingNoticeAccounts,
+        unapprovedNoticeAccounts,
+        missingFormalNoticeAccounts:
+          rows.length - items.length - pendingNoticeAccounts - unapprovedNoticeAccounts,
+    };
+    // Preserve the original array contract for older clients during deployment.
+    res.json(req.query.includeSummary === "true" ? { items, summary } : items);
   } catch (error) {
     next(error);
   }
@@ -1187,7 +1424,7 @@ arrearsRouter.post("/disconnections", officer, async (req, res, next) => {
       accountIds: z.array(id).min(1).max(1000),
       zoneId: id.optional(),
       minimumBalance: z.coerce.number().min(0),
-      minimumAgeDays: z.coerce.number().int().min(1),
+      minimumAgeDays: z.coerce.number().int().min(0),
       remarks: z.string().max(2000).optional(),
     }),
     req.body,
@@ -1210,7 +1447,7 @@ arrearsRouter.post("/disconnections", officer, async (req, res, next) => {
     );
     if (!eligible.length)
       return res.status(409).json({
-        error: "Selected accounts require an approved final demand or disconnection notice",
+        error: "Selected accounts require a queued final demand or disconnection notice",
       });
     const list = await prisma.$transaction(async (tx) => {
       const created = await tx.disconnectionList.create({
@@ -1253,6 +1490,70 @@ arrearsRouter.post("/disconnections", officer, async (req, res, next) => {
         list.disconnectionListId,
       );
     res.status(201).json({ ...list, count: eligible.length });
+  } catch (error) {
+    next(error);
+  }
+});
+
+arrearsRouter.patch("/disconnections/decision", manager, async (req, res, next) => {
+  const data = parse(
+    z.object({
+      disconnectionListIds: z.array(id).min(1).max(200),
+      decision: z.enum(["APPROVE", "REJECT", "RETURN"]),
+      comments: z.string().trim().min(3).max(2000),
+    }),
+    req.body,
+    res,
+  );
+  if (!data) return;
+  try {
+    const listIds = [...new Set(data.disconnectionListIds.map(String))].map(BigInt);
+    const lists = await prisma.disconnectionList.findMany({
+      where: { disconnectionListId: { in: listIds } },
+      include: { items: true },
+    });
+    if (lists.length !== listIds.length)
+      return res.status(404).json({ error: "One or more disconnection lists were not found" });
+    if (lists.some((list) => list.status !== "PENDING_APPROVAL"))
+      return res.status(409).json({ error: "Only pending disconnection lists can be decided" });
+    if (!isSystemAdmin(req) && lists.some((list) => list.createdBy === uid(req)))
+      return res.status(403).json({
+        error: "Maker-checker control: remove lists you created from this approval batch",
+      });
+    const status =
+      data.decision === "APPROVE"
+        ? "APPROVED"
+        : data.decision === "RETURN"
+          ? "RETURNED"
+          : "REJECTED";
+    const decidedAt = new Date();
+    await prisma.$transaction([
+      prisma.disconnectionList.updateMany({
+        where: { disconnectionListId: { in: listIds }, status: "PENDING_APPROVAL" },
+        data: {
+          status,
+          approvedBy: uid(req),
+          approvedAt: decidedAt,
+          decisionComments: data.comments,
+          updatedAt: decidedAt,
+        },
+      }),
+      prisma.disconnectionListItem.updateMany({
+        where: { disconnectionListId: { in: listIds } },
+        data: { status },
+      }),
+    ]);
+    for (const list of lists)
+      for (const item of list.items)
+        await action(
+          item.accountId,
+          `DISCONNECTION_LIST_${status}`,
+          data.comments,
+          uid(req),
+          "DISCONNECTION_LIST",
+          list.disconnectionListId,
+        );
+    res.json({ updated: lists.length, status });
   } catch (error) {
     next(error);
   }

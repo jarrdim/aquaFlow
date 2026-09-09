@@ -1016,9 +1016,7 @@ paymentsRouter.patch(
 paymentsRouter.get("/accounts/count", async (_req, res, next) => {
   try {
     res.json({
-      count: await prisma.customerAccount.count({
-        where: { accountStatus: "ACTIVE" },
-      }),
+      count: await prisma.customerAccount.count(),
     });
   } catch (error) {
     next(error);
@@ -1631,11 +1629,11 @@ paymentsRouter.patch("/:id/allocate", checker, async (req, res, next) => {
       validatePaymentSplits(Number(payment.amount), allocations);
 
       const accounts = await tx.customerAccount.findMany({
-        where: { accountId: { in: allocations.map((allocation) => allocation.accountId) }, accountStatus: "ACTIVE" },
+        where: { accountId: { in: allocations.map((allocation) => allocation.accountId) } },
         select: { accountId: true, accountNumber: true },
       });
       if (accounts.length !== allocations.length)
-        throw Object.assign(new Error("Every allocation must use an active customer account"), { status: 400 });
+        throw Object.assign(new Error("Every allocation must use an existing customer account"), { status: 400 });
 
       // Lock and load every candidate bill once. This both serializes competing
       // allocations and avoids one bill-list query for every row in a split.

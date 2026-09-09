@@ -5,7 +5,6 @@ import { prisma } from "../lib/prisma";
 import { queryStkPush } from "../lib/mpesa";
 import { initiateMpesaStk } from "../lib/mpesaStk";
 import { requireAuth, requireRole } from "../middleware/auth";
-import { ensureBillingPeriodGroup } from "../lib/billingPeriodGroup";
 
 export const metersRouter = Router();
 metersRouter.use(requireAuth);
@@ -665,6 +664,7 @@ const directReplacementPreviewSchema = z.object({
 const directDisconnectionSchema = z.object({
   accountId: z.string().regex(/^\d+$/),
   meterId: z.string().regex(/^\d+$/),
+  disconnectionListItemId: z.string().regex(/^\d+$/).optional(),
   actionDateTime: z.coerce.date(),
   currentReading: z.coerce.number().finite().min(0).max(999_999_999),
   reason: z.string().trim().min(3).max(1000),
@@ -1081,7 +1081,23 @@ metersRouter.post("/replacements/direct", requireRole("ADMIN", "SYSTEM_ADMIN", "
       const preparedBill = await prepareReplacementBill(tx, ids.accountId, replacementDate, consumption);
       const { account, tariff, calculation, dueDate, previousBalance, totalAmountDue } = preparedBill;
       const postedAt = new Date();
-      const periodGroup = await ensureBillingPeriodGroup(tx, dueDate);
+      // Direct operational actions must never create accounting periods. Attach
+      // the replacement bill to the billing group already configured for the
+      // date on which the replacement happened.
+      const periodGroup = await tx.billingPeriodGroup.findFirst({
+        where: {
+          periodStart: { lte: replacementDate },
+          periodEnd: { gte: replacementDate },
+        },
+        orderBy: [{ periodStart: "desc" }, { billingPeriodGroupId: "asc" }],
+      });
+      if (!periodGroup)
+        throw Object.assign(
+          new Error(
+            `No billing period group covers replacement date ${data.replacementDate}. Create the billing group before completing this replacement.`,
+          ),
+          { status: 409 },
+        );
       const billingCycle = await tx.billingCycle.create({ data: {
         billingPeriodGroupId: periodGroup.billingPeriodGroupId, cycleType: "METER_REPLACEMENT",
         cycleCode: `MR-${replacement.replacementId}`,
@@ -1240,6 +1256,20 @@ metersRouter.post("/service-actions/direct/disconnect", directServiceRoles, asyn
       const meterId = BigInt(data.meterId);
       const actorId = userId(req)!;
       const context = await directServiceContext(tx, accountId, meterId, data.actionDateTime, true);
+      const linkedListItem = data.disconnectionListItemId
+        ? await tx.disconnectionListItem.findUnique({
+            where: { disconnectionItemId: BigInt(data.disconnectionListItemId) },
+            include: { list: true },
+          })
+        : null;
+      if (data.disconnectionListItemId && !linkedListItem)
+        throw Object.assign(new Error("The linked disconnection-list item was not found"), { status: 404 });
+      if (linkedListItem && linkedListItem.accountId !== accountId)
+        throw Object.assign(new Error("The selected account does not match the approved disconnection-list item"), { status: 409 });
+      if (linkedListItem && linkedListItem.list.status !== "APPROVED")
+        throw Object.assign(new Error("Only an approved disconnection list can be recorded through this link"), { status: 409 });
+      if (linkedListItem && linkedListItem.status !== "APPROVED")
+        throw Object.assign(new Error(`This disconnection-list item is already ${linkedListItem.status.toLowerCase()}`), { status: 409 });
       if (!['ACTIVE', 'SUSPENDED'].includes(context.accountStatus)) throw Object.assign(new Error("Only an active or suspended account can be disconnected"), { status: 409 });
       if (context.meterStatus === "DISCONNECTED") throw Object.assign(new Error("This meter is already disconnected"), { status: 409 });
       if (data.currentReading < context.latestReading) throw Object.assign(new Error(`Current reading cannot be below the latest approved reading of ${context.latestReading}`), { status: 409 });
@@ -1248,12 +1278,14 @@ metersRouter.post("/service-actions/direct/disconnect", directServiceRoles, asyn
       const types = await tx.$queryRaw<any[]>`SELECT work_order_type_id FROM aquaflow.work_order_types WHERE type_code='DISCONNECTION' AND status='ACTIVE' LIMIT 1`;
       if (!types[0]) throw Object.assign(new Error("The DISCONNECTION operation type is not configured"), { status: 409 });
       const workOrderNumber = `WO-DD-${Date.now()}-${meterId}`;
+      const sourceType = linkedListItem ? "DISCONNECTION" : "MANUAL";
+      const sourceReference = linkedListItem?.list.listReference ?? "DIRECT_METER_SERVICE";
       const workOrders = await tx.$queryRaw<any[]>`
         INSERT INTO aquaflow.work_orders(work_order_number,work_order_type_id,account_id,property_id,zone_id,
           priority,description,scheduled_date,status,created_by,source_type,source_reference,
           completion_notes,started_at,completed_at,verified_by,verified_at,closed_at)
         VALUES(${workOrderNumber},${types[0].work_order_type_id},${accountId},${context.propertyId},${context.zoneId},
-          'HIGH',${data.reason},${data.actionDateTime},'CLOSED',${actorId},'MANUAL','DIRECT_METER_SERVICE',
+          'HIGH',${data.reason},${data.actionDateTime},'CLOSED',${actorId},${sourceType},${sourceReference},
           ${data.remarks ?? data.reason},${data.actionDateTime},${data.actionDateTime},${actorId},${data.actionDateTime},${data.actionDateTime})
         RETURNING work_order_id AS "workOrderId",work_order_number AS "workOrderNumber"`;
       const workOrder = workOrders[0];
@@ -1286,8 +1318,22 @@ metersRouter.post("/service-actions/direct/disconnect", directServiceRoles, asyn
       await tx.arrearsAction.create({ data: {
         accountId, actionType: "DIRECT_METER_DISCONNECTION", referenceType: "WORK_ORDER",
         referenceId: workOrder.workOrderId, details: data.reason, performedBy: actorId,
-        metadata: { meterId: meterId.toString(), meterNumber: context.meterNumber, readingId: reading.readingId.toString(), currentReading: data.currentReading, finalReadingCharge: prepared.calculation.totalCurrentCharges, remarks: data.remarks ?? null },
+        metadata: { meterId: meterId.toString(), meterNumber: context.meterNumber, readingId: reading.readingId.toString(), currentReading: data.currentReading, finalReadingCharge: prepared.calculation.totalCurrentCharges, remarks: data.remarks ?? null, disconnectionListItemId: linkedListItem?.disconnectionItemId.toString() ?? null, disconnectionListReference: linkedListItem?.list.listReference ?? null },
       } });
+      if (linkedListItem) {
+        await tx.disconnectionListItem.update({
+          where: { disconnectionItemId: linkedListItem.disconnectionItemId },
+          data: { status: "COMPLETED" },
+        });
+        const remaining = await tx.disconnectionListItem.count({
+          where: { disconnectionListId: linkedListItem.disconnectionListId, status: "APPROVED" },
+        });
+        if (!remaining)
+          await tx.disconnectionList.update({
+            where: { disconnectionListId: linkedListItem.disconnectionListId },
+            data: { status: "WORK_ORDERS_CREATED", updatedAt: new Date() },
+          });
+      }
       return { action: "DISCONNECTED", workOrder, readingId: reading.readingId, finalReadingCharge: prepared.calculation.totalCurrentCharges };
     }, { maxWait: 10_000, timeout: 30_000 });
     res.status(201).json(result);
