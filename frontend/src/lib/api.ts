@@ -46,20 +46,23 @@ function wait(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
-async function fetchWithReadRetry(path: string, options: RequestInit) {
-  const method = String(options.method ?? "GET").toUpperCase();
+type RequestOptions = RequestInit & { timeoutMs?: number };
+
+async function fetchWithReadRetry(path: string, options: RequestOptions) {
+  const { timeoutMs = 30_000, ...fetchOptions } = options;
+  const method = String(fetchOptions.method ?? "GET").toUpperCase();
   const maxAttempts = method === "GET" ? 4 : 1;
   const retryDelays = [250, 750, 1500];
   let lastError: unknown;
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const timeoutController = new AbortController();
-    const abortFromCaller = () => timeoutController.abort(options.signal?.reason);
-    const timeout = window.setTimeout(() => timeoutController.abort(), 30_000);
-    options.signal?.addEventListener("abort", abortFromCaller, { once: true });
+    const abortFromCaller = () => timeoutController.abort(fetchOptions.signal?.reason);
+    const timeout = window.setTimeout(() => timeoutController.abort(), timeoutMs);
+    fetchOptions.signal?.addEventListener("abort", abortFromCaller, { once: true });
     try {
       const response = await fetch(`/api${path}`, {
-        ...options,
+        ...fetchOptions,
         signal: timeoutController.signal,
       });
       const contentType = response.headers.get("content-type") ?? "";
@@ -81,7 +84,7 @@ async function fetchWithReadRetry(path: string, options: RequestInit) {
       await wait(retryDelays[attempt]);
     } finally {
       window.clearTimeout(timeout);
-      options.signal?.removeEventListener("abort", abortFromCaller);
+      fetchOptions.signal?.removeEventListener("abort", abortFromCaller);
     }
   }
 
@@ -92,9 +95,9 @@ async function fetchWithReadRetry(path: string, options: RequestInit) {
   );
 }
 
-async function request(path: string, options: RequestInit = {}) {
+async function request(path: string, options: RequestOptions = {}) {
   const token = getToken();
-  const requestOptions: RequestInit = {
+  const requestOptions: RequestOptions = {
     ...options,
     headers: {
       "Content-Type": "application/json",
@@ -834,6 +837,9 @@ export const api = {
     request("/notifications/process", {
       method: "POST",
       body: JSON.stringify({ notificationIds, batchSize }),
+      // Live providers receive a personalized request for each notification,
+      // so an operator-selected batch can legitimately exceed 30 seconds.
+      timeoutMs: 10 * 60_000,
     }),
   removeQueuedNotifications: (notificationIds: string[]) =>
     request("/notifications/queue", {

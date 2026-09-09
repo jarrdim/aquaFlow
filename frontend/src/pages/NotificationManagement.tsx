@@ -1732,7 +1732,7 @@ function NotificationRegister({ queueOnly = false }: { queueOnly?: boolean }) {
                 </div>
                 <div className="mt-1 text-xs leading-5 text-slate-500">
                   {busy
-                    ? `Processing up to ${(selected.length || processingBatchSize).toLocaleString()} notification(s). Keep this page open.`
+                    ? `Processing up to ${(selected.length || processingBatchSize).toLocaleString()} notification(s). Large live runs can take several minutes; keep this page open and do not submit the same batch again.`
                     : "Fetching the latest queue and delivery statuses."}
                 </div>
               </div>
