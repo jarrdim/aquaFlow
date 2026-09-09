@@ -1423,7 +1423,7 @@ export function DemandNotices() {
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                     <div>
                       <div className="text-sm font-semibold text-slate-700">
-                        Batch {accountBatch} of {accountBatchCount}
+                        Bulk batch {accountBatch} of {accountBatchCount}
                       </div>
                       <div className="text-xs text-slate-500">
                         {filteredAccounts.length
@@ -1453,16 +1453,16 @@ export function DemandNotices() {
                   <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
                     <CheckboxMultiSelect
                       className={INPUT}
-                      disabled={accountsLoading || !accountBatchAccounts.length}
+                      disabled={accountsLoading || !filteredAccounts.length}
                       loading={accountsLoading}
                       maxSelected={NOTICE_BATCH_SIZE}
                       value={recipientIds}
                       onChange={(values) => setRecipientIds(values.slice(0, NOTICE_BATCH_SIZE))}
-                      placeholder="Choose accounts from this batch"
-                      emptyMessage="No unnotified accounts in this batch"
-                      options={accountBatchAccounts.map((account) => ({
+                      placeholder="Search all unnotified accounts"
+                      emptyMessage="No matching unnotified account"
+                      options={filteredAccounts.map((account) => ({
                         value: String(account.accountId),
-                        label: `${account.accountNumber} · ${account.customerName} · ${money(account.currentBalance)}`,
+                        label: `${account.accountNumber} · ${account.customerName} · ${pretty(account.accountStatus)} · ${money(account.currentBalance)}`,
                       }))}
                     />
                     <button
