@@ -625,10 +625,6 @@ function BulkNotificationSend({ modeSwitch }: { modeSwitch: ReactNode }) {
   const [selected, setSelected] = useState<string[]>([]);
   const [allMatching, setAllMatching] = useState(false);
   const [channels, setChannels] = useState<string[]>(["SMS"]);
-  const [notificationType, setNotificationType] =
-    useState("BALANCE_REMINDER");
-  const [subject, setSubject] = useState("");
-  const [message, setMessage] = useState("");
   const [scheduledAt, setScheduledAt] = useState("");
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -654,7 +650,7 @@ function BulkNotificationSend({ modeSwitch }: { modeSwitch: ReactNode }) {
         zoneIds: applied.zoneIds.join(","),
         categoryIds: applied.categoryIds.join(","),
         page: String(page),
-        pageSize: "1000",
+        pageSize: "50",
       })
       .then(setAudience)
       .catch((e) => setError(errorText(e)))
@@ -670,7 +666,6 @@ function BulkNotificationSend({ modeSwitch }: { modeSwitch: ReactNode }) {
     1,
     Math.ceil(Number(audience.total) / Number(audience.pageSize ?? 1000)),
   );
-  const customRequired = notificationType === "GENERAL";
 
   function applyFilters() {
     setPage(1);
@@ -703,10 +698,8 @@ function BulkNotificationSend({ modeSwitch }: { modeSwitch: ReactNode }) {
           ...applied,
           minimumBalance: Number(applied.minimumBalance),
         },
-        notificationType,
+        notificationType: "BALANCE_REMINDER",
         channels,
-        subject: subject || undefined,
-        message: message || undefined,
         scheduledAt: scheduledAt
           ? new Date(scheduledAt).toISOString()
           : undefined,
@@ -735,7 +728,7 @@ function BulkNotificationSend({ modeSwitch }: { modeSwitch: ReactNode }) {
   return (
     <Page
       title="Bulk balance notification campaign"
-      subtitle="Filter outstanding accounts, review recipients and queue up to 1,000 customers per campaign"
+      subtitle="Choose the outstanding accounts to notify, then queue one balance-reminder campaign"
       actions={
         <>
           {modeSwitch}
@@ -744,12 +737,19 @@ function BulkNotificationSend({ modeSwitch }: { modeSwitch: ReactNode }) {
       }
     >
       <Notice error={error} success={success} />
-      <div className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_420px] 2xl:items-start">
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px] xl:items-start">
         <Card
-          className="2xl:col-start-1 2xl:row-start-1"
-          title="Audience filters"
+          className="xl:col-start-1 xl:row-start-1"
+          title={
+            <div>
+              <div>Choose your audience</div>
+              <div className="mt-1 text-sm font-normal text-slate-500">
+                Refine the list by balance, status, location or customer.
+              </div>
+            </div>
+          }
         >
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+          <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-5">
             <label className="text-sm font-medium">
               Minimum outstanding balance
               <input
@@ -806,59 +806,53 @@ function BulkNotificationSend({ modeSwitch }: { modeSwitch: ReactNode }) {
               />
             </label>
           </div>
-          <Button type="button" className="mt-3 w-full" onClick={applyFilters}>
-            Preview matching customers
-          </Button>
-        </Card>
-        <Card
-          className="2xl:col-start-2 2xl:row-start-1"
-          title="Audience summary"
-        >
-          <div className="grid grid-cols-2 gap-3">
-            <div className="rounded-xl bg-sky-50 p-3">
-              <div className="text-xs font-semibold text-sky-700">Matching</div>
-              <div className="mt-1 text-2xl font-bold">
-                {Number(audience.total).toLocaleString()}
-              </div>
-            </div>
-            <div className="rounded-xl bg-emerald-50 p-3">
-              <div className="text-xs font-semibold text-emerald-700">
-                Selected
-              </div>
-              <div className="mt-1 text-2xl font-bold">
-                {selectedCount.toLocaleString()}
-              </div>
-            </div>
+          <div className="mt-5 flex justify-end">
+            <Button type="button" className="min-w-48" onClick={applyFilters}>
+              Apply filters
+            </Button>
           </div>
-          <div className="mt-3 rounded-xl border border-slate-200 p-3">
-            <div className="text-xs text-slate-500">
-              Matching outstanding balance
-            </div>
-            <div className="mt-1 text-xl font-bold text-aqua-700">
-              {money(audience.totalBalance)}
-            </div>
-          </div>
-          <p className="mt-3 text-xs leading-5 text-slate-500">
-            Campaigns are queued first. The delivery queue processes at most
-            200 messages per run to protect provider limits.
-          </p>
         </Card>
       <Card
-        className="order-4 min-w-0 2xl:order-none 2xl:col-start-1 2xl:row-start-2"
-        title={`${Number(audience.total).toLocaleString()} matching customer account(s)`}
+        className="order-3 min-w-0 xl:order-none xl:col-start-1 xl:row-start-2"
+        title={
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <span>{Number(audience.total).toLocaleString()} matching accounts</span>
+              <span className="ml-2 text-sm font-normal text-slate-500">
+                {money(audience.totalBalance)} outstanding
+              </span>
+            </div>
+            <button
+              type="button"
+              disabled={!Number(audience.total) || loading}
+              className={`rounded-full px-4 py-2 text-sm font-bold transition disabled:cursor-not-allowed disabled:opacity-40 ${
+                allMatching
+                  ? "bg-emerald-600 text-white shadow-sm"
+                  : "border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+              }`}
+              onClick={() => {
+                setAllMatching(true);
+                setSelected([]);
+              }}
+            >
+              {allMatching ? "All matching selected" : "Select all matching"}
+            </button>
+          </div>
+        }
       >
         {selected.length > 0 && !allMatching && (
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800">
             <span>{selected.length} account(s) selected across pages.</span>
-            {Number(audience.total) <= 1000 && (
-              <button
-                type="button"
-                className="font-bold text-aqua-700"
-                onClick={() => setAllMatching(true)}
-              >
-                Select all {Number(audience.total).toLocaleString()} matching
-              </button>
-            )}
+            <button
+              type="button"
+              className="font-bold text-aqua-700"
+              onClick={() => {
+                setAllMatching(true);
+                setSelected([]);
+              }}
+            >
+              Select all {Number(audience.total).toLocaleString()} matching
+            </button>
           </div>
         )}
         {allMatching && (
@@ -877,12 +871,6 @@ function BulkNotificationSend({ modeSwitch }: { modeSwitch: ReactNode }) {
             >
               Clear
             </button>
-          </div>
-        )}
-        {Number(audience.total) > 1000 && (
-          <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-            More than 1,000 accounts match. Narrow the filters or select up to
-            1,000 rows across pages.
           </div>
         )}
         <div className="mb-3 flex items-center justify-end gap-2">
@@ -1035,39 +1023,38 @@ function BulkNotificationSend({ modeSwitch }: { modeSwitch: ReactNode }) {
       </Card>
 
       <Card
-        className="order-3 2xl:sticky 2xl:top-24 2xl:order-none 2xl:col-start-2 2xl:row-start-2"
-        title="Campaign message and delivery"
+        className="order-2 xl:sticky xl:top-28 xl:order-none xl:col-start-2 xl:row-span-2 xl:row-start-1"
+        title="Campaign setup"
       >
         <form
           onSubmit={submit}
           className="space-y-4"
         >
-          <div className="flex items-center justify-between rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+          <div className="rounded-2xl bg-gradient-to-br from-emerald-700 to-emerald-600 p-5 text-white shadow-sm">
             <div>
-              <div className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
-                Ready recipients
+              <div className="text-xs font-semibold uppercase tracking-widest text-emerald-100">
+                Campaign recipients
               </div>
-              <div className="mt-0.5 text-xl font-bold text-slate-900">
+              <div className="mt-1 text-3xl font-extrabold">
                 {selectedCount.toLocaleString()}
               </div>
             </div>
-            <div className="text-right text-xs leading-5 text-slate-500">
-              <div>{channels.length} channel(s) selected</div>
-              <div>Maximum 1,000 accounts</div>
+            <div className="mt-3 border-t border-white/20 pt-3 text-xs leading-5 text-emerald-50">
+              {allMatching
+                ? "Every account matching the current filters will be queued."
+                : selectedCount
+                  ? "Only the checked accounts will be queued."
+                  : "Select individual accounts or choose all matching accounts."}
             </div>
           </div>
           <div className="space-y-4">
-            <label className="block text-sm font-medium">
-              Message type
-              <SearchableSelect
-                className={`${INPUT} mt-1`}
-                value={notificationType}
-                onChange={(e) => setNotificationType(e.target.value)}
-              >
-                <option value="BALANCE_REMINDER">Balance reminder</option>
-                <option value="GENERAL">General message</option>
-              </SearchableSelect>
-            </label>
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+              <div className="text-xs font-bold uppercase tracking-wide text-slate-500">Message</div>
+              <div className="mt-1 font-semibold text-slate-800">Balance reminder</div>
+              <p className="mt-1 text-xs leading-5 text-slate-500">
+                Uses the approved template and personalises it for each account.
+              </p>
+            </div>
             <div>
               <div className="mb-2 text-sm font-medium">Delivery channels</div>
               <div className="grid grid-cols-3 gap-2">
@@ -1116,40 +1103,25 @@ function BulkNotificationSend({ modeSwitch }: { modeSwitch: ReactNode }) {
               />
             </label>
           </div>
-          <div className="space-y-4">
-            <label className="block text-sm font-medium">
-              Email subject override (optional)
-              <input
-                className={`${INPUT} mt-1`}
-                value={subject}
-                onChange={(e) => setSubject(e.target.value)}
-                placeholder="Uses the approved template"
-              />
-            </label>
-            <label className="block text-sm font-medium">
-              Custom message {customRequired ? "*" : "(optional)"}
-              <textarea
-                className={`${INPUT} mt-1 min-h-28`}
-                value={message}
-                onChange={(e) => setMessage(e.target.value)}
-                placeholder="Leave blank to use the approved template"
-              />
-            </label>
+          <div className="sticky bottom-3 z-10 -mx-2 rounded-2xl border border-slate-200 bg-white/95 p-2 shadow-[0_-8px_30px_rgba(15,23,42,0.10)] backdrop-blur">
             <Button
               tone="green"
-              className="w-full"
+              className="w-full py-3.5 text-base"
               disabled={
                 busy ||
                 !selectedCount ||
-                !channels.length ||
-                (allMatching && Number(audience.total) > 1000) ||
-                (customRequired && !message.trim())
+                !channels.length
               }
             >
               {busy
                 ? "Creating campaign…"
-                : `Queue campaign for ${selectedCount.toLocaleString()} account(s)`}
+                : selectedCount
+                  ? `Queue campaign · ${selectedCount.toLocaleString()} account(s)`
+                  : "Queue campaign"}
             </Button>
+            <p className="mt-2 text-center text-[11px] leading-4 text-slate-500">
+              Messages are created now and delivered in safe batches from the queue.
+            </p>
           </div>
         </form>
       </Card>

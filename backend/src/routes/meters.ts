@@ -49,6 +49,7 @@ const meterSchema = z.object({
 
 const registerMeterSchema = meterSchema.innerType().omit({ meterNumber: true }).extend({
   accountId: z.string().regex(/^\d+$/).optional(),
+  assignToAccount: z.coerce.boolean().default(false),
 }).refine(
   (data) => !data.purchaseDate || !data.warrantyExpiryDate || data.warrantyExpiryDate >= data.purchaseDate,
   { path: ["warrantyExpiryDate"], message: "Warranty expiry must be on or after the purchase date" },
@@ -479,26 +480,72 @@ metersRouter.post("/", async (req, res) => {
   const data = parsed.data;
   try {
     const meter = await prisma.$transaction(async (tx) => {
-      const { accountId, ...meterData } = data;
+      const { accountId, assignToAccount, ...meterData } = data;
       const targetAccount = accountId
         ? await tx.customerAccount.findUnique({
             where: { accountId: BigInt(accountId) },
-            include: { meterAssignments: { where: { assignmentStatus: "ACTIVE" }, take: 1 } },
+            include: {
+              customer: true,
+              meterAssignments: { where: { assignmentStatus: "ACTIVE" }, take: 1 },
+            },
           })
         : null;
       if (accountId && !targetAccount)
         throw Object.assign(new Error("Customer account not found"), { status: 404 });
       if (targetAccount?.meterAssignments.length)
         throw Object.assign(new Error("This customer account already has an active meter"), { status: 409 });
+      const customerMeterNumber = targetAccount
+        ? targetAccount.customer.customerNumber.replace(/^CUST-/i, "MTR-")
+        : undefined;
       const created = await tx.meter.create({ data: {
         ...meterData,
-        ...(targetAccount ? { meterType: "CUSTOMER" as const, status: "IN_STOCK" as const, installationStatus: "IN_STORE" as const } : {}),
-        meterNumber: targetAccount?.accountNumber ?? await nextMeterNumber(), brand: meterData.brand, model: meterData.model, serialNumber: meterData.serialNumber,
+        ...(targetAccount ? {
+          meterType: "CUSTOMER" as const,
+          status: assignToAccount ? "ACTIVE" as const : "IN_STOCK" as const,
+          installationStatus: assignToAccount ? "INSTALLED" as const : "IN_STORE" as const,
+        } : {}),
+        meterNumber: customerMeterNumber ?? await nextMeterNumber(), brand: meterData.brand, model: meterData.model, serialNumber: meterData.serialNumber,
         installationDate: meterData.installationDate ? new Date(meterData.installationDate) : null,
         purchaseDate: meterData.purchaseDate ? new Date(meterData.purchaseDate) : null,
         warrantyExpiryDate: meterData.warrantyExpiryDate ? new Date(meterData.warrantyExpiryDate) : null,
       } });
       await tx.meterEvent.create({ data: { meterId: created.meterId, eventType: "REGISTERED", newStatus: created.status, reading: created.openingReading, remarks: created.remarks, performedBy: userId(req) } });
+      if (targetAccount && assignToAccount) {
+        const assignmentDate = meterData.installationDate
+          ? new Date(meterData.installationDate)
+          : new Date();
+        const assignment = await tx.meterAssignment.create({
+          data: {
+            meterId: created.meterId,
+            accountId: targetAccount.accountId,
+            assignmentDate,
+            installationStatus: "COMPLETED",
+            installedBy: userId(req),
+            remarks: meterData.remarks,
+          },
+        });
+        await tx.customerAccount.update({
+          where: { accountId: targetAccount.accountId },
+          data: {
+            accountStatus: "ACTIVE",
+            connectionDate: assignmentDate,
+            updatedAt: new Date(),
+          },
+        });
+        await tx.meterEvent.create({
+          data: {
+            meterId: created.meterId,
+            assignmentId: assignment.assignmentId,
+            eventType: "ASSIGNED",
+            previousStatus: "IN_STOCK",
+            newStatus: "ACTIVE",
+            reading: meterData.openingReading,
+            reason: "Meter created and assigned from the customer directory",
+            remarks: meterData.remarks,
+            performedBy: userId(req),
+          },
+        });
+      }
       return created;
     });
     res.status(201).json(meter);

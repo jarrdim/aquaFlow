@@ -1480,13 +1480,7 @@ notificationsRouter.post("/send-bulk", managers, async (req, res, next) => {
           : filteredWhere,
       include: { customer: true },
       orderBy: { accountNumber: "asc" },
-      take: 1001,
     });
-    if (accounts.length > 1000)
-      return res.status(400).json({
-        error:
-          "This audience contains more than 1,000 accounts. Narrow the filters and create another batch.",
-      });
     const templateEntries = await Promise.all(
       parsed.data.channels.map(async (channel) => ({
         channel,

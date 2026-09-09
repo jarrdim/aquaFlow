@@ -197,6 +197,22 @@ export default function Customers() {
   const [reconciliationPreview, setReconciliationPreview] = useState<BalanceReconciliationPreview | null>(null);
   const [checkingReconciliation, setCheckingReconciliation] = useState(false);
   const [reconcilingBalance, setReconcilingBalance] = useState(false);
+  const [meterTarget, setMeterTarget] = useState<{
+    customer: Customer;
+    account: Customer["accounts"][number];
+  } | null>(null);
+  const [meterForm, setMeterForm] = useState({
+    technology: "MANUAL",
+    brand: "",
+    model: "",
+    meterSizeMm: "15",
+    serialNumber: "",
+    openingReading: "0",
+    installationDate: new Date().toISOString().slice(0, 10),
+    sealNumber: "",
+    remarks: "",
+  });
+  const [savingMeter, setSavingMeter] = useState(false);
 
   async function load(
     q = search,
@@ -627,8 +643,150 @@ export default function Customers() {
     }
   }
 
+  function openMeterModal(
+    customer: Customer,
+    account: Customer["accounts"][number],
+  ) {
+    setError("");
+    setSuccess("");
+    setMeterForm({
+      technology: "MANUAL",
+      brand: "",
+      model: "",
+      meterSizeMm: "15",
+      serialNumber: "",
+      openingReading: "0",
+      installationDate: new Date().toISOString().slice(0, 10),
+      sealNumber: "",
+      remarks: "",
+    });
+    setMeterTarget({ customer, account });
+  }
+
+  async function createCustomerMeter(event: FormEvent) {
+    event.preventDefault();
+    if (!meterTarget) return;
+    setSavingMeter(true);
+    setError("");
+    try {
+      const meter = await api.createMeter({
+        ...meterForm,
+        accountId: String(meterTarget.account.accountId),
+        assignToAccount: true,
+        meterType: "CUSTOMER",
+        meterSizeMm: Number(meterForm.meterSizeMm),
+        openingReading: Number(meterForm.openingReading),
+        installationStatus: "INSTALLED",
+        status: "ACTIVE",
+      });
+      setMeterTarget(null);
+      setSuccess(
+        `${meter.meterNumber} was created and assigned to ${meterTarget.account.accountNumber}.`,
+      );
+      await load(search, statusFilter, meterAssignmentFilter, page);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "The meter could not be created.");
+    } finally {
+      setSavingMeter(false);
+    }
+  }
+
   return (
     <div className="mx-auto max-w-[1600px] px-5 py-6 lg:px-8">
+      {meterTarget && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="create-meter-title"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !savingMeter) setMeterTarget(null);
+          }}
+        >
+          <section className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-start justify-between border-b border-slate-100 px-6 py-5">
+              <div>
+                <h2 id="create-meter-title" className="text-xl font-extrabold text-slate-900">
+                  Create and assign meter
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  {privacyMode ? maskName(customerName(meterTarget.customer)) : customerName(meterTarget.customer)} · {meterTarget.account.accountNumber}
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={savingMeter}
+                onClick={() => setMeterTarget(null)}
+                className="grid h-9 w-9 place-items-center rounded-full text-xl text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 disabled:opacity-40"
+                aria-label="Close create meter dialog"
+              >
+                ×
+              </button>
+            </div>
+            <form onSubmit={createCustomerMeter} className="p-6">
+              <div className="mb-5 rounded-xl border border-sky-200 bg-sky-50 p-4">
+                <div className="text-xs font-bold uppercase tracking-wide text-sky-700">Meter number</div>
+                <div className="mt-1 text-xl font-extrabold text-slate-900">
+                  {meterTarget.customer.customerNumber.replace(/^CUST-/i, "MTR-")}
+                </div>
+                <p className="mt-1 text-xs text-sky-800">Generated from the customer ID and linked to this account automatically.</p>
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <label className="text-sm font-semibold text-slate-700">
+                  Technology
+                  <SearchableSelect
+                    className="mt-1.5 h-11 w-full rounded-xl border border-slate-200 bg-white px-3.5 text-sm outline-none focus:border-sky-500 focus:ring-4 focus:ring-sky-500/10"
+                    value={meterForm.technology}
+                    onChange={(event) => setMeterForm({ ...meterForm, technology: event.target.value })}
+                  >
+                    <option value="MANUAL">Manual</option>
+                    <option value="PREPAID">Prepaid</option>
+                    <option value="SMART">Smart</option>
+                  </SearchableSelect>
+                </label>
+                <label className="text-sm font-semibold text-slate-700">
+                  Meter size (mm)
+                  <input required min="0.01" step="0.01" type="number" value={meterForm.meterSizeMm} onChange={(event) => setMeterForm({ ...meterForm, meterSizeMm: event.target.value })} className="mt-1.5 h-11 w-full rounded-xl border border-slate-200 px-3.5 text-sm outline-none focus:border-sky-500 focus:ring-4 focus:ring-sky-500/10" />
+                </label>
+                <label className="text-sm font-semibold text-slate-700">
+                  Brand
+                  <input value={meterForm.brand} onChange={(event) => setMeterForm({ ...meterForm, brand: event.target.value })} placeholder="e.g. Zenner" className="mt-1.5 h-11 w-full rounded-xl border border-slate-200 px-3.5 text-sm outline-none focus:border-sky-500 focus:ring-4 focus:ring-sky-500/10" />
+                </label>
+                <label className="text-sm font-semibold text-slate-700">
+                  Model
+                  <input value={meterForm.model} onChange={(event) => setMeterForm({ ...meterForm, model: event.target.value })} placeholder="e.g. ZR-15" className="mt-1.5 h-11 w-full rounded-xl border border-slate-200 px-3.5 text-sm outline-none focus:border-sky-500 focus:ring-4 focus:ring-sky-500/10" />
+                </label>
+                <label className="text-sm font-semibold text-slate-700">
+                  Serial number
+                  <input value={meterForm.serialNumber} onChange={(event) => setMeterForm({ ...meterForm, serialNumber: event.target.value })} className="mt-1.5 h-11 w-full rounded-xl border border-slate-200 px-3.5 text-sm outline-none focus:border-sky-500 focus:ring-4 focus:ring-sky-500/10" />
+                </label>
+                <label className="text-sm font-semibold text-slate-700">
+                  Opening reading
+                  <input required min="0" step="0.001" type="number" value={meterForm.openingReading} onChange={(event) => setMeterForm({ ...meterForm, openingReading: event.target.value })} className="mt-1.5 h-11 w-full rounded-xl border border-slate-200 px-3.5 text-sm outline-none focus:border-sky-500 focus:ring-4 focus:ring-sky-500/10" />
+                </label>
+                <label className="text-sm font-semibold text-slate-700">
+                  Installation date
+                  <input required type="date" value={meterForm.installationDate} onChange={(event) => setMeterForm({ ...meterForm, installationDate: event.target.value })} className="mt-1.5 h-11 w-full rounded-xl border border-slate-200 px-3.5 text-sm outline-none focus:border-sky-500 focus:ring-4 focus:ring-sky-500/10" />
+                </label>
+                <label className="text-sm font-semibold text-slate-700">
+                  Seal number
+                  <input value={meterForm.sealNumber} onChange={(event) => setMeterForm({ ...meterForm, sealNumber: event.target.value })} className="mt-1.5 h-11 w-full rounded-xl border border-slate-200 px-3.5 text-sm outline-none focus:border-sky-500 focus:ring-4 focus:ring-sky-500/10" />
+                </label>
+                <label className="text-sm font-semibold text-slate-700 sm:col-span-2">
+                  Remarks (optional)
+                  <textarea rows={2} value={meterForm.remarks} onChange={(event) => setMeterForm({ ...meterForm, remarks: event.target.value })} className="mt-1.5 w-full resize-y rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm outline-none focus:border-sky-500 focus:ring-4 focus:ring-sky-500/10" />
+                </label>
+              </div>
+              <div className="mt-6 flex justify-end gap-3 border-t border-slate-100 pt-5">
+                <button type="button" disabled={savingMeter} onClick={() => setMeterTarget(null)} className="h-11 rounded-xl border border-slate-200 px-5 text-sm font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-40">Cancel</button>
+                <button disabled={savingMeter} className="h-11 rounded-xl bg-aqua-700 px-6 text-sm font-bold text-white shadow-sm hover:bg-aqua-800 disabled:cursor-not-allowed disabled:opacity-50">
+                  {savingMeter ? "Creating meter…" : "Create and assign meter"}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
       <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-4">
           <span className="hidden h-12 w-12 items-center justify-center rounded-2xl bg-navy-900 text-sky-300 shadow-lg shadow-slate-300/60 sm:flex">
@@ -1085,13 +1243,14 @@ export default function Customers() {
                               No active meter
                             </span>
                             {meterAccount ? (
-                              <Link
-                                to={`/meters/register?accountId=${encodeURIComponent(String(meterAccount.accountId))}&accountNumber=${encodeURIComponent(meterAccount.accountNumber)}`}
+                              <button
+                                type="button"
+                                onClick={() => openMeterModal(customer, meterAccount)}
                                 className="rounded-lg bg-aqua-700 px-2.5 py-1.5 text-xs font-bold text-white transition hover:bg-aqua-800"
                                 title={`Create meter ${meterAccount.accountNumber}`}
                               >
                                 Create meter
-                              </Link>
+                              </button>
                             ) : unmeteredAccounts.length > 1 ? (
                               <Link to={detailPath} className="rounded-lg border border-sky-200 bg-sky-50 px-2.5 py-1.5 text-xs font-bold text-sky-700 hover:bg-sky-100">
                                 Choose account
