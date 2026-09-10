@@ -422,12 +422,14 @@ function CycleSelect({
   value,
   onChange,
   includeBlank = true,
+  blankLabel = "Select billing period",
   disabled = false,
 }: {
   cycles: Row[];
   value: string;
   onChange: (value: string) => void;
   includeBlank?: boolean;
+  blankLabel?: string;
   disabled?: boolean;
 }) {
   return (
@@ -437,7 +439,7 @@ function CycleSelect({
       disabled={disabled}
       onChange={(e) => onChange(e.target.value)}
     >
-      {includeBlank && <option value="">Select billing period</option>}
+      {includeBlank && <option value="">{blankLabel}</option>}
       {cycles.map((cycle) => (
         <option key={cycle.billingCycleId} value={cycle.billingCycleId}>
           {cycle.cycleName} · {pretty(cycle.status)}
@@ -2211,18 +2213,25 @@ export function BillApprovals() {
     const groupCycles = cycleRows.filter(
       (cycle: Row) => !selectedGroupId || String(cycle.billingPeriodGroupId) === selectedGroupId,
     );
-    const target =
-      groupCycles.find((cycle: Row) => String(cycle.billingCycleId) === preferredCycle) ??
-      groupCycles.find((cycle: Row) => cycle.status === "PENDING_APPROVAL") ??
-      groupCycles.find((cycle: Row) => cycle.status === "PROCESSING") ??
-      groupCycles[0];
+    const target = !preferredCycle && preferredGroup
+      ? undefined
+      : groupCycles.find((cycle: Row) => String(cycle.billingCycleId) === preferredCycle) ??
+        groupCycles.find((cycle: Row) => cycle.status === "PENDING_APPROVAL") ??
+        groupCycles.find((cycle: Row) => cycle.status === "PROCESSING") ??
+        groupCycles[0];
     setGroupId(selectedGroupId);
-    if (target) setCycleId(String(target.billingCycleId));
+    setCycleId(target ? String(target.billingCycleId) : "");
   };
-  const load = async (idValue = cycleId, searchValue = search) => {
+  const load = async (idValue = cycleId, searchValue = search, groupValue = groupId) => {
     setLoading(true);
     try {
-      const filters = { billingCycleId: idValue, search: searchValue };
+      const filters = {
+        ...(idValue
+          ? { billingCycleId: idValue }
+          : { billingPeriodGroupId: groupValue }),
+        search: searchValue,
+        limit: "10000",
+      };
       const [pendingRows, allRows] = await Promise.all([
         api.listBills({ ...filters, status: "PENDING_APPROVAL" }),
         api.listBills(filters),
@@ -2245,8 +2254,8 @@ export function BillApprovals() {
     });
   }, []);
   useEffect(() => {
-    if (cycleId) load().catch((e) => setError(e.message));
-  }, [cycleId, search]);
+    if (cycleId || groupId) load().catch((e) => setError(e.message));
+  }, [cycleId, groupId, search]);
   async function decide(decision: "APPROVE" | "REJECT" | "RETURN") {
     if (!selected.length || comments.trim().length < 3)
       return setError("Select at least one bill and enter approval comments.");
@@ -2274,11 +2283,29 @@ export function BillApprovals() {
     setPosting(true);
     setError("");
     try {
-      const result = await api.postBillingCycle(cycleId, reason);
+      let posted = 0;
+      if (cycleId) {
+        const result = await api.postBillingCycle(cycleId, reason);
+        posted = Number(result.posted ?? 0);
+      } else {
+        const approvedByCycle = processed
+          .filter((bill) => bill.status === "APPROVED")
+          .reduce((groups: Record<string, string[]>, bill: Row) => {
+            const memberCycleId = String(bill.billingCycleId);
+            (groups[memberCycleId] ??= []).push(String(bill.billId));
+            return groups;
+          }, {});
+        for (const billIds of Object.values(approvedByCycle)) {
+          for (let index = 0; index < billIds.length; index += 500) {
+            const result = await api.postBills(billIds.slice(index, index + 500), reason);
+            posted += Number(result.posted ?? 0);
+          }
+        }
+      }
       setMessage(
-        `${result.posted} approved bill(s) posted to customer accounts.`,
+        `${posted} approved bill(s) posted to customer accounts.`,
       );
-      await Promise.all([load(), refreshCycles(cycleId, groupId)]);
+      await Promise.all([load(cycleId, search, groupId), refreshCycles(cycleId, groupId)]);
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -2486,7 +2513,7 @@ export function BillApprovals() {
         <Button
           tone="green"
           onClick={post}
-          disabled={!cycleId || approvedCount === 0 || posting || loading}
+          disabled={(!cycleId && !groupId) || approvedCount === 0 || posting || loading}
         >
           {posting
             ? `Posting ${approvedCount.toLocaleString()} bill(s)…`
@@ -2504,14 +2531,7 @@ export function BillApprovals() {
               value={groupId}
               onChange={(nextGroupId) => {
                 setGroupId(nextGroupId);
-                const nextCycles = cycles.filter(
-                  (cycle: Row) => String(cycle.billingPeriodGroupId) === nextGroupId,
-                );
-                const nextCycle =
-                  nextCycles.find((cycle: Row) => cycle.status === "PENDING_APPROVAL") ??
-                  nextCycles.find((cycle: Row) => cycle.status === "PROCESSING") ??
-                  nextCycles[0];
-                setCycleId(nextCycle ? String(nextCycle.billingCycleId) : "");
+                setCycleId("");
               }}
             />
           </Field>
@@ -2522,7 +2542,8 @@ export function BillApprovals() {
               )}
               value={cycleId}
               onChange={setCycleId}
-              includeBlank={false}
+              includeBlank
+              blankLabel="All periods in selected group"
               disabled={!groupId}
             />
           </Field>
