@@ -511,7 +511,7 @@ export function BillingDashboard() {
             Create billing period
           </LinkButton>
           <LinkButton to="/billing/generate">Generate bills ({eligibleNotBilled.toLocaleString()})</LinkButton>
-          <LinkButton to="/billing/approvals" tone="orange">
+          <LinkButton to={`/billing/approvals?billingPeriodGroupId=${groupId}`} tone="orange">
             Post approved batch ({readyToPost.toLocaleString()})
           </LinkButton>
         </>
@@ -2176,6 +2176,8 @@ export function BillGeneration() {
 
 export function BillApprovals() {
   const [searchParams] = useSearchParams();
+  const [groups, setGroups] = useState<Row[]>([]);
+  const [groupId, setGroupId] = useState(searchParams.get("billingPeriodGroupId") ?? "");
   const [cycles, setCycles] = useState<Row[]>([]);
   const [cycleId, setCycleId] = useState(searchParams.get("billingCycleId") ?? "");
   const [search, setSearch] = useState("");
@@ -2191,13 +2193,30 @@ export function BillApprovals() {
     "",
   );
   const [posting, setPosting] = useState(false);
-  const refreshCycles = async (preferred = cycleId) => {
-    const rows = await api.listBillingCycles();
-    setCycles(rows);
+  const refreshCycles = async (preferredCycle = cycleId, preferredGroup = groupId) => {
+    const [cycleRows, groupRows] = await Promise.all([
+      api.listBillingCycles(),
+      api.listBillingPeriodGroups(),
+    ]);
+    setCycles(cycleRows);
+    setGroups(groupRows);
+    const preferredCycleRow = cycleRows.find(
+      (cycle: Row) => String(cycle.billingCycleId) === preferredCycle,
+    );
+    const selectedGroup =
+      groupRows.find((group: Row) => String(group.billingPeriodGroupId) === preferredGroup) ??
+      groupRows.find((group: Row) => String(group.billingPeriodGroupId) === String(preferredCycleRow?.billingPeriodGroupId ?? "")) ??
+      groupRows[0];
+    const selectedGroupId = String(selectedGroup?.billingPeriodGroupId ?? "");
+    const groupCycles = cycleRows.filter(
+      (cycle: Row) => !selectedGroupId || String(cycle.billingPeriodGroupId) === selectedGroupId,
+    );
     const target =
-      rows.find((x: Row) => String(x.billingCycleId) === preferred) ??
-      rows.find((x: Row) => x.status === "PENDING_APPROVAL") ??
-      rows[0];
+      groupCycles.find((cycle: Row) => String(cycle.billingCycleId) === preferredCycle) ??
+      groupCycles.find((cycle: Row) => cycle.status === "PENDING_APPROVAL") ??
+      groupCycles.find((cycle: Row) => cycle.status === "PROCESSING") ??
+      groupCycles[0];
+    setGroupId(selectedGroupId);
     if (target) setCycleId(String(target.billingCycleId));
   };
   const load = async (idValue = cycleId, searchValue = search) => {
@@ -2239,7 +2258,7 @@ export function BillApprovals() {
         `${result.updated} bill(s) changed to ${pretty(result.status)}.`,
       );
       setComments("");
-      await Promise.all([load(), refreshCycles(cycleId)]);
+      await Promise.all([load(), refreshCycles(cycleId, groupId)]);
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -2259,7 +2278,7 @@ export function BillApprovals() {
       setMessage(
         `${result.posted} approved bill(s) posted to customer accounts.`,
       );
-      await Promise.all([load(), refreshCycles(cycleId)]);
+      await Promise.all([load(), refreshCycles(cycleId, groupId)]);
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -2478,12 +2497,33 @@ export function BillApprovals() {
       {error && <Notice>{error}</Notice>}
       {message && <Notice tone="green">{message}</Notice>}
       <Card className="mb-4">
-        <div className="grid gap-4 md:grid-cols-2">
+        <div className="grid gap-4 md:grid-cols-3">
+          <Field label="Billing period group">
+            <BillingPeriodGroupSelect
+              groups={groups}
+              value={groupId}
+              onChange={(nextGroupId) => {
+                setGroupId(nextGroupId);
+                const nextCycles = cycles.filter(
+                  (cycle: Row) => String(cycle.billingPeriodGroupId) === nextGroupId,
+                );
+                const nextCycle =
+                  nextCycles.find((cycle: Row) => cycle.status === "PENDING_APPROVAL") ??
+                  nextCycles.find((cycle: Row) => cycle.status === "PROCESSING") ??
+                  nextCycles[0];
+                setCycleId(nextCycle ? String(nextCycle.billingCycleId) : "");
+              }}
+            />
+          </Field>
           <Field label="Billing period">
             <CycleSelect
-              cycles={cycles}
+              cycles={cycles.filter(
+                (cycle: Row) => !groupId || String(cycle.billingPeriodGroupId) === groupId,
+              )}
               value={cycleId}
               onChange={setCycleId}
+              includeBlank={false}
+              disabled={!groupId}
             />
           </Field>
           <Field label="Search bills">
