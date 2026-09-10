@@ -66,17 +66,27 @@ function Card({
   title,
   children,
   className = "",
+  contentClassName = "",
+  contentTabIndex,
 }: {
   title?: string;
   children: ReactNode;
   className?: string;
+  contentClassName?: string;
+  contentTabIndex?: number;
 }) {
   return (
     <section
       className={`rounded-2xl border border-slate-200 bg-white shadow-sm ${className}`}
     >
-      {title && <div className="border-b px-4 py-3 font-semibold">{title}</div>}
-      <div className="p-4">{children}</div>
+      {title && <div className="shrink-0 border-b px-4 py-3 font-semibold">{title}</div>}
+      <div
+        className={`p-4 ${contentClassName}`}
+        tabIndex={contentTabIndex}
+        aria-label={contentTabIndex !== undefined && title ? `${title} content` : undefined}
+      >
+        {children}
+      </div>
     </section>
   );
 }
@@ -1608,10 +1618,10 @@ export function UnmatchedPayments() {
     >
       {error && <Notice>{error}</Notice>}
       {message && <Notice green>{message}</Notice>}
-      <div className="mb-5 grid gap-3 sm:grid-cols-3">
-        <div className="rounded-2xl border border-amber-100 bg-amber-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-amber-700">Unmatched payments</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{rows.length}</div></div>
-        <div className="rounded-2xl border border-rose-100 bg-rose-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-rose-700">Value awaiting allocation</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{money(unmatchedTotal)}</div></div>
-        <div className="rounded-2xl border border-sky-100 bg-sky-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-sky-700">Available accounts</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{availableAccountCount.toLocaleString()}</div></div>
+      <div className="mb-3 grid gap-2 sm:grid-cols-3">
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-amber-100 bg-amber-50 px-3.5 py-2.5 shadow-sm"><div className="text-[11px] font-bold uppercase tracking-wide text-amber-700">Unmatched payments</div><div className="shrink-0 text-lg font-extrabold leading-none text-slate-900">{rows.length}</div></div>
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-rose-100 bg-rose-50 px-3.5 py-2.5 shadow-sm"><div className="text-[11px] font-bold uppercase tracking-wide text-rose-700">Value awaiting allocation</div><div className="shrink-0 text-lg font-extrabold leading-none text-slate-900">{money(unmatchedTotal)}</div></div>
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-sky-100 bg-sky-50 px-3.5 py-2.5 shadow-sm"><div className="text-[11px] font-bold uppercase tracking-wide text-sky-700">Available accounts</div><div className="shrink-0 text-lg font-extrabold leading-none text-slate-900">{availableAccountCount.toLocaleString()}</div></div>
       </div>
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_480px] xl:items-start">
         <Card title="Payments awaiting reconciliation" className="overflow-hidden shadow-md shadow-slate-200/50">
@@ -1641,14 +1651,22 @@ export function UnmatchedPayments() {
             </table>
           </div>
         </Card>
-        <Card title="Manual allocation" className="overflow-hidden shadow-md shadow-slate-200/50 xl:sticky xl:top-24">
+        <Card
+          title="Manual allocation"
+          className="overflow-hidden shadow-md shadow-slate-200/50 xl:sticky xl:top-4 xl:flex xl:max-h-[calc(100dvh-5.5rem)] xl:flex-col"
+          contentClassName="xl:min-h-0 xl:flex-1 xl:overflow-y-auto xl:overscroll-contain xl:[scrollbar-gutter:stable]"
+          contentTabIndex={0}
+        >
           {focus ? (
             <div className="space-y-4">
-              <div className="rounded-xl bg-slate-900 p-4 text-white shadow-sm">
-                <div className="mb-2 text-xs font-bold uppercase tracking-wider text-emerald-400">Selected transaction</div>
-                <strong>{focus.transactionReference}</strong>
-                <div className="mt-1 text-xl font-extrabold">
-                  {money(focus.amount)}{usablePhone(focus.payerPhone) ? ` · ${usablePhone(focus.payerPhone)}` : ""}
+              <div className="flex items-center justify-between gap-4 rounded-xl bg-slate-900 px-4 py-3 text-white shadow-sm">
+                <div className="min-w-0">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-emerald-400">Selected transaction</div>
+                  <strong className="mt-0.5 block truncate text-sm">{focus.transactionReference}</strong>
+                </div>
+                <div className="shrink-0 text-right">
+                  <div className="text-lg font-extrabold leading-tight">{money(focus.amount)}</div>
+                  {usablePhone(focus.payerPhone) && <div className="mt-0.5 text-[11px] text-slate-300">{usablePhone(focus.payerPhone)}</div>}
                 </div>
               </div>
               {focus.suggestedAccount && <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
