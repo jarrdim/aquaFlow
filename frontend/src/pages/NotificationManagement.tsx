@@ -615,6 +615,9 @@ function BulkNotificationSend({ modeSwitch }: { modeSwitch: ReactNode }) {
   const [applied, setApplied] = useState(filters);
   const [zones, setZones] = useState<Row[]>([]);
   const [categories, setCategories] = useState<Row[]>([]);
+  const [accountOptions, setAccountOptions] = useState<Row[]>([]);
+  const [accountSearch, setAccountSearch] = useState("");
+  const [loadingAccounts, setLoadingAccounts] = useState(false);
   const [audience, setAudience] = useState<Row>({
     items: [],
     total: 0,
@@ -639,6 +642,28 @@ function BulkNotificationSend({ modeSwitch }: { modeSwitch: ReactNode }) {
       })
       .catch((e) => setError(errorText(e)));
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      setLoadingAccounts(true);
+      api
+        .listMeterAccounts(accountSearch)
+        .then((rows) => {
+          if (!cancelled) setAccountOptions(rows);
+        })
+        .catch((e) => {
+          if (!cancelled) setError(errorText(e));
+        })
+        .finally(() => {
+          if (!cancelled) setLoadingAccounts(false);
+        });
+    }, accountSearch ? 250 : 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [accountSearch]);
 
   useEffect(() => {
     setLoading(true);
@@ -795,15 +820,21 @@ function BulkNotificationSend({ modeSwitch }: { modeSwitch: ReactNode }) {
             </label>
             <label className="text-sm font-medium">
               Account or customer
-              <input
+              <SearchableSelect
                 className={`${INPUT} mt-1`}
-                placeholder="Optional search"
                 value={filters.search}
-                onChange={(e) =>
-                  setFilters({ ...filters, search: e.target.value })
-                }
-                onKeyDown={(e) => e.key === "Enter" && applyFilters()}
-              />
+                onChange={(e) => setFilters({ ...filters, search: e.target.value })}
+                onSearchQuery={setAccountSearch}
+              >
+                <option value="">
+                  {loadingAccounts ? "Loading accounts…" : "All accounts and customers"}
+                </option>
+                {accountOptions.map((account) => (
+                  <option key={account.accountId} value={account.accountNumber}>
+                    {account.accountNumber} · {account.customerName}
+                  </option>
+                ))}
+              </SearchableSelect>
             </label>
           </div>
           <div className="mt-5 flex justify-end">
