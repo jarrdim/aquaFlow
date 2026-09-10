@@ -603,6 +603,18 @@ export const api = {
     ).toString();
     return request(`/billing/bills${query ? `?${query}` : ""}`);
   },
+  listBillApprovalQueue: (filters: Record<string, string> = {}) => {
+    const query = new URLSearchParams(
+      Object.entries(filters).filter(([, value]) => value),
+    ).toString();
+    return request(`/billing/bills/approval-queue${query ? `?${query}` : ""}`);
+  },
+  listBillPostingCandidates: (filters: Record<string, string> = {}) => {
+    const query = new URLSearchParams(
+      Object.entries(filters).filter(([, value]) => value),
+    ).toString();
+    return request(`/billing/bills/posting-candidates${query ? `?${query}` : ""}`);
+  },
   listBillingPeriodRecords: (filters: Record<string, string> = {}) => {
     const query = new URLSearchParams(
       Object.entries(filters).filter(([, value]) => value),

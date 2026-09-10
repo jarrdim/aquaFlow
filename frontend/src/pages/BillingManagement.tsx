@@ -165,6 +165,8 @@ const badges: Record<string, string> = {
   ACTIVE: "bg-emerald-50 text-emerald-700",
   OPEN: "bg-emerald-50 text-emerald-700",
   POSTED: "bg-emerald-50 text-emerald-700",
+  PARTIALLY_POSTED: "bg-sky-50 text-sky-700",
+  PARTIALLY_PAID: "bg-sky-50 text-sky-700",
   PAID: "bg-emerald-50 text-emerald-700",
   APPROVED: "bg-cyan-50 text-cyan-700",
   PENDING_APPROVAL: "bg-amber-50 text-amber-700",
@@ -251,20 +253,26 @@ function Kpi({
 function BillingStatusChart({
   generated,
   pending,
-  approved,
+  approvedAwaitingPosting,
+  posted,
   cancelled,
+  postingInconsistencies,
 }: {
   generated: number;
   pending: number;
-  approved: number;
+  approvedAwaitingPosting: number;
+  posted: number;
   cancelled: number;
+  postingInconsistencies: number;
 }) {
-  const accounted = pending + approved + cancelled;
+  const accounted = pending + approvedAwaitingPosting + posted + cancelled + postingInconsistencies;
   const other = Math.max(0, generated - accounted);
   const segments = [
-    { label: "Approved / posted", value: approved, color: "#10b981" },
+    { label: "Posted", value: posted, color: "#10b981" },
+    { label: "Approved — awaiting posting", value: approvedAwaitingPosting, color: "#0891b2" },
     { label: "Pending approval", value: pending, color: "#f59e0b" },
     { label: "Cancelled", value: cancelled, color: "#ef4444" },
+    { label: "Posting inconsistency", value: postingInconsistencies, color: "#be123c" },
     { label: "Other", value: other, color: "#94a3b8" },
   ];
   const total = Math.max(0, generated);
@@ -330,12 +338,14 @@ function BillingStatusChart({
 
 function BillingWorkflowChart({
   generated,
-  approved,
+  approvedAwaitingPosting,
+  posted,
   notified,
   totalBilling,
 }: {
   generated: number;
-  approved: number;
+  approvedAwaitingPosting: number;
+  posted: number;
   notified: number;
   totalBilling: number;
 }) {
@@ -347,16 +357,22 @@ function BillingWorkflowChart({
       icon: "01",
     },
     {
-      label: "Approved",
-      value: approved,
-      color: "from-emerald-600 to-teal-400",
+      label: "Approved — awaiting posting",
+      value: approvedAwaitingPosting,
+      color: "from-cyan-600 to-sky-400",
       icon: "02",
     },
     {
-      label: "Notified",
+      label: "Posted",
+      value: posted,
+      color: "from-emerald-600 to-teal-400",
+      icon: "03",
+    },
+    {
+      label: "Notified after posting",
       value: notified,
       color: "from-violet-600 to-fuchsia-400",
-      icon: "03",
+      icon: "04",
     },
   ];
   const average = generated ? totalBilling / generated : 0;
@@ -442,7 +458,7 @@ function CycleSelect({
       {includeBlank && <option value="">{blankLabel}</option>}
       {cycles.map((cycle) => (
         <option key={cycle.billingCycleId} value={cycle.billingCycleId}>
-          {cycle.cycleName} · {pretty(cycle.status)}
+          {cycle.cycleName} · {pretty(cycle.completionStatus ?? cycle.status)}
         </option>
       ))}
     </SearchableSelect>
@@ -465,7 +481,7 @@ function BillingPeriodGroupSelect({
       <option value="">Select billing group</option>
       {groups.map((group) => (
         <option key={group.billingPeriodGroupId} value={group.billingPeriodGroupId}>
-          {group.groupName} Â· {pretty(group.status)} Â· {Number(group.totals?.bills ?? 0).toLocaleString()} bills
+          {group.groupName} · {pretty(group.status)} · {Number(group.totals?.bills ?? 0).toLocaleString()} bills
           {Number(group.replacementCount ?? 0) ? ` (${Number(group.replacementCount).toLocaleString()} replacements)` : ""}
         </option>
       ))}
@@ -497,9 +513,12 @@ export function BillingDashboard() {
       .catch((e) => setError(e.message));
   }, [groupId]);
   const generated = Number(data?.billsGenerated ?? 0);
-  const approved = Number(data?.approved ?? 0);
+  const approvedAwaitingPosting = Number(data?.approvedAwaitingPosting ?? 0);
+  const posted = Number(data?.posted ?? 0);
   const readyToPost = Number(data?.readyToPost ?? 0);
   const notified = Number(data?.notified ?? 0);
+  const postingInconsistencies = Number(data?.postingInconsistencies ?? 0);
+  const unpostedNotifications = Number(data?.unpostedNotifications ?? 0);
   const eligibleNotBilled = Number(data?.eligibleNotBilled ?? 0);
   const eligibleNotNotifiedMeterReplacement = Number(data?.eligibleNotNotifiedMeterReplacement ?? 0);
   const eligibleNotNotifiedOther = Number(data?.eligibleNotNotifiedOther ?? 0);
@@ -535,13 +554,19 @@ export function BillingDashboard() {
               label="Pending approval"
               value={data.pending}
               tone="text-amber-600"
-              to="/billing/approvals"
+              to={`/billing/approvals?billingPeriodGroupId=${groupId}`}
             />
             <Kpi
-              label="Approved / posted"
-              value={approved}
+              label="Approved — awaiting posting"
+              value={approvedAwaitingPosting}
+              tone="text-cyan-700"
+              to={`/billing/invoices?billingPeriodGroupId=${groupId}&status=APPROVED`}
+            />
+            <Kpi
+              label="Posted"
+              value={posted}
               tone="text-emerald-700"
-              to={`/billing/invoices?billingPeriodGroupId=${groupId}`}
+              to={`/billing/invoices?billingPeriodGroupId=${groupId}&status=POSTED_GROUP`}
             />
             <Kpi
               label="Total current billing"
@@ -550,6 +575,14 @@ export function BillingDashboard() {
               to={`/billing/periods?view=register&billingPeriodGroupId=${groupId}`}
             />
             <Kpi label="Notifications sent" value={notified} to="/billing/notifications" />
+            {unpostedNotifications > 0 && (
+              <Kpi
+                label="Unposted bills notified"
+                value={unpostedNotifications}
+                tone="text-red-600"
+                to={`/billing/invoices?billingPeriodGroupId=${groupId}&status=APPROVED`}
+              />
+            )}
             <Kpi
               label="Eligible readings not billed"
               value={eligibleNotBilled}
@@ -580,18 +613,29 @@ export function BillingDashboard() {
               tone="text-red-600"
               to="/billing/alerts"
             />
+            {postingInconsistencies > 0 && (
+              <Kpi
+                label="Posting inconsistencies"
+                value={postingInconsistencies}
+                tone="text-red-600"
+                to={`/billing/invoices?billingPeriodGroupId=${groupId}&status=APPROVED`}
+              />
+            )}
             <Kpi label="Cancelled bills" value={data.cancelled} to={`/billing/invoices?billingPeriodGroupId=${groupId}&status=CANCELLED`} />
           </div>
           <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
             <BillingStatusChart
               generated={generated}
               pending={Number(data.pending ?? 0)}
-              approved={approved}
+              approvedAwaitingPosting={approvedAwaitingPosting}
+              posted={posted}
               cancelled={Number(data.cancelled ?? 0)}
+              postingInconsistencies={postingInconsistencies}
             />
             <BillingWorkflowChart
               generated={generated}
-              approved={approved}
+              approvedAwaitingPosting={approvedAwaitingPosting}
+              posted={posted}
               notified={notified}
               totalBilling={Number(data.totalBilling ?? 0)}
             />
@@ -1002,7 +1046,7 @@ export function IndividualBillingWorkspace() {
         <div className="grid gap-3 p-4 lg:grid-cols-[minmax(280px,1.3fr)_minmax(220px,1fr)_minmax(220px,1fr)_auto]">
           <Field label="Accounts / customers" required><CheckboxMultiSelect className={INPUT} loading={loading} maxSelected={500} options={accountOptions} emptyMessage="No matching active or suspended accounts" placeholder={loading ? "Loading active and suspended accounts…" : "Select one or more accounts"} value={selectedAccountIds} onChange={setSelectedAccountIds} /></Field>
           <Field label="Reading cycle" required><SearchableSelect className={INPUT} value={readingCycleId} onChange={(event) => { const value = event.target.value; setReadingCycleId(value); const readingCycle = readingCycles.find((cycle) => String(cycle.readingCycleId) === value); const linked = readingCycle?.billingCycleId ? billingCycles.find((cycle) => String(cycle.billingCycleId) === String(readingCycle.billingCycleId)) : billingCycles.find((cycle) => cycle.readingCycles?.some((item: Row) => String(item.readingCycleId) === value)); setBillingCycleId(linked ? String(linked.billingCycleId) : ""); }}><option value="">Select reading cycle</option>{readingCycles.filter((cycle) => !["CANCELLED"].includes(cycle.status)).map((cycle) => <option key={cycle.readingCycleId} value={cycle.readingCycleId}>{cycle.cycleCode} · {pretty(cycle.status)}</option>)}</SearchableSelect></Field>
-          <Field label="Billing period"><SearchableSelect className={INPUT} value={billingCycleId} onChange={(event) => { const value = event.target.value; setBillingCycleId(value); const cycle = billingCycles.find((item) => String(item.billingCycleId) === value); if (cycle?.readingCycles?.[0]) setReadingCycleId(String(cycle.readingCycles[0].readingCycleId)); }}><option value="">Select or create period</option>{billingCycles.filter((cycle) => cycle.status !== "CANCELLED").map((cycle) => <option key={cycle.billingCycleId} value={cycle.billingCycleId}>{cycle.cycleCode} · {pretty(cycle.status)}</option>)}</SearchableSelect></Field>
+          <Field label="Billing period"><SearchableSelect className={INPUT} value={billingCycleId} onChange={(event) => { const value = event.target.value; setBillingCycleId(value); const cycle = billingCycles.find((item) => String(item.billingCycleId) === value); if (cycle?.readingCycles?.[0]) setReadingCycleId(String(cycle.readingCycles[0].readingCycleId)); }}><option value="">Select or create period</option>{billingCycles.filter((cycle) => cycle.status !== "CANCELLED").map((cycle) => <option key={cycle.billingCycleId} value={cycle.billingCycleId}>{cycle.cycleCode} · {pretty(cycle.completionStatus ?? cycle.status)}</option>)}</SearchableSelect></Field>
           <div className="flex items-end">{!mixedReadingReadiness && <button type="button" onClick={() => setShowSetup((value) => !value)} className="whitespace-nowrap rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">{showSetup ? "Hide setup" : needsReadingCycle ? "Create reading cycle" : needsBillingPeriod ? "Create billing period" : "Create cycles"}</button>}</div>
         </div>
         {mixedReadingReadiness && !showSetup && <div className="border-t border-violet-200 bg-violet-50 px-4 py-3">
@@ -1071,7 +1115,7 @@ export function IndividualBillingWorkspace() {
         <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm xl:sticky xl:top-4">
           <div className="border-b border-slate-100 px-4 py-3"><h2 className="font-bold text-slate-900">Workflow actions</h2><p className="text-xs text-slate-500">Complete each available step in order</p></div>
           <div className="p-4">
-            <div className="mb-5 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs"><div className="flex justify-between"><span className="text-slate-500">Reading cycle</span><Badge value={selectedReadingCycle?.status} /></div><div className="mt-2 flex justify-between"><span className="text-slate-500">Billing period</span><Badge value={selectedBillingCycle?.status} /></div></div>
+            <div className="mb-5 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs"><div className="flex justify-between"><span className="text-slate-500">Reading cycle</span><Badge value={selectedReadingCycle?.status} /></div><div className="mt-2 flex justify-between"><span className="text-slate-500">Billing period</span><Badge value={selectedBillingCycle?.completionStatus ?? selectedBillingCycle?.status} /></div></div>
             {workflowStep(1, "Meter readings", meterStepDone, <>
               {actionButton("Save current readings", "saving-readings", !canCapture || selectedReadingCycle?.status !== "OPEN" || invalidReadingRows.length > 0 || !worklist.some((row) => !row.cycleReading && readingValues[String(row.meterId)] !== ""), saveReadings)}
               {actionButton(`Approve ${pendingReadingIds.length} reading(s)`, "approving-readings", !canApproveReadings || !pendingReadingIds.length, approveReadings, "green")}
@@ -1179,9 +1223,15 @@ export function BillingPeriods() {
       const starts = members.map((cycle) => String(cycle.periodStart)).sort();
       const ends = members.map((cycle) => String(cycle.periodEnd)).sort();
       const dueDates = [...new Set(members.map((cycle) => String(cycle.dueDate)))].sort();
-      const statuses = [...new Set(members.map((cycle) => String(cycle.status)))];
-      const statusPriority = ["RETURNED", "PENDING_APPROVAL", "PROCESSING", "OPEN", "DRAFT", "APPROVED", "POSTED", "CLOSED", "CANCELLED"];
-      const combinedStatus = statusPriority.find((value) => statuses.includes(value)) ?? statuses[0] ?? "EMPTY";
+      const statuses = [...new Set(members.map((cycle) => String(cycle.completionStatus ?? cycle.status)))];
+      const activeStatuses = statuses.filter((value) => !["EMPTY", "CANCELLED"].includes(value));
+      const postedMembers = activeStatuses.filter((value) => value === "POSTED").length;
+      const statusPriority = ["RETURNED", "PENDING_APPROVAL", "PROCESSING", "OPEN", "DRAFT", "APPROVED", "REJECTED"];
+      const combinedStatus = statuses.includes("PARTIALLY_POSTED") || (postedMembers > 0 && postedMembers < activeStatuses.length)
+        ? "PARTIALLY_POSTED"
+        : activeStatuses.length > 0 && postedMembers === activeStatuses.length
+          ? "POSTED"
+          : statusPriority.find((value) => activeStatuses.includes(value)) ?? (statuses.every((value) => value === "EMPTY") ? "EMPTY" : "CANCELLED");
       const dueLabel = new Date(dueDates[dueDates.length - 1]).toLocaleString(undefined, { month: "long", year: "numeric" });
       rows.push({
         registerKey: `replacement-${key}`,
@@ -1207,7 +1257,7 @@ export function BillingPeriods() {
     bills: visibleCycles.reduce((sum, cycle) => sum + Number(cycle._count?.bills ?? 0), 0),
     amount: visibleCycles.reduce((sum, cycle) => sum + Number(cycle.totals?.amount ?? 0), 0),
     statuses: visibleCycles.reduce((counts: Record<string, number>, cycle) => {
-      const value = String(cycle.status);
+      const value = String(cycle.completionStatus ?? cycle.status);
       counts[value] = (counts[value] ?? 0) + 1;
       return counts;
     }, {}),
@@ -1513,7 +1563,7 @@ export function BillingPeriods() {
                     </td>
                     <td className={`${TD} font-bold text-slate-900`}>{money(c.totals?.amount)}</td>
                     <td className={TD}>
-                      <Badge value={c.status} />
+                      <Badge value={c.completionStatus ?? c.status} />
                     </td>
                     <td className={TD}>
                       <div className="flex flex-wrap gap-2">
@@ -1692,6 +1742,7 @@ export function BillingPeriodRecords() {
           <Field label="Status">
             <SearchableSelect className={INPUT} disabled={loading} value={status} onChange={(event) => setStatus(event.target.value)}>
               <option value="">All statuses</option>
+              <option value="POSTED_GROUP">Posted (including paid)</option>
               {["DRAFT", "PENDING_APPROVAL", "APPROVED", "POSTED", "PARTIALLY_PAID", "PAID", "CANCELLED"].map((value) => <option key={value}>{value}</option>)}
             </SearchableSelect>
           </Field>
@@ -2183,8 +2234,16 @@ export function BillApprovals() {
   const [cycles, setCycles] = useState<Row[]>([]);
   const [cycleId, setCycleId] = useState(searchParams.get("billingCycleId") ?? "");
   const [search, setSearch] = useState("");
+  const [appliedSearch, setAppliedSearch] = useState("");
   const [bills, setBills] = useState<Row[]>([]);
   const [processed, setProcessed] = useState<Row[]>([]);
+  const [pendingTotal, setPendingTotal] = useState(0);
+  const [processedTotal, setProcessedTotal] = useState(0);
+  const [approvedCount, setApprovedCount] = useState(0);
+  const [postingInconsistencyCount, setPostingInconsistencyCount] = useState(0);
+  const [pendingPage, setPendingPage] = useState(1);
+  const [processedPage, setProcessedPage] = useState(1);
+  const pageSize = 50;
   const [selected, setSelected] = useState<string[]>([]);
   const [focus, setFocus] = useState<Row | null>(null);
   const [comments, setComments] = useState("");
@@ -2216,13 +2275,19 @@ export function BillApprovals() {
     const target = !preferredCycle && preferredGroup
       ? undefined
       : groupCycles.find((cycle: Row) => String(cycle.billingCycleId) === preferredCycle) ??
-        groupCycles.find((cycle: Row) => cycle.status === "PENDING_APPROVAL") ??
-        groupCycles.find((cycle: Row) => cycle.status === "PROCESSING") ??
+        groupCycles.find((cycle: Row) => cycle.completionStatus === "PENDING_APPROVAL") ??
+        groupCycles.find((cycle: Row) => ["PROCESSING", "PARTIALLY_POSTED"].includes(cycle.completionStatus)) ??
         groupCycles[0];
     setGroupId(selectedGroupId);
     setCycleId(target ? String(target.billingCycleId) : "");
   };
-  const load = async (idValue = cycleId, searchValue = search, groupValue = groupId) => {
+  const load = async (
+    idValue = cycleId,
+    searchValue = appliedSearch,
+    groupValue = groupId,
+    pendingPageValue = pendingPage,
+    processedPageValue = processedPage,
+  ) => {
     setLoading(true);
     try {
       const filters = {
@@ -2230,16 +2295,19 @@ export function BillApprovals() {
           ? { billingCycleId: idValue }
           : { billingPeriodGroupId: groupValue }),
         search: searchValue,
-        limit: "10000",
+        pendingPage: String(pendingPageValue),
+        processedPage: String(processedPageValue),
+        pageSize: String(pageSize),
       };
-      const [pendingRows, allRows] = await Promise.all([
-        api.listBills({ ...filters, status: "PENDING_APPROVAL" }),
-        api.listBills(filters),
-      ]);
+      const result = await api.listBillApprovalQueue(filters);
+      const pendingRows = result.pending?.items ?? [];
+      const processedRows = result.processed?.items ?? [];
       setBills(pendingRows);
-      setProcessed(
-        allRows.filter((bill: Row) => bill.status !== "PENDING_APPROVAL"),
-      );
+      setProcessed(processedRows);
+      setPendingTotal(Number(result.pending?.total ?? 0));
+      setProcessedTotal(Number(result.processed?.total ?? 0));
+      setApprovedCount(Number(result.statusCounts?.approvedEligible ?? 0));
+      setPostingInconsistencyCount(Number(result.statusCounts?.postingInconsistencies ?? 0));
       setFocus(pendingRows[0] ?? null);
       setSelected([]);
       setError("");
@@ -2254,8 +2322,16 @@ export function BillApprovals() {
     });
   }, []);
   useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setPendingPage(1);
+      setProcessedPage(1);
+      setAppliedSearch(search.trim());
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [search]);
+  useEffect(() => {
     if (cycleId || groupId) load().catch((e) => setError(e.message));
-  }, [cycleId, groupId, search]);
+  }, [cycleId, groupId, appliedSearch, pendingPage, processedPage]);
   async function decide(decision: "APPROVE" | "REJECT" | "RETURN") {
     if (!selected.length || comments.trim().length < 3)
       return setError("Select at least one bill and enter approval comments.");
@@ -2267,7 +2343,11 @@ export function BillApprovals() {
         `${result.updated} bill(s) changed to ${pretty(result.status)}.`,
       );
       setComments("");
-      await Promise.all([load(), refreshCycles(cycleId, groupId)]);
+      setPendingPage(1);
+      await Promise.all([
+        load(cycleId, appliedSearch, groupId, 1, processedPage),
+        refreshCycles(cycleId, groupId),
+      ]);
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -2288,14 +2368,14 @@ export function BillApprovals() {
         const result = await api.postBillingCycle(cycleId, reason);
         posted = Number(result.posted ?? 0);
       } else {
-        const approvedByCycle = processed
-          .filter((bill) => bill.status === "APPROVED")
+        const postingResult = await api.listBillPostingCandidates({ billingPeriodGroupId: groupId });
+        const approvedByCycle = (postingResult.items ?? [])
           .reduce((groups: Record<string, string[]>, bill: Row) => {
             const memberCycleId = String(bill.billingCycleId);
             (groups[memberCycleId] ??= []).push(String(bill.billId));
             return groups;
           }, {});
-        for (const billIds of Object.values(approvedByCycle)) {
+        for (const billIds of Object.values(approvedByCycle) as string[][]) {
           for (let index = 0; index < billIds.length; index += 500) {
             const result = await api.postBills(billIds.slice(index, index + 500), reason);
             posted += Number(result.posted ?? 0);
@@ -2305,16 +2385,18 @@ export function BillApprovals() {
       setMessage(
         `${posted} approved bill(s) posted to customer accounts.`,
       );
-      await Promise.all([load(cycleId, search, groupId), refreshCycles(cycleId, groupId)]);
+      await Promise.all([
+        load(cycleId, appliedSearch, groupId, pendingPage, processedPage),
+        refreshCycles(cycleId, groupId),
+      ]);
     } catch (e: any) {
       setError(e.message);
     } finally {
       setPosting(false);
     }
   }
-  const approvedCount = processed.filter(
-    (bill) => bill.status === "APPROVED",
-  ).length;
+  const pendingPages = Math.max(1, Math.ceil(pendingTotal / pageSize));
+  const processedPages = Math.max(1, Math.ceil(processedTotal / pageSize));
   const selectedBills = bills.filter((bill) =>
     selected.includes(String(bill.billId)),
   );
@@ -2523,6 +2605,11 @@ export function BillApprovals() {
     >
       {error && <Notice>{error}</Notice>}
       {message && <Notice tone="green">{message}</Notice>}
+      {postingInconsistencyCount > 0 && (
+        <Notice tone="blue">
+          {postingInconsistencyCount.toLocaleString()} approved bill(s) already have posting evidence and are excluded from posting. Review and reconcile their audit records before changing their status.
+        </Notice>
+      )}
       <Card className="mb-4">
         <div className="grid gap-4 md:grid-cols-3">
           <Field label="Billing period group">
@@ -2532,6 +2619,8 @@ export function BillApprovals() {
               onChange={(nextGroupId) => {
                 setGroupId(nextGroupId);
                 setCycleId("");
+                setPendingPage(1);
+                setProcessedPage(1);
               }}
             />
           </Field>
@@ -2541,7 +2630,11 @@ export function BillApprovals() {
                 (cycle: Row) => !groupId || String(cycle.billingPeriodGroupId) === groupId,
               )}
               value={cycleId}
-              onChange={setCycleId}
+              onChange={(nextCycleId) => {
+                setCycleId(nextCycleId);
+                setPendingPage(1);
+                setProcessedPage(1);
+              }}
               includeBlank
               blankLabel="All periods in selected group"
               disabled={!groupId}
@@ -2560,7 +2653,7 @@ export function BillApprovals() {
         </div>
       </Card>
       <div className="grid gap-4 xl:grid-cols-[1.25fr_0.75fr]">
-        <Card title={`${bills.length} pending bill(s)`}>
+        <Card title={`${pendingTotal.toLocaleString()} pending bill(s)`}>
           <div className="overflow-x-auto">
             <table className="w-full min-w-[850px]">
               <thead>
@@ -2650,10 +2743,20 @@ export function BillApprovals() {
               </tbody>
             </table>
           </div>
+          {!loading && pendingTotal > 0 && (
+            <Pagination
+              page={pendingPage}
+              totalPages={pendingPages}
+              total={pendingTotal}
+              pageSize={pageSize}
+              onPageChange={setPendingPage}
+              label="pending bills"
+            />
+          )}
         </Card>
         <Card title="Approval decision">{decisionContent}</Card>
       </div>
-      <Card title="Approved and processed bills" className="mt-4">
+      <Card title={`Approved and processed bills (${processedTotal.toLocaleString()})`} className="mt-4">
         <div className="overflow-x-auto">
           <table className="w-full min-w-[760px]">
             <thead>
@@ -2706,6 +2809,16 @@ export function BillApprovals() {
             </tbody>
           </table>
         </div>
+        {!loading && processedTotal > 0 && (
+          <Pagination
+            page={processedPage}
+            totalPages={processedPages}
+            total={processedTotal}
+            pageSize={pageSize}
+            onPageChange={setProcessedPage}
+            label="processed bills"
+          />
+        )}
       </Card>
     </Page>
   );
@@ -2775,6 +2888,7 @@ export function InvoiceRegister() {
               onChange={(e) => setStatus(e.target.value)}
             >
               <option value="">All statuses</option>
+              <option value="POSTED_GROUP">Posted (including paid)</option>
               {[
                 "DRAFT",
                 "PENDING_APPROVAL",
@@ -4281,7 +4395,7 @@ export function BillNotifications() {
     }
   }
   const selected = bills.filter((bill) =>
-    ["APPROVED", "POSTED", "PARTIALLY_PAID", "PAID"].includes(bill.status) &&
+    ["POSTED", "PARTIALLY_PAID", "PAID"].includes(bill.status) &&
     Boolean(bill.readingId ?? bill.reading),
   );
   const filteredBills = useMemo(() => {
@@ -4348,7 +4462,7 @@ export function BillNotifications() {
   return (
     <Page
       title="Bill notifications"
-      subtitle="Send bill notices through configured customer channels"
+      subtitle="Send final bill notices for posted charges through configured customer channels"
     >
       {error && <Notice>{error}</Notice>}
       {message && <Notice tone="green">{message}</Notice>}
@@ -4477,7 +4591,6 @@ export function BillNotifications() {
             <Field label="Bill status">
               <SearchableSelect className={INPUT} disabled={loadingBills || queueing} value={billStatus} onChange={(e) => setBillStatus(e.target.value)}>
                 <option value="">All eligible statuses</option>
-                <option value="APPROVED">Approved</option>
                 <option value="POSTED">Posted</option>
                 <option value="PARTIALLY_PAID">Partially paid</option>
                 <option value="PAID">Paid</option>

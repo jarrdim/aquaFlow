@@ -22,6 +22,7 @@
     "db:send-money-channel-upgrade": "prisma db execute --file prisma/migrations/20260907100000_add_mpesa_send_money_channel/migration.sql --schema prisma/schema.prisma",
     "db:bill-notification-performance-upgrade": "prisma db execute --file prisma/migrations/20260908100000_optimize_bill_notification_lookup/migration.sql --schema prisma/schema.prisma",
     "db:period-records-performance-upgrade": "prisma db execute --file prisma/migrations/20260908130000_optimize_billing_period_records/migration.sql --schema prisma/schema.prisma",
+    "db:posting-workflow-upgrade": "prisma db execute --file prisma/migrations/20260910120000_billing_posting_workflow_guards/migration.sql --schema prisma/schema.prisma",
     "db:payment-admin-reversal-upgrade": "prisma db execute --file prisma/migrations/20260823150000_system_admin_payment_reversal_override/migration.sql --schema prisma/schema.prisma",
     "db:mpesa-upgrade": "prisma db execute --file prisma/migrations/20260715120000_mpesa_stk_push/migration.sql --schema prisma/schema.prisma",
     "db:notification-upgrade": "prisma db execute --file prisma/migrations/20260715150000_notification_management/migration.sql --schema prisma/schema.prisma",

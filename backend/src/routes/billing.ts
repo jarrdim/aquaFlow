@@ -5,7 +5,16 @@ import { prisma } from "../lib/prisma";
 import { isSystemAdmin, requireAuth, requireRole } from "../middleware/auth";
 import { createPaymentLinkToken, publicAppUrl } from "../lib/paymentLink";
 import { readingRequiresBill } from "../lib/readingBilling";
-import { aggregateBillingGroupStatus, billingCycleType, ensureBillingPeriodGroup } from "../lib/billingPeriodGroup";
+import {
+  aggregateBillingGroupStatus,
+  billingCompletionStatus,
+  billingCycleType,
+  ensureBillingPeriodGroup,
+  hasPostingEvidence,
+  isEligibleApprovedBill,
+  postedBillStatuses,
+  summarizeBillStatuses,
+} from "../lib/billingPeriodGroup";
 
 export const billingRouter = Router();
 billingRouter.use(requireAuth);
@@ -46,8 +55,6 @@ function batchesOf<T>(values: T[], size: number): T[][] {
   }
   return batches;
 }
-const postedBillStatuses = ["POSTED", "PARTIALLY_PAID", "PAID"];
-
 async function ensureEarlierReadingsAreBilled(billingCycleId: bigint, accountIds: bigint[]) {
   const currentPeriod = await prisma.billingCycle.findUnique({
     where: { billingCycleId },
@@ -68,7 +75,7 @@ async function ensureEarlierReadingsAreBilled(billingCycleId: bigint, accountIds
       syncId: true,
       cycle: { select: { readingCycleId: true, cycleCode: true, billingCycleId: true } },
       account: { select: { accountNumber: true } },
-      bills: { where: { status: { in: postedBillStatuses } }, select: { billId: true } },
+      bills: { where: { status: { in: [...postedBillStatuses] } }, select: { billId: true } },
     },
   });
   const linkedBillingCycleIds = Array.from(new Set(earlierReadings
@@ -78,7 +85,7 @@ async function ensureEarlierReadingsAreBilled(billingCycleId: bigint, accountIds
     where: {
       accountId: { in: accountIds },
       billingCycleId: { in: linkedBillingCycleIds },
-      status: { in: postedBillStatuses },
+      status: { in: [...postedBillStatuses] },
     },
     select: { accountId: true, billingCycleId: true },
   }) : [];
@@ -396,18 +403,21 @@ billingRouter.get("/cycles", async (req, res, next) => {
   try {
     const status = String(req.query.status ?? "");
     const rows = await prisma.billingCycle.findMany({
-      where: status ? { status } : undefined,
       include: { readingCycles: true, creator: true, poster: true, _count: { select: { bills: true } }, bills: { select: { status: true, totalCurrentCharges: true, notificationStatus: true } } },
       orderBy: [{ periodStart: "desc" }, { billingCycleId: "desc" }],
     });
-    res.json(rows.map((row: any) => ({
+    const results = rows.map((row: any) => ({
       ...row,
+      operationalStatus: row.status,
+      completionStatus: billingCompletionStatus(row.bills),
       totals: {
         amount: round(row.bills.reduce((sum: number, bill: any) => sum + Number(bill.totalCurrentCharges), 0)),
-        approved: row.bills.filter((bill: any) => ["APPROVED", "POSTED", "PAID", "PARTIALLY_PAID"].includes(bill.status)).length,
+        approvedAwaitingPosting: row.bills.filter((bill: any) => bill.status === "APPROVED").length,
+        posted: row.bills.filter((bill: any) => postedBillStatuses.includes(bill.status)).length,
         notified: row.bills.filter((bill: any) => bill.notificationStatus === "SENT").length,
       },
-    })));
+    }));
+    res.json(status ? results.filter((row) => row.completionStatus === status || row.operationalStatus === status) : results);
   } catch (error) { next(error); }
 });
 
@@ -425,10 +435,16 @@ billingRouter.get("/period-groups", async (_req, res, next) => {
     res.json(groups.map((group) => {
       const bills = group.billingCycles.flatMap((cycle) => cycle.bills);
       const { billingCycles, ...groupDetails } = group;
+      const cyclesWithCompletion = billingCycles.map(({ bills: cycleBills, ...cycle }) => ({
+        ...cycle,
+        operationalStatus: cycle.status,
+        completionStatus: billingCompletionStatus(cycleBills),
+        billCount: cycleBills.length,
+      }));
       return {
         ...groupDetails,
-        billingCycles: billingCycles.map(({ bills: cycleBills, ...cycle }) => ({ ...cycle, billCount: cycleBills.length })),
-        status: aggregateBillingGroupStatus(billingCycles.map((cycle) => cycle.status)),
+        billingCycles: cyclesWithCompletion,
+        status: aggregateBillingGroupStatus(cyclesWithCompletion.map((cycle) => cycle.completionStatus)),
         memberCount: billingCycles.length,
         replacementCount: billingCycles.filter((cycle) => cycle.cycleType === "METER_REPLACEMENT").length,
         totals: {
@@ -677,11 +693,8 @@ billingRouter.get("/bills", async (req, res, next) => {
               } }
             : {}),
         ...(accountId ? { accountId } : {}),
-        ...(status
-          ? { status }
-          : notificationEligible
-            ? { status: { in: ["APPROVED", "POSTED", "PARTIALLY_PAID", "PAID"] } }
-            : {}),
+        ...(status ? { status: status === "POSTED_GROUP" ? { in: [...postedBillStatuses] } : status } : {}),
+        ...(notificationEligible ? { AND: [{ status: { in: [...postedBillStatuses] } }] } : {}),
         ...(notificationEligible ? { readingId: { not: null } } : {}),
         ...(notificationStatus === "NOT_NOTIFIED"
           ? { notificationStatus: { notIn: ["QUEUED", "SENT"] } }
@@ -694,6 +707,156 @@ billingRouter.get("/bills", async (req, res, next) => {
       orderBy: { createdAt: "desc" }, take,
     });
     res.json(rows.map((row: any) => ({ ...row, customerName: customerName(row.account.customer) })));
+  } catch (error) { next(error); }
+});
+
+// The approval screen is intentionally backed by a narrow, paginated query.
+// The general bill endpoint includes the complete invoice/audit graph and is
+// appropriate for invoice detail, but loading that graph for an entire billing
+// group can turn a few thousand bills into a very large response.
+billingRouter.get("/bills/approval-queue", async (req, res, next) => {
+  try {
+    const cycleId = req.query.billingCycleId ? BigInt(String(req.query.billingCycleId)) : undefined;
+    const groupId = req.query.billingPeriodGroupId ? BigInt(String(req.query.billingPeriodGroupId)) : undefined;
+    if (!cycleId && !groupId) return res.status(400).json({ error: "Select a billing period or billing period group" });
+
+    const search = String(req.query.search ?? "").trim();
+    const pendingPage = Math.max(1, Number(req.query.pendingPage) || 1);
+    const processedPage = Math.max(1, Number(req.query.processedPage) || 1);
+    const pageSize = Math.min(100, Math.max(10, Number(req.query.pageSize) || 50));
+    const scope: Prisma.BillWhereInput = cycleId
+      ? { billingCycleId: cycleId }
+      : { billingCycle: { billingPeriodGroupId: groupId } };
+    const searchFilter: Prisma.BillWhereInput = search ? {
+      OR: [
+        { billNumber: { contains: search, mode: "insensitive" } },
+        { account: { accountNumber: { contains: search, mode: "insensitive" } } },
+        { account: { customer: { customerNumber: { contains: search, mode: "insensitive" } } } },
+        { account: { customer: { firstName: { contains: search, mode: "insensitive" } } } },
+        { account: { customer: { middleName: { contains: search, mode: "insensitive" } } } },
+        { account: { customer: { lastName: { contains: search, mode: "insensitive" } } } },
+        { account: { customer: { organizationName: { contains: search, mode: "insensitive" } } } },
+      ],
+    } : {};
+    const pendingWhere: Prisma.BillWhereInput = { AND: [scope, searchFilter], status: "PENDING_APPROVAL" };
+    const processedWhere: Prisma.BillWhereInput = { AND: [scope, searchFilter], status: { not: "PENDING_APPROVAL" } };
+    const customerSelect = {
+      customerType: true,
+      organizationName: true,
+      firstName: true,
+      middleName: true,
+      lastName: true,
+    } as const;
+    const userSelect = { username: true, firstName: true, lastName: true } as const;
+    const approvedEvidenceWhere: Prisma.BillWhereInput = {
+      AND: [scope],
+      status: "APPROVED",
+      OR: [
+        { postedAt: { not: null } },
+        { postedBy: { not: null } },
+        { events: { some: { eventType: "BILL_POSTED" } } },
+      ],
+    };
+    const approvedEligibleWhere: Prisma.BillWhereInput = {
+      AND: [scope],
+      status: "APPROVED",
+      postedAt: null,
+      postedBy: null,
+      events: { none: { eventType: "BILL_POSTED" } },
+    };
+    const [statusCounts, approvedEligible, postingInconsistencies, pendingTotal, pendingRows, processedTotal, processedRows] = await Promise.all([
+      prisma.bill.groupBy({ by: ["status"], where: scope, _count: { _all: true } }),
+      prisma.bill.count({ where: approvedEligibleWhere }),
+      prisma.bill.count({ where: approvedEvidenceWhere }),
+      prisma.bill.count({ where: pendingWhere }),
+      prisma.bill.findMany({
+        where: pendingWhere,
+        select: {
+          billId: true,
+          billNumber: true,
+          billingCycleId: true,
+          consumptionUnits: true,
+          totalCurrentCharges: true,
+          totalAmountDue: true,
+          exceptionType: true,
+          status: true,
+          account: { select: { accountNumber: true, customer: { select: customerSelect } } },
+          tariff: { select: { tariffName: true } },
+          items: { select: { billItemId: true, description: true, amount: true }, orderBy: { billItemId: "asc" } },
+        },
+        orderBy: { billId: "desc" },
+        skip: (pendingPage - 1) * pageSize,
+        take: pageSize,
+      }),
+      prisma.bill.count({ where: processedWhere }),
+      prisma.bill.findMany({
+        where: processedWhere,
+        select: {
+          billId: true,
+          billNumber: true,
+          totalAmountDue: true,
+          status: true,
+          account: { select: { accountNumber: true, customer: { select: customerSelect } } },
+          approver: { select: userSelect },
+          poster: { select: userSelect },
+        },
+        orderBy: { billId: "desc" },
+        skip: (processedPage - 1) * pageSize,
+        take: pageSize,
+      }),
+    ]);
+    const serialize = (row: any) => ({ ...row, customerName: customerName(row.account.customer) });
+    res.json({
+      pending: {
+        items: pendingRows.map(serialize),
+        total: pendingTotal,
+        page: pendingPage,
+        pages: Math.max(1, Math.ceil(pendingTotal / pageSize)),
+      },
+      processed: {
+        items: processedRows.map(serialize),
+        total: processedTotal,
+        page: processedPage,
+        pages: Math.max(1, Math.ceil(processedTotal / pageSize)),
+      },
+      statusCounts: {
+        ...Object.fromEntries(statusCounts.map((row) => [row.status, row._count._all])),
+        approvedEligible,
+        postingInconsistencies,
+      },
+      pageSize,
+    });
+  } catch (error) { next(error); }
+});
+
+billingRouter.get("/bills/posting-candidates", async (req, res, next) => {
+  try {
+    const cycleId = req.query.billingCycleId ? BigInt(String(req.query.billingCycleId)) : undefined;
+    const groupId = req.query.billingPeriodGroupId ? BigInt(String(req.query.billingPeriodGroupId)) : undefined;
+    if (!cycleId && !groupId) return res.status(400).json({ error: "Select a billing period or billing period group" });
+    const rows = await prisma.bill.findMany({
+      where: {
+        status: "APPROVED",
+        postedAt: null,
+        postedBy: null,
+        events: { none: { eventType: "BILL_POSTED" } },
+        ...(cycleId ? { billingCycleId: cycleId } : { billingCycle: { billingPeriodGroupId: groupId } }),
+      },
+      select: { billId: true, billingCycleId: true },
+      orderBy: { billId: "asc" },
+    });
+    const postingInconsistencies = await prisma.bill.count({
+      where: {
+        status: "APPROVED",
+        OR: [
+          { postedAt: { not: null } },
+          { postedBy: { not: null } },
+          { events: { some: { eventType: "BILL_POSTED" } } },
+        ],
+        ...(cycleId ? { billingCycleId: cycleId } : { billingCycle: { billingPeriodGroupId: groupId } }),
+      },
+    });
+    res.json({ items: rows, postingInconsistencies });
   } catch (error) { next(error); }
 });
 
@@ -720,7 +883,7 @@ billingRouter.get("/period-records", async (req, res, next) => {
                   : {}),
             } }
           : {}),
-      ...(status ? { status } : {}),
+      ...(status ? { status: status === "POSTED_GROUP" ? { in: [...postedBillStatuses] } : status } : {}),
       ...(search ? { OR: [
         { billNumber: { contains: search, mode: "insensitive" } },
         { account: { accountNumber: { contains: search, mode: "insensitive" } } },
@@ -986,14 +1149,31 @@ billingRouter.post("/cycles/:id/post", requireRole("FINANCE_MANAGER", "SYSTEM_AD
   const data = parse(z.object({ reason: z.string().trim().min(3).max(1000) }), req.body, res);
   if (!cycleId || !data) return;
   try {
-    const cycle = await prisma.billingCycle.findUnique({ where: { billingCycleId: cycleId }, include: { bills: true } });
+    const cycle = await prisma.billingCycle.findUnique({
+      where: { billingCycleId: cycleId },
+      include: { bills: { select: { billId: true, accountId: true, status: true, postedAt: true, postedBy: true, events: { where: { eventType: "BILL_POSTED" }, select: { eventType: true }, take: 1 } } } },
+    });
     if (!cycle) return res.status(404).json({ error: "Billing period not found" });
-    const approved = cycle.bills.filter((bill: any) => bill.status === "APPROVED");
+    const inconsistent = cycle.bills.filter((bill) => bill.status === "APPROVED" && hasPostingEvidence(bill));
+    if (inconsistent.length) return res.status(409).json({ error: `${inconsistent.length} approved bill(s) already have posting evidence. Posting was blocked pending audit review.` });
+    const approved = cycle.bills.filter(isEligibleApprovedBill);
     if (!approved.length) return res.status(409).json({ error: "No approved bills are ready for posting" });
-    if (cycle.bills.some((bill: any) => ["DRAFT", "PENDING_APPROVAL", "RETURNED"].includes(bill.status))) return res.status(409).json({ error: "Resolve all draft, pending or returned bills before posting the period" });
+    if (cycle.bills.some((bill) => ![...postedBillStatuses, "APPROVED", "CANCELLED"].includes(bill.status as any))) return res.status(409).json({ error: "Resolve all unapproved active bills before posting the period" });
     await ensureEarlierReadingsAreBilled(cycleId, Array.from(new Set(approved.map((bill: any) => bill.accountId))));
     const postedAt = new Date();
     await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${cycleId})`;
+      const lockedBills = await tx.bill.findMany({
+        where: { billingCycleId: cycleId },
+        select: { billId: true, accountId: true, status: true, postedAt: true, postedBy: true, events: { where: { eventType: "BILL_POSTED" }, select: { eventType: true }, take: 1 } },
+      });
+      const lockedInconsistent = lockedBills.filter((bill) => bill.status === "APPROVED" && hasPostingEvidence(bill));
+      if (lockedInconsistent.length) throw Object.assign(new Error(`${lockedInconsistent.length} approved bill(s) already have posting evidence. Posting was blocked pending audit review.`), { status: 409 });
+      const lockedApproved = lockedBills.filter(isEligibleApprovedBill);
+      if (!lockedApproved.length) throw Object.assign(new Error("No approved bills are ready for posting"), { status: 409 });
+      if (lockedBills.some((bill) => ![...postedBillStatuses, "APPROVED", "CANCELLED"].includes(bill.status as any))) {
+        throw Object.assign(new Error("Resolve all unapproved active bills before posting the period"), { status: 409 });
+      }
       await tx.$executeRaw`
         UPDATE aquaflow.customer_accounts AS account
         SET current_balance = account.current_balance + charges.total,
@@ -1001,16 +1181,24 @@ billingRouter.post("/cycles/:id/post", requireRole("FINANCE_MANAGER", "SYSTEM_AD
         FROM (
           SELECT account_id, SUM(total_current_charges) AS total
           FROM aquaflow.bills
-          WHERE billing_cycle_id = ${cycleId} AND status = 'APPROVED'
+          WHERE billing_cycle_id = ${cycleId}
+            AND status = 'APPROVED'
+            AND posted_at IS NULL
+            AND posted_by IS NULL
+            AND NOT EXISTS (
+              SELECT 1 FROM aquaflow.billing_events AS evidence
+              WHERE evidence.bill_id = bills.bill_id AND evidence.event_type = 'BILL_POSTED'
+            )
           GROUP BY account_id
         ) AS charges
         WHERE account.account_id = charges.account_id
       `;
-      await tx.bill.updateMany({ where: { billingCycleId: cycleId, status: "APPROVED" }, data: { status: "POSTED", postedBy: uid(req), postedAt, updatedAt: postedAt } });
-      await tx.billingEvent.createMany({ data: approved.map((bill: any) => ({ billingCycleId: cycleId, billId: bill.billId, eventType: "BILL_POSTED", previousStatus: "APPROVED", newStatus: "POSTED", details: data.reason, performedBy: uid(req), createdAt: postedAt })) });
+      const updated = await tx.bill.updateMany({ where: { billingCycleId: cycleId, status: "APPROVED", postedAt: null, postedBy: null, events: { none: { eventType: "BILL_POSTED" } } }, data: { status: "POSTED", postedBy: uid(req), postedAt, updatedAt: postedAt } });
+      if (updated.count !== lockedApproved.length) throw Object.assign(new Error("Some bills changed while posting. No balances were changed; refresh and try again."), { status: 409 });
+      await tx.billingEvent.createMany({ data: lockedApproved.map((bill) => ({ billingCycleId: cycleId, billId: bill.billId, eventType: "BILL_POSTED", previousStatus: "APPROVED", newStatus: "POSTED", details: data.reason, performedBy: uid(req), createdAt: postedAt })) });
       await tx.billingCycle.update({ where: { billingCycleId: cycleId }, data: { status: "POSTED", postedBy: uid(req), postedAt, updatedAt: postedAt } });
-      await tx.billingEvent.create({ data: { billingCycleId: cycleId, eventType: "PERIOD_POSTED", previousStatus: cycle.status, newStatus: "POSTED", details: `${approved.length} bill(s) posted. ${data.reason}`, performedBy: uid(req) } });
-    });
+      await tx.billingEvent.create({ data: { billingCycleId: cycleId, eventType: "PERIOD_POSTED", previousStatus: cycle.status, newStatus: "POSTED", details: `${lockedApproved.length} bill(s) posted. ${data.reason}`, performedBy: uid(req) } });
+    }, { maxWait: 10_000, timeout: 120_000 });
     res.json({ posted: approved.length });
   } catch (error: any) {
     if (error.status) return res.status(error.status).json({ error: error.message });
@@ -1027,10 +1215,11 @@ billingRouter.post("/bills/post", requireRole("FINANCE_MANAGER", "SYSTEM_ADMIN")
   try {
     const bills = await prisma.bill.findMany({
       where: { billId: { in: data.billIds } },
-      select: { billId: true, accountId: true, billingCycleId: true, status: true },
+      select: { billId: true, accountId: true, billingCycleId: true, status: true, postedAt: true, postedBy: true, events: { where: { eventType: "BILL_POSTED" }, select: { eventType: true }, take: 1 } },
     });
     if (bills.length !== data.billIds.length) return res.status(404).json({ error: "One or more bills were not found" });
     if (bills.some((bill) => bill.status !== "APPROVED")) return res.status(409).json({ error: "Only approved bills can be posted" });
+    if (bills.some(hasPostingEvidence)) return res.status(409).json({ error: "One or more approved bills already have posting evidence. Posting was blocked pending audit review." });
     const cycleIds = [...new Set(bills.map((bill) => bill.billingCycleId.toString()))];
     if (cycleIds.length !== 1) return res.status(409).json({ error: "Selected bills must belong to the same billing period" });
     const cycleId = bills[0].billingCycleId;
@@ -1039,6 +1228,17 @@ billingRouter.post("/bills/post", requireRole("FINANCE_MANAGER", "SYSTEM_ADMIN")
     await ensureEarlierReadingsAreBilled(cycleId, Array.from(new Set(bills.map((bill) => bill.accountId))));
     const postedAt = new Date();
     await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${cycleId})`;
+      const lockedBills = await tx.bill.findMany({
+        where: { billId: { in: data.billIds } },
+        select: { billId: true, accountId: true, billingCycleId: true, status: true, postedAt: true, postedBy: true, events: { where: { eventType: "BILL_POSTED" }, select: { eventType: true }, take: 1 } },
+      });
+      if (lockedBills.length !== data.billIds.length || lockedBills.some((bill) => bill.status !== "APPROVED")) {
+        throw Object.assign(new Error("Some bills changed before posting. No balances were changed; refresh and try again."), { status: 409 });
+      }
+      if (lockedBills.some(hasPostingEvidence)) {
+        throw Object.assign(new Error("One or more approved bills already have posting evidence. Posting was blocked pending audit review."), { status: 409 });
+      }
       await tx.$executeRaw(Prisma.sql`
         UPDATE aquaflow.customer_accounts AS account
         SET current_balance = account.current_balance + charges.total,
@@ -1046,22 +1246,31 @@ billingRouter.post("/bills/post", requireRole("FINANCE_MANAGER", "SYSTEM_ADMIN")
         FROM (
           SELECT account_id, SUM(total_current_charges) AS total
           FROM aquaflow.bills
-          WHERE bill_id IN (${Prisma.join(data.billIds)}) AND status = 'APPROVED'
+          WHERE bill_id IN (${Prisma.join(data.billIds)})
+            AND status = 'APPROVED'
+            AND posted_at IS NULL
+            AND posted_by IS NULL
+            AND NOT EXISTS (
+              SELECT 1 FROM aquaflow.billing_events AS evidence
+              WHERE evidence.bill_id = bills.bill_id AND evidence.event_type = 'BILL_POSTED'
+            )
           GROUP BY account_id
         ) AS charges
         WHERE account.account_id = charges.account_id
       `);
       const updated = await tx.bill.updateMany({
-        where: { billId: { in: data.billIds }, status: "APPROVED" },
+        where: { billId: { in: data.billIds }, status: "APPROVED", postedAt: null, postedBy: null, events: { none: { eventType: "BILL_POSTED" } } },
         data: { status: "POSTED", postedBy: uid(req), postedAt, updatedAt: postedAt },
       });
       if (updated.count !== data.billIds.length) throw Object.assign(new Error("Some bills changed before posting. Refresh and try again."), { status: 409 });
       await tx.billingEvent.createMany({
-        data: bills.map((bill) => ({ billingCycleId: bill.billingCycleId, billId: bill.billId, eventType: "BILL_POSTED", previousStatus: "APPROVED", newStatus: "POSTED", details: data.reason, performedBy: uid(req), createdAt: postedAt })),
+        data: lockedBills.map((bill) => ({ billingCycleId: bill.billingCycleId, billId: bill.billId, eventType: "BILL_POSTED", previousStatus: "APPROVED", newStatus: "POSTED", details: data.reason, performedBy: uid(req), createdAt: postedAt })),
       });
+      const remaining = await tx.bill.findMany({ where: { billingCycleId: cycleId }, select: { status: true } });
+      const completionStatus = billingCompletionStatus(remaining);
       await tx.billingCycle.update({
         where: { billingCycleId: cycleId },
-        data: { status: cycle.status === "POSTED" ? "POSTED" : "PROCESSING", updatedAt: postedAt },
+        data: { status: completionStatus === "POSTED" ? "POSTED" : "PROCESSING", ...(completionStatus === "POSTED" ? { postedBy: uid(req), postedAt } : {}), updatedAt: postedAt },
       });
     }, { maxWait: 10_000, timeout: 30_000 });
     res.json({ posted: bills.length, billingCycleId: cycleId });
@@ -1084,9 +1293,13 @@ billingRouter.post("/notifications", requireRole("SYSTEM_ADMIN", "BILLING_OFFICE
     if (!readingCycle) return res.status(409).json({ error: "This billing period has no linked reading cycle" });
     if (readingCycle.status !== "CLOSED") return res.status(409).json({ error: "Close the linked reading cycle before sending bill notifications" });
 
-    // A bill notification is also the customer's reading statement. Send it
-    // for zero balances as long as the bill came from an approved reading.
-    const bills = await prisma.bill.findMany({ where: { billingCycleId: data.billingCycleId, status: { in: ["APPROVED", "POSTED", "PARTIALLY_PAID", "PAID"] }, readingId: { not: null }, ...(data.billIds ? { billId: { in: data.billIds } } : {}) }, include: { account: { include: { customer: true } }, billingCycle: true, reading: true } });
+    // BILL_ISSUED is a final bill/payment-demand notification. Reading data is
+    // included in the message, but approval alone does not make the charge part
+    // of the customer ledger; only posted bills may be queued.
+    const bills = await prisma.bill.findMany({ where: { billingCycleId: data.billingCycleId, status: { in: [...postedBillStatuses] }, readingId: { not: null }, ...(data.billIds ? { billId: { in: data.billIds } } : {}) }, include: { account: { include: { customer: true } }, billingCycle: true, reading: true } });
+    if (data.billIds && bills.length !== new Set(data.billIds.map(String)).size) {
+      return res.status(409).json({ error: "Final bill notifications can only be sent after every selected bill is posted" });
+    }
     const settings = await prisma.systemSetting.findUnique({
       where: { settingId: 1n },
       select: { reconnectionFee: true },
@@ -1805,6 +2018,9 @@ billingRouter.get("/dashboard", async (req, res, next) => {
           notificationStatus: true,
           readingId: true,
           billingCycleId: true,
+          postedAt: true,
+          postedBy: true,
+          events: { where: { eventType: "BILL_POSTED" }, select: { eventType: true }, take: 1 },
         },
       }),
       prisma.billingSecurityAlert.count({ where: { status: "OPEN", bill: where } }),
@@ -1812,12 +2028,15 @@ billingRouter.get("/dashboard", async (req, res, next) => {
       prisma.billingEvent.findMany({ where, include: { bill: { include: { account: { include: { customer: true } } } }, performer: true }, orderBy: { createdAt: "desc" }, take: 8 }),
       candidatesPromise,
     ]);
-    const approved = bills.filter((bill) => ["APPROVED", "POSTED", "PARTIALLY_PAID", "PAID"].includes(bill.status)).length;
-    const readyToPost = bills.filter((bill) => bill.status === "APPROVED").length;
+    const statusSummary = summarizeBillStatuses(bills);
+    const cycleCompletionStatuses = selectedCycles.map((selectedCycle) => billingCompletionStatus(
+      bills.filter((bill) => bill.billingCycleId === selectedCycle.billingCycleId),
+    ));
+    const completionStatus = aggregateBillingGroupStatus(cycleCompletionStatuses);
     const eligibleNotBilled = candidateSets.reduce((total, candidates) => total + (candidates?.rows.filter((row) => row.eligible).length ?? 0), 0);
     const eligibleNotNotifiedBills = bills.filter((bill) =>
       bill.readingId != null &&
-      ["APPROVED", "POSTED", "PARTIALLY_PAID", "PAID"].includes(bill.status) &&
+      postedBillStatuses.includes(bill.status as (typeof postedBillStatuses)[number]) &&
       !["QUEUED", "SENT"].includes(bill.notificationStatus),
     );
     const meterReplacementCycleIds = new Set(
@@ -1834,6 +2053,29 @@ billingRouter.get("/dashboard", async (req, res, next) => {
       (sum, bill) => sum + Number(bill.totalCurrentCharges),
       0,
     ));
-    res.json({ group, cycle, customersToBill: bills.length + eligibleNotBilled, billsGenerated: bills.length, eligibleNotBilled, eligibleNotNotified, eligibleNotNotifiedMeterReplacement, eligibleNotNotifiedOther, pending: bills.filter((bill) => bill.status === "PENDING_APPROVAL").length, approved, readyToPost, totalBilling: totalCurrentBilling, notified: bills.filter((bill) => bill.notificationStatus === "SENT").length, cancelled: bills.filter((bill) => bill.status === "CANCELLED").length, alerts, adjustments, recent: recent.map((row: any) => ({ ...row, customerName: customerName(row.bill?.account?.customer) })) });
+    res.json({
+      group: group ? { ...group, operationalStatus: aggregateBillingGroupStatus(group.billingCycles.map((item) => item.status)), completionStatus } : null,
+      cycle: cycle ? { ...cycle, operationalStatus: cycle.status, completionStatus } : null,
+      completionStatus,
+      customersToBill: bills.length + eligibleNotBilled,
+      billsGenerated: statusSummary.generated,
+      eligibleNotBilled,
+      eligibleNotNotified,
+      eligibleNotNotifiedMeterReplacement,
+      eligibleNotNotifiedOther,
+      pending: statusSummary.pendingApproval,
+      approvedAwaitingPosting: statusSummary.approvedAwaitingPosting,
+      posted: statusSummary.posted,
+      readyToPost: statusSummary.approvedAwaitingPosting,
+      postingInconsistencies: statusSummary.postingInconsistencies,
+      unpostedNotifications: bills.filter((bill) => bill.status === "APPROVED" && bill.notificationStatus === "SENT").length,
+      other: statusSummary.other,
+      totalBilling: totalCurrentBilling,
+      notified: bills.filter((bill) => postedBillStatuses.includes(bill.status as (typeof postedBillStatuses)[number]) && bill.notificationStatus === "SENT").length,
+      cancelled: statusSummary.cancelled,
+      alerts,
+      adjustments,
+      recent: recent.map((row: any) => ({ ...row, customerName: customerName(row.bill?.account?.customer) })),
+    });
   } catch (error) { next(error); }
 });

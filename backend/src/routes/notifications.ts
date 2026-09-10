@@ -9,6 +9,7 @@ import {
   encryptProviderSecret,
 } from "../lib/notificationSecrets";
 import { createPaymentLinkToken, publicAppUrl } from "../lib/paymentLink";
+import { isFinalBillNotificationEligible, notificationRequiresPostedBill } from "../lib/billingPeriodGroup";
 
 export const notificationsRouter = Router();
 
@@ -418,7 +419,7 @@ async function failAttempt(
 async function processOneDelivery(notificationId: bigint) {
   let notification = await prisma.notification.findUnique({
     where: { notificationId },
-    include: { provider: true, account: { include: { customer: true } } },
+    include: { provider: true, account: { include: { customer: true } }, bill: { select: { status: true } } },
   });
   if (
     !notification ||
@@ -428,6 +429,43 @@ async function processOneDelivery(notificationId: bigint) {
   if (notification.retryCount >= notification.maxRetries) return notification;
   if (notification.scheduledAt && notification.scheduledAt > new Date())
     return notification;
+  if (
+    notificationRequiresPostedBill(notification.notificationType, Boolean(notification.bill)) &&
+    (!notification.bill || !isFinalBillNotificationEligible(notification.bill))
+  ) {
+    const now = new Date();
+    const notificationBillId = notification.billId;
+    return prisma.$transaction(async (tx) => {
+      const cancelled = await tx.notification.update({
+        where: { notificationId },
+        data: {
+          deliveryStatus: "CANCELLED",
+          failureReason: "Delivery blocked because the referenced bill has not been posted",
+          lastAttemptAt: now,
+          updatedAt: now,
+        },
+        include,
+      });
+      if (notificationBillId) {
+        await tx.billNotification.updateMany({
+          where: { billId: notificationBillId, status: "QUEUED" },
+          data: { status: "CANCELLED" },
+        });
+        const previouslySent = await tx.notification.count({
+          where: {
+            billId: notificationBillId,
+            notificationId: { not: notificationId },
+            deliveryStatus: { in: ["SENT", "DELIVERED"] },
+          },
+        });
+        await tx.bill.update({
+          where: { billId: notificationBillId },
+          data: { notificationStatus: previouslySent ? "SENT" : "NOT_SENT", updatedAt: now },
+        });
+      }
+      return cancelled;
+    });
+  }
 
   if (
     notification.notificationType === "BALANCE_REMINDER" &&
@@ -454,7 +492,7 @@ async function processOneDelivery(notificationId: bigint) {
     notification = await prisma.notification.update({
       where: { notificationId },
       data: { messageBody, updatedAt: new Date() },
-      include: { provider: true, account: { include: { customer: true } } },
+      include: { provider: true, account: { include: { customer: true } }, bill: { select: { status: true } } },
     });
   }
 
@@ -1663,6 +1701,14 @@ notificationsRouter.post("/send", managers, async (req, res, next) => {
       return res.status(404).json({
         error: "The selected target does not have a customer account.",
       });
+    if (
+      notificationRequiresPostedBill(parsed.data.notificationType, Boolean(bill)) &&
+      (!bill || !isFinalBillNotificationEligible(bill))
+    ) {
+      return res.status(409).json({
+        error: "Final bill notifications can only be sent after the bill is posted.",
+      });
+    }
     const values: Record<string, string> = {
       customer_name: customerName(account.customer),
       account_number: account.accountNumber,
