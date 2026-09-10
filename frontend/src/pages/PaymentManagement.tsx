@@ -1525,31 +1525,21 @@ export function UnmatchedPayments() {
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [paymentsLoaded, setPaymentsLoaded] = useState(false);
-  const [availableAccountCount, setAvailableAccountCount] = useState(0);
   const [accountsLoading, setAccountsLoading] = useState(false);
   const [allocating, setAllocating] = useState(false);
   const load = () => {
     setLoading(true);
     setPaymentsLoaded(false);
     setError("");
-    return Promise.allSettled([
-      api.listUnmatchedPayments(),
-      api.paymentAccountCount(),
-    ]).then(([paymentsResult, accountsResult]) => {
-      const failures: string[] = [];
-      if (paymentsResult.status === "fulfilled") {
-        setRows(paymentsResult.value);
+    return api.listUnmatchedPayments()
+      .then((payments) => {
+        setRows(payments);
         setPaymentsLoaded(true);
-      } else {
-        failures.push(`Could not load unmatched payments: ${paymentsResult.reason?.message ?? "Request failed"}`);
-      }
-      if (accountsResult.status === "fulfilled") {
-        setAvailableAccountCount(Number(accountsResult.value.count ?? 0));
-      } else {
-        failures.push(`Could not count customer accounts: ${accountsResult.reason?.message ?? "Request failed"}`);
-      }
-      setError(failures.join(" "));
-    }).finally(() => setLoading(false));
+      })
+      .catch((loadError: any) => {
+        setError(`Could not load unmatched payments: ${loadError?.message ?? "Request failed"}`);
+      })
+      .finally(() => setLoading(false));
   };
   async function selectPayment(payment: Row) {
     setFocus(payment);
@@ -1618,10 +1608,9 @@ export function UnmatchedPayments() {
     >
       {error && <Notice>{error}</Notice>}
       {message && <Notice green>{message}</Notice>}
-      <div className="mb-3 grid gap-2 sm:grid-cols-3">
+      <div className="mb-3 grid gap-2 sm:grid-cols-2">
         <div className="flex items-center justify-between gap-3 rounded-xl border border-amber-100 bg-amber-50 px-3.5 py-2.5 shadow-sm"><div className="text-[11px] font-bold uppercase tracking-wide text-amber-700">Unmatched payments</div><div className="shrink-0 text-lg font-extrabold leading-none text-slate-900">{rows.length}</div></div>
         <div className="flex items-center justify-between gap-3 rounded-xl border border-rose-100 bg-rose-50 px-3.5 py-2.5 shadow-sm"><div className="text-[11px] font-bold uppercase tracking-wide text-rose-700">Value awaiting allocation</div><div className="shrink-0 text-lg font-extrabold leading-none text-slate-900">{money(unmatchedTotal)}</div></div>
-        <div className="flex items-center justify-between gap-3 rounded-xl border border-sky-100 bg-sky-50 px-3.5 py-2.5 shadow-sm"><div className="text-[11px] font-bold uppercase tracking-wide text-sky-700">Available accounts</div><div className="shrink-0 text-lg font-extrabold leading-none text-slate-900">{availableAccountCount.toLocaleString()}</div></div>
       </div>
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_480px] xl:items-start">
         <Card title="Payments awaiting reconciliation" className="overflow-hidden shadow-md shadow-slate-200/50">
