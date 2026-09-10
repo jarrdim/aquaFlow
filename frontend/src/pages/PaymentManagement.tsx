@@ -1710,7 +1710,7 @@ export function UnmatchedPayments() {
               </div>
               <Field label="Allocation reason">
                 <textarea
-                  rows={4}
+                  rows={2}
                   className={`${allocationInput} resize-none`}
                   placeholder="Explain why this payment belongs to the selected account"
                   value={reason}
