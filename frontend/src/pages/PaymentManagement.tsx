@@ -1608,14 +1608,16 @@ export function UnmatchedPayments() {
     >
       {error && <Notice>{error}</Notice>}
       {message && <Notice green>{message}</Notice>}
-      <div className="mb-3 grid gap-2 sm:grid-cols-2">
-        <div className="flex items-center justify-between gap-3 rounded-xl border border-amber-100 bg-amber-50 px-3.5 py-2.5 shadow-sm"><div className="text-[11px] font-bold uppercase tracking-wide text-amber-700">Unmatched payments</div><div className="shrink-0 text-lg font-extrabold leading-none text-slate-900">{rows.length}</div></div>
-        <div className="flex items-center justify-between gap-3 rounded-xl border border-rose-100 bg-rose-50 px-3.5 py-2.5 shadow-sm"><div className="text-[11px] font-bold uppercase tracking-wide text-rose-700">Value awaiting allocation</div><div className="shrink-0 text-lg font-extrabold leading-none text-slate-900">{money(unmatchedTotal)}</div></div>
-      </div>
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_480px] xl:items-start">
         <Card title="Payments awaiting reconciliation" className="overflow-hidden shadow-md shadow-slate-200/50">
           <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div><div className="font-semibold text-slate-800">Select a transaction to allocate</div><div className="mt-0.5 text-xs text-slate-500">Match unresolved deposits to the correct customer account.</div></div>
+            <div>
+              <div className="font-semibold text-slate-800">Select a transaction to allocate</div>
+              <div className="mt-1 flex flex-wrap items-center gap-2 text-xs font-semibold">
+                <span className="rounded-full bg-amber-50 px-2.5 py-1 text-amber-700">{rows.length} unmatched</span>
+                <span className="rounded-full bg-rose-50 px-2.5 py-1 text-rose-700">{money(unmatchedTotal)} awaiting allocation</span>
+              </div>
+            </div>
             <div className="relative sm:w-72"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></svg><input className={`${allocationInput} pl-10`} placeholder="Search payments" value={search} onChange={(e) => setSearch(e.target.value)} /></div>
           </div>
           <div className="overflow-x-auto rounded-xl border border-slate-200 [scrollbar-gutter:stable]">
