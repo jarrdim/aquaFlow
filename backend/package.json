@@ -12,6 +12,7 @@
     "prisma:pull": "prisma db pull",
     "db:meter-upgrade": "prisma db execute --file prisma/migrations/20260714090000_complete_meter_management/migration.sql --schema prisma/schema.prisma",
     "db:reading-upgrade": "prisma db execute --file prisma/migrations/20260714130000_meter_reading_management/migration.sql --schema prisma/schema.prisma",
+    "db:reading-worklist-performance-upgrade": "prisma db execute --file prisma/migrations/20260911120000_optimize_reading_worklist/migration.sql --schema prisma/schema.prisma",
     "db:meter-event-upgrade": "prisma db execute --file prisma/migrations/20260714190000_expand_meter_event_types/migration.sql --schema prisma/schema.prisma",
     "db:billing-upgrade": "prisma db execute --file prisma/migrations/20260714210000_billing_management/migration.sql --schema prisma/schema.prisma",
     "db:billing-period-group-upgrade": "prisma db execute --file prisma/migrations/20260906120000_billing_period_groups/migration.sql --schema prisma/schema.prisma",

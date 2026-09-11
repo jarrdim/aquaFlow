@@ -3,6 +3,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { requireAuth, requireRole } from "../middleware/auth";
 import {
+  buildReadingWorklistPage,
   LEGACY_READABLE_METER_STATUSES,
   READING_ACCOUNT_STATUSES,
   readingEligibilityWarning,
@@ -196,7 +197,22 @@ async function getEligibleAssignments(
             },
           },
         }
-      : { meter: true },
+      : {
+          meter: {
+            select: {
+              meterNumber: true,
+              status: true,
+              installationStatus: true,
+            },
+          },
+          account: {
+            select: {
+              accountNumber: true,
+              route: { select: { routeName: true } },
+              property: { select: { route: { select: { routeName: true } } } },
+            },
+          },
+        },
     orderBy: [{ assignmentDate: "asc" }, { assignmentId: "asc" }],
   });
   const resolved = resolveReadableAssignments(assignments);
@@ -550,6 +566,14 @@ readingsRouter.get("/worklist", async (req, res, next) => {
     }
     const accountIds = Array.from(new Set(rawAccountIds)).map((value) => BigInt(value));
     const search = String(req.query.search ?? "").trim();
+    const quickSearch = String(req.query.quickSearch ?? "").trim();
+    const paginated = String(req.query.paginated ?? "") === "true";
+    const page = Math.max(1, Number.parseInt(String(req.query.page ?? "1"), 10) || 1);
+    const pageSize = Math.min(200, Math.max(10, Number.parseInt(String(req.query.pageSize ?? "50"), 10) || 50));
+    const status = String(req.query.status ?? "");
+    if (status && !["UNREAD", "CAPTURED", "MISSED_CLOSED"].includes(status)) {
+      return res.status(400).json({ error: "status must be UNREAD, CAPTURED, or MISSED_CLOSED" });
+    }
     let allowedRouteIds: bigint[] | undefined;
     if (req.user?.roles.includes("METER_READER")) {
       const officer = await prisma.fieldOfficer.findUnique({
@@ -573,21 +597,29 @@ readingsRouter.get("/worklist", async (req, res, next) => {
         return res.status(403).json({ error: "This route is not assigned to you for the selected cycle" });
       }
     }
+    const effectiveSearch = [search, quickSearch].filter(Boolean).join(" ");
     const items = await getEligibleAssignments(
       cycleId,
       routeIds,
       zoneId,
-      search,
+      effectiveSearch,
       meterId,
       allowedRouteIds,
       accountIds,
+      !paginated,
     );
     const meterIds = items.map((assignment) => assignment.meterId);
+    const currentReadingsPromise: Promise<any[]> = paginated
+      ? prisma.meterReading.findMany({
+          where: { readingCycleId: cycleId, meterId: { in: meterIds } },
+          select: { meterId: true },
+        })
+      : prisma.meterReading.findMany({
+          where: { readingCycleId: cycleId, meterId: { in: meterIds } },
+          include: { evidence: true },
+        });
     const [currentReadings, missedCycle] = await Promise.all([
-      prisma.meterReading.findMany({
-        where: { readingCycleId: cycleId, meterId: { in: meterIds } },
-        include: { evidence: true },
-      }),
+      currentReadingsPromise,
       missedCycleId
         ? prisma.readingCycle.findUnique({
             where: { readingCycleId: missedCycleId },
@@ -624,7 +656,7 @@ readingsRouter.get("/worklist", async (req, res, next) => {
     const readInMissedCycle = new Set(
       missedCycleReadings.map((reading) => reading.meterId.toString()),
     );
-    const visibleItems = missedCycle
+    let visibleItems = missedCycle
       ? items.filter(
           (assignment) =>
             assignment.assignmentDate <= missedCycle.endDate &&
@@ -632,6 +664,80 @@ readingsRouter.get("/worklist", async (req, res, next) => {
             !readInMissedCycle.has(assignment.meterId.toString()),
         )
       : items;
+    if (paginated) {
+      visibleItems.sort((left, right) => {
+        const leftRoute = left.account?.route?.routeName ?? left.account?.property?.route?.routeName ?? "";
+        const rightRoute = right.account?.route?.routeName ?? right.account?.property?.route?.routeName ?? "";
+        return String(leftRoute).localeCompare(String(rightRoute), undefined, { numeric: true, sensitivity: "base" }) ||
+          String(left.account?.accountNumber ?? "").localeCompare(String(right.account?.accountNumber ?? ""), undefined, { numeric: true, sensitivity: "base" }) ||
+          String(left.meter?.meterNumber ?? "").localeCompare(String(right.meter?.meterNumber ?? ""), undefined, { numeric: true, sensitivity: "base" });
+      });
+      const worklistPage = buildReadingWorklistPage(items, visibleItems, new Set(byMeter.keys()), status, page, pageSize);
+      const { total, summary } = worklistPage;
+      const pageAssignments = worklistPage.items;
+      const assignmentIds = pageAssignments.map((assignment) => assignment.assignmentId);
+      const detailedItems = assignmentIds.length
+        ? await prisma.meterAssignment.findMany({
+            where: { assignmentId: { in: assignmentIds } },
+            include: {
+              meter: { include: { readings: { orderBy: [{ readingDate: "desc" }, { readingId: "desc" }], take: 1 } } },
+              account: {
+                include: {
+                  customer: true,
+                  route: { include: { zone: true } },
+                  property: {
+                    include: {
+                      route: { include: { zone: true } },
+                      zone: true,
+                      serviceArea: true,
+                    },
+                  },
+                },
+              },
+            },
+          })
+        : [];
+      const detailsById = new Map(detailedItems.map((assignment) => [assignment.assignmentId.toString(), assignment]));
+      const pageDetails = pageAssignments.flatMap((assignment) => {
+        const detail = detailsById.get(assignment.assignmentId.toString());
+        return detail ? [detail] : [];
+      });
+      const pageMeterIds = pageDetails.map((assignment) => assignment.meterId);
+      const pageReadings = pageMeterIds.length
+        ? await prisma.meterReading.findMany({
+            where: { readingCycleId: cycleId, meterId: { in: pageMeterIds } },
+            include: { evidence: true },
+          })
+        : [];
+      const pageByMeter = new Map(pageReadings.map((reading) => [reading.meterId.toString(), reading]));
+      const serialized = pageDetails.map((a) => ({
+        ...a,
+        legacyMeterException: Boolean(readingEligibilityWarning(a.meter)),
+        eligibilityWarning: readingEligibilityWarning(a.meter),
+        cycleReading: pageByMeter.get(a.meterId.toString()) ?? null,
+        missedCycleUnread: Boolean(missedCycle),
+        missedCycle: missedCycle ? {
+          readingCycleId: missedCycle.readingCycleId,
+          cycleCode: missedCycle.cycleCode,
+          cycleName: missedCycle.cycleName,
+        } : null,
+        route: a.account?.route ?? a.account?.property.route,
+        zone: a.account?.property.zone,
+        customerName: a.account?.customer.organizationName || [
+          a.account?.customer.firstName,
+          a.account?.customer.middleName,
+          a.account?.customer.lastName,
+        ].filter(Boolean).join(" "),
+      }));
+      return res.json({
+        items: serialized,
+        total,
+        page,
+        pageSize,
+        pages: worklistPage.pages,
+        summary,
+      });
+    }
     res.json(visibleItems.map((a) => ({
       ...a,
       legacyMeterException: Boolean(readingEligibilityWarning(a.meter)),

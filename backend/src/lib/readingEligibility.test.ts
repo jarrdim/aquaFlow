@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildReadingWorklistPage,
   LEGACY_METER_WARNING,
   filterReadingAssignmentsBySearch,
   isReadableAccountStatus,
@@ -97,3 +98,24 @@ test("meter readers can request only routes assigned to them", () => {
   assert.equal(requestedRoutesAreAllowed([13n], [11n, 12n]), false);
 });
 
+test("worklist paging returns only the requested rows while keeping full-scope counts", () => {
+  const eligible = Array.from({ length: 125 }, (_, index) => ({ meterId: BigInt(index + 1) }));
+  const captured = new Set(Array.from({ length: 25 }, (_, index) => String(index + 1)));
+  const result = buildReadingWorklistPage(eligible, eligible, captured, "", 2, 50);
+  assert.equal(result.items.length, 50);
+  assert.equal(result.items[0].meterId, 51n);
+  assert.equal(result.total, 125);
+  assert.equal(result.pages, 3);
+  assert.deepEqual(result.summary, { eligible: 125, captured: 25, unread: 100 });
+});
+
+test("worklist status filtering happens before server-side pagination", () => {
+  const eligible = Array.from({ length: 80 }, (_, index) => ({ meterId: BigInt(index + 1) }));
+  const captured = new Set(Array.from({ length: 30 }, (_, index) => String(index + 1)));
+  const unread = buildReadingWorklistPage(eligible, eligible, captured, "UNREAD", 1, 10);
+  const capturedPage = buildReadingWorklistPage(eligible, eligible, captured, "CAPTURED", 2, 10);
+  assert.equal(unread.total, 50);
+  assert.equal(unread.items[0].meterId, 31n);
+  assert.equal(capturedPage.total, 30);
+  assert.equal(capturedPage.items[0].meterId, 11n);
+});

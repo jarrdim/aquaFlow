@@ -107,3 +107,29 @@ export function filterReadingAssignmentsBySearch<T extends SearchableReadingAssi
 export function requestedRoutesAreAllowed(requestedRouteIds: bigint[], allowedRouteIds: bigint[]) {
   return requestedRouteIds.every((requested) => allowedRouteIds.some((allowed) => allowed === requested));
 }
+
+export function buildReadingWorklistPage<T extends { meterId: bigint }>(
+  eligibleItems: T[],
+  visibleItems: T[],
+  capturedMeterIds: Set<string>,
+  status: string,
+  page: number,
+  pageSize: number,
+) {
+  const filteredItems = status === "CAPTURED"
+    ? visibleItems.filter((item) => capturedMeterIds.has(item.meterId.toString()))
+    : status === "UNREAD"
+      ? visibleItems.filter((item) => !capturedMeterIds.has(item.meterId.toString()))
+      : visibleItems;
+  const total = filteredItems.length;
+  return {
+    items: filteredItems.slice((page - 1) * pageSize, page * pageSize),
+    total,
+    pages: Math.max(1, Math.ceil(total / pageSize)),
+    summary: {
+      eligible: eligibleItems.length,
+      captured: capturedMeterIds.size,
+      unread: Math.max(0, eligibleItems.length - capturedMeterIds.size),
+    },
+  };
+}

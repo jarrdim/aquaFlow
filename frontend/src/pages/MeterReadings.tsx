@@ -2376,6 +2376,8 @@ export function ReadingWorklist() {
   const [routes, setRoutes] = useState<Row[]>([]);
   const [routeAssignments, setRouteAssignments] = useState<Row[]>([]);
   const [items, setItems] = useState<Row[]>([]);
+  const [worklistTotal, setWorklistTotal] = useState(0);
+  const [unread, setUnread] = useState(0);
   const [capturedInCycle, setCapturedInCycle] = useState(0);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -2489,12 +2491,15 @@ export function ReadingWorklist() {
   useEffect(() => {
     if (!cycleId) {
       setItems([]);
+      setWorklistTotal(0);
+      setUnread(0);
       setCapturedInCycle(0);
       setLoading(false);
       return;
     }
     if (readingStatus === "MISSED_CLOSED" && !effectiveMissedCycleId) {
       setItems([]);
+      setWorklistTotal(0);
       setLoading(false);
       return;
     }
@@ -2505,18 +2510,22 @@ export function ReadingWorklist() {
           cycleId,
           routeIds: routeIds.join(","),
           search: search.trim(),
+          quickSearch: quickSearch.trim(),
+          status: readingStatus,
+          paginated: "true",
+          page: String(page),
+          pageSize: String(pageSize),
           missedCycleId:
             readingStatus === "MISSED_CLOSED" ? effectiveMissedCycleId : "",
         };
-      Promise.all([
-        api.readingWorklist(worklistFilters),
-        api.readingWorklistCapturedCount(worklistFilters),
-      ])
-        .then(([nextItems, capturedSummary]) => {
+      api.readingWorklist(worklistFilters)
+        .then((result) => {
           if (cancelled) return;
           setError("");
-          setItems(nextItems);
-          setCapturedInCycle(Number(capturedSummary.count ?? 0));
+          setItems(result.items ?? []);
+          setWorklistTotal(Number(result.total ?? 0));
+          setUnread(Number(result.summary?.unread ?? 0));
+          setCapturedInCycle(Number(result.summary?.captured ?? 0));
         })
         .catch((e) => {
           if (!cancelled) setError(e.message);
@@ -2524,12 +2533,12 @@ export function ReadingWorklist() {
         .finally(() => {
           if (!cancelled) setLoading(false);
         });
-    }, search ? 250 : 0);
+    }, search || quickSearch ? 250 : 0);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [cycleId, routeIdsParam, search, readingStatus, effectiveMissedCycleId]);
+  }, [cycleId, routeIdsParam, search, quickSearch, readingStatus, effectiveMissedCycleId, page, pageSize]);
   const selectedRoutes = routes.filter((route) =>
     routeIds.includes(String(route.routeId)),
   );
@@ -2539,61 +2548,29 @@ export function ReadingWorklist() {
       : selectedRoutes.length <= 2
         ? selectedRoutes.map((route) => route.routeName).join(", ")
         : `${selectedRoutes.length.toLocaleString()} routes`;
-  const capturedEligible = items.filter((item) => item.cycleReading).length;
-  const unread = items.length - capturedEligible;
-  const filteredItems = useMemo(() => {
-    const quickTerm = quickSearch.trim().toLowerCase();
-    const matchingItems = items.filter((item) => {
-        if (readingStatus === "UNREAD") return !item.cycleReading;
-        if (readingStatus === "MISSED_CLOSED")
-          return !item.cycleReading && item.missedCycleUnread;
-        if (readingStatus === "CAPTURED") return Boolean(item.cycleReading);
-        return true;
-      }).filter((item) => {
-        if (!quickTerm) return true;
-        return [
-          item.account?.accountNumber,
-          item.account?.customer?.customerNumber,
-          item.customerName,
-          item.meter?.meterNumber,
-          item.meter?.serialNumber,
-          item.route?.routeName,
-          item.account?.customer?.phoneNumber,
-        ]
-          .filter(Boolean)
-          .some((value) => String(value).toLowerCase().includes(quickTerm));
-      });
-    return matchingItems.sort((left, right) => {
-      const byRoute = String(
-        left.route?.routeName ?? "Unassigned route",
-      ).localeCompare(
-        String(right.route?.routeName ?? "Unassigned route"),
-        undefined,
-        { numeric: true, sensitivity: "base" },
-      );
-      const byAccount = String(
-        left.account?.accountNumber ?? "",
-      ).localeCompare(String(right.account?.accountNumber ?? ""), undefined, {
-        numeric: true,
-        sensitivity: "base",
-      });
-      return byRoute || byAccount ||
-        String(left.meter?.meterNumber ?? "").localeCompare(
-          String(right.meter?.meterNumber ?? ""),
-          undefined,
-          { numeric: true, sensitivity: "base" },
-        );
-    });
-  }, [items, readingStatus, quickSearch]);
+  const filteredItems = items;
 
   async function exportWorklist(format: "excel" | "pdf") {
-    if (!filteredItems.length || operation) return;
+    if (!worklistTotal || operation) return;
     setError("");
     setOperation(`Preparing ${format === "pdf" ? "PDF" : "Excel"} reading sheets`);
     setOperationProgress(10);
     try {
       await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
-      const exportItems = [...filteredItems].sort((left, right) => {
+      const allItems = await api.readingWorklist({
+        cycleId,
+        routeIds: routeIds.join(","),
+        search: [search.trim(), quickSearch.trim()].filter(Boolean).join(" "),
+        missedCycleId:
+          readingStatus === "MISSED_CLOSED" ? effectiveMissedCycleId : "",
+      });
+      const exportItems = (allItems as Row[]).filter((item) => {
+        if (readingStatus === "UNREAD") return !item.cycleReading;
+        if (readingStatus === "MISSED_CLOSED")
+          return !item.cycleReading && item.missedCycleUnread;
+        if (readingStatus === "CAPTURED") return Boolean(item.cycleReading);
+        return true;
+      }).sort((left, right) => {
         const byAccount = String(
           left.account?.accountNumber ?? "",
         ).localeCompare(String(right.account?.accountNumber ?? ""), undefined, {
@@ -3096,11 +3073,17 @@ export function ReadingWorklist() {
     } finally {
       if (savedReadings.size) {
         setItems((current) =>
-          current.map((row) => {
+          current.flatMap((row) => {
             const reading = savedReadings.get(String(row.meterId));
-            return reading ? { ...row, cycleReading: reading } : row;
+            if (reading && ["UNREAD", "MISSED_CLOSED"].includes(readingStatus)) return [];
+            return [{ ...row, ...(reading ? { cycleReading: reading } : {}) }];
           }),
         );
+        setCapturedInCycle((current) => current + savedReadings.size);
+        setUnread((current) => Math.max(0, current - savedReadings.size));
+        if (["UNREAD", "MISSED_CLOSED"].includes(readingStatus)) {
+          setWorklistTotal((current) => Math.max(0, current - savedReadings.size));
+        }
         setInlineReadings((current) => {
           const next = { ...current };
           savedReadings.forEach((_reading, meterKey) => delete next[meterKey]);
@@ -3126,11 +3109,8 @@ export function ReadingWorklist() {
   const invalidInlineCount = enteredInlineItems.filter(
     (item) => !inlineReadingIsValid(item),
   ).length;
-  const totalPages = Math.max(1, Math.ceil(filteredItems.length / pageSize));
-  const pageItems = filteredItems.slice(
-    (page - 1) * pageSize,
-    page * pageSize,
-  );
+  const totalPages = Math.max(1, Math.ceil(worklistTotal / pageSize));
+  const pageItems = filteredItems;
   useEffect(() => {
     const container = worklistTableRef.current;
     const scrollRoot = container?.closest(".app-content") as HTMLElement | null;
@@ -3290,11 +3270,11 @@ export function ReadingWorklist() {
       aria-label={`Worklist ${position} pagination`}
     >
       <p className="text-xs font-medium text-slate-500">
-        {filteredItems.length
+        {worklistTotal
           ? `Showing ${(page - 1) * pageSize + 1}–${Math.min(
               page * pageSize,
-              filteredItems.length,
-            )} of ${filteredItems.length.toLocaleString()} meters`
+              worklistTotal,
+            )} of ${worklistTotal.toLocaleString()} meters`
           : "No meters to display"}
       </p>
       <div className="flex items-center gap-1">
@@ -3355,14 +3335,14 @@ export function ReadingWorklist() {
         <>
           <Button
             tone="slate"
-            disabled={!cycleId || !filteredItems.length || Boolean(operation)}
+            disabled={!cycleId || !worklistTotal || Boolean(operation)}
             onClick={() => exportWorklist("excel")}
           >
             Export Excel
           </Button>
           <Button
             tone="blue"
-            disabled={!cycleId || !filteredItems.length || Boolean(operation)}
+            disabled={!cycleId || !worklistTotal || Boolean(operation)}
             onClick={() => exportWorklist("pdf")}
           >
             Export PDF
@@ -3671,9 +3651,9 @@ export function ReadingWorklist() {
             <div>
               <h2 className="text-base font-bold text-slate-900">Route worklist</h2>
               <p className="mt-0.5 text-xs text-slate-500">
-                {filteredItems.length.toLocaleString()} {readingStatus === "MISSED_CLOSED"
-                  ? `meter${filteredItems.length === 1 ? "" : "s"} unread in ${selectedMissedCycle?.cycleName ?? "the selected closed cycle"}`
-                  : `eligible meter${filteredItems.length === 1 ? "" : "s"}`} · Page {page} of{" "}
+                {worklistTotal.toLocaleString()} {readingStatus === "MISSED_CLOSED"
+                  ? `meter${worklistTotal === 1 ? "" : "s"} unread in ${selectedMissedCycle?.cycleName ?? "the selected closed cycle"}`
+                  : `eligible meter${worklistTotal === 1 ? "" : "s"}`} · Page {page} of{" "}
                 {totalPages}
               </p>
             </div>
