@@ -8,6 +8,7 @@ import { readingRequiresBill } from "../lib/readingBilling";
 import {
   aggregateBillingGroupStatus,
   billingCompletionStatus,
+  billingCycleLabel,
   billingCycleType,
   ensureBillingPeriodGroup,
   hasPostingEvidence,
@@ -1358,7 +1359,7 @@ billingRouter.post("/notifications", requireRole("SYSTEM_ADMIN", "BILLING_OFFICE
           notificationType: "BILL_ISSUED",
           channel: deliveryChannel,
           recipient,
-          subject: `Water bill - ${bill.billingCycle.cycleName}`,
+          subject: `Water bill - ${billingCycleLabel(bill.billingCycle)}`,
           messageBody: message,
           requestedBy,
           metadata: { source: "BILLING", billingCycleId: bill.billingCycleId.toString(), requestedChannel: channel, resend: data.resend },
@@ -1541,7 +1542,7 @@ billingRouter.get("/statements/:accountId", async (req, res, next) => {
         date: bill.issueDate,
         particulars: "Water bill",
         reference: bill.billNumber,
-        period: bill.billingCycle.cycleCode || bill.billingCycle.cycleName,
+        period: billingCycleLabel(bill.billingCycle),
         details: bill.reading
           ? `Prev: ${Number(bill.reading.previousReading)} - Curr: ${Number(bill.reading.currentReading)} - Units billed: ${Number(bill.consumptionUnits)}${Number(bill.consumptionUnits) !== Number(bill.reading.consumption) ? " (includes meter replacement final consumption)" : ""} (${String(bill.reading.readingType).replace(/_/g, " ")}) - Due: ${bill.dueDate.toISOString().slice(0, 10)}`
           : `Units: ${Number(bill.consumptionUnits)} - Due: ${bill.dueDate.toISOString().slice(0, 10)}`,

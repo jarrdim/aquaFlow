@@ -5,6 +5,7 @@ import { decodeId, encodeId } from "../lib/hashids";
 import { SearchableSelect } from "../components/SearchableSelect";
 import { SweetAlertToast } from "../components/SweetAlertToast";
 import { maskAddress, maskEmail, maskName, maskPhone, usePrivacyMode } from "../lib/privacyMode";
+import { billingCycleLabel } from "../lib/billingPeriod";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface Customer {
@@ -71,7 +72,7 @@ interface CustomerBill {
   billNumber: string;
   accountId: string;
   account?: { accountNumber?: string };
-  billingCycle?: { cycleName?: string };
+  billingCycle?: { cycleCode?: string; cycleName?: string };
   issueDate: string;
   dueDate: string;
   totalAmountDue: number;
@@ -735,7 +736,7 @@ export default function CustomerDetail() {
                   <InfoRow label="Account number" value={primaryAccount.accountNumber} />
                   <InfoRow label="Category" value={primaryAccount.category?.categoryName} />
                   <InfoRow label="Status" value={<StatusBadge status={primaryAccount.accountStatus} />} />
-                  <InfoRow label="Billing cycle" value={bills[0]?.billingCycle?.cycleName} />
+                  <InfoRow label="Billing cycle" value={billingCycleLabel(bills[0]?.billingCycle)} />
                   <InfoRow label="Last payment" value={latestPayment ? date(latestPayment.paymentDate) : undefined} />
                   <InfoRow label="Payment method" value={latestPayment?.channel?.channelName} />
                 </div>
@@ -803,7 +804,7 @@ export default function CustomerDetail() {
                     return (
                       <tr key={bill.billId} className="transition-colors hover:bg-slate-50/80">
                         <td className="px-5 py-4 font-semibold text-slate-900">{bill.billNumber}</td>
-                        <td className="px-5 py-4 text-slate-600">{bill.billingCycle?.cycleName ?? "—"}</td>
+                        <td className="px-5 py-4 text-slate-600">{billingCycleLabel(bill.billingCycle)}</td>
                         <td className="px-5 py-4 text-slate-600">{bill.account?.accountNumber ?? "—"}</td>
                         <td className="px-5 py-4 text-slate-600">{date(bill.issueDate)}<div className="mt-0.5 text-xs text-slate-400">Due {date(bill.dueDate)}</div></td>
                         <td className="px-5 py-4 text-right font-semibold text-slate-800">{displayMoney(bill.totalAmountDue)}</td>

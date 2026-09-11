@@ -10,6 +10,7 @@ import { maskAddress, maskEmail, maskIdentifier, maskName, maskPhone, usePrivacy
 import Swal from "sweetalert2";
 import { DateInput } from "../components/DateInput";
 import { DeliveryQueueLink } from "../components/DeliveryQueueLink";
+import { billingCycleLabel } from "../lib/billingPeriod";
 
 type Row = Record<string, any>;
 const INPUT =
@@ -458,7 +459,7 @@ function CycleSelect({
       {includeBlank && <option value="">{blankLabel}</option>}
       {cycles.map((cycle) => (
         <option key={cycle.billingCycleId} value={cycle.billingCycleId}>
-          {cycle.cycleName} · {pretty(cycle.completionStatus ?? cycle.status)}
+          {billingCycleLabel(cycle)} · {pretty(cycle.completionStatus ?? cycle.status)}
         </option>
       ))}
     </SearchableSelect>
@@ -1046,7 +1047,7 @@ export function IndividualBillingWorkspace() {
         <div className="grid gap-3 p-4 lg:grid-cols-[minmax(280px,1.3fr)_minmax(220px,1fr)_minmax(220px,1fr)_auto]">
           <Field label="Accounts / customers" required><CheckboxMultiSelect className={INPUT} loading={loading} maxSelected={500} options={accountOptions} emptyMessage="No matching active or suspended accounts" placeholder={loading ? "Loading active and suspended accounts…" : "Select one or more accounts"} value={selectedAccountIds} onChange={setSelectedAccountIds} /></Field>
           <Field label="Reading cycle" required><SearchableSelect className={INPUT} value={readingCycleId} onChange={(event) => { const value = event.target.value; setReadingCycleId(value); const readingCycle = readingCycles.find((cycle) => String(cycle.readingCycleId) === value); const linked = readingCycle?.billingCycleId ? billingCycles.find((cycle) => String(cycle.billingCycleId) === String(readingCycle.billingCycleId)) : billingCycles.find((cycle) => cycle.readingCycles?.some((item: Row) => String(item.readingCycleId) === value)); setBillingCycleId(linked ? String(linked.billingCycleId) : ""); }}><option value="">Select reading cycle</option>{readingCycles.filter((cycle) => !["CANCELLED"].includes(cycle.status)).map((cycle) => <option key={cycle.readingCycleId} value={cycle.readingCycleId}>{cycle.cycleCode} · {pretty(cycle.status)}</option>)}</SearchableSelect></Field>
-          <Field label="Billing period"><SearchableSelect className={INPUT} value={billingCycleId} onChange={(event) => { const value = event.target.value; setBillingCycleId(value); const cycle = billingCycles.find((item) => String(item.billingCycleId) === value); if (cycle?.readingCycles?.[0]) setReadingCycleId(String(cycle.readingCycles[0].readingCycleId)); }}><option value="">Select or create period</option>{billingCycles.filter((cycle) => cycle.status !== "CANCELLED").map((cycle) => <option key={cycle.billingCycleId} value={cycle.billingCycleId}>{cycle.cycleCode} · {pretty(cycle.completionStatus ?? cycle.status)}</option>)}</SearchableSelect></Field>
+          <Field label="Billing period"><SearchableSelect className={INPUT} value={billingCycleId} onChange={(event) => { const value = event.target.value; setBillingCycleId(value); const cycle = billingCycles.find((item) => String(item.billingCycleId) === value); if (cycle?.readingCycles?.[0]) setReadingCycleId(String(cycle.readingCycles[0].readingCycleId)); }}><option value="">Select or create period</option>{billingCycles.filter((cycle) => cycle.status !== "CANCELLED").map((cycle) => <option key={cycle.billingCycleId} value={cycle.billingCycleId}>{billingCycleLabel(cycle)} · {pretty(cycle.completionStatus ?? cycle.status)}</option>)}</SearchableSelect></Field>
           <div className="flex items-end">{!mixedReadingReadiness && <button type="button" onClick={() => setShowSetup((value) => !value)} className="whitespace-nowrap rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">{showSetup ? "Hide setup" : needsReadingCycle ? "Create reading cycle" : needsBillingPeriod ? "Create billing period" : "Create cycles"}</button>}</div>
         </div>
         {mixedReadingReadiness && !showSetup && <div className="border-t border-violet-200 bg-violet-50 px-4 py-3">
@@ -1535,7 +1536,7 @@ export function BillingPeriods() {
                         <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100">
                           <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><rect x="4" y="5" width="16" height="15" rx="2" /><path d="M4 10h16" /></svg>
                         </span>
-                        <span><strong className="block text-slate-800">{c.cycleName}</strong><span className="mt-0.5 block font-mono text-[11px] font-semibold text-slate-400">{c.cycleCode}</span></span>
+                        <strong className="text-slate-800">{c.cycleType === "METER_REPLACEMENT_GROUP" ? `${c.cycleName} · ${c.cycleCode}` : billingCycleLabel(c)}</strong>
                       </div>
                     </td>
                     <td className={TD}>
@@ -1764,7 +1765,7 @@ export function BillingPeriodRecords() {
                 </tr>) : rows.map((record) => <tr key={record.billId} className="border-t border-slate-100 transition hover:bg-sky-50/50">
                   <td className={TD}><strong className="text-slate-800">{record.billNumber}</strong><div className="text-xs text-slate-400">Issued {date(record.issueDate)}</div></td>
                   <td className={TD}><strong className="text-slate-800">{record.account?.accountNumber}</strong><div className="text-xs">{record.customerName}</div></td>
-                  <td className={TD}>{record.billingCycle?.cycleName}<div className="font-mono text-xs text-slate-400">{record.billingCycle?.cycleCode}</div></td>
+                  <td className={TD}>{billingCycleLabel(record.billingCycle)}</td>
                   <td className={`${TD} font-semibold`}>{Number(record.consumptionUnits ?? 0).toLocaleString("en-KE", { maximumFractionDigits: 3 })}</td>
                   <td className={`${TD} font-semibold text-slate-800`}>{money(record.totalCurrentCharges)}</td>
                   <td className={`${TD} font-bold text-slate-900`}>{money(record.totalAmountDue)}</td>
@@ -2860,7 +2861,7 @@ export function InvoiceRegister() {
                 Bill: b.billNumber,
                 Account: b.account.accountNumber,
                 Customer: b.customerName,
-                Period: b.billingCycle.cycleName,
+                Period: billingCycleLabel(b.billingCycle),
                 Amount: Number(b.totalAmountDue),
                 Status: b.status,
               })),
@@ -2934,7 +2935,7 @@ export function InvoiceRegister() {
                     {bill.account.accountNumber}
                     <div className="text-xs">{bill.customerName}</div>
                   </td>
-                  <td className={TD}>{bill.billingCycle.cycleName}</td>
+                  <td className={TD}>{billingCycleLabel(bill.billingCycle)}</td>
                   <td className={TD}>
                     {date(bill.issueDate)}
                     <div className="text-xs">Due {date(bill.dueDate)}</div>
@@ -3050,7 +3051,7 @@ export function BillInvoice() {
           </div>
           <div className="grid grid-cols-2 gap-2 text-sm">
             <span className="text-slate-500">Period</span>
-            <strong>{bill.billingCycle.cycleName}</strong>
+            <strong>{billingCycleLabel(bill.billingCycle)}</strong>
             <span className="text-slate-500">Invoice date</span>
             <strong>{date(bill.issueDate)}</strong>
             <span className="text-slate-500">Due date</span>
@@ -5820,7 +5821,7 @@ export function BillingHistory() {
               "billing-history.xlsx",
               "Billing History",
               rows.map((b) => ({
-                Period: b.billingCycle.cycleName,
+                Period: billingCycleLabel(b.billingCycle),
                 Bill: b.billNumber,
                 Account: b.account.accountNumber,
                 Customer: b.customerName,
@@ -5871,7 +5872,7 @@ export function BillingHistory() {
             <tbody>
               {rows.map((b) => (
                 <tr key={b.billId} className="border-t">
-                  <td className={TD}>{b.billingCycle.cycleName}</td>
+                  <td className={TD}>{billingCycleLabel(b.billingCycle)}</td>
                   <td className={TD}>{b.billNumber}</td>
                   <td className={TD}>
                     {b.account.accountNumber}
@@ -5927,7 +5928,7 @@ export function BillingAudit() {
               "Billing Audit",
               rows.map((e) => ({
                 Date: dateTime(e.createdAt),
-                Period: e.billingCycle?.cycleName,
+                Period: billingCycleLabel(e.billingCycle),
                 Bill: e.bill?.billNumber,
                 Action: e.eventType,
                 PreviousStatus: e.previousStatus,
@@ -5966,7 +5967,7 @@ export function BillingAudit() {
                 <tr key={e.billingEventId} className="border-t">
                   <td className={TD}>{dateTime(e.createdAt)}</td>
                   <td className={TD}>
-                    {e.billingCycle?.cycleName ?? "—"}
+                    {billingCycleLabel(e.billingCycle)}
                     <div className="text-xs">{e.bill?.billNumber}</div>
                   </td>
                   <td className={TD}>{person(e.performer)}</td>

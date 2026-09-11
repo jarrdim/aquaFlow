@@ -10,6 +10,7 @@ import {
   READING_ACCOUNT_STATUSES,
   resolveReadableAssignments,
 } from "../lib/readingEligibility";
+import { billingCycleLabel } from "../lib/billingPeriodGroup";
 
 export const mobileRouter = Router();
 
@@ -1270,7 +1271,7 @@ async function loadCustomerStatement(
       date: bill.issueDate,
       particulars: "Water bill",
       reference: bill.billNumber,
-      period: bill.billingCycle.cycleCode || bill.billingCycle.cycleName,
+      period: billingCycleLabel(bill.billingCycle),
       details: bill.reading
         ? `Prev: ${Number(bill.reading.previousReading)} - Curr: ${Number(bill.reading.currentReading)} - Units billed: ${Number(bill.consumptionUnits)}${Number(bill.consumptionUnits) !== Number(bill.reading.consumption) ? " (includes meter replacement final consumption)" : ""} - Due: ${bill.dueDate.toISOString().slice(0, 10)}`
         : `Units: ${Number(bill.consumptionUnits)} - Due: ${bill.dueDate.toISOString().slice(0, 10)}`,

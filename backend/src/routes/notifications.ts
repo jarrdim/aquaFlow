@@ -9,7 +9,7 @@ import {
   encryptProviderSecret,
 } from "../lib/notificationSecrets";
 import { createPaymentLinkToken, publicAppUrl } from "../lib/paymentLink";
-import { isFinalBillNotificationEligible, notificationRequiresPostedBill } from "../lib/billingPeriodGroup";
+import { billingCycleLabel, isFinalBillNotificationEligible, notificationRequiresPostedBill } from "../lib/billingPeriodGroup";
 
 export const notificationsRouter = Router();
 
@@ -1714,7 +1714,7 @@ notificationsRouter.post("/send", managers, async (req, res, next) => {
       account_number: account.accountNumber,
       balance: money(account.currentBalance),
       bill_number: bill?.billNumber ?? "",
-      period: bill?.billingCycle?.cycleName ?? "",
+      period: bill ? billingCycleLabel(bill.billingCycle, "") : "",
       amount_due: money(bill?.totalAmountDue),
       due_date: day(bill?.dueDate),
       payment_reference: payment?.transactionReference ?? "",

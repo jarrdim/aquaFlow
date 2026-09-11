@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   aggregateBillingGroupStatus,
   billingCompletionStatus,
+  billingCycleLabel,
   billingCycleType,
   billingPeriodGroupIdentity,
   ensureBillingPeriodGroup,
@@ -12,6 +13,13 @@ import {
   notificationRequiresPostedBill,
   summarizeBillStatuses,
 } from "./billingPeriodGroup";
+
+test("billing period labels concatenate cycle code and cycle name with safe fallbacks", () => {
+  assert.equal(billingCycleLabel({ cycleCode: "BC-2026-12", cycleName: "Late readings" }), "BC-2026-12 · Late readings");
+  assert.equal(billingCycleLabel({ cycleCode: "BC-2026-12", cycleName: "" }), "BC-2026-12");
+  assert.equal(billingCycleLabel({ cycleCode: "", cycleName: "December billing" }), "December billing");
+  assert.equal(billingCycleLabel(null), "-");
+});
 
 test("billing periods are grouped by the month in which payment is due", () => {
   assert.deepEqual(billingPeriodGroupIdentity(new Date("2026-09-10T00:00:00.000Z")), {
