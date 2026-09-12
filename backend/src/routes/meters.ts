@@ -1276,7 +1276,7 @@ metersRouter.get("/service-actions/direct/history", directServiceRoles, async (r
       WHERE action_type IN ('DIRECT_METER_DISCONNECTION','DIRECT_METER_RECONNECTION')`;
     const rows = await prisma.$queryRaw<any[]>`
       SELECT aa.arrears_action_id AS "actionId",aa.action_type AS "actionType",aa.details,
-        aa.metadata,aa.created_at AS "createdAt",ca.account_number AS "accountNumber",
+        aa.metadata,aa.created_at AS "createdAt",ca.account_id AS "accountId",ca.account_number AS "accountNumber",
         COALESCE(NULLIF(TRIM(CONCAT_WS(' ',c.first_name,c.middle_name,c.last_name)),''),c.organization_name,c.customer_number) AS "customerName",
         COALESCE(NULLIF(TRIM(CONCAT_WS(' ',u.first_name,u.last_name)),''),u.username) AS "performedByName",
         COALESCE(rr.fee_payment_status,'UNPAID') AS "feePaymentStatus",
