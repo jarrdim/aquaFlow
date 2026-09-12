@@ -2405,6 +2405,7 @@ export function DisconnectionLists() {
     minimumAgeDays: "90",
     minimumBalance: "2000",
     zoneId: "",
+    requireFinalDemandNotice: "true",
   });
   const load = async () => {
     setLoading(true);
@@ -2458,7 +2459,7 @@ export function DisconnectionLists() {
   };
   useEffect(() => {
     void load();
-  }, [filters.minimumAgeDays, filters.minimumBalance, filters.zoneId]);
+  }, [filters.minimumAgeDays, filters.minimumBalance, filters.zoneId, filters.requireFinalDemandNotice]);
   useEffect(() => {
     api.listZones().then(setZones).catch((e) => setError(e.message));
   }, []);
@@ -2471,7 +2472,10 @@ export function DisconnectionLists() {
         minimumAgeDays: filters.minimumAgeDays,
         minimumBalance: filters.minimumBalance,
         zoneId: filters.zoneId || undefined,
-        remarks: "Generated from queued formal recovery notices",
+        requireFinalDemandNotice: filters.requireFinalDemandNotice === "true",
+        remarks: filters.requireFinalDemandNotice === "true"
+          ? "Generated from queued formal recovery notices"
+          : "Generated without requiring a final demand notice",
       });
       setMessage("Disconnection list submitted for Finance Manager approval.");
       setSelected([]);
@@ -2558,19 +2562,19 @@ export function DisconnectionLists() {
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-sm font-bold text-slate-800">Eligibility path</span>
-              <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-bold text-emerald-700">
-                Demand notices do not require approval
+              <span className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${filters.requireFinalDemandNotice === "true" ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
+                {filters.requireFinalDemandNotice === "true" ? "Final demand notice required" : "Final demand notice check disabled"}
               </span>
             </div>
             <p className="mt-1 text-xs text-slate-500">
-              Match arrears rules <span className="px-1 text-slate-300">→</span> create and queue a final notice <span className="px-1 text-slate-300">→</span> select the account for a disconnection list
+              Match arrears rules <span className="px-1 text-slate-300">→</span> {filters.requireFinalDemandNotice === "true" && <>verify a queued final notice <span className="px-1 text-slate-300">→</span> </>}select the account for a disconnection list
             </p>
           </div>
           <div className="grid shrink-0 grid-cols-3 divide-x divide-slate-200 rounded-lg bg-slate-50 px-2 py-1.5">
             {[
               [eligibility.thresholdMatches, "Match rules", "text-slate-800"],
               [eligibility.eligibleAccounts, "Ready", "text-emerald-700"],
-              [accountsNeedingNotice, "Need queued notice", "text-amber-700"],
+              [filters.requireFinalDemandNotice === "true" ? accountsNeedingNotice : 0, filters.requireFinalDemandNotice === "true" ? "Need queued notice" : "Notice check off", "text-amber-700"],
             ].map(([value, label, color]) => (
               <div key={String(label)} className="min-w-24 px-3 text-center">
                 <div className={`text-lg font-extrabold leading-5 ${color}`}>{loading ? "—" : Number(value ?? 0).toLocaleString()}</div>
@@ -2589,7 +2593,7 @@ export function DisconnectionLists() {
             </div>
             <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600">{selected.length} selected</span>
           </div>
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
           <Field label="Minimum arrears age (days)">
             <input
               type="number"
@@ -2618,6 +2622,17 @@ export function DisconnectionLists() {
               {zones.map((zone) => <option key={zone.zoneId} value={zone.zoneId}>{zone.zoneName}</option>)}
             </SearchableSelect>
           </Field>
+          <div className="flex items-end">
+            <label className="flex min-h-[42px] w-full cursor-pointer items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700">
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded border-slate-300 text-aqua-700 focus:ring-aqua-500"
+                checked={filters.requireFinalDemandNotice === "true"}
+                onChange={(event) => { setSelected([]); setFilters({ ...filters, requireFinalDemandNotice: event.target.checked ? "true" : "false" }); }}
+              />
+              Check final demand notice
+            </label>
+          </div>
           <div className="flex items-end">
             <Button
               className="w-full"
@@ -2727,16 +2742,16 @@ export function DisconnectionLists() {
                       >
                         <div className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-amber-50 text-xl text-amber-700">!</div>
                         <div className="mt-3 text-base font-bold text-slate-800">
-                          {eligibility.thresholdMatches
+                          {eligibility.thresholdMatches && filters.requireFinalDemandNotice === "true"
                             ? `${Number(eligibility.thresholdMatches).toLocaleString()} account(s) match the financial rule, but none has cleared the notice gate.`
                             : "No accounts match these age and balance filters."}
                         </div>
                         <p className="mx-auto mt-1 max-w-xl text-sm leading-6 text-slate-500">
-                          {eligibility.thresholdMatches
+                          {eligibility.thresholdMatches && filters.requireFinalDemandNotice === "true"
                             ? "Create and queue a Final Demand or Disconnection Notice. The account becomes eligible automatically; there is no demand-notice approval step."
                             : "Lower the minimum age or balance, or choose a different zone to broaden the result."}
                         </p>
-                        {!!eligibility.thresholdMatches && (
+                        {!!eligibility.thresholdMatches && filters.requireFinalDemandNotice === "true" && (
                           <Link to="/arrears/notices" className="mt-4 inline-flex rounded-lg bg-aqua-700 px-4 py-2 text-sm font-bold text-white transition hover:bg-aqua-800">
                             Open demand notices
                           </Link>

@@ -802,6 +802,7 @@ export function MeterList({ initialStatus = "" }: { initialStatus?: string }) {
     zoneId: "",
   });
   const [loading, setLoading] = useState(true);
+  const [exporting, setExporting] = useState("");
   const [error, setError] = useState("");
   function load(nextPage = page) {
     setLoading(true);
@@ -827,6 +828,46 @@ export function MeterList({ initialStatus = "" }: { initialStatus?: string }) {
   useEffect(() => {
     load(1);
   }, []);
+  async function allFilteredMeters() {
+    const first = await api.listMeters({ ...filters, page: "1", pageSize: "100" });
+    const all = [...(first.items ?? [])];
+    const pages = Math.max(1, Number(first.totalPages ?? 1));
+    for (let nextPage = 2; nextPage <= pages; nextPage += 1) {
+      const result = await api.listMeters({ ...filters, page: String(nextPage), pageSize: "100" });
+      all.push(...(result.items ?? []));
+    }
+    return all;
+  }
+  function exportRows(rows: AnyRecord[]): Record<string, unknown>[] {
+    return rows.map((m) => ({
+      "Meter Number": m.meterNumber,
+      Type: pretty(m.meterType),
+      "Size (mm)": Number(m.meterSizeMm ?? 0),
+      "Assigned To": m.assignedTo ?? "",
+      Zone: assignmentZone(m),
+      Status: pretty(m.status),
+    }));
+  }
+  async function exportMeterList(format: "excel" | "csv") {
+    setExporting(format); setError("");
+    try {
+      const rows = exportRows(await allFilteredMeters());
+      const baseName = initialStatus === "DISCONNECTED" ? "disconnected-meters" : "meter-register";
+      if (format === "excel") {
+        await exportExcel(`${baseName}.xlsx`, initialStatus === "DISCONNECTED" ? "Disconnected Meters" : "Meter Register", rows);
+      } else if (rows.length) {
+        const headers = Object.keys(rows[0]);
+        const escape = (value: unknown) => `"${String(value ?? "").replace(/"/g, '""')}"`;
+        const csv = [headers.map(escape).join(","), ...rows.map((row) => headers.map((header) => escape(row[header])).join(","))].join("\r\n");
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" }));
+        link.download = `${baseName}.csv`;
+        link.click();
+        URL.revokeObjectURL(link.href);
+      }
+    } catch (err: any) { setError(err.message); }
+    finally { setExporting(""); }
+  }
   return (
     <Page
       title={initialStatus === "DISCONNECTED" ? "Disconnected meters" : "Meter register"}
@@ -967,22 +1008,17 @@ export function MeterList({ initialStatus = "" }: { initialStatus?: string }) {
         <div className="mt-5 flex flex-wrap gap-3">
           <Button
             tone="slate"
-            onClick={() =>
-              exportExcel(
-                "meter-register.xlsx",
-                "Meter Register",
-                meters.map((m) => ({
-                  MeterNumber: m.meterNumber,
-                  Type: m.meterType,
-                  SizeMM: m.meterSizeMm,
-                  AssignedTo: m.assignedTo ?? "",
-                  Zone: assignmentZone(m),
-                  Status: m.status,
-                })),
-              )
-            }
+            disabled={Boolean(exporting) || total === 0}
+            onClick={() => void exportMeterList("excel")}
           >
-            Export Excel
+            {exporting === "excel" ? "Exporting…" : "Export Excel"}
+          </Button>
+          <Button
+            tone="slate"
+            disabled={Boolean(exporting) || total === 0}
+            onClick={() => void exportMeterList("csv")}
+          >
+            {exporting === "csv" ? "Exporting…" : "Export CSV"}
           </Button>
           <Button tone="slate" onClick={() => window.print()}>
             Print register

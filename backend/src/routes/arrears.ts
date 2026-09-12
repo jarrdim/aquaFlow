@@ -1326,6 +1326,7 @@ arrearsRouter.patch("/promises/:id/status", customerStaff, async (req, res, next
 arrearsRouter.get("/disconnections/eligible", async (req, res, next) => {
   try {
     const asOf = req.query.asOf ? day(String(req.query.asOf)) : today();
+    const requireFinalDemandNotice = String(req.query.requireFinalDemandNotice ?? "true") !== "false";
     const rows = await arrearsRows(asOf, {
       ...req.query,
       minimumAgeDays: req.query.minimumAgeDays ?? 90,
@@ -1351,12 +1352,14 @@ arrearsRouter.get("/disconnections/eligible", async (req, res, next) => {
       )
         qualifyingNoticeByAccount.set(accountId, notice);
     }
-    const items = rows
+    const rowsWithNotices = rows
       .map((row) => ({
         ...row,
         lastNotice: qualifyingNoticeByAccount.get(String(row.accountId)),
-      }))
-      .filter((row) => row.lastNotice);
+      }));
+    const items = requireFinalDemandNotice
+      ? rowsWithNotices.filter((row) => row.lastNotice)
+      : rowsWithNotices;
     const pendingNoticeAccounts = rows.filter(
       (row) =>
         !qualifyingNoticeByAccount.has(String(row.accountId)) &&
@@ -1425,6 +1428,7 @@ arrearsRouter.post("/disconnections", officer, async (req, res, next) => {
       zoneId: id.optional(),
       minimumBalance: z.coerce.number().min(0),
       minimumAgeDays: z.coerce.number().int().min(0),
+      requireFinalDemandNotice: z.boolean().default(true),
       remarks: z.string().max(2000).optional(),
     }),
     req.body,
@@ -1442,12 +1446,14 @@ arrearsRouter.post("/disconnections", officer, async (req, res, next) => {
       },
       orderBy: { createdAt: "desc" },
     });
-    const eligible = selected.filter((row) =>
-      notices.some((notice) => notice.accountId === row.accountId),
-    );
+    const eligible = data.requireFinalDemandNotice
+      ? selected.filter((row) => notices.some((notice) => notice.accountId === row.accountId))
+      : selected;
     if (!eligible.length)
       return res.status(409).json({
-        error: "Selected accounts require a queued final demand or disconnection notice",
+        error: data.requireFinalDemandNotice
+          ? "Selected accounts require a queued final demand or disconnection notice"
+          : "No selected accounts match the disconnection rules",
       });
     const list = await prisma.$transaction(async (tx) => {
       const created = await tx.disconnectionList.create({
