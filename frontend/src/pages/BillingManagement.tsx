@@ -1785,7 +1785,9 @@ export function BillingPeriodRecords() {
 }
 
 export function ReadingCorrections() {
-  const [search, setSearch] = useState("");
+  const [searchParams] = useSearchParams();
+  const requestedBillId = searchParams.get("billId") ?? "";
+  const [search, setSearch] = useState(searchParams.get("billNumber") ?? "");
   const [candidates, setCandidates] = useState<Row[]>([]);
   const [selected, setSelected] = useState<Row | null>(null);
   const [correctedPreviousReading, setCorrectedPreviousReading] = useState("");
@@ -1820,6 +1822,12 @@ export function ReadingCorrections() {
     setMessage("");
     setError("");
   }
+  useEffect(() => {
+    if (!selected && requestedBillId) {
+      const requested = candidates.find((bill) => String(bill.billId) === requestedBillId);
+      if (requested) chooseBill(requested);
+    }
+  }, [candidates, requestedBillId, selected]);
   async function previewCorrection() {
     if (!selected) return;
     setWorking(true);
@@ -3698,6 +3706,11 @@ export function CustomerStatements() {
   const [reconcilingBalance, setReconcilingBalance] = useState(false);
   const [error, setError] = useState("");
   const actor = getSessionUser();
+  const canCorrectReadings = Boolean(actor?.roles.includes("SYSTEM_ADMIN"));
+  const canRequestBillAdjustment = Boolean(
+    actor?.roles.some((role) => ["SYSTEM_ADMIN", "BILLING_OFFICER", "BILLING_SUPERVISOR"].includes(role)),
+  );
+  const canCorrectStatements = canCorrectReadings || canRequestBillAdjustment;
   const canReconcileBalance = Boolean(
     actor?.roles.some((role) => ["SYSTEM_ADMIN", "FINANCE_MANAGER"].includes(role)),
   );
@@ -4105,6 +4118,7 @@ export function CustomerStatements() {
                     <th className={`${TH} text-right`}>Credits</th>
                     <th className={`${TH} text-right`}>Debits</th>
                     <th className={`${TH} text-right`}>Balance</th>
+                    {canCorrectStatements && <th className={`${TH} statement-correction-actions text-right`}>Correction</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -4119,6 +4133,7 @@ export function CustomerStatements() {
                     <td className={`${TD} text-right font-bold`}>
                       {money(statement.openingBalance)}
                     </td>
+                    {canCorrectStatements && <td className="statement-correction-actions" />}
                   </tr>
                   {statement.entries.map((entry: Row, index: number) => (
                     <tr
@@ -4152,12 +4167,18 @@ export function CustomerStatements() {
                       >
                         {money(entry.balance)}
                       </td>
+                      {canCorrectStatements && <td className={`${TD} statement-correction-actions whitespace-nowrap text-right`}>
+                        {entry.sourceType === "BILL" ? <div className="flex justify-end gap-1.5">
+                          {canCorrectReadings && entry.hasReading && <Link to={`/billing/reading-corrections?billId=${encodeURIComponent(String(entry.billId))}&billNumber=${encodeURIComponent(String(entry.reference ?? ""))}`} className="rounded-lg border border-sky-200 bg-sky-50 px-2.5 py-1.5 text-xs font-bold text-sky-700 transition hover:bg-sky-100">Correct reading</Link>}
+                          {canRequestBillAdjustment && <Link to={`/billing/adjustments?billId=${encodeURIComponent(String(entry.billId))}`} className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs font-bold text-amber-700 transition hover:bg-amber-100">Adjust / cancel</Link>}
+                        </div> : <span className="text-slate-300">—</span>}
+                      </td>}
                     </tr>
                   ))}
                   {!statement.entries.length && (
                     <tr>
                       <td
-                        colSpan={8}
+                        colSpan={canCorrectStatements ? 9 : 8}
                         className="p-8 text-center text-slate-500"
                       >
                         No posted transactions in this date range. The closing
@@ -4189,6 +4210,7 @@ export function CustomerStatements() {
                     >
                       {money(statement.closingBalance)}
                     </td>
+                    {canCorrectStatements && <td className="statement-correction-actions" />}
                   </tr>
                 </tfoot>
               </table>
@@ -4715,6 +4737,8 @@ async function fileData(file?: File) {
 }
 
 export function BillingAdjustments() {
+  const [searchParams] = useSearchParams();
+  const requestedBillId = searchParams.get("billId") ?? "";
   const [bills, setBills] = useState<Row[]>([]);
   const [items, setItems] = useState<Row[]>([]);
   const [loading, setLoading] = useState(true);
@@ -4729,7 +4753,7 @@ export function BillingAdjustments() {
   const [page, setPage] = useState(1);
   const pageSize = 10;
   const [form, setForm] = useState<Row>({
-    billId: "",
+    billId: requestedBillId,
     adjustmentType: "CREDIT_NOTE",
     amount: "",
     reason: "",

@@ -1539,6 +1539,10 @@ billingRouter.get("/statements/:accountId", async (req, res, next) => {
     const entries = [
       ...bills.map((bill: any) => ({
         id: `B${bill.billId}`,
+        sourceType: "BILL",
+        sourceId: bill.billId,
+        billId: bill.billId,
+        hasReading: Boolean(bill.readingId),
         date: bill.issueDate,
         particulars: "Water bill",
         reference: bill.billNumber,

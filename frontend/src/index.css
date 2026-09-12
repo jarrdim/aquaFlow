@@ -402,6 +402,10 @@ input[type="radio"] {
 }
 
 @media print {
+  .statement-correction-actions {
+    display: none !important;
+  }
+
   @page {
     size: A4 portrait;
     margin: 12mm;
