@@ -1267,18 +1267,42 @@ metersRouter.get("/service-actions/direct/options", directServiceRoles, async (r
 
 metersRouter.get("/service-actions/direct/history", directServiceRoles, async (req, res, next) => {
   try {
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const pageSize = Math.min(100, Math.max(10, Number(req.query.pageSize) || 10));
+    const offset = (page - 1) * pageSize;
+    const totals = await prisma.$queryRaw<any[]>`
+      SELECT COUNT(*)::int AS total
+      FROM aquaflow.arrears_actions
+      WHERE action_type IN ('DIRECT_METER_DISCONNECTION','DIRECT_METER_RECONNECTION')`;
     const rows = await prisma.$queryRaw<any[]>`
       SELECT aa.arrears_action_id AS "actionId",aa.action_type AS "actionType",aa.details,
         aa.metadata,aa.created_at AS "createdAt",ca.account_number AS "accountNumber",
         COALESCE(NULLIF(TRIM(CONCAT_WS(' ',c.first_name,c.middle_name,c.last_name)),''),c.organization_name,c.customer_number) AS "customerName",
-        COALESCE(NULLIF(TRIM(CONCAT_WS(' ',u.first_name,u.last_name)),''),u.username) AS "performedByName"
+        COALESCE(NULLIF(TRIM(CONCAT_WS(' ',u.first_name,u.last_name)),''),u.username) AS "performedByName",
+        COALESCE(rr.fee_payment_status,'UNPAID') AS "feePaymentStatus",
+        COALESCE(
+          rr.fee_payment_status='PAID' AND (
+            (rr.fee_payment_id IS NULL AND COALESCE(rr.decision_notes,'') ILIKE '%account credit%')
+            OR (pay.payment_status='POSTED' AND pay.payment_type='RECONNECTION_FEE'
+              AND pay.amount>=rr.reconnection_fee)
+          ),FALSE
+        ) AS "paid"
       FROM aquaflow.arrears_actions aa
       JOIN aquaflow.customer_accounts ca ON ca.account_id=aa.account_id
       JOIN aquaflow.customers c ON c.customer_id=ca.customer_id
       LEFT JOIN aquaflow.users u ON u.user_id=aa.performed_by
+      LEFT JOIN LATERAL (
+        SELECT request.* FROM aquaflow.reconnection_requests request
+        WHERE (aa.action_type='DIRECT_METER_RECONNECTION' AND request.reconnection_request_id=aa.reference_id)
+          OR (aa.action_type='DIRECT_METER_DISCONNECTION' AND request.disconnection_work_order_id=aa.reference_id)
+        ORDER BY request.created_at DESC,request.reconnection_request_id DESC LIMIT 1
+      ) rr ON TRUE
+      LEFT JOIN aquaflow.payments pay ON pay.payment_id=rr.fee_payment_id
       WHERE aa.action_type IN ('DIRECT_METER_DISCONNECTION','DIRECT_METER_RECONNECTION')
-      ORDER BY aa.created_at DESC LIMIT 50`;
-    res.json(rows);
+      ORDER BY aa.created_at DESC,aa.arrears_action_id DESC
+      OFFSET ${offset} LIMIT ${pageSize}`;
+    const total = Number(totals[0]?.total ?? 0);
+    res.json({ items: rows, total, page, pageSize, totalPages: Math.max(1, Math.ceil(total / pageSize)) });
   } catch (error) { next(error); }
 });
 

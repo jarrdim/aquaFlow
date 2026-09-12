@@ -3036,6 +3036,10 @@ export function DirectMeterService() {
   };
   const [items, setItems] = useState<AnyRecord[]>([]);
   const [historyItems, setHistoryItems] = useState<AnyRecord[]>([]);
+  const [historyPage, setHistoryPage] = useState(1);
+  const [historyPageSize, setHistoryPageSize] = useState(10);
+  const [historyTotal, setHistoryTotal] = useState(0);
+  const [historyLoading, setHistoryLoading] = useState(true);
   const [search, setSearch] = useState(linkedAccountNumber);
   const [selected, setSelected] = useState<AnyRecord | null>(null);
   const [mode, setMode] = useState<DirectServiceMode | null>(null);
@@ -3057,13 +3061,9 @@ export function DirectMeterService() {
   async function load(searchValue = search, background = false) {
     if (!background) setLoading(true);
     try {
-      const [options, recent] = await Promise.all([
-        api.getDirectMeterServiceOptions(searchValue),
-        api.getDirectMeterServiceHistory(),
-      ]);
+      const options = await api.getDirectMeterServiceOptions(searchValue);
       const nextItems = options.items ?? [];
       setItems(nextItems);
-      setHistoryItems(recent ?? []);
       setSelected((current) => {
         if (current) return nextItems.find((row: AnyRecord) => String(row.meterId) === String(current.meterId)) ?? null;
         if (linkedAccountId) return nextItems.find((row: AnyRecord) => String(row.accountId) === linkedAccountId) ?? null;
@@ -3072,11 +3072,23 @@ export function DirectMeterService() {
     } catch (err: any) { setError(err.message); }
     finally { if (!background) setLoading(false); }
   }
+  async function loadHistory(pageValue = historyPage, pageSizeValue = historyPageSize, background = false) {
+    if (!background) setHistoryLoading(true);
+    try {
+      const result = await api.getDirectMeterServiceHistory(pageValue, pageSizeValue);
+      setHistoryItems(result.items ?? []);
+      setHistoryTotal(Number(result.total ?? 0));
+      const totalPages = Math.max(1, Number(result.totalPages ?? 1));
+      if (pageValue > totalPages) setHistoryPage(totalPages);
+    } catch (err: any) { setError(err.message); }
+    finally { if (!background) setHistoryLoading(false); }
+  }
   useEffect(() => { void load(linkedAccountNumber, false); }, []);
   useEffect(() => {
     const timer = window.setTimeout(() => void load(search, true), 300);
     return () => window.clearTimeout(timer);
   }, [search]);
+  useEffect(() => { void loadHistory(historyPage, historyPageSize); }, [historyPage, historyPageSize]);
   useEffect(() => {
     setPaymentPhone(String(selected?.customerPhone ?? ""));
     setPaymentMessage("");
@@ -3140,7 +3152,8 @@ export function DirectMeterService() {
         setSuccess(`${selected.meterNumber} reconnected using paid request ${result.requestNumber}${result.receiptNumber ? ` · receipt ${result.receiptNumber}` : ""}.`);
       }
       setMode(null); setSelected(null); setSearch(""); setPreview(null);
-      await load("", false);
+      setHistoryPage(1);
+      await Promise.all([load("", false), loadHistory(1, historyPageSize, false)]);
     } catch (err: any) { setError(err.message); }
     finally { setSaving(false); }
   }
@@ -3237,9 +3250,17 @@ export function DirectMeterService() {
           </div>}
         </Card>
         <Card title="Recent direct actions">
-          <div className="overflow-x-auto"><table className="min-w-full"><thead><tr className="border-b border-slate-100"><th className={TH}>Date</th><th className={TH}>Action</th><th className={TH}>Account / customer</th><th className={TH}>Meter</th><th className={TH}>Recorded by</th></tr></thead>
-            <tbody>{historyItems.map((row) => <tr key={row.actionId} className="border-b border-slate-50"><td className={TD}>{new Date(row.createdAt).toLocaleString()}</td><td className={TD}><Status value={row.actionType.includes("RECONNECTION") ? "ACTIVE" : "DISCONNECTED"} /></td><td className={TD}><strong className="text-slate-800">{row.accountNumber}</strong><div className="text-xs text-slate-400">{row.customerName}</div></td><td className={TD}>{row.metadata?.meterNumber ?? "—"}</td><td className={TD}>{row.performedByName ?? "System"}</td></tr>)}</tbody>
-          </table>{!historyItems.length && <div className="py-10 text-center text-sm text-slate-400">No direct service actions recorded yet.</div>}</div>
+          <div className="mb-3 flex justify-end">
+            <select className={`${INPUT} w-auto py-1.5`} value={historyPageSize} onChange={(event) => { setHistoryPageSize(Number(event.target.value)); setHistoryPage(1); }} aria-label="Direct actions per page">
+              <option value="10">10 per page</option><option value="25">25 per page</option><option value="50">50 per page</option><option value="100">100 per page</option>
+            </select>
+          </div>
+          {historyLoading ? <Spinner /> : <>
+            <div className="overflow-x-auto"><table className="min-w-full"><thead><tr className="border-b border-slate-100"><th className={TH}>Date</th><th className={TH}>Action</th><th className={TH}>Account / customer</th><th className={TH}>Meter</th><th className={TH}>Payment</th><th className={TH}>Recorded by</th></tr></thead>
+              <tbody>{historyItems.map((row) => <tr key={row.actionId} className="border-b border-slate-50"><td className={TD}>{new Date(row.createdAt).toLocaleString()}</td><td className={TD}><Status value={row.actionType.includes("RECONNECTION") ? "ACTIVE" : "DISCONNECTED"} /></td><td className={TD}><strong className="text-slate-800">{row.accountNumber}</strong><div className="text-xs text-slate-400">{row.customerName}</div></td><td className={TD}>{row.metadata?.meterNumber ?? "—"}</td><td className={TD}><span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-inset ${row.paid ? "bg-emerald-50 text-emerald-700 ring-emerald-600/20" : "bg-red-50 text-red-700 ring-red-600/20"}`}>{row.paid ? "Paid" : "Not paid"}</span></td><td className={TD}>{row.performedByName ?? "System"}</td></tr>)}</tbody>
+            </table>{!historyItems.length && <div className="py-10 text-center text-sm text-slate-400">No direct service actions recorded yet.</div>}</div>
+            {historyTotal > 0 && <Pagination page={historyPage} totalPages={Math.max(1, Math.ceil(historyTotal / historyPageSize))} total={historyTotal} pageSize={historyPageSize} onPageChange={setHistoryPage} disabled={historyLoading} label="direct actions" />}
+          </>}
         </Card>
       </div>
       <div className="xl:sticky xl:top-24 xl:self-start"><Card title="Selected service">
