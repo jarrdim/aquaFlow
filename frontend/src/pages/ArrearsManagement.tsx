@@ -2402,6 +2402,7 @@ export function DisconnectionLists({ view = "builder" }: { view?: "builder" | "r
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(true);
+  const [exportingEligible, setExportingEligible] = useState<"excel" | "csv" | "">("");
   const [action, setAction] = useState<
     "CREATE" | "APPROVE" | "REJECT" | "RETURN" | ""
   >("");
@@ -2559,6 +2560,40 @@ export function DisconnectionLists({ view = "builder" }: { view?: "builder" | "r
     : eligible;
   const compactTH = "px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500";
   const compactTD = "px-3 py-2 text-sm text-slate-600";
+  function eligibleExportRows() {
+    return visibleEligible.map((row) => ({
+      "Account Number": row.accountNumber,
+      Customer: row.customerName,
+      Zone: row.zone?.zoneName ?? "",
+      "Account Balance": Number(row.currentBalance ?? 0),
+      "Arrears Balance": Number(row.arrearsBalance ?? 0),
+      "Previous Reading": row.previousReading == null ? "" : Number(row.previousReading),
+      "Meter Number": row.meterNumber ?? "",
+      "Arrears Age (Days)": Number(row.ageDays ?? 0),
+      "Last Notice": row.lastNotice?.noticeNumber ?? "",
+      "Notice Deadline": row.lastNotice?.paymentDeadline ? new Date(row.lastNotice.paymentDeadline).toLocaleDateString("en-KE") : "",
+    }));
+  }
+  async function exportEligible(format: "excel" | "csv") {
+    const rows = eligibleExportRows();
+    if (!rows.length) return;
+    setExportingEligible(format); setError("");
+    try {
+      if (format === "excel") {
+        await exportExcel("disconnection-eligible-accounts.xlsx", "Eligible Accounts", rows);
+      } else {
+        const headers = Object.keys(rows[0]);
+        const escape = (value: unknown) => `"${String(value ?? "").replace(/"/g, '""')}"`;
+        const csv = [headers.map(escape).join(","), ...rows.map((row) => headers.map((header) => escape(row[header as keyof typeof row])).join(","))].join("\r\n");
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" }));
+        link.download = "disconnection-eligible-accounts.csv";
+        link.click();
+        URL.revokeObjectURL(link.href);
+      }
+    } catch (e: any) { setError(e.message); }
+    finally { setExportingEligible(""); }
+  }
   return (
     <Page
       compact
@@ -2566,7 +2601,7 @@ export function DisconnectionLists({ view = "builder" }: { view?: "builder" | "r
       subtitle={isRegister ? "Review submitted lists and record approval decisions" : `${selectedZoneName ?? "All zones"} · Controlled escalation after formal recovery notices`}
       actions={isRegister
         ? <><Button tone="slate" disabled={!review?.items?.length} onClick={() => review && void exportDisconnectionListExcel(review)}>Export selected list</Button><LinkButton to="/arrears/disconnections">Build disconnection list</LinkButton></>
-        : <><LinkButton to="/arrears/disconnections/register" tone="slate">Open list register</LinkButton><LinkButton to="/arrears/notices">Manage demand notices</LinkButton></>}
+        : <><Button tone="slate" disabled={loading || !visibleEligible.length || Boolean(exportingEligible)} onClick={() => void exportEligible("excel")}>{exportingEligible === "excel" ? "Exporting…" : "Export Excel"}</Button><Button tone="slate" disabled={loading || !visibleEligible.length || Boolean(exportingEligible)} onClick={() => void exportEligible("csv")}>{exportingEligible === "csv" ? "Exporting…" : "Export CSV"}</Button><LinkButton to="/arrears/disconnections/register" tone="slate">Open list register</LinkButton><LinkButton to="/arrears/notices">Manage demand notices</LinkButton></>}
     >
       {error && <Alert>{error}</Alert>}
       {message && <Alert success>{message}</Alert>}
