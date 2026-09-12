@@ -434,6 +434,7 @@ const ARREARS_MENU = [
   ["Payment Reminders", "/arrears/reminders"],
   ["Demand Notices", "/arrears/notices"],
   ["Disconnection Lists", "/arrears/disconnections"],
+  ["Disconnection Register", "/arrears/disconnections/register"],
   ["Payment Plans", "/arrears/plans"],
   ["Promises to Pay", "/arrears/promises"],
   ["Debt Write-Off", "/arrears/write-offs"],
@@ -2118,6 +2119,16 @@ export default function App() {
           <Protected>
             <Shell>
               <DisconnectionLists />
+            </Shell>
+          </Protected>
+        }
+      />
+      <Route
+        path="/arrears/disconnections/register"
+        element={
+          <Protected>
+            <Shell>
+              <DisconnectionLists view="register" />
             </Shell>
           </Protected>
         }

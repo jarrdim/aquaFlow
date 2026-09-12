@@ -46,18 +46,20 @@ function Page({
   subtitle,
   actions,
   children,
+  compact = false,
 }: {
   title: string;
   subtitle: string;
   actions?: ReactNode;
   children: ReactNode;
+  compact?: boolean;
 }) {
   return (
-    <div className="mx-auto max-w-[1600px] p-4 lg:px-6 lg:py-5">
-      <div className="page-screen-header mb-4 flex flex-wrap items-start justify-between gap-3">
+    <div className={`mx-auto max-w-[1600px] ${compact ? "p-3 lg:px-4 lg:py-3" : "p-4 lg:px-6 lg:py-5"}`}>
+      <div className={`page-screen-header flex flex-wrap items-start justify-between ${compact ? "mb-2 gap-2" : "mb-4 gap-3"}`}>
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">{title}</h1>
-          <p className="mt-1 text-[15px] text-slate-500">{subtitle}</p>
+          <h1 className={`${compact ? "text-xl" : "text-2xl"} font-bold text-slate-900`}>{title}</h1>
+          <p className={`${compact ? "mt-0.5 text-sm" : "mt-1 text-[15px]"} text-slate-500`}>{subtitle}</p>
         </div>
         <div className="flex flex-wrap gap-2">{actions}</div>
       </div>
@@ -2376,7 +2378,8 @@ async function exportDisconnectionListExcel(list: Row) {
   URL.revokeObjectURL(link.href);
 }
 
-export function DisconnectionLists() {
+export function DisconnectionLists({ view = "builder" }: { view?: "builder" | "register" }) {
+  const isRegister = view === "register";
   const [eligible, setEligible] = useState<Row[]>([]);
   const [eligibility, setEligibility] = useState<Row>({
     thresholdMatches: 0,
@@ -2393,6 +2396,7 @@ export function DisconnectionLists() {
   const [bulkAction, setBulkAction] = useState<"APPROVE" | "REJECT" | "RETURN" | "">("");
   const [zones, setZones] = useState<Row[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
+  const [customerFilter, setCustomerFilter] = useState("");
   const [review, setReview] = useState<Row>();
   const [comments, setComments] = useState("");
   const [error, setError] = useState("");
@@ -2420,6 +2424,7 @@ export function DisconnectionLists() {
         ? eligibilityResult
         : eligibilityResult.items ?? [];
       setEligible(eligibleRows);
+      setCustomerFilter((current) => current && !eligibleRows.some((row: Row) => String(row.accountId) === current) ? "" : current);
       setEligibility(
         Array.isArray(eligibilityResult)
           ? {
@@ -2549,16 +2554,25 @@ export function DisconnectionLists() {
     .map((row) => String(row.disconnectionListId));
   const allPendingVisibleSelected = pendingVisibleListIds.length > 0 &&
     pendingVisibleListIds.every((id) => selectedListIds.includes(id));
+  const visibleEligible = customerFilter
+    ? eligible.filter((row) => String(row.accountId) === customerFilter)
+    : eligible;
+  const compactTH = "px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500";
+  const compactTD = "px-3 py-2 text-sm text-slate-600";
   return (
     <Page
-      title="Disconnection control"
-      subtitle={`${selectedZoneName ?? "All zones"} · Controlled escalation after formal recovery notices`}
-      actions={<><Button tone="slate" disabled={!review?.items?.length} onClick={() => review && void exportDisconnectionListExcel(review)}>Export selected list</Button><LinkButton to="/arrears/notices">Manage demand notices</LinkButton></>}
+      compact
+      title={isRegister ? "Disconnection list register" : "Disconnection control"}
+      subtitle={isRegister ? "Review submitted lists and record approval decisions" : `${selectedZoneName ?? "All zones"} · Controlled escalation after formal recovery notices`}
+      actions={isRegister
+        ? <><Button tone="slate" disabled={!review?.items?.length} onClick={() => review && void exportDisconnectionListExcel(review)}>Export selected list</Button><LinkButton to="/arrears/disconnections">Build disconnection list</LinkButton></>
+        : <><LinkButton to="/arrears/disconnections/register" tone="slate">Open list register</LinkButton><LinkButton to="/arrears/notices">Manage demand notices</LinkButton></>}
     >
       {error && <Alert>{error}</Alert>}
       {message && <Alert success>{message}</Alert>}
-      <section className="mb-4 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+      {!isRegister && <>
+      <section className="mb-2 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
+        <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-sm font-bold text-slate-800">Eligibility path</span>
@@ -2570,30 +2584,30 @@ export function DisconnectionLists() {
               Match arrears rules <span className="px-1 text-slate-300">→</span> {filters.requireFinalDemandNotice === "true" && <>verify a queued final notice <span className="px-1 text-slate-300">→</span> </>}select the account for a disconnection list
             </p>
           </div>
-          <div className="grid shrink-0 grid-cols-3 divide-x divide-slate-200 rounded-lg bg-slate-50 px-2 py-1.5">
+          <div className="grid shrink-0 grid-cols-3 divide-x divide-slate-200 rounded-lg bg-slate-50 px-1 py-1">
             {[
               [eligibility.thresholdMatches, "Match rules", "text-slate-800"],
               [eligibility.eligibleAccounts, "Ready", "text-emerald-700"],
               [filters.requireFinalDemandNotice === "true" ? accountsNeedingNotice : 0, filters.requireFinalDemandNotice === "true" ? "Need queued notice" : "Notice check off", "text-amber-700"],
             ].map(([value, label, color]) => (
-              <div key={String(label)} className="min-w-24 px-3 text-center">
-                <div className={`text-lg font-extrabold leading-5 ${color}`}>{loading ? "—" : Number(value ?? 0).toLocaleString()}</div>
+              <div key={String(label)} className="min-w-20 px-2 text-center">
+                <div className={`text-base font-extrabold leading-5 ${color}`}>{loading ? "—" : Number(value ?? 0).toLocaleString()}</div>
                 <div className="mt-0.5 whitespace-nowrap text-[10px] font-semibold uppercase tracking-wide text-slate-500">{label}</div>
               </div>
             ))}
           </div>
         </div>
       </section>
-      <Card title="Build a disconnection list" className="overflow-hidden">
-        <div className="-m-4 mb-4 border-b border-slate-200 bg-slate-50/80 p-4">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+      <Card title="Build a disconnection list" className="overflow-hidden [&>div:first-child]:px-3 [&>div:first-child]:py-2 [&>div:last-child]:p-3">
+        <div className="-m-3 mb-2 border-b border-slate-200 bg-slate-50/80 p-3">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
             <div>
               <div className="text-sm font-bold text-slate-800">Eligibility filters</div>
               <div className="text-xs text-slate-500">Current rule: {filterDescription}</div>
             </div>
             <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600">{selected.length} selected</span>
           </div>
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-6">
           <Field label="Minimum arrears age (days)">
             <input
               type="number"
@@ -2620,6 +2634,12 @@ export function DisconnectionLists() {
             <SearchableSelect className={INPUT} value={filters.zoneId} onChange={(e) => { setSelected([]); setFilters({ ...filters, zoneId: e.target.value }); }}>
               <option value="">All zones</option>
               {zones.map((zone) => <option key={zone.zoneId} value={zone.zoneId}>{zone.zoneName}</option>)}
+            </SearchableSelect>
+          </Field>
+          <Field label="Customer / account">
+            <SearchableSelect className={INPUT} value={customerFilter} onChange={(event) => setCustomerFilter(event.target.value)}>
+              <option value="">All eligible customers</option>
+              {eligible.map((row) => <option key={row.accountId} value={row.accountId}>{row.accountNumber} · {row.customerName}</option>)}
             </SearchableSelect>
           </Field>
           <div className="flex items-end">
@@ -2656,29 +2676,29 @@ export function DisconnectionLists() {
           <table className="w-full min-w-[1150px]">
             <thead className="bg-slate-50">
               <tr>
-                <th className={TH}>
+                <th className={compactTH}>
                   <input
                     type="checkbox"
                     disabled={loading}
                     checked={
-                      eligible.length > 0 && selected.length === eligible.length
+                      visibleEligible.length > 0 && visibleEligible.every((row) => selected.includes(String(row.accountId)))
                     }
                     onChange={(e) =>
                       setSelected(
                         e.target.checked
-                          ? eligible.map((row) => String(row.accountId))
-                          : [],
+                          ? Array.from(new Set([...selected, ...visibleEligible.map((row) => String(row.accountId))]))
+                          : selected.filter((value) => !visibleEligible.some((row) => String(row.accountId) === value)),
                       )
                     }
                   />
                 </th>
-                <th className={TH}>Account / Customer</th>
-                <th className={TH}>Zone</th>
-                <th className={TH}>Account balance</th>
-                <th className={TH}>Arrears balance</th>
-                <th className={TH}>Previous reading</th>
-                <th className={TH}>Age</th>
-                <th className={TH}>Last notice</th>
+                <th className={compactTH}>Account / Customer</th>
+                <th className={compactTH}>Zone</th>
+                <th className={compactTH}>Account balance</th>
+                <th className={compactTH}>Arrears balance</th>
+                <th className={compactTH}>Previous reading</th>
+                <th className={compactTH}>Age</th>
+                <th className={compactTH}>Last notice</th>
               </tr>
             </thead>
             <tbody>
@@ -2693,9 +2713,9 @@ export function DisconnectionLists() {
                 </tr>
               ) : (
                 <>
-                  {eligible.map((row) => (
+                  {visibleEligible.map((row) => (
                     <tr className="border-t border-slate-100 transition hover:bg-cyan-50/40" key={row.accountId}>
-                      <td className={TD}>
+                      <td className={compactTD}>
                         <input
                           type="checkbox"
                           checked={selected.includes(String(row.accountId))}
@@ -2710,23 +2730,23 @@ export function DisconnectionLists() {
                           }
                         />
                       </td>
-                      <td className={TD}>
+                      <td className={compactTD}>
                         <strong>{row.accountNumber}</strong>
                         <div className="text-xs">{row.customerName}</div>
                       </td>
-                      <td className={TD}>{row.zone?.zoneName ?? "—"}</td>
-                      <td className={`${TD} font-semibold text-slate-800`}>
+                      <td className={compactTD}>{row.zone?.zoneName ?? "—"}</td>
+                      <td className={`${compactTD} font-semibold text-slate-800`}>
                         {money(row.currentBalance)}
                       </td>
-                      <td className={`${TD} font-semibold text-red-700`}>
+                      <td className={`${compactTD} font-semibold text-red-700`}>
                         {money(row.arrearsBalance)}
                       </td>
-                      <td className={TD}>
+                      <td className={compactTD}>
                         <strong>{row.previousReading == null ? "—" : Number(row.previousReading).toLocaleString("en-KE", { maximumFractionDigits: 3 })}</strong>
                         <div className="text-xs text-slate-400">{row.meterNumber ?? "No meter"}</div>
                       </td>
-                      <td className={TD}>{row.ageDays} days</td>
-                      <td className={TD}>
+                      <td className={compactTD}>{row.ageDays} days</td>
+                      <td className={compactTD}>
                         {row.lastNotice?.noticeNumber}
                         <div className="text-xs">
                           {date(row.lastNotice?.paymentDeadline)}
@@ -2734,7 +2754,7 @@ export function DisconnectionLists() {
                       </td>
                     </tr>
                   ))}
-                  {!eligible.length && (
+                  {!visibleEligible.length && (
                     <tr>
                       <td
                         colSpan={8}
@@ -2765,7 +2785,8 @@ export function DisconnectionLists() {
           </table>
         </div>
       </Card>
-      <div className="mt-4 grid items-start gap-4 xl:grid-cols-[1.25fr_.75fr]">
+      </>}
+      {isRegister && <div className="grid items-start gap-4 xl:grid-cols-[1.25fr_.75fr]">
         <Card title={`Disconnection list register · ${lists.length}`}>
           <div className="mb-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_190px]">
             <input
@@ -2949,7 +2970,7 @@ export function DisconnectionLists() {
             </>
           )}
         </Card>
-      </div>
+      </div>}
     </Page>
   );
 }
