@@ -788,7 +788,7 @@ export function RegisterMeter() {
   );
 }
 
-export function MeterList() {
+export function MeterList({ initialStatus = "" }: { initialStatus?: string }) {
   const [meters, setMeters] = useState<AnyRecord[]>([]);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
@@ -798,7 +798,7 @@ export function MeterList() {
   const [filters, setFilters] = useState({
     search: "",
     type: "",
-    status: "",
+    status: initialStatus,
     zoneId: "",
   });
   const [loading, setLoading] = useState(true);
@@ -829,7 +829,7 @@ export function MeterList() {
   }, []);
   return (
     <Page
-      title="Meter register"
+      title={initialStatus === "DISCONNECTED" ? "Disconnected meters" : "Meter register"}
       subtitle={`${total.toLocaleString()} meters found`}
       actions={
         <>

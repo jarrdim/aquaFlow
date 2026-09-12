@@ -334,6 +334,7 @@ const CONNECTION_MENU = [
 const METER_MENU = [
   ["Overview", "/meters"],
   ["All Meters", "/meters/list"],
+  ["Disconnected Meters", "/meters/disconnected"],
   ["Add Meter", "/meters/register"],
   ["Customer Assignment", "/meters/assign"],
   ["Network Assignment", "/meters/assign/non-customer"],
@@ -2497,6 +2498,16 @@ export default function App() {
           <Protected>
             <Shell>
               <MeterList />
+            </Shell>
+          </Protected>
+        }
+      />
+      <Route
+        path="/meters/disconnected"
+        element={
+          <Protected>
+            <Shell>
+              <MeterList initialStatus="DISCONNECTED" />
             </Shell>
           </Protected>
         }
