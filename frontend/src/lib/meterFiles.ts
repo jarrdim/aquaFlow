@@ -67,6 +67,124 @@ export async function exportExcel(
   URL.revokeObjectURL(link.href);
 }
 
+export async function exportArrearsAgingWorkbook(
+  filename: string,
+  rows: Record<string, unknown>[],
+) {
+  if (!rows.length) return;
+  const { default: ExcelJS } = await import("exceljs");
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = "Samdamte Water";
+  workbook.created = new Date();
+
+  const sheet = workbook.addWorksheet("Arrears ageing", {
+    views: [{ state: "frozen", ySplit: 3 }],
+    pageSetup: {
+      orientation: "landscape",
+      paperSize: 9,
+      fitToPage: true,
+      fitToWidth: 1,
+      fitToHeight: 0,
+      margins: {
+        left: 0.25,
+        right: 0.25,
+        top: 0.4,
+        bottom: 0.4,
+        header: 0.15,
+        footer: 0.15,
+      },
+    },
+  });
+  const headers = Object.keys(rows[0]);
+  sheet.columns = headers.map((header) => ({
+    key: header,
+    width:
+      header === "Customer"
+        ? 30
+        : header === "Category"
+          ? 23
+          : header === "Zone"
+            ? 20
+            : Math.max(15, header.length + 3),
+  }));
+
+  sheet.mergeCells(1, 1, 1, headers.length);
+  const title = sheet.getCell(1, 1);
+  title.value = "SAMDAMTE WATER - ARREARS AGEING REPORT";
+  title.font = { bold: true, size: 16, color: { argb: "FFFFFFFF" } };
+  title.fill = {
+    type: "pattern",
+    pattern: "solid",
+    fgColor: { argb: "FF0B4F7C" },
+  };
+  title.alignment = { horizontal: "center", vertical: "middle" };
+  sheet.getRow(1).height = 28;
+
+  sheet.mergeCells(2, 1, 2, headers.length);
+  const summary = sheet.getCell(2, 1);
+  summary.value = `${rows.length.toLocaleString()} account(s) in arrears - Exported ${new Date().toLocaleString("en-KE")}`;
+  summary.font = { italic: true, color: { argb: "FF334155" } };
+  summary.fill = {
+    type: "pattern",
+    pattern: "solid",
+    fgColor: { argb: "FFE0F2FE" },
+  };
+  summary.alignment = { horizontal: "left", vertical: "middle" };
+
+  const headerRow = sheet.getRow(3);
+  headerRow.values = headers;
+  headerRow.height = 22;
+  headerRow.font = { bold: true, color: { argb: "FFFFFFFF" } };
+  headerRow.fill = {
+    type: "pattern",
+    pattern: "solid",
+    fgColor: { argb: "FF087EA4" },
+  };
+  headerRow.alignment = { vertical: "middle" };
+
+  rows.forEach((item, index) => {
+    const row = sheet.addRow(item);
+    row.alignment = { vertical: "middle" };
+    if (index % 2 === 1) {
+      row.fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: "FFF0F9FF" },
+      };
+    }
+  });
+
+  const balanceColumn = headers.indexOf("Arrears balance") + 1;
+  if (balanceColumn > 0) {
+    sheet.getColumn(balanceColumn).numFmt =
+      '"KSh" #,##0.00;[Red]-"KSh" #,##0.00';
+    sheet.getColumn(balanceColumn).alignment = { horizontal: "right" };
+  }
+  sheet.autoFilter = {
+    from: { row: 3, column: 1 },
+    to: { row: 3, column: headers.length },
+  };
+  sheet.eachRow((row, rowNumber) => {
+    if (rowNumber < 3) return;
+    row.eachCell({ includeEmpty: true }, (cell) => {
+      cell.border = {
+        bottom: { style: "thin", color: { argb: "FFD7E3EC" } },
+      };
+    });
+  });
+
+  const data = await workbook.xlsx.writeBuffer();
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(
+    new Blob([data], {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    }),
+  );
+  link.download = filename.endsWith(".xlsx") ? filename : `${filename}.xlsx`;
+  link.click();
+  URL.revokeObjectURL(link.href);
+}
+
 export async function exportDailyReceiptsWorkbook(
   filename: string,
   period: string,

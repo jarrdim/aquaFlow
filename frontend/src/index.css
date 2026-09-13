@@ -426,6 +426,168 @@ input[type="radio"] {
     margin: 8mm;
   }
 
+  @page arrears-aging {
+    size: A4 landscape;
+    margin: 9mm;
+  }
+
+  body.printing-arrears-aging {
+    overflow: visible !important;
+    background: white !important;
+  }
+
+  body.printing-arrears-aging .app-sidebar,
+  body.printing-arrears-aging .app-topbar,
+  body.printing-arrears-aging .app-breadcrumbs,
+  body.printing-arrears-aging .page-screen-header,
+  body.printing-arrears-aging .arrears-aging-screen-filters,
+  body.printing-arrears-aging .arrears-aging-action,
+  body.printing-arrears-aging .swal2-container {
+    display: none !important;
+  }
+
+  body.printing-arrears-aging .app-shell,
+  body.printing-arrears-aging .app-main-column,
+  body.printing-arrears-aging .app-content {
+    display: block !important;
+    width: 100% !important;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    background: white !important;
+  }
+
+  body.printing-arrears-aging .arrears-aging-print-page {
+    page: arrears-aging;
+    width: 100% !important;
+    color: #0f172a !important;
+    print-color-adjust: exact !important;
+    -webkit-print-color-adjust: exact !important;
+  }
+
+  body.printing-arrears-aging .arrears-aging-print-page > div {
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  body.printing-arrears-aging .arrears-aging-print-header {
+    display: flex !important;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 8mm;
+    padding: 4mm 5mm;
+    border-bottom: 3px solid #0891b2;
+    background: #e0f2fe !important;
+    break-inside: avoid;
+  }
+
+  body.printing-arrears-aging .arrears-aging-print-header img {
+    display: block;
+    width: 185px;
+    height: auto;
+  }
+
+  body.printing-arrears-aging .arrears-aging-print-header h1 {
+    margin: 0 0 3px;
+    color: #0b4f7c !important;
+    font-size: 17pt;
+    font-weight: 800;
+    text-transform: uppercase;
+  }
+
+  body.printing-arrears-aging .arrears-aging-print-header p {
+    margin: 1px 0;
+    color: #334155 !important;
+    font-size: 8pt;
+  }
+
+  body.printing-arrears-aging .arrears-aging-report-card {
+    border: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+  }
+
+  body.printing-arrears-aging .arrears-aging-report-card > div:first-child {
+    padding: 0 0 3mm !important;
+    border: 0 !important;
+    color: #0b4f7c !important;
+    font-size: 11pt;
+  }
+
+  body.printing-arrears-aging .arrears-aging-report-card > div:last-child {
+    padding: 0 !important;
+  }
+
+  body.printing-arrears-aging .arrears-aging-report-card .overflow-x-auto {
+    overflow: visible !important;
+  }
+
+  body.printing-arrears-aging .arrears-aging-report-card table {
+    width: 100% !important;
+    min-width: 0 !important;
+    table-layout: fixed;
+    border-collapse: collapse;
+    font-size: 7.5pt;
+  }
+
+  body.printing-arrears-aging .arrears-aging-report-card thead {
+    display: table-header-group;
+  }
+
+  body.printing-arrears-aging .arrears-aging-report-card th {
+    padding: 6px 7px !important;
+    border: 1px solid #0b6686 !important;
+    background: #087ea4 !important;
+    color: white !important;
+    font-size: 7pt !important;
+  }
+
+  body.printing-arrears-aging .arrears-aging-report-card td {
+    padding: 5px 7px !important;
+    border: 1px solid #d7e3ec !important;
+    color: #334155 !important;
+    font-size: 7.5pt !important;
+    overflow-wrap: anywhere;
+  }
+
+  body.printing-arrears-aging
+    .arrears-aging-report-card
+    tbody
+    tr:nth-child(even)
+    td {
+    background: #f0f9ff !important;
+  }
+
+  body.printing-arrears-aging .arrears-aging-report-card tr {
+    break-inside: avoid;
+  }
+
+  body.printing-arrears-aging .arrears-aging-report-card th:nth-child(1) {
+    width: 23%;
+  }
+
+  body.printing-arrears-aging .arrears-aging-report-card th:nth-child(2) {
+    width: 15%;
+  }
+
+  body.printing-arrears-aging .arrears-aging-report-card th:nth-child(3) {
+    width: 18%;
+  }
+
+  body.printing-arrears-aging .arrears-aging-report-card th:nth-child(4) {
+    width: 16%;
+  }
+
+  body.printing-arrears-aging .arrears-aging-report-card th:nth-child(5) {
+    width: 13%;
+  }
+
+  body.printing-arrears-aging .arrears-aging-report-card th:nth-child(6) {
+    width: 15%;
+  }
+
   body.printing-daily-report {
     overflow: visible !important;
     background: white !important;

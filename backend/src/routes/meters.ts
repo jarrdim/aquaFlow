@@ -818,6 +818,43 @@ async function paidDirectReconnectionRequest(tx: Prisma.TransactionClient, accou
   return rows[0] ?? null;
 }
 
+async function legacyLedgerReconnectionSettlements(
+  tx: Prisma.TransactionClient,
+  accountIds: bigint[],
+) {
+  if (!accountIds.length) return [];
+  return tx.$queryRaw<any[]>(Prisma.sql`
+    SELECT DISTINCT ON (debit.account_id)
+      debit.account_id AS "accountId",
+      debit.account_adjustment_id AS "debitAdjustmentId",
+      credit.account_adjustment_id AS "creditAdjustmentId",
+      debit.amount AS "settledAmount"
+    FROM aquaflow.account_adjustments debit
+    JOIN aquaflow.customer_accounts account ON account.account_id=debit.account_id
+    JOIN LATERAL (
+      SELECT candidate.account_adjustment_id,candidate.amount
+      FROM aquaflow.account_adjustments candidate
+      WHERE candidate.account_id=debit.account_id
+        AND candidate.status='APPROVED'
+        AND candidate.adjustment_type='CREDIT'
+        AND candidate.created_at>=debit.created_at
+        AND ABS(candidate.amount-debit.amount)<0.01
+      ORDER BY candidate.created_at,candidate.account_adjustment_id
+      LIMIT 1
+    ) credit ON TRUE
+    WHERE debit.account_id IN (${Prisma.join(accountIds)})
+      AND debit.status='APPROVED'
+      AND debit.adjustment_type='DEBIT'
+      AND (debit.reason ILIKE '%reconnection%' OR debit.reason ILIKE '%re-connection%')
+      AND account.current_balance<=0
+      AND debit.created_at>=COALESCE((
+        SELECT MAX(posting.posted_at)
+        FROM aquaflow.disconnection_postings posting
+        WHERE posting.account_id=debit.account_id
+      ),'-infinity'::timestamptz)
+    ORDER BY debit.account_id,debit.created_at DESC,debit.account_adjustment_id DESC`);
+}
+
 async function ensureDirectReconnectionRequest(
   tx: Prisma.TransactionClient,
   context: any,
@@ -1261,7 +1298,29 @@ metersRouter.get("/service-actions/direct/options", directServiceRoles, async (r
           OR COALESCE(c.phone_number,'') ILIKE ${pattern}
           OR CONCAT_WS(' ',c.first_name,c.middle_name,c.last_name,c.organization_name) ILIKE ${pattern})
       ORDER BY ca.account_number,ma.assignment_date DESC,ma.assignment_id DESC LIMIT 100`;
-    res.json({ items: rows });
+    const disconnectedAccountIds = rows
+      .filter((row) => row.accountStatus === "DISCONNECTED" && row.meterStatus === "DISCONNECTED")
+      .map((row) => BigInt(row.accountId));
+    const ledgerSettlements = await legacyLedgerReconnectionSettlements(prisma, disconnectedAccountIds);
+    const ledgerSettlementByAccount = new Map(
+      ledgerSettlements.map((settlement) => [String(settlement.accountId), settlement]),
+    );
+    const items = rows.map((row) => {
+      const settlement = ledgerSettlementByAccount.get(String(row.accountId));
+      const settlesConfiguredFee = settlement
+        && Math.abs(Number(settlement.settledAmount) - Number(row.reconnectionFee)) < 0.01
+        && row.reconnectionFeePaymentStatus !== "PENDING";
+      return settlesConfiguredFee
+        ? {
+            ...row,
+            reconnectionPaymentConfirmed: true,
+            reconnectionSettlementMethod: "ACCOUNT_LEDGER",
+            reconnectionLedgerDebitAdjustmentId: settlement.debitAdjustmentId,
+            reconnectionLedgerCreditAdjustmentId: settlement.creditAdjustmentId,
+          }
+        : row;
+    });
+    res.json({ items });
   } catch (error) { next(error); }
 });
 
@@ -1667,13 +1726,48 @@ metersRouter.post("/service-actions/direct/reconnect", directServiceRoles, async
       if (context.accountStatus !== "DISCONNECTED" || context.meterStatus !== "DISCONNECTED") {
         throw Object.assign(new Error("The account and its current meter must both be disconnected"), { status: 409 });
       }
-      const request = await paidDirectReconnectionRequest(tx, accountId);
+      let request = await paidDirectReconnectionRequest(tx, accountId);
+      if (request?.workOrderId) throw Object.assign(new Error("This reconnection is already dispatched through a work order and must be completed there"), { status: 409 });
+      const settings = await tx.systemSetting.findUnique({
+        where: { settingId: 1n },
+        select: { reconnectionFee: true },
+      });
+      const expectedFee = Number(request?.reconnectionFee ?? settings?.reconnectionFee ?? 0);
+      const ledgerSettlement = (await legacyLedgerReconnectionSettlements(tx, [accountId]))[0];
+      const paidInAccountLedger = Boolean(
+        ledgerSettlement
+        && expectedFee > 0
+        && Math.abs(Number(ledgerSettlement.settledAmount) - expectedFee) < 0.01
+        && request?.feePaymentStatus !== "PENDING",
+      );
+      if (paidInAccountLedger && request?.feePaymentStatus !== "PAID") {
+        request = request ?? await ensureDirectReconnectionRequest(tx, context, actorId, data.reason);
+        const settlementNote = `Reconnection fee settled in account ledger via debit adjustment ${ledgerSettlement.debitAdjustmentId} and credit adjustment ${ledgerSettlement.creditAdjustmentId}`;
+        await tx.$executeRaw`UPDATE aquaflow.reconnection_requests SET fee_payment_status='PAID',
+          fee_payment_id=NULL,fee_paid_at=NOW(),decision_notes=${settlementNote},updated_at=NOW()
+          WHERE reconnection_request_id=${request.reconnectionRequestId}`;
+        await tx.arrearsAction.create({ data: {
+          accountId,
+          actionType: "RECONNECTION_FEE_LEDGER_CONFIRMED",
+          referenceType: "RECONNECTION_REQUEST",
+          referenceId: request.reconnectionRequestId,
+          details: settlementNote,
+          performedBy: actorId,
+          metadata: {
+            debitAdjustmentId: String(ledgerSettlement.debitAdjustmentId),
+            creditAdjustmentId: String(ledgerSettlement.creditAdjustmentId),
+            amount: expectedFee,
+          },
+        } });
+        request = await paidDirectReconnectionRequest(tx, accountId);
+      }
       const paidFromAccountCredit = request?.feePaymentStatus === "PAID" && !request?.paymentId &&
         String(request?.decisionNotes ?? "").toLowerCase().includes("account credit");
-      const paid = paidFromAccountCredit || (request?.feePaymentStatus === "PAID" && request?.paymentStatus === "POSTED" &&
+      const paidFromAccountLedger = request?.feePaymentStatus === "PAID" && !request?.paymentId &&
+        String(request?.decisionNotes ?? "").toLowerCase().includes("account ledger");
+      const paid = paidFromAccountCredit || paidFromAccountLedger || (request?.feePaymentStatus === "PAID" && request?.paymentStatus === "POSTED" &&
         request?.paymentType === "RECONNECTION_FEE" && Number(request?.paidAmount) >= Number(request?.reconnectionFee));
       if (!paid) throw Object.assign(new Error("A posted reconnection-fee payment is required before direct reconnection"), { status: 409 });
-      if (request.workOrderId) throw Object.assign(new Error("This reconnection is already dispatched through a work order and must be completed there"), { status: 409 });
       await tx.customerAccount.update({ where: { accountId }, data: { accountStatus: "ACTIVE", updatedAt: new Date() } });
       await tx.meter.update({ where: { meterId }, data: { status: "ACTIVE", updatedAt: new Date() } });
       await tx.$executeRaw`UPDATE aquaflow.reconnection_requests SET status='COMPLETED',decision_notes=${data.reason},

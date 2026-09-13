@@ -1,7 +1,7 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../lib/api";
-import { exportExcel } from "../lib/meterFiles";
+import { exportArrearsAgingWorkbook, exportExcel } from "../lib/meterFiles";
 import { SearchableSelect } from "../components/SearchableSelect";
 import { CheckboxMultiSelect } from "../components/CheckboxMultiSelect";
 import { SweetAlertToast } from "../components/SweetAlertToast";
@@ -499,29 +499,63 @@ export function ArrearsAgingReport() {
     "Age days": row.ageDays,
     Status: row.accountStatus,
   }));
+  const printReport = () => {
+    const cleanup = () =>
+      document.body.classList.remove("printing-arrears-aging");
+    document.body.classList.add("printing-arrears-aging");
+    window.addEventListener("afterprint", cleanup, { once: true });
+    window.print();
+  };
+  const selectedZone =
+    zones.find((row) => String(row.zoneId) === String(filters.zoneId))
+      ?.zoneName ?? "All zones";
+  const selectedCategory =
+    categories.find(
+      (row) => String(row.categoryId) === String(filters.categoryId),
+    )?.categoryName ?? "All categories";
   return (
-    <Page
-      title="Arrears ageing report"
-      subtitle="Classify overdue balances by age, zone, category and amount"
-      actions={
-        <>
-          <Button
-            tone="slate"
-            disabled={!rows.length}
-            onClick={() =>
-              exportExcel("arrears-aging-report", "Arrears ageing", exportRows)
-            }
-          >
-            Export Excel
-          </Button>
-          <Button tone="slate" onClick={() => window.print()}>
-            Print / Save PDF
-          </Button>
-        </>
-      }
-    >
+    <div className="arrears-aging-print-page">
+      <Page
+        title="Arrears ageing report"
+        subtitle="Classify overdue balances by age, zone, category and amount"
+        actions={
+          <>
+            <Button
+              tone="slate"
+              disabled={!rows.length}
+              onClick={() =>
+                exportArrearsAgingWorkbook("arrears-aging-report", exportRows)
+              }
+            >
+              Export Excel
+            </Button>
+            <Button tone="slate" disabled={!rows.length} onClick={printReport}>
+              Print / Save PDF
+            </Button>
+          </>
+        }
+      >
+      <div className="arrears-aging-print-header hidden">
+        <img
+          src="/samdamte-water-logo-print.png"
+          alt="Samdamte Water Utility Management"
+        />
+        <div>
+          <h1>Arrears Ageing Report</h1>
+          <p>
+            Report date: {date(`${filters.asOf}T12:00:00`)} | Zone:{" "}
+            {selectedZone} | Category: {selectedCategory}
+          </p>
+          <p>
+            Age: {filters.ageBucket ? pretty(filters.ageBucket) : "All ages"} |
+            Minimum balance:{" "}
+            {filters.minimumBalance ? money(filters.minimumBalance) : "Any"} |
+            Accounts: {rows.length.toLocaleString()}
+          </p>
+        </div>
+      </div>
       {error && <Alert>{error}</Alert>}
-      <Card className="mb-4">
+      <Card className="arrears-aging-screen-filters mb-4">
         <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
           <Field label="Report date">
             <DateInput
@@ -601,7 +635,10 @@ export function ArrearsAgingReport() {
           </Field>
         </div>
       </Card>
-      <Card title={`${rows.length} account(s) in arrears`}>
+      <Card
+        className="arrears-aging-report-card"
+        title={`${rows.length} account(s) in arrears`}
+      >
         <div className="overflow-x-auto">
           <table className="w-full min-w-[1000px]">
             <thead>
@@ -612,7 +649,7 @@ export function ArrearsAgingReport() {
                 <th className={TH}>Balance</th>
                 <th className={TH}>Age</th>
                 <th className={TH}>Status</th>
-                <th className={TH}>Action</th>
+                <th className={`${TH} arrears-aging-action`}>Action</th>
               </tr>
             </thead>
             <tbody>
@@ -636,7 +673,7 @@ export function ArrearsAgingReport() {
                   <td className={TD}>
                     <Badge value={row.accountStatus} />
                   </td>
-                  <td className={TD}>
+                  <td className={`${TD} arrears-aging-action`}>
                     <Link
                       className="font-semibold text-aqua-700"
                       to={`/arrears/accounts/${row.accountId}`}
@@ -658,7 +695,8 @@ export function ArrearsAgingReport() {
           </table>
         </div>
       </Card>
-    </Page>
+      </Page>
+    </div>
   );
 }
 

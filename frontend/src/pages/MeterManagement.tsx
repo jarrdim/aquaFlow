@@ -3339,6 +3339,11 @@ export function DirectMeterService() {
             </div>}
             {paymentMessage && <p className="border-t border-slate-100 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700">{paymentMessage}</p>}
           </div>}
+          {canReconnect && selected.reconnectionSettlementMethod === "ACCOUNT_LEDGER" && (
+            <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-800">
+              The KSh {money(reconnectionFee)} reconnection fee is settled in this account statement. No second payment is required.
+            </div>
+          )}
           <div className="mt-4 grid gap-2">
             <Button tone="red" disabled={!canDisconnect} onClick={() => openAction("DISCONNECT")}>Disconnect meter</Button>
             <Button tone="green" disabled={!canReconnect || !paymentConfirmed || Boolean(selected.workOrderId)} onClick={() => openAction("RECONNECT")}>Reconnect meter</Button>
