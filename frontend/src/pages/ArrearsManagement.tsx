@@ -194,13 +194,39 @@ function Badge({ value }: { value: any }) {
 function Kpi({
   label,
   value,
+  to,
   color = "text-slate-900",
 }: {
   label: string;
   value: ReactNode;
+  to?: string;
   color?: string;
 }) {
-  return (
+  const content = (
+    <>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-sm text-slate-500 transition group-hover:text-aqua-700">{label}</div>
+          <div className={`mt-1 text-2xl font-bold ${color}`}>{value}</div>
+        </div>
+        <span className="mt-1 grid h-8 w-8 shrink-0 place-items-center rounded-full bg-slate-50 text-slate-400 transition group-hover:bg-aqua-50 group-hover:text-aqua-700" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="m9 18 6-6-6-6" /></svg>
+        </span>
+      </div>
+      <div className="mt-3 text-xs font-semibold text-slate-400 transition group-hover:text-aqua-700 group-focus-visible:text-aqua-700">
+        View details
+      </div>
+    </>
+  );
+  return to ? (
+    <Link
+      to={to}
+      className="group rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:border-aqua-300 hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-aqua-500"
+      aria-label={`View ${label}`}
+    >
+      {content}
+    </Link>
+  ) : (
     <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
       <div className="text-sm text-slate-500">{label}</div>
       <div className={`mt-1 text-2xl font-bold ${color}`}>{value}</div>
@@ -356,30 +382,36 @@ export function ArrearsDashboard() {
             <Kpi
               label="Total arrears"
               value={money(data?.totalArrears)}
+              to="/arrears/aging"
               color="text-red-700"
             />
             <Kpi
               label="Customers in arrears"
               value={data?.customersInArrears ?? 0}
+              to="/arrears/aging"
             />
             <Kpi
               label="Demand notices"
               value={data?.demandNotices ?? 0}
+              to="/arrears/notices"
               color="text-orange-600"
             />
             <Kpi
               label="Disconnection eligible"
               value={data?.disconnectionEligible ?? 0}
+              to="/arrears/disconnections"
               color="text-red-600"
             />
             <Kpi
               label="Active payment plans"
               value={data?.activePlans ?? 0}
+              to="/arrears/plans"
               color="text-emerald-700"
             />
             <Kpi
               label="Open promises"
               value={data?.openPromises ?? 0}
+              to="/arrears/promises"
               color="text-aqua-700"
             />
           </div>

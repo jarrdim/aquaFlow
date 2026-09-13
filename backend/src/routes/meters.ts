@@ -5,6 +5,7 @@ import { prisma } from "../lib/prisma";
 import { queryStkPush } from "../lib/mpesa";
 import { initiateMpesaStk } from "../lib/mpesaStk";
 import { requireAuth, requireRole } from "../middleware/auth";
+import { processOne } from "./notifications";
 
 export const metersRouter = Router();
 metersRouter.use(requireAuth);
@@ -14,6 +15,28 @@ const technologies = ["MANUAL", "PREPAID", "SMART"] as const;
 const meterStatuses = ["IN_STOCK", "RESERVED", "ACTIVE", "FAULTY", "INACTIVE", "REMOVED", "REPLACED", "DISCONNECTED", "TAMPERED"] as const;
 const installationStatuses = ["IN_STORE", "INSTALLED", "REMOVED"] as const;
 const evidenceTypes = ["INSTALLATION_PHOTO", "METER_PHOTO", "CUSTOMER_SIGNATURE", "STATUS_PHOTO", "REPLACEMENT_PHOTO", "DOCUMENT"] as const;
+
+function directDisconnectionSms(input: {
+  customerName: string;
+  accountNumber: string;
+  actionDate: Date;
+  previousReading: number;
+  currentReading: number;
+  consumption: number;
+  previousBalance: number;
+  consumptionCharge: number;
+  reconnectionFee: number;
+  totalAmountDue: number;
+}) {
+  const amount = (value: number) => value.toLocaleString("en-KE", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  const actionDate = input.actionDate.toLocaleDateString("en-KE", {
+    timeZone: "Africa/Nairobi",
+  });
+  return `Dear ${input.customerName}, your water supply for A/C ${input.accountNumber} was disconnected on ${actionDate}. Previous reading ${input.previousReading.toLocaleString("en-KE")}, final reading ${input.currentReading.toLocaleString("en-KE")}, consumption ${input.consumption.toLocaleString("en-KE")} units. Final-reading charge KSh ${amount(input.consumptionCharge)}; reconnection fee KSh ${amount(input.reconnectionFee)}; previous balance KSh ${amount(input.previousBalance)}; total amount due KSh ${amount(input.totalAmountDue)}. Pay through PayBill 823496 using ${input.accountNumber} as the account number. Reconnection will proceed after full payment. WE MAKE IT SAFE BECAUSE WATER IS LIFE. THANK YOU.`;
+}
 
 const optText = z.string().optional().transform((value) => value?.trim() || undefined);
 const optNumber = z.union([z.coerce.number(), z.literal("")]).optional().transform((value) => value === "" ? undefined : value);
@@ -1385,6 +1408,19 @@ metersRouter.post("/service-actions/direct/disconnection/preview", directService
     }
     const consumptionCharge = roundMoney(prepared.calculation.totalCurrentCharges);
     const totalPostedCharge = roundMoney(consumptionCharge + reconnectionFee);
+    const balanceAfterDisconnection = roundMoney(prepared.previousBalance + totalPostedCharge);
+    const messagePreview = directDisconnectionSms({
+      customerName: context.customerName,
+      accountNumber: context.accountNumber,
+      actionDate: data.actionDateTime,
+      previousReading: context.latestReading,
+      currentReading: data.currentReading,
+      consumption,
+      previousBalance: prepared.previousBalance,
+      consumptionCharge,
+      reconnectionFee,
+      totalAmountDue: balanceAfterDisconnection,
+    });
     res.json({
       previousReading: context.latestReading, currentReading: data.currentReading, consumption,
       tariffCode: prepared.tariff.tariffCode, tariffName: prepared.tariff.tariffName,
@@ -1392,7 +1428,9 @@ metersRouter.post("/service-actions/direct/disconnection/preview", directService
       reconnectionFee,
       finalReadingCharge: totalPostedCharge,
       currentBalance: prepared.previousBalance,
-      balanceAfterDisconnection: roundMoney(prepared.previousBalance + totalPostedCharge),
+      balanceAfterDisconnection,
+      messagePreview,
+      messageRecipient: context.customerPhone ?? null,
       calculation: prepared.calculation,
     });
   } catch (error: any) {
@@ -1492,6 +1530,41 @@ metersRouter.post("/service-actions/direct/disconnect", directServiceRoles, asyn
         `Reconnection fee posted with direct disconnection ${workOrder.workOrderNumber}`,
         context.customerPhone,
       );
+      const totalAmountDue = roundMoney(prepared.previousBalance + totalPostedCharge);
+      const messageBody = directDisconnectionSms({
+        customerName: context.customerName,
+        accountNumber: context.accountNumber,
+        actionDate: data.actionDateTime,
+        previousReading: context.latestReading,
+        currentReading: data.currentReading,
+        consumption,
+        previousBalance: prepared.previousBalance,
+        consumptionCharge,
+        reconnectionFee,
+        totalAmountDue,
+      });
+      const notification = context.customerPhone
+        ? await tx.notification.create({ data: {
+            customerId: context.customerId,
+            accountId,
+            notificationType: "DISCONNECTION_BILL",
+            channel: "SMS",
+            recipient: context.customerPhone,
+            subject: `Disconnection bill - ${context.accountNumber}`,
+            messageBody,
+            requestedBy: actorId,
+            metadata: {
+              source: "DIRECT_METER_DISCONNECTION",
+              workOrderId: workOrder.workOrderId.toString(),
+              readingId: reading.readingId.toString(),
+              reconnectionRequestId: reconnectionRequest.reconnectionRequestId.toString(),
+              consumptionCharge,
+              reconnectionFee,
+              totalPostedCharge,
+              totalAmountDue,
+            },
+          } })
+        : null;
       await tx.meterEvent.create({ data: {
         meterId, assignmentId: context.assignmentId, eventType: "STATUS_CHANGED",
         previousStatus: context.meterStatus, newStatus: "DISCONNECTED", reading: data.currentReading,
@@ -1518,9 +1591,29 @@ metersRouter.post("/service-actions/direct/disconnect", directServiceRoles, asyn
           });
       }
       return { action: "DISCONNECTED", workOrder, readingId: reading.readingId, consumptionCharge,
-        reconnectionFee, finalReadingCharge: totalPostedCharge, reconnectionRequestNumber: reconnectionRequest.requestNumber };
+        reconnectionFee, finalReadingCharge: totalPostedCharge, reconnectionRequestNumber: reconnectionRequest.requestNumber,
+        notificationId: notification?.notificationId.toString() ?? null,
+        notificationRecipient: notification?.recipient ?? null,
+        notificationMessage: messageBody };
     }, { maxWait: 10_000, timeout: 30_000 });
-    res.status(201).json(result);
+    let notificationDeliveryStatus = result.notificationId ? "QUEUED" : "SKIPPED_NO_PHONE";
+    let notificationFailureReason: string | null = null;
+    if (result.notificationId) {
+      try {
+        const delivered = await processOne(BigInt(result.notificationId));
+        if (delivered) {
+          notificationDeliveryStatus = delivered.deliveryStatus;
+          notificationFailureReason = delivered.failureReason;
+        } else {
+          notificationFailureReason = "The SMS remains queued for retry.";
+        }
+      } catch (notificationError) {
+        notificationFailureReason = notificationError instanceof Error
+          ? notificationError.message
+          : "The SMS remains queued for retry.";
+      }
+    }
+    res.status(201).json({ ...result, notificationDeliveryStatus, notificationFailureReason });
   } catch (error: any) {
     if (error.status) return res.status(error.status).json({ error: error.message });
     next(error);

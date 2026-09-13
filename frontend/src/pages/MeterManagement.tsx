@@ -3198,7 +3198,12 @@ export function DirectMeterService() {
           customerAcknowledgement: form.customerAcknowledgement,
           disconnectionListItemId: linkedListItemId || undefined,
         });
-        setSuccess(`${selected.meterNumber} disconnected. Final reading ${Number(form.currentReading).toLocaleString()}; consumption KSh ${Number(result.consumptionCharge).toLocaleString("en-KE", { minimumFractionDigits: 2 })} and reconnection fee KSh ${Number(result.reconnectionFee).toLocaleString("en-KE", { minimumFractionDigits: 2 })} posted.`);
+        const smsResult = ["SENT", "DELIVERED"].includes(result.notificationDeliveryStatus)
+          ? ` SMS sent to ${result.notificationRecipient}.`
+          : result.notificationDeliveryStatus === "SKIPPED_NO_PHONE"
+            ? " Charges were posted, but no SMS was sent because the customer has no phone number."
+            : ` SMS delivery is ${pretty(result.notificationDeliveryStatus)}${result.notificationFailureReason ? `: ${result.notificationFailureReason}` : "."}`;
+        setSuccess(`${selected.meterNumber} disconnected. Final reading ${Number(form.currentReading).toLocaleString()}; consumption KSh ${Number(result.consumptionCharge).toLocaleString("en-KE", { minimumFractionDigits: 2 })} and reconnection fee KSh ${Number(result.reconnectionFee).toLocaleString("en-KE", { minimumFractionDigits: 2 })} posted.${smsResult}`);
       } else {
         const result = await api.createDirectMeterReconnection(common);
         setSuccess(`${selected.meterNumber} reconnected using paid request ${result.requestNumber}${result.receiptNumber ? ` · receipt ${result.receiptNumber}` : ""}.`);
@@ -3370,6 +3375,15 @@ export function DirectMeterService() {
             <Field label="Reason" required><input className={INPUT} minLength={3} value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value, confirmed: false })} placeholder={mode === "DISCONNECT" ? "Reason for disconnection" : "Supply restored after confirmed payment"} required /></Field>
             <div className="sm:col-span-2"><Field label="Remarks"><textarea className={`${INPUT} min-h-20`} value={form.remarks} onChange={(e) => setForm({ ...form, remarks: e.target.value, confirmed: false })} placeholder="Optional operational notes" /></Field></div>
           </div>
+          {mode === "DISCONNECT" && preview && <div className="overflow-hidden rounded-xl border border-sky-200 bg-sky-50">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-sky-200 px-4 py-3">
+              <div><p className="text-xs font-bold uppercase tracking-wider text-sky-700">SMS and bill preview</p><p className="mt-0.5 text-xs text-sky-600">To: {preview.messageRecipient || "No phone number on customer profile"}</p></div>
+              <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${preview.messageRecipient ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"}`}>{preview.messageRecipient ? "Will send on save" : "Cannot send"}</span>
+            </div>
+            <div className="max-h-52 overflow-y-auto whitespace-pre-wrap break-words bg-white px-4 py-3 text-sm leading-6 text-slate-700">
+              {preview.messagePreview}
+            </div>
+          </div>}
           {mode === "DISCONNECT" && <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
             {previewLoading ? <div className="flex items-center gap-2 text-sm font-semibold text-slate-500"><span className="h-5 w-5 animate-spin rounded-full border-2 border-sky-200 border-t-aqua-700" />Calculating final-reading charge…</div> : preview ? <div><div className="flex items-end justify-between gap-3"><div><p className="text-xs font-bold uppercase text-slate-400">Charge posted on save</p><p className="mt-1 text-2xl font-black text-slate-900">KSh {money(preview.finalReadingCharge)}</p></div><p className="text-right text-xs text-slate-500">{preview.consumption.toLocaleString()} units<br />{preview.tariffCode} · {preview.tariffName}</p></div><div className="mt-3 flex justify-between border-t border-slate-200 pt-3 text-sm"><span className="text-slate-500">Balance after disconnection</span><strong>KSh {money(preview.balanceAfterDisconnection)}</strong></div></div> : <p className="text-sm text-slate-500">Enter the final reading to calculate the charge.</p>}
             {preview && <div className="mt-3 grid gap-1 border-t border-slate-200 pt-3 text-sm">
