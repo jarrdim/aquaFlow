@@ -3422,29 +3422,25 @@ export function DirectMeterService() {
                 <strong>Pay statement balance: KSh {money(statementBalance)}</strong>
                 <p className="mt-1 text-xs leading-5 text-amber-800">This includes the reconnection fee and all other posted charges. No separate fee payment is needed.</p>
               </div>
-              <div>
-                <p className="mb-2 text-xs font-bold uppercase tracking-wider text-amber-800">Payment method</p>
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                  {([
-                    ["ACCOUNT_CREDIT", "Account credit"],
-                    ["CASH", "Cash"],
-                    ["MPESA_SEND_MONEY", "Send Money"],
-                    ["BANK", "Bank"],
-                    ["C2B", "C2B / PayBill"],
-                    ["MPESA_STK", "M-Pesa STK"],
-                  ] as Array<[StatementPaymentMethod, string]>).map(([method, label]) => (
-                    <button
-                      type="button"
-                      key={method}
-                      disabled={Boolean(paymentBusy)}
-                      onClick={() => { setStatementPaymentMethod(method); setPaymentMessage(""); setError(""); }}
-                      className={`rounded-lg border px-2.5 py-2 text-xs font-bold transition disabled:opacity-50 ${statementPaymentMethod === method ? "border-aqua-700 bg-aqua-700 text-white" : "border-slate-200 bg-white text-slate-700 hover:border-aqua-300"}`}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-              </div>
+              <Field label="Payment method" required>
+                <SearchableSelect
+                  className={`${INPUT} bg-white`}
+                  value={statementPaymentMethod}
+                  disabled={Boolean(paymentBusy)}
+                  onChange={(event) => {
+                    setStatementPaymentMethod(event.target.value as StatementPaymentMethod);
+                    setPaymentMessage("");
+                    setError("");
+                  }}
+                >
+                  <option value="ACCOUNT_CREDIT">Account credit</option>
+                  <option value="CASH">Cash</option>
+                  <option value="MPESA_SEND_MONEY">M-Pesa Send Money</option>
+                  <option value="BANK">Bank</option>
+                  <option value="C2B">C2B / PayBill</option>
+                  <option value="MPESA_STK">M-Pesa STK prompt</option>
+                </SearchableSelect>
+              </Field>
               {statementPaymentMethod === "ACCOUNT_CREDIT" && (
                 <div className="rounded-lg border border-violet-200 bg-violet-50 p-3 text-violet-900">
                   <p className="font-bold">Existing account credit</p>
