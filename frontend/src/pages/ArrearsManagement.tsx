@@ -1,4 +1,4 @@
-import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { exportArrearsAgingWorkbook, exportExcel } from "../lib/meterFiles";
@@ -487,23 +487,45 @@ export function ArrearsDashboard() {
 }
 
 export function ArrearsAgingReport() {
-  const [rows, setRows] = useState<Row[]>([]);
-  const [zones, setZones] = useState<Row[]>([]);
-  const [categories, setCategories] = useState<Row[]>([]);
-  const [error, setError] = useState("");
-  const [filters, setFilters] = useState<Row>({
+  const initialFilters: Row = {
     asOf: isoToday(),
     zoneId: "",
     categoryId: "",
     ageBucket: "",
     minimumBalance: "",
-    search: "",
-  });
-  const load = () =>
-    api
-      .listArrearsAccounts(filters)
-      .then(setRows)
-      .catch((e) => setError(e.message));
+    accountIds: "",
+  };
+  const [rows, setRows] = useState<Row[]>([]);
+  const [zones, setZones] = useState<Row[]>([]);
+  const [categories, setCategories] = useState<Row[]>([]);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [filters, setFilters] = useState<Row>(initialFilters);
+  const [appliedFilters, setAppliedFilters] = useState<Row>(initialFilters);
+  const [accountOptions, setAccountOptions] = useState<Row[]>([]);
+  const [accountSearch, setAccountSearch] = useState("");
+  const [loadingAccounts, setLoadingAccounts] = useState(true);
+  const requestId = useRef(0);
+  const accountRequestId = useRef(0);
+  const load = async (nextFilters: Row) => {
+    const currentRequest = ++requestId.current;
+    setLoading(true);
+    setError("");
+    try {
+      const result = await api.listArrearsAccounts(nextFilters);
+      if (currentRequest === requestId.current) setRows(result);
+    } catch (e: any) {
+      if (currentRequest === requestId.current) setError(e.message);
+    } finally {
+      if (currentRequest === requestId.current) setLoading(false);
+    }
+  };
+  const search = () => {
+    const nextFilters = { ...filters };
+    setFilters(nextFilters);
+    setAppliedFilters(nextFilters);
+    void load(nextFilters);
+  };
   useEffect(() => {
     Promise.all([api.listZones(), api.listCategories()])
       .then(([a, b]) => {
@@ -513,15 +535,34 @@ export function ArrearsAgingReport() {
       .catch((e) => setError(e.message));
   }, []);
   useEffect(() => {
-    load();
-  }, [
-    filters.asOf,
-    filters.zoneId,
-    filters.categoryId,
-    filters.ageBucket,
-    filters.minimumBalance,
-    filters.search,
-  ]);
+    void load(initialFilters);
+  }, []);
+  useEffect(() => {
+    const currentRequest = ++accountRequestId.current;
+    const timer = window.setTimeout(async () => {
+      setLoadingAccounts(true);
+      try {
+        const selectedAccountId = String(filters.accountIds ?? "");
+        const [matches, selectedRows] = await Promise.all([
+          api.listAccounts(accountSearch, 75),
+          selectedAccountId
+            ? api.listAccounts("", 1, selectedAccountId)
+            : Promise.resolve([]),
+        ]);
+        if (currentRequest !== accountRequestId.current) return;
+        const unique = new Map<string, Row>();
+        [...selectedRows, ...matches].forEach((account: Row) =>
+          unique.set(String(account.accountId), account),
+        );
+        setAccountOptions(Array.from(unique.values()));
+      } catch (e: any) {
+        if (currentRequest === accountRequestId.current) setError(e.message);
+      } finally {
+        if (currentRequest === accountRequestId.current) setLoadingAccounts(false);
+      }
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [accountSearch, filters.accountIds]);
   const exportRows = rows.map((row) => ({
     Account: row.accountNumber,
     Customer: row.customerName,
@@ -539,11 +580,11 @@ export function ArrearsAgingReport() {
     window.print();
   };
   const selectedZone =
-    zones.find((row) => String(row.zoneId) === String(filters.zoneId))
+    zones.find((row) => String(row.zoneId) === String(appliedFilters.zoneId))
       ?.zoneName ?? "All zones";
   const selectedCategory =
     categories.find(
-      (row) => String(row.categoryId) === String(filters.categoryId),
+      (row) => String(row.categoryId) === String(appliedFilters.categoryId),
     )?.categoryName ?? "All categories";
   return (
     <div className="arrears-aging-print-page">
@@ -554,14 +595,14 @@ export function ArrearsAgingReport() {
           <>
             <Button
               tone="slate"
-              disabled={!rows.length}
+              disabled={loading || !rows.length}
               onClick={() =>
                 exportArrearsAgingWorkbook("arrears-aging-report", exportRows)
               }
             >
               Export Excel
             </Button>
-            <Button tone="slate" disabled={!rows.length} onClick={printReport}>
+            <Button tone="slate" disabled={loading || !rows.length} onClick={printReport}>
               Print / Save PDF
             </Button>
           </>
@@ -575,13 +616,13 @@ export function ArrearsAgingReport() {
         <div>
           <h1>Arrears Ageing Report</h1>
           <p>
-            Report date: {date(`${filters.asOf}T12:00:00`)} | Zone:{" "}
+             Report date: {date(`${appliedFilters.asOf}T12:00:00`)} | Zone:{" "}
             {selectedZone} | Category: {selectedCategory}
           </p>
           <p>
-            Age: {filters.ageBucket ? pretty(filters.ageBucket) : "All ages"} |
-            Minimum balance:{" "}
-            {filters.minimumBalance ? money(filters.minimumBalance) : "Any"} |
+             Age: {appliedFilters.ageBucket ? pretty(appliedFilters.ageBucket) : "All ages"} |
+             Minimum balance:{" "}
+             {appliedFilters.minimumBalance ? money(appliedFilters.minimumBalance) : "Any"} |
             Accounts: {rows.length.toLocaleString()}
           </p>
         </div>
@@ -592,6 +633,7 @@ export function ArrearsAgingReport() {
           <Field label="Report date">
             <DateInput
               className={INPUT}
+              disabled={loading}
               value={filters.asOf}
               onChange={(e) => setFilters({ ...filters, asOf: e.target.value })}
             />
@@ -599,6 +641,7 @@ export function ArrearsAgingReport() {
           <Field label="Zone">
             <SearchableSelect
               className={INPUT}
+              disabled={loading}
               value={filters.zoneId}
               onChange={(e) =>
                 setFilters({ ...filters, zoneId: e.target.value })
@@ -615,6 +658,7 @@ export function ArrearsAgingReport() {
           <Field label="Category">
             <SearchableSelect
               className={INPUT}
+              disabled={loading}
               value={filters.categoryId}
               onChange={(e) =>
                 setFilters({ ...filters, categoryId: e.target.value })
@@ -631,6 +675,7 @@ export function ArrearsAgingReport() {
           <Field label="Arrears age">
             <SearchableSelect
               className={INPUT}
+              disabled={loading}
               value={filters.ageBucket}
               onChange={(e) =>
                 setFilters({ ...filters, ageBucket: e.target.value })
@@ -649,27 +694,52 @@ export function ArrearsAgingReport() {
               type="number"
               min="0"
               className={INPUT}
+              disabled={loading}
               value={filters.minimumBalance}
               onChange={(e) =>
                 setFilters({ ...filters, minimumBalance: e.target.value })
               }
             />
           </Field>
-          <Field label="Search">
-            <input
-              className={INPUT}
-              placeholder="Account, name or phone"
-              value={filters.search}
-              onChange={(e) =>
-                setFilters({ ...filters, search: e.target.value })
-              }
-            />
+          <Field label="Customer account">
+            <div className="flex gap-2">
+              <SearchableSelect
+                className={INPUT}
+                disabled={loading || loadingAccounts}
+                value={filters.accountIds}
+                onChange={(e) => {
+                  setFilters({ ...filters, accountIds: e.target.value });
+                  setAccountSearch("");
+                }}
+                onSearchQuery={setAccountSearch}
+              >
+                <option value="">
+                  {loadingAccounts ? "Loading accounts..." : "All accounts"}
+                </option>
+                {accountOptions.map((account: Row) => (
+                  <option key={account.accountId} value={account.accountId}>
+                    {account.accountNumber} - {account.customer.organizationName ||
+                      [account.customer.firstName, account.customer.middleName, account.customer.lastName]
+                        .filter(Boolean)
+                        .join(" ")}
+                  </option>
+                ))}
+              </SearchableSelect>
+              <Button disabled={loading || loadingAccounts} onClick={search}>
+                <span className="inline-flex items-center gap-2">
+                  {loading && (
+                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                  )}
+                  {loading ? "Searching…" : "Search"}
+                </span>
+              </Button>
+            </div>
           </Field>
         </div>
       </Card>
       <Card
         className="arrears-aging-report-card"
-        title={`${rows.length} account(s) in arrears`}
+        title={loading ? "Loading arrears…" : `${rows.length} account(s) in arrears`}
       >
         <div className="overflow-x-auto">
           <table className="w-full min-w-[1000px]">
@@ -685,7 +755,17 @@ export function ArrearsAgingReport() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((row) => (
+              {loading ? (
+                Array.from({ length: 4 }, (_, index) => (
+                  <tr key={index} className="animate-pulse border-t">
+                    {Array.from({ length: 7 }, (__, cell) => (
+                      <td key={cell} className={TD}>
+                        <span className={`block h-4 rounded bg-slate-100 ${cell === 0 ? "w-36" : "w-20"}`} />
+                      </td>
+                    ))}
+                  </tr>
+                ))
+              ) : rows.map((row) => (
                 <tr key={row.accountId} className="border-t">
                   <td className={TD}>
                     <div className="font-semibold text-slate-700">
@@ -715,7 +795,7 @@ export function ArrearsAgingReport() {
                   </td>
                 </tr>
               ))}
-              {!rows.length && (
+              {!loading && !rows.length && (
                 <tr>
                   <td colSpan={7} className="p-10 text-center text-slate-400">
                     No overdue accounts match these filters. A positive balance

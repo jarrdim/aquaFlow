@@ -133,12 +133,16 @@ async function arrearsRows(asOf: Date, filters: any = {}) {
   });
   return accounts
     .map((account: any) => {
+      const effectiveDueDate = (bill: any) =>
+        (bill.billingCycle?.dueDate ?? bill.dueDate) as Date;
       const overdueBills = account.bills.filter(
         (bill: any) =>
-          bill.dueDate < asOf &&
+          effectiveDueDate(bill) < asOf &&
           Number(bill.totalAmountDue) - Number(bill.paidAmount) > 0,
       );
-      const currentBills = account.bills.filter((bill: any) => bill.dueDate >= asOf);
+      const currentBills = account.bills.filter(
+        (bill: any) => effectiveDueDate(bill) >= asOf,
+      );
       const overdueBillBalance = round(
         overdueBills.reduce(
           (sum: number, bill: any) =>
@@ -159,7 +163,9 @@ async function arrearsRows(asOf: Date, filters: any = {}) {
           overdueBillBalance + legacyOpeningBalance,
         ),
       );
-      const oldestBillDueDate = overdueBills[0]?.dueDate as Date | undefined;
+      const oldestBillDueDate = overdueBills
+        .map(effectiveDueDate)
+        .sort((left: Date, right: Date) => left.getTime() - right.getTime())[0];
       const openingBalanceStillContributes = outstanding > overdueBillBalance;
       const openingBalanceDate =
         legacyOpeningBalance > 0 && openingBalanceStillContributes

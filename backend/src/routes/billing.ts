@@ -1548,8 +1548,8 @@ billingRouter.get("/statements/:accountId", async (req, res, next) => {
         reference: bill.billNumber,
         period: billingCycleLabel(bill.billingCycle),
         details: bill.reading
-          ? `Prev: ${Number(bill.reading.previousReading)} - Curr: ${Number(bill.reading.currentReading)} - Units billed: ${Number(bill.consumptionUnits)}${Number(bill.consumptionUnits) !== Number(bill.reading.consumption) ? " (includes meter replacement final consumption)" : ""} (${String(bill.reading.readingType).replace(/_/g, " ")}) - Due: ${bill.dueDate.toISOString().slice(0, 10)}`
-          : `Units: ${Number(bill.consumptionUnits)} - Due: ${bill.dueDate.toISOString().slice(0, 10)}`,
+          ? `Prev: ${Number(bill.reading.previousReading)} - Curr: ${Number(bill.reading.currentReading)} - Units billed: ${Number(bill.consumptionUnits)}${Number(bill.consumptionUnits) !== Number(bill.reading.consumption) ? " (includes meter replacement final consumption)" : ""} (${String(bill.reading.readingType).replace(/_/g, " ")}) - Due: ${(bill.billingCycle?.dueDate ?? bill.dueDate).toISOString().slice(0, 10)}`
+          : `Units: ${Number(bill.consumptionUnits)} - Due: ${(bill.billingCycle?.dueDate ?? bill.dueDate).toISOString().slice(0, 10)}`,
         description: `Water bill ${bill.billNumber}`,
         debit: Number(bill.totalCurrentCharges),
         credit: 0,
