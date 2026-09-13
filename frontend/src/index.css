@@ -265,6 +265,19 @@ input[type="radio"] {
   accent-color: #0284c7;
 }
 
+.direct-disconnection-charge-card .text-2xl {
+  font-size: 1.25rem;
+  line-height: 1.5rem;
+}
+
+.direct-disconnection-charge-card .mt-3 {
+  margin-top: 0.5rem;
+}
+
+.direct-disconnection-charge-card .pt-3 {
+  padding-top: 0.5rem;
+}
+
 ::selection {
   color: #0c4a6e;
   background: #bae6fd;

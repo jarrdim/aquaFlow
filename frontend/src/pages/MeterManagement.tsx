@@ -3384,9 +3384,9 @@ export function DirectMeterService() {
               {preview.messagePreview}
             </div>
           </div>}
-          {mode === "DISCONNECT" && <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+          {mode === "DISCONNECT" && <div className="direct-disconnection-charge-card rounded-xl border border-slate-200 bg-slate-50 p-3">
             {previewLoading ? <div className="flex items-center gap-2 text-sm font-semibold text-slate-500"><span className="h-5 w-5 animate-spin rounded-full border-2 border-sky-200 border-t-aqua-700" />Calculating final-reading charge…</div> : preview ? <div><div className="flex items-end justify-between gap-3"><div><p className="text-xs font-bold uppercase text-slate-400">Charge posted on save</p><p className="mt-1 text-2xl font-black text-slate-900">KSh {money(preview.finalReadingCharge)}</p></div><p className="text-right text-xs text-slate-500">{preview.consumption.toLocaleString()} units<br />{preview.tariffCode} · {preview.tariffName}</p></div><div className="mt-3 flex justify-between border-t border-slate-200 pt-3 text-sm"><span className="text-slate-500">Balance after disconnection</span><strong>KSh {money(preview.balanceAfterDisconnection)}</strong></div></div> : <p className="text-sm text-slate-500">Enter the final reading to calculate the charge.</p>}
-            {preview && <div className="mt-3 grid gap-1 border-t border-slate-200 pt-3 text-sm">
+            {preview && <div className="mt-2 grid gap-0.5 border-t border-slate-200 pt-2 text-xs">
               <div className="flex justify-between"><span className="text-slate-500">Final-reading consumption</span><strong>KSh {money(preview.consumptionCharge)}</strong></div>
               <div className="flex justify-between"><span className="text-slate-500">Reconnection fee</span><strong>KSh {money(preview.reconnectionFee)}</strong></div>
               <div className="flex justify-between border-t border-slate-200 pt-2"><span className="font-semibold text-slate-700">Total posted now</span><strong>KSh {money(preview.finalReadingCharge)}</strong></div>
