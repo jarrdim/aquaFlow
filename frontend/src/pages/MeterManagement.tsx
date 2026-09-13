@@ -3198,7 +3198,7 @@ export function DirectMeterService() {
           customerAcknowledgement: form.customerAcknowledgement,
           disconnectionListItemId: linkedListItemId || undefined,
         });
-        setSuccess(`${selected.meterNumber} disconnected. Final reading ${Number(form.currentReading).toLocaleString()} and KSh ${Number(result.finalReadingCharge).toLocaleString("en-KE", { minimumFractionDigits: 2 })} posted.`);
+        setSuccess(`${selected.meterNumber} disconnected. Final reading ${Number(form.currentReading).toLocaleString()}; consumption KSh ${Number(result.consumptionCharge).toLocaleString("en-KE", { minimumFractionDigits: 2 })} and reconnection fee KSh ${Number(result.reconnectionFee).toLocaleString("en-KE", { minimumFractionDigits: 2 })} posted.`);
       } else {
         const result = await api.createDirectMeterReconnection(common);
         setSuccess(`${selected.meterNumber} reconnected using paid request ${result.requestNumber}${result.receiptNumber ? ` · receipt ${result.receiptNumber}` : ""}.`);
@@ -3265,6 +3265,7 @@ export function DirectMeterService() {
   const canReconnect = selected && selected.accountStatus === "DISCONNECTED" && selected.meterStatus === "DISCONNECTED";
   const paymentConfirmed = Boolean(selected?.reconnectionPaymentConfirmed);
   const paymentPending = selected?.reconnectionFeePaymentStatus === "PENDING";
+  const reconnectionFeePostedToLedger = Boolean(selected?.reconnectionFeePostedToLedger);
   const reconnectionFee = Number(selected?.reconnectionFee ?? 0);
   const accountCreditAvailable = Number(selected?.accountCreditAvailable ?? 0);
   const creditCoversFee = reconnectionFee > 0 && accountCreditAvailable >= reconnectionFee;
@@ -3325,7 +3326,7 @@ export function DirectMeterService() {
             <div className={`p-3 text-sm ${paymentConfirmed ? "bg-emerald-50 text-emerald-800" : paymentPending ? "bg-blue-50 text-blue-800" : "bg-amber-50 text-amber-800"}`}>
               <div className="flex items-start justify-between gap-3"><div><p className="font-bold">{paymentConfirmed ? "Reconnection fee confirmed" : paymentPending ? "Waiting for M-Pesa payment" : "Choose a payment option"}</p><p className="mt-1 text-xs">{selected.reconnectionRequestNumber ? `${selected.reconnectionRequestNumber} · KSh ${money(reconnectionFee)}${selected.reconnectionReceiptNumber ? ` · ${selected.reconnectionReceiptNumber}` : selected.reconnectionSettlementMethod === "ACCOUNT_CREDIT" ? " · account credit" : ""}` : `Configured fee: KSh ${money(reconnectionFee)}`}</p></div>{paymentPending && <span className="h-5 w-5 shrink-0 animate-spin rounded-full border-2 border-blue-200 border-t-blue-700" />}</div>
             </div>
-            {!paymentConfirmed && <div className="space-y-3 bg-white p-3">
+            {!paymentConfirmed && !reconnectionFeePostedToLedger && <div className="space-y-3 bg-white p-3">
               <div className="rounded-lg border border-violet-200 bg-violet-50 p-3">
                 <div className="flex items-center justify-between gap-3"><div><p className="text-sm font-bold text-violet-900">Use existing overpayment</p><p className="mt-0.5 text-xs text-violet-700">Available account credit: KSh {money(accountCreditAvailable)}</p></div><Button type="button" tone="teal" disabled={!creditCoversFee || Boolean(paymentBusy) || paymentPending} onClick={() => void applyAccountCredit()}>{paymentBusy === "credit" ? "Applying…" : "Use credit"}</Button></div>
                 {!creditCoversFee && <p className="mt-2 text-[11px] text-violet-600">Credit must cover the full KSh {money(reconnectionFee)} fee. Partial credit is retained on the account.</p>}
@@ -3339,6 +3340,11 @@ export function DirectMeterService() {
             </div>}
             {paymentMessage && <p className="border-t border-slate-100 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700">{paymentMessage}</p>}
           </div>}
+          {canReconnect && reconnectionFeePostedToLedger && !paymentConfirmed && (
+            <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              <strong>Payment required:</strong> the reconnection fee is already included in the account statement. Pay the full statement balance of KSh {money(selected.currentBalance)} using account {selected.accountNumber}; no separate fee payment is needed.
+            </div>
+          )}
           {canReconnect && selected.reconnectionSettlementMethod === "ACCOUNT_LEDGER" && (
             <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-800">
               The KSh {money(reconnectionFee)} reconnection fee is settled in this account statement. No second payment is required.
@@ -3366,6 +3372,11 @@ export function DirectMeterService() {
           </div>
           {mode === "DISCONNECT" && <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
             {previewLoading ? <div className="flex items-center gap-2 text-sm font-semibold text-slate-500"><span className="h-5 w-5 animate-spin rounded-full border-2 border-sky-200 border-t-aqua-700" />Calculating final-reading charge…</div> : preview ? <div><div className="flex items-end justify-between gap-3"><div><p className="text-xs font-bold uppercase text-slate-400">Charge posted on save</p><p className="mt-1 text-2xl font-black text-slate-900">KSh {money(preview.finalReadingCharge)}</p></div><p className="text-right text-xs text-slate-500">{preview.consumption.toLocaleString()} units<br />{preview.tariffCode} · {preview.tariffName}</p></div><div className="mt-3 flex justify-between border-t border-slate-200 pt-3 text-sm"><span className="text-slate-500">Balance after disconnection</span><strong>KSh {money(preview.balanceAfterDisconnection)}</strong></div></div> : <p className="text-sm text-slate-500">Enter the final reading to calculate the charge.</p>}
+            {preview && <div className="mt-3 grid gap-1 border-t border-slate-200 pt-3 text-sm">
+              <div className="flex justify-between"><span className="text-slate-500">Final-reading consumption</span><strong>KSh {money(preview.consumptionCharge)}</strong></div>
+              <div className="flex justify-between"><span className="text-slate-500">Reconnection fee</span><strong>KSh {money(preview.reconnectionFee)}</strong></div>
+              <div className="flex justify-between border-t border-slate-200 pt-2"><span className="font-semibold text-slate-700">Total posted now</span><strong>KSh {money(preview.finalReadingCharge)}</strong></div>
+            </div>}
             {previewError && <p className="mt-2 text-xs font-semibold text-red-600">{previewError}</p>}
           </div>}
           {mode === "RECONNECT" && <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800"><p className="font-extrabold">Payment verified</p><p className="mt-1">{selected.reconnectionRequestNumber} · KSh {money(selected.reconnectionFee)}{selected.reconnectionReceiptNumber ? ` · receipt ${selected.reconnectionReceiptNumber}` : ""}</p></div>}

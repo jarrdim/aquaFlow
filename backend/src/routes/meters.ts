@@ -818,7 +818,7 @@ async function paidDirectReconnectionRequest(tx: Prisma.TransactionClient, accou
   return rows[0] ?? null;
 }
 
-async function legacyLedgerReconnectionSettlements(
+async function ledgerReconnectionFeeCharges(
   tx: Prisma.TransactionClient,
   accountIds: bigint[],
 ) {
@@ -827,26 +827,12 @@ async function legacyLedgerReconnectionSettlements(
     SELECT DISTINCT ON (debit.account_id)
       debit.account_id AS "accountId",
       debit.account_adjustment_id AS "debitAdjustmentId",
-      credit.account_adjustment_id AS "creditAdjustmentId",
       debit.amount AS "settledAmount"
     FROM aquaflow.account_adjustments debit
-    JOIN aquaflow.customer_accounts account ON account.account_id=debit.account_id
-    JOIN LATERAL (
-      SELECT candidate.account_adjustment_id,candidate.amount
-      FROM aquaflow.account_adjustments candidate
-      WHERE candidate.account_id=debit.account_id
-        AND candidate.status='APPROVED'
-        AND candidate.adjustment_type='CREDIT'
-        AND candidate.created_at>=debit.created_at
-        AND ABS(candidate.amount-debit.amount)<0.01
-      ORDER BY candidate.created_at,candidate.account_adjustment_id
-      LIMIT 1
-    ) credit ON TRUE
     WHERE debit.account_id IN (${Prisma.join(accountIds)})
       AND debit.status='APPROVED'
       AND debit.adjustment_type='DEBIT'
       AND (debit.reason ILIKE '%reconnection%' OR debit.reason ILIKE '%re-connection%')
-      AND account.current_balance<=0
       AND debit.created_at>=COALESCE((
         SELECT MAX(posting.posted_at)
         FROM aquaflow.disconnection_postings posting
@@ -1301,22 +1287,28 @@ metersRouter.get("/service-actions/direct/options", directServiceRoles, async (r
     const disconnectedAccountIds = rows
       .filter((row) => row.accountStatus === "DISCONNECTED" && row.meterStatus === "DISCONNECTED")
       .map((row) => BigInt(row.accountId));
-    const ledgerSettlements = await legacyLedgerReconnectionSettlements(prisma, disconnectedAccountIds);
-    const ledgerSettlementByAccount = new Map(
-      ledgerSettlements.map((settlement) => [String(settlement.accountId), settlement]),
+    const ledgerFeeCharges = await ledgerReconnectionFeeCharges(prisma, disconnectedAccountIds);
+    const ledgerFeeChargeByAccount = new Map(
+      ledgerFeeCharges.map((charge) => [String(charge.accountId), charge]),
     );
     const items = rows.map((row) => {
-      const settlement = ledgerSettlementByAccount.get(String(row.accountId));
-      const settlesConfiguredFee = settlement
-        && Math.abs(Number(settlement.settledAmount) - Number(row.reconnectionFee)) < 0.01
+      const ledgerFeeCharge = ledgerFeeChargeByAccount.get(String(row.accountId));
+      const feePostedToLedger = Boolean(
+        ledgerFeeCharge
+        && Math.abs(Number(ledgerFeeCharge.settledAmount) - Number(row.reconnectionFee)) < 0.01,
+      );
+      const settlesConfiguredFee = feePostedToLedger
+        && Number(row.currentBalance) <= 0
         && row.reconnectionFeePaymentStatus !== "PENDING";
-      return settlesConfiguredFee
+      return feePostedToLedger
         ? {
             ...row,
+            reconnectionFeePostedToLedger: true,
+            reconnectionLedgerDebitAdjustmentId: ledgerFeeCharge.debitAdjustmentId,
+            ...(settlesConfiguredFee ? {
             reconnectionPaymentConfirmed: true,
             reconnectionSettlementMethod: "ACCOUNT_LEDGER",
-            reconnectionLedgerDebitAdjustmentId: settlement.debitAdjustmentId,
-            reconnectionLedgerCreditAdjustmentId: settlement.creditAdjustmentId,
+            } : {}),
           }
         : row;
     });
@@ -1383,12 +1375,24 @@ metersRouter.post("/service-actions/direct/disconnection/preview", directService
     }
     const consumption = roundMoney(data.currentReading - context.latestReading);
     const prepared = await prepareReplacementBill(prisma, accountId, data.actionDateTime, consumption);
+    const settings = await prisma.systemSetting.findUnique({
+      where: { settingId: 1n },
+      select: { reconnectionFee: true },
+    });
+    const reconnectionFee = roundMoney(Number(settings?.reconnectionFee ?? 0));
+    if (reconnectionFee <= 0) {
+      return res.status(409).json({ error: "A positive reconnection fee is not configured" });
+    }
+    const consumptionCharge = roundMoney(prepared.calculation.totalCurrentCharges);
+    const totalPostedCharge = roundMoney(consumptionCharge + reconnectionFee);
     res.json({
       previousReading: context.latestReading, currentReading: data.currentReading, consumption,
       tariffCode: prepared.tariff.tariffCode, tariffName: prepared.tariff.tariffName,
-      finalReadingCharge: prepared.calculation.totalCurrentCharges,
+      consumptionCharge,
+      reconnectionFee,
+      finalReadingCharge: totalPostedCharge,
       currentBalance: prepared.previousBalance,
-      balanceAfterDisconnection: roundMoney(prepared.previousBalance + prepared.calculation.totalCurrentCharges),
+      balanceAfterDisconnection: roundMoney(prepared.previousBalance + totalPostedCharge),
       calculation: prepared.calculation,
     });
   } catch (error: any) {
@@ -1426,6 +1430,14 @@ metersRouter.post("/service-actions/direct/disconnect", directServiceRoles, asyn
       if (data.currentReading < context.latestReading) throw Object.assign(new Error(`Current reading cannot be below the latest approved reading of ${context.latestReading}`), { status: 409 });
       const consumption = roundMoney(data.currentReading - context.latestReading);
       const prepared = await prepareReplacementBill(tx, accountId, data.actionDateTime, consumption);
+      const settings = await tx.systemSetting.findUnique({
+        where: { settingId: 1n },
+        select: { reconnectionFee: true },
+      });
+      const reconnectionFee = roundMoney(Number(settings?.reconnectionFee ?? 0));
+      if (reconnectionFee <= 0) throw Object.assign(new Error("A positive reconnection fee is not configured"), { status: 409 });
+      const consumptionCharge = roundMoney(prepared.calculation.totalCurrentCharges);
+      const totalPostedCharge = roundMoney(consumptionCharge + reconnectionFee);
       const types = await tx.$queryRaw<any[]>`SELECT work_order_type_id FROM aquaflow.work_order_types WHERE type_code='DISCONNECTION' AND status='ACTIVE' LIMIT 1`;
       if (!types[0]) throw Object.assign(new Error("The DISCONNECTION operation type is not configured"), { status: 409 });
       const workOrderNumber = `WO-DD-${Date.now()}-${meterId}`;
@@ -1456,10 +1468,30 @@ metersRouter.post("/service-actions/direct/disconnect", directServiceRoles, asyn
         VALUES(${workOrder.workOrderId},${accountId},${meterId},${reading.readingId},${context.latestReading},
           ${data.currentReading},${prepared.calculation.totalCurrentCharges},${prepared.calculation.totalCurrentCharges},
           FALSE,NULL,0,NULL,${actorId})`;
+      const reconnectionFeeAdjustment = await tx.accountAdjustment.create({ data: {
+        adjustmentNumber: `AADJ-RCF-${Date.now()}-${String(accountId).slice(-5)}`,
+        accountId,
+        adjustmentType: "DEBIT",
+        amount: reconnectionFee,
+        reason: `Reconnection fee posted during direct disconnection ${workOrder.workOrderNumber}`,
+        status: "APPROVED",
+        requestedBy: actorId,
+        approvedBy: actorId,
+        adjustmentDate: data.actionDateTime,
+        approvedAt: new Date(),
+        decisionComments: "Automatically posted with the final-reading charge",
+      } });
       await tx.customerAccount.update({ where: { accountId }, data: {
-        currentBalance: { increment: prepared.calculation.totalCurrentCharges }, accountStatus: "DISCONNECTED", updatedAt: new Date(),
+        currentBalance: { increment: totalPostedCharge }, accountStatus: "DISCONNECTED", updatedAt: new Date(),
       } });
       await tx.meter.update({ where: { meterId }, data: { status: "DISCONNECTED", updatedAt: new Date() } });
+      const reconnectionRequest = await ensureDirectReconnectionRequest(
+        tx,
+        context,
+        actorId,
+        `Reconnection fee posted with direct disconnection ${workOrder.workOrderNumber}`,
+        context.customerPhone,
+      );
       await tx.meterEvent.create({ data: {
         meterId, assignmentId: context.assignmentId, eventType: "STATUS_CHANGED",
         previousStatus: context.meterStatus, newStatus: "DISCONNECTED", reading: data.currentReading,
@@ -1469,7 +1501,7 @@ metersRouter.post("/service-actions/direct/disconnect", directServiceRoles, asyn
       await tx.arrearsAction.create({ data: {
         accountId, actionType: "DIRECT_METER_DISCONNECTION", referenceType: "WORK_ORDER",
         referenceId: workOrder.workOrderId, details: data.reason, performedBy: actorId,
-        metadata: { meterId: meterId.toString(), meterNumber: context.meterNumber, readingId: reading.readingId.toString(), currentReading: data.currentReading, finalReadingCharge: prepared.calculation.totalCurrentCharges, remarks: data.remarks ?? null, disconnectionListItemId: linkedListItem?.disconnectionItemId.toString() ?? null, disconnectionListReference: linkedListItem?.list.listReference ?? null },
+        metadata: { meterId: meterId.toString(), meterNumber: context.meterNumber, readingId: reading.readingId.toString(), currentReading: data.currentReading, consumptionCharge, reconnectionFee, totalPostedCharge, reconnectionFeeAdjustmentId: reconnectionFeeAdjustment.accountAdjustmentId.toString(), reconnectionRequestId: reconnectionRequest.reconnectionRequestId.toString(), remarks: data.remarks ?? null, disconnectionListItemId: linkedListItem?.disconnectionItemId.toString() ?? null, disconnectionListReference: linkedListItem?.list.listReference ?? null },
       } });
       if (linkedListItem) {
         await tx.disconnectionListItem.update({
@@ -1485,7 +1517,8 @@ metersRouter.post("/service-actions/direct/disconnect", directServiceRoles, asyn
             data: { status: "WORK_ORDERS_CREATED", updatedAt: new Date() },
           });
       }
-      return { action: "DISCONNECTED", workOrder, readingId: reading.readingId, finalReadingCharge: prepared.calculation.totalCurrentCharges };
+      return { action: "DISCONNECTED", workOrder, readingId: reading.readingId, consumptionCharge,
+        reconnectionFee, finalReadingCharge: totalPostedCharge, reconnectionRequestNumber: reconnectionRequest.requestNumber };
     }, { maxWait: 10_000, timeout: 30_000 });
     res.status(201).json(result);
   } catch (error: any) {
@@ -1733,16 +1766,17 @@ metersRouter.post("/service-actions/direct/reconnect", directServiceRoles, async
         select: { reconnectionFee: true },
       });
       const expectedFee = Number(request?.reconnectionFee ?? settings?.reconnectionFee ?? 0);
-      const ledgerSettlement = (await legacyLedgerReconnectionSettlements(tx, [accountId]))[0];
+      const ledgerSettlement = (await ledgerReconnectionFeeCharges(tx, [accountId]))[0];
       const paidInAccountLedger = Boolean(
         ledgerSettlement
         && expectedFee > 0
         && Math.abs(Number(ledgerSettlement.settledAmount) - expectedFee) < 0.01
+        && Number(context.currentBalance) <= 0
         && request?.feePaymentStatus !== "PENDING",
       );
       if (paidInAccountLedger && request?.feePaymentStatus !== "PAID") {
         request = request ?? await ensureDirectReconnectionRequest(tx, context, actorId, data.reason);
-        const settlementNote = `Reconnection fee settled in account ledger via debit adjustment ${ledgerSettlement.debitAdjustmentId} and credit adjustment ${ledgerSettlement.creditAdjustmentId}`;
+        const settlementNote = `Reconnection fee settled through account balance after debit adjustment ${ledgerSettlement.debitAdjustmentId}`;
         await tx.$executeRaw`UPDATE aquaflow.reconnection_requests SET fee_payment_status='PAID',
           fee_payment_id=NULL,fee_paid_at=NOW(),decision_notes=${settlementNote},updated_at=NOW()
           WHERE reconnection_request_id=${request.reconnectionRequestId}`;
@@ -1755,7 +1789,6 @@ metersRouter.post("/service-actions/direct/reconnect", directServiceRoles, async
           performedBy: actorId,
           metadata: {
             debitAdjustmentId: String(ledgerSettlement.debitAdjustmentId),
-            creditAdjustmentId: String(ledgerSettlement.creditAdjustmentId),
             amount: expectedFee,
           },
         } });
