@@ -159,7 +159,15 @@ async function arrearsRows(asOf: Date, filters: any = {}) {
           overdueBillBalance + legacyOpeningBalance,
         ),
       );
-      const oldestDueDate = overdueBills[0]?.dueDate as Date | undefined;
+      const oldestBillDueDate = overdueBills[0]?.dueDate as Date | undefined;
+      const openingBalanceStillContributes = outstanding > overdueBillBalance;
+      const openingBalanceDate =
+        legacyOpeningBalance > 0 && openingBalanceStillContributes
+          ? ((account.openingBalanceDate ?? account.createdAt) as Date)
+          : undefined;
+      const oldestDueDate = [oldestBillDueDate, openingBalanceDate]
+        .filter((value): value is Date => Boolean(value))
+        .sort((left, right) => left.getTime() - right.getTime())[0];
       // A notice suppresses duplicates only for the current continuous arrears
       // episode. Once those overdue bills are cleared, a later overdue bill has
       // a newer episode start and the account becomes eligible again without

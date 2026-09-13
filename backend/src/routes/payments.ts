@@ -1229,10 +1229,10 @@ paymentsRouter.post("/mpesa/stk", staff, async (req, res, next) => {
       where: { accountId: data.accountId },
       include: { customer: true },
     });
-    if (!account || account.accountStatus !== "ACTIVE")
+    if (!account || !["ACTIVE", "SUSPENDED", "DISCONNECTED"].includes(account.accountStatus))
       return res
         .status(404)
-        .json({ error: "Active customer account not found" });
+        .json({ error: "Payable customer account not found" });
     const phoneNumber = String(
       data.phoneNumber || account.customer.phoneNumber || "",
     ).trim();

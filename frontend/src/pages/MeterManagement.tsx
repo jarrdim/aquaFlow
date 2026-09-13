@@ -3242,6 +3242,29 @@ export function DirectMeterService() {
     }), (result) => result.customerMessage || `M-Pesa prompt sent for KSh ${money(result.reconnectionFee)}.`);
   }
 
+  async function sendStatementStkPrompt() {
+    if (!selected) return;
+    const amount = Math.ceil(Number(selected.currentBalance ?? 0));
+    await paymentAction("statement-stk", () => api.initiateMpesaStk({
+      accountId: String(selected.accountId),
+      phoneNumber: paymentPhone,
+      amount,
+    }), () => `M-Pesa prompt sent for the full statement balance of KSh ${money(amount)}. Refresh the balance after the customer confirms payment.`);
+  }
+
+  async function refreshStatementBalance() {
+    setPaymentBusy("statement-refresh");
+    setError("");
+    try {
+      await load(search, true);
+      setPaymentMessage("Account balance refreshed.");
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setPaymentBusy("");
+    }
+  }
+
   async function refreshPayment() {
     if (!selected) return;
     await paymentAction("refresh", () => api.refreshDirectReconnectionPayment(String(selected.accountId)),
@@ -3272,6 +3295,7 @@ export function DirectMeterService() {
   const paymentPending = selected?.reconnectionFeePaymentStatus === "PENDING";
   const reconnectionFeePostedToLedger = Boolean(selected?.reconnectionFeePostedToLedger);
   const reconnectionFee = Number(selected?.reconnectionFee ?? 0);
+  const statementBalance = Math.max(0, Math.ceil(Number(selected?.currentBalance ?? 0)));
   const accountCreditAvailable = Number(selected?.accountCreditAvailable ?? 0);
   const creditCoversFee = reconnectionFee > 0 && accountCreditAvailable >= reconnectionFee;
   const money = (value: any) => Number(value ?? 0).toLocaleString("en-KE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -3327,7 +3351,7 @@ export function DirectMeterService() {
             <div className="flex items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase text-slate-400">{selected.accountNumber}</p><p className="mt-1 text-lg font-extrabold text-slate-900">{selected.meterNumber}</p><p className="text-sm text-slate-500">{selected.customerName}</p></div><Status value={disconnected ? "DISCONNECTED" : selected.accountStatus} /></div>
             <dl className="mt-4 grid grid-cols-2 gap-3 border-t border-slate-200 pt-3 text-sm"><div><dt className="text-xs text-slate-400">Latest reading</dt><dd className="font-bold text-slate-800">{Number(selected.latestReading ?? 0).toLocaleString()}</dd></div><div><dt className="text-xs text-slate-400">Account balance</dt><dd className="font-bold text-slate-800">KSh {money(selected.currentBalance)}</dd></div></dl>
           </div>
-          {canReconnect && <div className="mt-3 overflow-hidden rounded-xl border border-slate-200">
+          {canReconnect && !reconnectionFeePostedToLedger && <div className="mt-3 overflow-hidden rounded-xl border border-slate-200">
             <div className={`p-3 text-sm ${paymentConfirmed ? "bg-emerald-50 text-emerald-800" : paymentPending ? "bg-blue-50 text-blue-800" : "bg-amber-50 text-amber-800"}`}>
               <div className="flex items-start justify-between gap-3"><div><p className="font-bold">{paymentConfirmed ? "Reconnection fee confirmed" : paymentPending ? "Waiting for M-Pesa payment" : "Choose a payment option"}</p><p className="mt-1 text-xs">{selected.reconnectionRequestNumber ? `${selected.reconnectionRequestNumber} · KSh ${money(reconnectionFee)}${selected.reconnectionReceiptNumber ? ` · ${selected.reconnectionReceiptNumber}` : selected.reconnectionSettlementMethod === "ACCOUNT_CREDIT" ? " · account credit" : ""}` : `Configured fee: KSh ${money(reconnectionFee)}`}</p></div>{paymentPending && <span className="h-5 w-5 shrink-0 animate-spin rounded-full border-2 border-blue-200 border-t-blue-700" />}</div>
             </div>
@@ -3346,8 +3370,23 @@ export function DirectMeterService() {
             {paymentMessage && <p className="border-t border-slate-100 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700">{paymentMessage}</p>}
           </div>}
           {canReconnect && reconnectionFeePostedToLedger && !paymentConfirmed && (
-            <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-              <strong>Payment required:</strong> the reconnection fee is already included in the account statement. Pay the full statement balance of KSh {money(selected.currentBalance)} using account {selected.accountNumber}; no separate fee payment is needed.
+            <div className="mt-3 space-y-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+              <div>
+                <strong>Pay statement balance: KSh {money(statementBalance)}</strong>
+                <p className="mt-1 text-xs leading-5 text-amber-800">This includes the reconnection fee and all other posted charges. No separate fee payment is needed.</p>
+              </div>
+              <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+                <p className="font-bold text-emerald-900">M-Pesa STK prompt</p>
+                <div className="mt-2 flex gap-2">
+                  <input className={`${INPUT} min-w-0 flex-1 bg-white`} value={paymentPhone} onChange={(event) => setPaymentPhone(event.target.value)} placeholder="2547XXXXXXXX" disabled={Boolean(paymentBusy)} />
+                  <Button type="button" tone="green" disabled={Boolean(paymentBusy) || statementBalance <= 0 || paymentPhone.trim().length < 7} onClick={() => void sendStatementStkPrompt()}>{paymentBusy === "statement-stk" ? "Sendingâ€¦" : "Pay full balance"}</Button>
+                </div>
+              </div>
+              <div className="rounded-lg border border-sky-200 bg-sky-50 p-3 text-xs leading-5 text-sky-800">
+                <strong>PayBill 823496:</strong> use <strong>{selected.accountNumber}</strong> as the account number and pay <strong>KSh {money(statementBalance)}</strong>.
+              </div>
+              <Button type="button" tone="slate" className="w-full" disabled={Boolean(paymentBusy)} onClick={() => void refreshStatementBalance()}>{paymentBusy === "statement-refresh" ? "Refreshingâ€¦" : "Refresh balance after payment"}</Button>
+              {paymentMessage && <p className="rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-700">{paymentMessage}</p>}
             </div>
           )}
           {canReconnect && selected.reconnectionSettlementMethod === "ACCOUNT_LEDGER" && (

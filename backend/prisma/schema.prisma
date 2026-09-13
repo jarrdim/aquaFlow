@@ -179,6 +179,7 @@ model CustomerAccount {
   categoryId     BigInt    @map("category_id")
   routeId        BigInt?   @map("route_id")
   openingBalance Decimal   @default(0) @map("opening_balance") @db.Decimal(18, 2)
+  openingBalanceDate DateTime? @map("opening_balance_date") @db.Date
   currentBalance Decimal   @default(0) @map("current_balance") @db.Decimal(18, 2)
   connectionDate DateTime? @map("connection_date") @db.Date
   accountStatus  String    @default("PENDING") @map("account_status")
