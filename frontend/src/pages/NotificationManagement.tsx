@@ -355,7 +355,17 @@ function NotificationTable({
     .filter((row) => ["QUEUED", "FAILED"].includes(row.deliveryStatus))
     .map((row) => String(row.notificationId));
   const selectionEnabled = Boolean(selected && onSelectionChange);
+  const [previewRow, setPreviewRow] = useState<Row | null>(null);
+  useEffect(() => {
+    if (!previewRow) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setPreviewRow(null);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [previewRow]);
   return (
+    <>
     <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
       <div className="overflow-x-auto">
       <table className="w-full min-w-[760px]">
@@ -453,7 +463,16 @@ function NotificationTable({
               </td>
               {(onRetry || onRemove) && (
                 <td className={TD}>
-                  <div className="flex items-center gap-1">
+                  <div className="flex flex-wrap items-center gap-1">
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 font-semibold text-sky-700 transition hover:bg-sky-50"
+                      onClick={() => setPreviewRow(row)}
+                      aria-label={`Preview message to ${row.recipient}`}
+                    >
+                      <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" /><circle cx="12" cy="12" r="2.5" /></svg>
+                      Preview
+                    </button>
                     {onRetry && row.deliveryStatus === "FAILED" && row.retryCount < row.maxRetries && (
                       <button
                         className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 font-semibold text-emerald-700 transition hover:bg-emerald-50"
@@ -500,6 +519,61 @@ function NotificationTable({
         <div className="flex items-center justify-center gap-2 border-t border-slate-100 bg-slate-50/60 px-4 py-3 text-xs font-medium text-slate-400"><span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />End of loaded queue · {rows.length} item{rows.length === 1 ? "" : "s"}</div>
       )}
     </div>
+    {previewRow && (
+      <div
+        className="fixed inset-0 z-[1200] flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="notification-preview-title"
+        onMouseDown={(event) => {
+          if (event.target === event.currentTarget) setPreviewRow(null);
+        }}
+      >
+        <article className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+          <header className="flex items-start justify-between gap-4 border-b border-slate-200 bg-slate-50 px-5 py-4 sm:px-6">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wider text-emerald-600">Message preview</p>
+              <h2 id="notification-preview-title" className="mt-1 text-xl font-extrabold text-slate-900">
+                {pretty(previewRow.notificationType)}
+              </h2>
+            </div>
+            <button
+              type="button"
+              onClick={() => setPreviewRow(null)}
+              className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-2xl leading-none text-slate-500 transition hover:bg-slate-200 hover:text-slate-800"
+              aria-label="Close message preview"
+            >
+              ×
+            </button>
+          </header>
+          <div className="overflow-y-auto p-5 sm:p-6">
+            <dl className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm sm:grid-cols-2">
+              <div><dt className="text-xs font-semibold uppercase text-slate-400">Recipient</dt><dd className="mt-1 font-semibold text-slate-800">{previewRow.recipient}</dd></div>
+              <div><dt className="text-xs font-semibold uppercase text-slate-400">Account</dt><dd className="mt-1 font-semibold text-slate-800">{previewRow.account?.accountNumber ?? "General"}</dd></div>
+              <div><dt className="text-xs font-semibold uppercase text-slate-400">Channel</dt><dd className="mt-1 text-slate-700">{previewRow.channel} · {previewRow.provider?.providerName ?? "Provider pending"}</dd></div>
+              <div><dt className="text-xs font-semibold uppercase text-slate-400">Created</dt><dd className="mt-1 text-slate-700">{dateTime(previewRow.createdAt)}</dd></div>
+              {previewRow.subject && <div className="sm:col-span-2"><dt className="text-xs font-semibold uppercase text-slate-400">Subject</dt><dd className="mt-1 font-semibold text-slate-800">{previewRow.subject}</dd></div>}
+            </dl>
+            <section className="mt-5">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">Complete message</h3>
+              <div className="mt-2 whitespace-pre-wrap break-words rounded-xl border border-emerald-100 bg-emerald-50/60 p-4 text-[15px] leading-7 text-slate-800">
+                {previewRow.messageBody || "No message content."}
+              </div>
+            </section>
+            {previewRow.failureReason && (
+              <section className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+                <strong className="block">Delivery failure</strong>
+                <span className="mt-1 block whitespace-pre-wrap break-words">{previewRow.failureReason}</span>
+              </section>
+            )}
+          </div>
+          <footer className="flex justify-end border-t border-slate-200 bg-white px-5 py-4 sm:px-6">
+            <Button tone="slate" onClick={() => setPreviewRow(null)}>Close</Button>
+          </footer>
+        </article>
+      </div>
+    )}
+    </>
   );
 }
 
