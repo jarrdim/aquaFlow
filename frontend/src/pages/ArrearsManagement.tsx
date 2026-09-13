@@ -1,7 +1,11 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../lib/api";
-import { exportArrearsAgingWorkbook, exportExcel } from "../lib/meterFiles";
+import { printDisconnection } from "../lib/printDisconnection";
+import {
+  exportArrearsAgingWorkbook,
+  exportExcel,
+} from "../lib/meterFiles";
 import { SearchableSelect } from "../components/SearchableSelect";
 import { CheckboxMultiSelect } from "../components/CheckboxMultiSelect";
 import { SweetAlertToast } from "../components/SweetAlertToast";
@@ -2782,12 +2786,13 @@ export function DisconnectionLists({ view = "builder" }: { view?: "builder" | "r
     } catch (e: any) { setError(e.message); }
     finally { setExportingEligible(""); }
   }
-  function printEligible() {
-    const cleanup = () =>
-      document.body.classList.remove("printing-disconnection-eligible");
-    document.body.classList.add("printing-disconnection-eligible");
-    window.addEventListener("afterprint", cleanup, { once: true });
-    window.print();
+  async function printEligible() {
+    if (!visibleEligible.length) return;
+    try {
+      await printDisconnection(eligibleByZone, filterDescription);
+    } catch (e: any) {
+      setError(e.message);
+    }
   }
   return (
     <Page
@@ -2796,60 +2801,11 @@ export function DisconnectionLists({ view = "builder" }: { view?: "builder" | "r
       subtitle={isRegister ? "Review submitted lists and record approval decisions" : `${selectedZoneName ?? "All zones"} · Controlled escalation after formal recovery notices`}
       actions={isRegister
         ? <><Button tone="slate" disabled={!review?.items?.length} onClick={() => review && void exportDisconnectionListExcel(review)}>Export selected list</Button><LinkButton to="/arrears/disconnections">Build disconnection list</LinkButton></>
-        : <><Button tone="slate" disabled={loading || !visibleEligible.length || Boolean(exportingEligible)} onClick={() => void exportEligible("excel")}>{exportingEligible === "excel" ? "Exporting…" : "Export Excel"}</Button><Button tone="slate" disabled={loading || !visibleEligible.length || Boolean(exportingEligible)} onClick={() => void exportEligible("csv")}>{exportingEligible === "csv" ? "Exporting…" : "Export CSV"}</Button><Button tone="slate" disabled={loading || !visibleEligible.length || Boolean(exportingEligible)} onClick={printEligible}>Print / Save PDF</Button><LinkButton to="/arrears/disconnections/register" tone="slate">Open list register</LinkButton></>}
+        : <><Button tone="slate" disabled={loading || !visibleEligible.length || Boolean(exportingEligible)} onClick={() => void exportEligible("excel")}>{exportingEligible === "excel" ? "Exporting…" : "Export Excel"}</Button><Button tone="slate" disabled={loading || !visibleEligible.length || Boolean(exportingEligible)} onClick={() => void exportEligible("csv")}>{exportingEligible === "csv" ? "Exporting…" : "Export CSV"}</Button><Button tone="slate" disabled={loading || !visibleEligible.length || Boolean(exportingEligible)} onClick={printEligible}>Print</Button><LinkButton to="/arrears/disconnections/register" tone="slate">Open list register</LinkButton></>}
     >
       {error && <Alert>{error}</Alert>}
       {message && <Alert success>{message}</Alert>}
-      {!isRegister && <>
-      <section className="disconnection-eligible-print-report hidden">
-        <header>
-          <img
-            src="/samdamte-water-logo-print.png"
-            alt="Samdamte Water Utility Management"
-          />
-          <div>
-            <h1>Samdamte Water Utility Management</h1>
-            <h2>Disconnection Eligible Accounts</h2>
-            <p>
-              {filterDescription} | {visibleEligible.length.toLocaleString()} account(s) |
-              Printed {new Date().toLocaleString("en-KE")}
-            </p>
-          </div>
-        </header>
-        {eligibleByZone.map(([zoneName, accounts], zoneIndex) => (
-          <section className="disconnection-print-zone" key={zoneName}>
-            <table>
-              <thead>
-                <tr className="disconnection-print-zone-title">
-                  <th colSpan={4}>
-                    {zoneName} <span>{accounts.length.toLocaleString()} account(s)</span>
-                  </th>
-                </tr>
-                <tr>
-                  <th>S/No.</th>
-                  <th>Account</th>
-                  <th>Customer</th>
-                  <th>Balance</th>
-                </tr>
-              </thead>
-              <tbody>
-                {accounts.map((row: Row, rowIndex: number) => (
-                  <tr key={row.accountId}>
-                    <td>
-                      {eligibleByZone
-                        .slice(0, zoneIndex)
-                        .reduce((total, [, zoneRows]) => total + zoneRows.length, 0) + rowIndex + 1}
-                    </td>
-                    <td>{row.accountNumber}</td>
-                    <td>{row.customerName}</td>
-                    <td>{money(row.currentBalance)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </section>
-        ))}
-      </section>
+      {!isRegister && <div className="disconnection-eligible-screen">
       <section className="mb-2 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
         <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
           <div className="min-w-0">
@@ -3073,7 +3029,7 @@ export function DisconnectionLists({ view = "builder" }: { view?: "builder" | "r
           </table>
         </div>
       </Card>
-      </>}
+      </div>}
       {isRegister && <div className="grid items-start gap-4 xl:grid-cols-[1.25fr_.75fr]">
         <Card title={`Disconnection list register · ${lists.length}`}>
           <div className="mb-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_190px]">

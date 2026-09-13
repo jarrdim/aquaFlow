@@ -3344,6 +3344,7 @@ export function DirectMeterService() {
   const reconnectionFee = Number(selected?.reconnectionFee ?? 0);
   const statementBalance = Math.max(0, Number(selected?.currentBalance ?? 0));
   const accountCreditAvailable = Number(selected?.accountCreditAvailable ?? 0);
+  const hasAccountCredit = accountCreditAvailable > 0;
   const creditCoversFee = reconnectionFee > 0 && accountCreditAvailable >= reconnectionFee;
   const money = (value: any) => Number(value ?? 0).toLocaleString("en-KE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -3396,7 +3397,7 @@ export function DirectMeterService() {
         {!selected ? <div className="py-12 text-center"><div className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-slate-100 text-slate-400">↔</div><p className="mt-3 text-sm font-semibold text-slate-600">Select a customer meter</p><p className="mt-1 text-xs text-slate-400">Its available direct action will appear here.</p></div> : <>
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
             <div className="flex items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase text-slate-400">{selected.accountNumber}</p><p className="mt-1 text-lg font-extrabold text-slate-900">{selected.meterNumber}</p><p className="text-sm text-slate-500">{selected.customerName}</p></div><Status value={disconnected ? "DISCONNECTED" : selected.accountStatus} /></div>
-            <dl className="mt-4 grid grid-cols-2 gap-3 border-t border-slate-200 pt-3 text-sm"><div><dt className="text-xs text-slate-400">Latest reading</dt><dd className="font-bold text-slate-800">{Number(selected.latestReading ?? 0).toLocaleString()}</dd></div><div><dt className="text-xs text-slate-400">Account balance</dt><dd className="font-bold text-slate-800">KSh {money(selected.currentBalance)}</dd></div></dl>
+            <dl className="mt-4 grid grid-cols-2 gap-3 border-t border-slate-200 pt-3 text-sm"><div><dt className="text-xs text-slate-400">Latest reading</dt><dd className="font-bold text-slate-800">{Number(selected.latestReading ?? 0).toLocaleString()}</dd></div><div><dt className="text-xs text-slate-400">{Number(selected.currentBalance ?? 0) < 0 ? "Available credit" : "Account balance"}</dt><dd className={`font-bold ${Number(selected.currentBalance ?? 0) < 0 ? "text-violet-700" : "text-slate-800"}`}>KSh {money(Math.abs(Number(selected.currentBalance ?? 0)))}</dd></div></dl>
           </div>
           {canReconnect && !reconnectionFeePostedToLedger && <div className="mt-3 overflow-hidden rounded-xl border border-slate-200">
             <div className={`p-3 text-sm ${paymentConfirmed ? "bg-emerald-50 text-emerald-800" : paymentPending ? "bg-blue-50 text-blue-800" : "bg-amber-50 text-amber-800"}`}>
@@ -3422,6 +3423,21 @@ export function DirectMeterService() {
                 <strong>Pay statement balance: KSh {money(statementBalance)}</strong>
                 <p className="mt-1 text-xs leading-5 text-amber-800">This includes the reconnection fee and all other posted charges. No separate fee payment is needed.</p>
               </div>
+              <div className={`rounded-lg border p-3 ${hasAccountCredit ? "border-violet-200 bg-violet-50 text-violet-900" : "border-slate-200 bg-white text-slate-700"}`}>
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="font-bold">Account credit / overpayment</p>
+                    <p className="mt-1 text-xs leading-5">
+                      {hasAccountCredit
+                        ? <>Available credit: <strong>KSh {money(accountCreditAvailable)}</strong>. It is already deducted from the statement balance shown above.</>
+                        : <>Available credit: <strong>KSh 0.00</strong>. This account has no unused overpayment to apply.</>}
+                    </p>
+                  </div>
+                  <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-bold ${hasAccountCredit ? "bg-violet-100 text-violet-800" : "bg-slate-100 text-slate-500"}`}>
+                    {hasAccountCredit ? "Applied" : "None"}
+                  </span>
+                </div>
+              </div>
               <Field label="Payment method" required>
                 <SearchableSelect
                   className={`${INPUT} bg-white`}
@@ -3433,7 +3449,7 @@ export function DirectMeterService() {
                     setError("");
                   }}
                 >
-                  <option value="ACCOUNT_CREDIT">Account credit</option>
+                  <option value="ACCOUNT_CREDIT" disabled={!hasAccountCredit}>Account credit{hasAccountCredit ? ` · KSh ${money(accountCreditAvailable)} available` : " · none available"}</option>
                   <option value="CASH">Cash</option>
                   <option value="MPESA_SEND_MONEY">M-Pesa Send Money</option>
                   <option value="BANK">Bank</option>
@@ -3444,7 +3460,7 @@ export function DirectMeterService() {
               {statementPaymentMethod === "ACCOUNT_CREDIT" && (
                 <div className="rounded-lg border border-violet-200 bg-violet-50 p-3 text-violet-900">
                   <p className="font-bold">Existing account credit</p>
-                  <p className="mt-1 text-xs leading-5">Available credit: <strong>KSh {money(accountCreditAvailable)}</strong>. Account credit is already included in the statement balance shown above. When it fully clears the balance, reconnection is enabled automatically.</p>
+                  <p className="mt-1 text-xs leading-5">Available credit: <strong>KSh {money(accountCreditAvailable)}</strong>. The system applies overpayments to posted charges automatically. The statement balance above is the amount left after using that credit.</p>
                 </div>
               )}
               {statementPaymentMethod === "MPESA_STK" && (
@@ -3495,7 +3511,7 @@ export function DirectMeterService() {
           )}
           {canReconnect && selected.reconnectionSettlementMethod === "ACCOUNT_LEDGER" && (
             <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-800">
-              The KSh {money(reconnectionFee)} reconnection fee is settled in this account statement. No second payment is required.
+              Overpayment applied automatically. The KSh {money(reconnectionFee)} reconnection fee is settled. Remaining account credit: KSh {money(accountCreditAvailable)}.
             </div>
           )}
           <div className="mt-4 grid gap-2">

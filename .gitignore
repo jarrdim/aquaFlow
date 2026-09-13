@@ -36,3 +36,5 @@ ngrok.exe
 *.tmp
 outputs/
 .vscode/
+
+/tmp/pdfs/
