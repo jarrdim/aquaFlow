@@ -3100,7 +3100,7 @@ export function DirectMeterService() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [form, setForm] = useState({
-    actionDateTime: nowLocal(), currentReading: "", reason: "", remarks: "",
+    actionDateTime: nowLocal(), currentReading: "", penaltyAmount: "0", reason: "", remarks: "",
     customerAcknowledgement: "ACKNOWLEDGED", confirmed: false,
   });
 
@@ -3169,7 +3169,7 @@ export function DirectMeterService() {
     setForm({
       actionDateTime: nowLocal(),
       currentReading: String(Number(selected.latestReading ?? 0)),
-      reason: "", remarks: "", customerAcknowledgement: "ACKNOWLEDGED", confirmed: false,
+      penaltyAmount: "0", reason: "", remarks: "", customerAcknowledgement: "ACKNOWLEDGED", confirmed: false,
     });
   }
   function closeAction() {
@@ -3191,12 +3191,13 @@ export function DirectMeterService() {
         setPreview(await api.previewDirectMeterDisconnection({
           accountId: String(selected.accountId), meterId: String(selected.meterId),
           actionDateTime: new Date(form.actionDateTime).toISOString(), currentReading,
+          penaltyAmount: Number(form.penaltyAmount || 0),
         }));
       } catch (err: any) { setPreviewError(err.message); }
       finally { setPreviewLoading(false); }
     }, 350);
     return () => window.clearTimeout(timer);
-  }, [mode, selected?.meterId, form.actionDateTime, form.currentReading]);
+  }, [mode, selected?.meterId, form.actionDateTime, form.currentReading, form.penaltyAmount]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -3211,7 +3212,7 @@ export function DirectMeterService() {
       if (mode === "DISCONNECT") {
         if (!preview) throw new Error("Wait for a valid final-reading charge preview.");
         const result = await api.createDirectMeterDisconnection({
-          ...common, currentReading: Number(form.currentReading),
+          ...common, currentReading: Number(form.currentReading), penaltyAmount: Number(form.penaltyAmount || 0),
           customerAcknowledgement: form.customerAcknowledgement,
           disconnectionListItemId: linkedListItemId || undefined,
         });
@@ -3220,7 +3221,7 @@ export function DirectMeterService() {
           : result.notificationDeliveryStatus === "SKIPPED_NO_PHONE"
             ? " Charges were posted, but no SMS was sent because the customer has no phone number."
             : ` SMS delivery is ${pretty(result.notificationDeliveryStatus)}${result.notificationFailureReason ? `: ${result.notificationFailureReason}` : "."}`;
-        setSuccess(`${selected.meterNumber} disconnected. Final reading ${Number(form.currentReading).toLocaleString()}; consumption KSh ${Number(result.consumptionCharge).toLocaleString("en-KE", { minimumFractionDigits: 2 })} and reconnection fee KSh ${Number(result.reconnectionFee).toLocaleString("en-KE", { minimumFractionDigits: 2 })} posted.${smsResult}`);
+        setSuccess(`${selected.meterNumber} disconnected. Final reading ${Number(form.currentReading).toLocaleString()}; consumption KSh ${Number(result.consumptionCharge).toLocaleString("en-KE", { minimumFractionDigits: 2 })}, reconnection fee KSh ${Number(result.reconnectionFee).toLocaleString("en-KE", { minimumFractionDigits: 2 })}, and penalty KSh ${Number(result.penaltyAmount ?? 0).toLocaleString("en-KE", { minimumFractionDigits: 2 })} posted.${smsResult}`);
       } else {
         const result = await api.createDirectMeterReconnection(common);
         setSuccess(`${selected.meterNumber} reconnected using paid request ${result.requestNumber}${result.receiptNumber ? ` · receipt ${result.receiptNumber}` : ""}.`);
@@ -3532,6 +3533,7 @@ export function DirectMeterService() {
             {mode === "DISCONNECT" && <Field label="Final meter reading" required><input type="number" min={Number(selected.latestReading ?? 0)} step="0.001" className={INPUT} value={form.currentReading} onChange={(e) => setForm({ ...form, currentReading: e.target.value, confirmed: false })} required /></Field>}
             {mode === "DISCONNECT" && <Field label="Customer acknowledgement" required><select className={INPUT} value={form.customerAcknowledgement} onChange={(e) => setForm({ ...form, customerAcknowledgement: e.target.value, confirmed: false })}><option value="ACKNOWLEDGED">Acknowledged</option><option value="UNAVAILABLE">Customer unavailable</option><option value="REFUSED_TO_SIGN">Refused to sign</option></select></Field>}
             <Field label="Reason" required><input className={INPUT} minLength={3} value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value, confirmed: false })} placeholder={mode === "DISCONNECT" ? "Reason for disconnection" : "Supply restored after confirmed payment"} required /></Field>
+            {mode === "DISCONNECT" && <Field label="Penalty amount (KSh)"><input type="number" min="0" max="10000000" step="0.01" className={INPUT} value={form.penaltyAmount} onChange={(e) => setForm({ ...form, penaltyAmount: e.target.value, confirmed: false })} /></Field>}
             <div className="sm:col-span-2"><Field label="Remarks"><textarea className={`${INPUT} min-h-20`} value={form.remarks} onChange={(e) => setForm({ ...form, remarks: e.target.value, confirmed: false })} placeholder="Optional operational notes" /></Field></div>
           </div>
           {mode === "DISCONNECT" && preview && <div className="overflow-hidden rounded-xl border border-sky-200 bg-sky-50">
@@ -3548,6 +3550,7 @@ export function DirectMeterService() {
             {preview && <div className="mt-2 grid gap-0.5 border-t border-slate-200 pt-2 text-xs">
               <div className="flex justify-between"><span className="text-slate-500">Final-reading consumption</span><strong>KSh {money(preview.consumptionCharge)}</strong></div>
               <div className="flex justify-between"><span className="text-slate-500">Reconnection fee</span><strong>KSh {money(preview.reconnectionFee)}</strong></div>
+              <div className="flex justify-between"><span className="text-slate-500">Penalty</span><strong>KSh {money(preview.penaltyAmount)}</strong></div>
               <div className="flex justify-between border-t border-slate-200 pt-2"><span className="font-semibold text-slate-700">Total posted now</span><strong>KSh {money(preview.finalReadingCharge)}</strong></div>
             </div>}
             {previewError && <p className="mt-2 text-xs font-semibold text-red-600">{previewError}</p>}

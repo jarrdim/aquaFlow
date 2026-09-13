@@ -26,6 +26,7 @@ function directDisconnectionSms(input: {
   previousBalance: number;
   consumptionCharge: number;
   reconnectionFee: number;
+  penaltyAmount: number;
   totalAmountDue: number;
 }) {
   const amount = (value: number) => value.toLocaleString("en-KE", {
@@ -35,7 +36,7 @@ function directDisconnectionSms(input: {
   const actionDate = input.actionDate.toLocaleDateString("en-KE", {
     timeZone: "Africa/Nairobi",
   });
-  return `Dear ${input.customerName}, your water supply for A/C ${input.accountNumber} was disconnected on ${actionDate}. Previous reading ${input.previousReading.toLocaleString("en-KE")}, final reading ${input.currentReading.toLocaleString("en-KE")}, consumption ${input.consumption.toLocaleString("en-KE")} units. Final-reading charge KSh ${amount(input.consumptionCharge)}; reconnection fee KSh ${amount(input.reconnectionFee)}; previous balance KSh ${amount(input.previousBalance)}; total amount due KSh ${amount(input.totalAmountDue)}. Pay through PayBill 823496 using ${input.accountNumber} as the account number. Reconnection will proceed after full payment. WE MAKE IT SAFE BECAUSE WATER IS LIFE. THANK YOU.`;
+  return `Dear ${input.customerName}, your water supply for A/C ${input.accountNumber} was disconnected on ${actionDate}. Previous reading ${input.previousReading.toLocaleString("en-KE")}, final reading ${input.currentReading.toLocaleString("en-KE")}, consumption ${input.consumption.toLocaleString("en-KE")} units. Final-reading charge KSh ${amount(input.consumptionCharge)}; reconnection fee KSh ${amount(input.reconnectionFee)}; penalty KSh ${amount(input.penaltyAmount)}; previous balance KSh ${amount(input.previousBalance)}; total amount due KSh ${amount(input.totalAmountDue)}. Pay through PayBill 823496 using ${input.accountNumber} as the account number. Reconnection will proceed after full payment. WE MAKE IT SAFE BECAUSE WATER IS LIFE. THANK YOU.`;
 }
 
 const optText = z.string().optional().transform((value) => value?.trim() || undefined);
@@ -757,6 +758,7 @@ const directDisconnectionSchema = z.object({
   disconnectionListItemId: z.string().regex(/^\d+$/).optional(),
   actionDateTime: z.coerce.date(),
   currentReading: z.coerce.number().finite().min(0).max(999_999_999),
+  penaltyAmount: z.coerce.number().finite().min(0).max(10_000_000).default(0),
   reason: z.string().trim().min(3).max(1000),
   remarks: z.string().trim().max(5000).optional(),
   customerAcknowledgement: z.enum(["ACKNOWLEDGED", "UNAVAILABLE", "REFUSED_TO_SIGN"]),
@@ -768,6 +770,7 @@ const directDisconnectionPreviewSchema = directDisconnectionSchema.pick({
   meterId: true,
   actionDateTime: true,
   currentReading: true,
+  penaltyAmount: true,
 });
 
 const directReconnectionSchema = z.object({
@@ -1407,7 +1410,8 @@ metersRouter.post("/service-actions/direct/disconnection/preview", directService
       return res.status(409).json({ error: "A positive reconnection fee is not configured" });
     }
     const consumptionCharge = roundMoney(prepared.calculation.totalCurrentCharges);
-    const totalPostedCharge = roundMoney(consumptionCharge + reconnectionFee);
+    const penaltyAmount = roundMoney(data.penaltyAmount);
+    const totalPostedCharge = roundMoney(consumptionCharge + reconnectionFee + penaltyAmount);
     const balanceAfterDisconnection = roundMoney(prepared.previousBalance + totalPostedCharge);
     const messagePreview = directDisconnectionSms({
       customerName: context.customerName,
@@ -1419,6 +1423,7 @@ metersRouter.post("/service-actions/direct/disconnection/preview", directService
       previousBalance: prepared.previousBalance,
       consumptionCharge,
       reconnectionFee,
+      penaltyAmount,
       totalAmountDue: balanceAfterDisconnection,
     });
     res.json({
@@ -1426,6 +1431,7 @@ metersRouter.post("/service-actions/direct/disconnection/preview", directService
       tariffCode: prepared.tariff.tariffCode, tariffName: prepared.tariff.tariffName,
       consumptionCharge,
       reconnectionFee,
+      penaltyAmount,
       finalReadingCharge: totalPostedCharge,
       currentBalance: prepared.previousBalance,
       balanceAfterDisconnection,
@@ -1475,7 +1481,8 @@ metersRouter.post("/service-actions/direct/disconnect", directServiceRoles, asyn
       const reconnectionFee = roundMoney(Number(settings?.reconnectionFee ?? 0));
       if (reconnectionFee <= 0) throw Object.assign(new Error("A positive reconnection fee is not configured"), { status: 409 });
       const consumptionCharge = roundMoney(prepared.calculation.totalCurrentCharges);
-      const totalPostedCharge = roundMoney(consumptionCharge + reconnectionFee);
+      const penaltyAmount = roundMoney(data.penaltyAmount);
+      const totalPostedCharge = roundMoney(consumptionCharge + reconnectionFee + penaltyAmount);
       const types = await tx.$queryRaw<any[]>`SELECT work_order_type_id FROM aquaflow.work_order_types WHERE type_code='DISCONNECTION' AND status='ACTIVE' LIMIT 1`;
       if (!types[0]) throw Object.assign(new Error("The DISCONNECTION operation type is not configured"), { status: 409 });
       const workOrderNumber = `WO-DD-${Date.now()}-${meterId}`;
@@ -1505,7 +1512,7 @@ metersRouter.post("/service-actions/direct/disconnect", directServiceRoles, asyn
           fee_overridden,fee_override_reason,fine_amount,fine_reason,posted_by)
         VALUES(${workOrder.workOrderId},${accountId},${meterId},${reading.readingId},${context.latestReading},
           ${data.currentReading},${prepared.calculation.totalCurrentCharges},${prepared.calculation.totalCurrentCharges},
-          FALSE,NULL,0,NULL,${actorId})`;
+          FALSE,NULL,${penaltyAmount},${penaltyAmount > 0 ? data.reason : null},${actorId})`;
       const reconnectionFeeAdjustment = await tx.accountAdjustment.create({ data: {
         adjustmentNumber: `AADJ-RCF-${Date.now()}-${String(accountId).slice(-5)}`,
         accountId,
@@ -1541,6 +1548,7 @@ metersRouter.post("/service-actions/direct/disconnect", directServiceRoles, asyn
         previousBalance: prepared.previousBalance,
         consumptionCharge,
         reconnectionFee,
+        penaltyAmount,
         totalAmountDue,
       });
       const notification = context.customerPhone
@@ -1560,6 +1568,7 @@ metersRouter.post("/service-actions/direct/disconnect", directServiceRoles, asyn
               reconnectionRequestId: reconnectionRequest.reconnectionRequestId.toString(),
               consumptionCharge,
               reconnectionFee,
+              penaltyAmount,
               totalPostedCharge,
               totalAmountDue,
             },
@@ -1574,7 +1583,7 @@ metersRouter.post("/service-actions/direct/disconnect", directServiceRoles, asyn
       await tx.arrearsAction.create({ data: {
         accountId, actionType: "DIRECT_METER_DISCONNECTION", referenceType: "WORK_ORDER",
         referenceId: workOrder.workOrderId, details: data.reason, performedBy: actorId,
-        metadata: { meterId: meterId.toString(), meterNumber: context.meterNumber, readingId: reading.readingId.toString(), currentReading: data.currentReading, consumptionCharge, reconnectionFee, totalPostedCharge, reconnectionFeeAdjustmentId: reconnectionFeeAdjustment.accountAdjustmentId.toString(), reconnectionRequestId: reconnectionRequest.reconnectionRequestId.toString(), remarks: data.remarks ?? null, disconnectionListItemId: linkedListItem?.disconnectionItemId.toString() ?? null, disconnectionListReference: linkedListItem?.list.listReference ?? null },
+        metadata: { meterId: meterId.toString(), meterNumber: context.meterNumber, readingId: reading.readingId.toString(), currentReading: data.currentReading, consumptionCharge, reconnectionFee, penaltyAmount, totalPostedCharge, reconnectionFeeAdjustmentId: reconnectionFeeAdjustment.accountAdjustmentId.toString(), reconnectionRequestId: reconnectionRequest.reconnectionRequestId.toString(), remarks: data.remarks ?? null, disconnectionListItemId: linkedListItem?.disconnectionItemId.toString() ?? null, disconnectionListReference: linkedListItem?.list.listReference ?? null },
       } });
       if (linkedListItem) {
         await tx.disconnectionListItem.update({
@@ -1591,7 +1600,7 @@ metersRouter.post("/service-actions/direct/disconnect", directServiceRoles, asyn
           });
       }
       return { action: "DISCONNECTED", workOrder, readingId: reading.readingId, consumptionCharge,
-        reconnectionFee, finalReadingCharge: totalPostedCharge, reconnectionRequestNumber: reconnectionRequest.requestNumber,
+        reconnectionFee, penaltyAmount, finalReadingCharge: totalPostedCharge, reconnectionRequestNumber: reconnectionRequest.requestNumber,
         notificationId: notification?.notificationId.toString() ?? null,
         notificationRecipient: notification?.recipient ?? null,
         notificationMessage: messageBody };
