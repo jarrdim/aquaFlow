@@ -3059,6 +3059,13 @@ export function DirectMeterReplacement() {
 }
 
 type DirectServiceMode = "DISCONNECT" | "RECONNECT";
+type StatementPaymentMethod =
+  | "ACCOUNT_CREDIT"
+  | "CASH"
+  | "MPESA_SEND_MONEY"
+  | "BANK"
+  | "C2B"
+  | "MPESA_STK";
 
 export function DirectMeterService() {
   const [serviceParams] = useSearchParams();
@@ -3085,6 +3092,9 @@ export function DirectMeterService() {
   const [paymentBusy, setPaymentBusy] = useState("");
   const [paymentMessage, setPaymentMessage] = useState("");
   const [paymentPhone, setPaymentPhone] = useState("");
+  const [paymentChannels, setPaymentChannels] = useState<AnyRecord[]>([]);
+  const [statementPaymentMethod, setStatementPaymentMethod] = useState<StatementPaymentMethod>("MPESA_STK");
+  const [statementPaymentReference, setStatementPaymentReference] = useState("");
   const [preview, setPreview] = useState<AnyRecord | null>(null);
   const [previewError, setPreviewError] = useState("");
   const [error, setError] = useState("");
@@ -3137,6 +3147,11 @@ export function DirectMeterService() {
   }
   useEffect(() => { void load(linkedAccountNumber, false); }, []);
   useEffect(() => {
+    api.listPaymentChannels()
+      .then((channels) => setPaymentChannels((channels ?? []).filter((channel: AnyRecord) => channel.status === "ACTIVE")))
+      .catch((err: any) => setError(err.message));
+  }, []);
+  useEffect(() => {
     const timer = window.setTimeout(() => void load(search, true), 300);
     return () => window.clearTimeout(timer);
   }, [search]);
@@ -3144,6 +3159,8 @@ export function DirectMeterService() {
   useEffect(() => {
     setPaymentPhone(String(selected?.customerPhone ?? ""));
     setPaymentMessage("");
+    setStatementPaymentMethod("MPESA_STK");
+    setStatementPaymentReference("");
   }, [selected?.meterId]);
 
   function openAction(nextMode: DirectServiceMode) {
@@ -3265,6 +3282,36 @@ export function DirectMeterService() {
     }
   }
 
+  async function recordStatementPayment(channelCode: "CASH" | "MPESA_SEND_MONEY" | "BANK", label: string) {
+    if (!selected) return;
+    const channel = paymentChannels.find((item) => String(item.channelCode).toUpperCase() === channelCode);
+    if (!channel) {
+      setError(`${label} is not configured as an active payment channel.`);
+      return;
+    }
+    const reference = channelCode === "CASH"
+      ? `CASH-${selected.accountNumber}-${Date.now()}`
+      : statementPaymentReference.trim();
+    if (!reference) {
+      setError(`Enter the ${label.toLowerCase()} transaction reference.`);
+      return;
+    }
+    if (!window.confirm(`Record KSh ${money(statementBalance)} received through ${label} for ${selected.accountNumber}?`)) return;
+    await paymentAction(`statement-${channelCode.toLowerCase()}`, () => api.recordPayment({
+      accountId: String(selected.accountId),
+      channelId: String(channel.channelId),
+      transactionReference: reference,
+      amount: statementBalance,
+      paymentDate: new Date().toISOString(),
+      paymentType: "BILL_PAYMENT",
+      autoAllocate: true,
+      remarks: `Full statement payment recorded from direct meter reconnection via ${label}`,
+    }), () => {
+      setStatementPaymentReference("");
+      return `${label} payment posted successfully and a receipt was generated.`;
+    });
+  }
+
   async function refreshPayment() {
     if (!selected) return;
     await paymentAction("refresh", () => api.refreshDirectReconnectionPayment(String(selected.accountId)),
@@ -3295,7 +3342,7 @@ export function DirectMeterService() {
   const paymentPending = selected?.reconnectionFeePaymentStatus === "PENDING";
   const reconnectionFeePostedToLedger = Boolean(selected?.reconnectionFeePostedToLedger);
   const reconnectionFee = Number(selected?.reconnectionFee ?? 0);
-  const statementBalance = Math.max(0, Math.ceil(Number(selected?.currentBalance ?? 0)));
+  const statementBalance = Math.max(0, Number(selected?.currentBalance ?? 0));
   const accountCreditAvailable = Number(selected?.accountCreditAvailable ?? 0);
   const creditCoversFee = reconnectionFee > 0 && accountCreditAvailable >= reconnectionFee;
   const money = (value: any) => Number(value ?? 0).toLocaleString("en-KE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -3375,17 +3422,78 @@ export function DirectMeterService() {
                 <strong>Pay statement balance: KSh {money(statementBalance)}</strong>
                 <p className="mt-1 text-xs leading-5 text-amber-800">This includes the reconnection fee and all other posted charges. No separate fee payment is needed.</p>
               </div>
-              <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
-                <p className="font-bold text-emerald-900">M-Pesa STK prompt</p>
-                <div className="mt-2 flex gap-2">
-                  <input className={`${INPUT} min-w-0 flex-1 bg-white`} value={paymentPhone} onChange={(event) => setPaymentPhone(event.target.value)} placeholder="2547XXXXXXXX" disabled={Boolean(paymentBusy)} />
-                  <Button type="button" tone="green" disabled={Boolean(paymentBusy) || statementBalance <= 0 || paymentPhone.trim().length < 7} onClick={() => void sendStatementStkPrompt()}>{paymentBusy === "statement-stk" ? "Sendingâ€¦" : "Pay full balance"}</Button>
+              <div>
+                <p className="mb-2 text-xs font-bold uppercase tracking-wider text-amber-800">Payment method</p>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                  {([
+                    ["ACCOUNT_CREDIT", "Account credit"],
+                    ["CASH", "Cash"],
+                    ["MPESA_SEND_MONEY", "Send Money"],
+                    ["BANK", "Bank"],
+                    ["C2B", "C2B / PayBill"],
+                    ["MPESA_STK", "M-Pesa STK"],
+                  ] as Array<[StatementPaymentMethod, string]>).map(([method, label]) => (
+                    <button
+                      type="button"
+                      key={method}
+                      disabled={Boolean(paymentBusy)}
+                      onClick={() => { setStatementPaymentMethod(method); setPaymentMessage(""); setError(""); }}
+                      className={`rounded-lg border px-2.5 py-2 text-xs font-bold transition disabled:opacity-50 ${statementPaymentMethod === method ? "border-aqua-700 bg-aqua-700 text-white" : "border-slate-200 bg-white text-slate-700 hover:border-aqua-300"}`}
+                    >
+                      {label}
+                    </button>
+                  ))}
                 </div>
               </div>
-              <div className="rounded-lg border border-sky-200 bg-sky-50 p-3 text-xs leading-5 text-sky-800">
-                <strong>PayBill 823496:</strong> use <strong>{selected.accountNumber}</strong> as the account number and pay <strong>KSh {money(statementBalance)}</strong>.
-              </div>
-              <Button type="button" tone="slate" className="w-full" disabled={Boolean(paymentBusy)} onClick={() => void refreshStatementBalance()}>{paymentBusy === "statement-refresh" ? "Refreshingâ€¦" : "Refresh balance after payment"}</Button>
+              {statementPaymentMethod === "ACCOUNT_CREDIT" && (
+                <div className="rounded-lg border border-violet-200 bg-violet-50 p-3 text-violet-900">
+                  <p className="font-bold">Existing account credit</p>
+                  <p className="mt-1 text-xs leading-5">Available credit: <strong>KSh {money(accountCreditAvailable)}</strong>. Account credit is already included in the statement balance shown above. When it fully clears the balance, reconnection is enabled automatically.</p>
+                </div>
+              )}
+              {statementPaymentMethod === "MPESA_STK" && (
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+                  <p className="font-bold text-emerald-900">M-Pesa STK prompt</p>
+                  <div className="mt-2 flex gap-2">
+                    <input className={`${INPUT} min-w-0 flex-1 bg-white`} value={paymentPhone} onChange={(event) => setPaymentPhone(event.target.value)} placeholder="2547XXXXXXXX" disabled={Boolean(paymentBusy)} />
+                    <Button type="button" tone="green" disabled={Boolean(paymentBusy) || statementBalance <= 0 || paymentPhone.trim().length < 7} onClick={() => void sendStatementStkPrompt()}>{paymentBusy === "statement-stk" ? "Sending…" : "Pay full balance"}</Button>
+                  </div>
+                </div>
+              )}
+              {statementPaymentMethod === "C2B" && (
+                <div className="rounded-lg border border-sky-200 bg-sky-50 p-3 text-xs leading-5 text-sky-800">
+                  <strong>PayBill 823496:</strong> use <strong>{selected.accountNumber}</strong> as the account number and pay <strong>KSh {money(statementBalance)}</strong>. The C2B callback posts the payment automatically; refresh the balance after confirmation.
+                </div>
+              )}
+              {statementPaymentMethod === "CASH" && (
+                <div className="rounded-lg border border-slate-200 bg-white p-3">
+                  <p className="font-bold text-slate-900">Cash payment</p>
+                  <p className="mt-1 text-xs text-slate-500">Record the full amount received and generate a system receipt.</p>
+                  <Button type="button" tone="green" className="mt-3 w-full" disabled={Boolean(paymentBusy) || statementBalance <= 0} onClick={() => void recordStatementPayment("CASH", "Cash")}>{paymentBusy === "statement-cash" ? "Posting…" : `Record KSh ${money(statementBalance)} cash`}</Button>
+                </div>
+              )}
+              {(statementPaymentMethod === "MPESA_SEND_MONEY" || statementPaymentMethod === "BANK") && (
+                <div className="rounded-lg border border-slate-200 bg-white p-3">
+                  <p className="font-bold text-slate-900">{statementPaymentMethod === "BANK" ? "Bank payment" : "M-Pesa Send Money"}</p>
+                  <input
+                    className={`${INPUT} mt-2 bg-white`}
+                    value={statementPaymentReference}
+                    onChange={(event) => setStatementPaymentReference(event.target.value)}
+                    placeholder={statementPaymentMethod === "BANK" ? "Bank transaction reference" : "M-Pesa transaction code"}
+                    disabled={Boolean(paymentBusy)}
+                  />
+                  <Button
+                    type="button"
+                    tone="green"
+                    className="mt-2 w-full"
+                    disabled={Boolean(paymentBusy) || statementBalance <= 0 || statementPaymentReference.trim().length < 2}
+                    onClick={() => void recordStatementPayment(statementPaymentMethod, statementPaymentMethod === "BANK" ? "Bank" : "M-Pesa Send Money")}
+                  >
+                    {paymentBusy === `statement-${statementPaymentMethod.toLowerCase()}` ? "Posting…" : `Record KSh ${money(statementBalance)} payment`}
+                  </Button>
+                </div>
+              )}
+              <Button type="button" tone="slate" className="w-full" disabled={Boolean(paymentBusy)} onClick={() => void refreshStatementBalance()}>{paymentBusy === "statement-refresh" ? "Refreshing…" : "Refresh balance after payment"}</Button>
               {paymentMessage && <p className="rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-700">{paymentMessage}</p>}
             </div>
           )}

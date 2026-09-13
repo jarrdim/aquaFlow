@@ -35,3 +35,4 @@ ngrok.exe
 .tmp/build-properties-workbook.cjs
 *.tmp
 outputs/
+.vscode/

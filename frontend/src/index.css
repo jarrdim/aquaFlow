@@ -309,10 +309,13 @@ input[type="radio"] {
 }
 
 @keyframes landing-live-pulse {
-  0%, 100% {
+
+  0%,
+  100% {
     box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.45);
     opacity: 1;
   }
+
   50% {
     box-shadow: 0 0 0 5px rgba(52, 211, 153, 0);
     opacity: 0.75;
@@ -320,10 +323,13 @@ input[type="radio"] {
 }
 
 @keyframes landing-chart-breathe {
-  0%, 100% {
+
+  0%,
+  100% {
     transform: scaleY(0.88);
     filter: saturate(0.9);
   }
+
   50% {
     transform: scaleY(1);
     filter: saturate(1.15);
@@ -331,9 +337,12 @@ input[type="radio"] {
 }
 
 @keyframes landing-toast-float {
-  0%, 100% {
+
+  0%,
+  100% {
     transform: translate3d(0, 0, 0);
   }
+
   50% {
     transform: translate3d(0, -7px, 0);
   }
@@ -392,12 +401,12 @@ input[type="radio"] {
   font-family: Arial, Helvetica, sans-serif;
 }
 
-.daily-report-print-document > header + div,
-.daily-report-print-document > section {
+.daily-report-print-document>header+div,
+.daily-report-print-document>section {
   display: none;
 }
 
-.daily-report-preview > div:first-child {
+.daily-report-preview>div:first-child {
   position: sticky;
   top: 0;
   z-index: 30;
@@ -406,6 +415,7 @@ input[type="radio"] {
 }
 
 @media (prefers-reduced-motion: reduce) {
+
   .landing-live-dot,
   .landing-workflow-dot,
   .landing-chart-bar,
@@ -444,6 +454,12 @@ input[type="radio"] {
     margin: 9mm;
   }
 
+  @page disconnection-eligible {
+    size: A4 portrait;
+    /* Extra top margin reserves room for the fixed running header on every page. */
+    margin: 34mm 10mm 10mm;
+  }
+
   body.printing-arrears-aging {
     overflow: visible !important;
     background: white !important;
@@ -478,7 +494,7 @@ input[type="radio"] {
     -webkit-print-color-adjust: exact !important;
   }
 
-  body.printing-arrears-aging .arrears-aging-print-page > div {
+  body.printing-arrears-aging .arrears-aging-print-page>div {
     width: 100% !important;
     max-width: none !important;
     margin: 0 !important;
@@ -522,14 +538,14 @@ input[type="radio"] {
     box-shadow: none !important;
   }
 
-  body.printing-arrears-aging .arrears-aging-report-card > div:first-child {
+  body.printing-arrears-aging .arrears-aging-report-card>div:first-child {
     padding: 0 0 3mm !important;
     border: 0 !important;
     color: #0b4f7c !important;
     font-size: 11pt;
   }
 
-  body.printing-arrears-aging .arrears-aging-report-card > div:last-child {
+  body.printing-arrears-aging .arrears-aging-report-card>div:last-child {
     padding: 0 !important;
   }
 
@@ -565,11 +581,7 @@ input[type="radio"] {
     overflow-wrap: anywhere;
   }
 
-  body.printing-arrears-aging
-    .arrears-aging-report-card
-    tbody
-    tr:nth-child(even)
-    td {
+  body.printing-arrears-aging .arrears-aging-report-card tbody tr:nth-child(even) td {
     background: #f0f9ff !important;
   }
 
@@ -601,12 +613,159 @@ input[type="radio"] {
     width: 15%;
   }
 
+  body.printing-disconnection-eligible {
+    overflow: visible !important;
+    background: white !important;
+  }
+
+  body.printing-disconnection-eligible>* {
+    visibility: hidden !important;
+  }
+
+  body.printing-disconnection-eligible .disconnection-eligible-print-report,
+  body.printing-disconnection-eligible .disconnection-eligible-print-report * {
+    visibility: visible !important;
+  }
+
+  body.printing-disconnection-eligible .disconnection-eligible-print-report {
+    display: block !important;
+    position: absolute !important;
+    inset: 0 !important;
+    width: 100% !important;
+    padding: 0 !important;
+    color: #000 !important;
+    background: white !important;
+    page: disconnection-eligible;
+    print-color-adjust: exact !important;
+    -webkit-print-color-adjust: exact !important;
+  }
+
+  body.printing-disconnection-eligible .disconnection-eligible-print-report>header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    /* Fixed to the physical page edge, repeats on every page within the reserved @page top margin. */
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 26mm;
+    padding: 3mm 5mm;
+    border-bottom: 2px solid #000;
+    background: white !important;
+    overflow: hidden;
+    break-inside: avoid;
+  }
+
+  body.printing-disconnection-eligible .disconnection-eligible-print-report>header img {
+    width: auto;
+    max-width: 110px;
+    height: auto;
+    max-height: 18mm;
+    filter: grayscale(1);
+  }
+
+  body.printing-disconnection-eligible .disconnection-eligible-print-report h1 {
+    margin: 0;
+    color: #000 !important;
+    font-size: 16pt;
+    font-weight: 800;
+  }
+
+  body.printing-disconnection-eligible .disconnection-eligible-print-report h2 {
+    margin: 2px 0;
+    color: #000 !important;
+    font-size: 12pt;
+    font-weight: 700;
+  }
+
+  body.printing-disconnection-eligible .disconnection-eligible-print-report header p {
+    margin: 0;
+    color: #000 !important;
+    font-size: 8pt;
+  }
+
+  body.printing-disconnection-eligible .disconnection-print-zone {
+    margin-bottom: 6mm;
+  }
+
+  body.printing-disconnection-eligible .disconnection-print-zone table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+  }
+
+  body.printing-disconnection-eligible .disconnection-print-zone thead {
+    display: table-header-group;
+  }
+
+  body.printing-disconnection-eligible .disconnection-print-zone-title {
+    break-after: avoid;
+    break-inside: avoid;
+  }
+
+  body.printing-disconnection-eligible .disconnection-print-zone-title th {
+    padding: 6px 8px;
+    border: 1px solid #000;
+    background: white !important;
+    color: #000 !important;
+    font-size: 10pt;
+    text-align: left;
+  }
+
+  body.printing-disconnection-eligible .disconnection-print-zone-title th span {
+    float: right;
+    font-size: 8pt;
+    font-weight: 600;
+  }
+
+  body.printing-disconnection-eligible .disconnection-print-zone th {
+    padding: 6px 8px;
+    border: 1px solid #000;
+    background: white !important;
+    color: #000 !important;
+    font-size: 8pt;
+    text-align: left;
+  }
+
+  body.printing-disconnection-eligible .disconnection-print-zone td {
+    padding: 6px 8px;
+    border: 1px solid #000;
+    color: #000 !important;
+    font-size: 8.5pt;
+    overflow-wrap: anywhere;
+  }
+
+  body.printing-disconnection-eligible .disconnection-print-zone tbody tr:nth-child(even) td {
+    background: white !important;
+  }
+
+  body.printing-disconnection-eligible .disconnection-print-zone tr {
+    break-inside: avoid;
+  }
+
+  body.printing-disconnection-eligible .disconnection-print-zone th:nth-child(1) {
+    width: 8%;
+  }
+
+  body.printing-disconnection-eligible .disconnection-print-zone th:nth-child(2) {
+    width: 20%;
+  }
+
+  body.printing-disconnection-eligible .disconnection-print-zone th:nth-child(3) {
+    width: 47%;
+  }
+
+  body.printing-disconnection-eligible .disconnection-print-zone th:nth-child(4) {
+    width: 25%;
+  }
+
   body.printing-daily-report {
     overflow: visible !important;
     background: white !important;
   }
 
-  body.printing-daily-report > * {
+  body.printing-daily-report>* {
     visibility: hidden !important;
   }
 
@@ -623,7 +782,7 @@ input[type="radio"] {
     background: white !important;
   }
 
-  body.printing-daily-report .daily-report-preview > div:first-child {
+  body.printing-daily-report .daily-report-preview>div:first-child {
     display: none !important;
   }
 
@@ -640,8 +799,8 @@ input[type="radio"] {
     -webkit-print-color-adjust: exact;
   }
 
-  body.printing-daily-report .daily-report-print-document > header + div,
-  body.printing-daily-report .daily-report-print-document > section {
+  body.printing-daily-report .daily-report-print-document>header+div,
+  body.printing-daily-report .daily-report-print-document>section {
     display: none !important;
   }
 
@@ -840,7 +999,7 @@ input[type="radio"] {
     break-inside: avoid;
   }
 
-  body.printing-statement .statement-account-grid > div {
+  body.printing-statement .statement-account-grid>div {
     grid-template-columns: 92px minmax(0, 1fr) !important;
     row-gap: 3px !important;
   }
@@ -935,7 +1094,7 @@ input[type="radio"] {
     margin-top: 8px !important;
   }
 
-  body.printing-statement .statement-balance-forward > div {
+  body.printing-statement .statement-balance-forward>div {
     min-width: 250px !important;
     padding-top: 5px !important;
     font-size: 12pt !important;
@@ -966,6 +1125,7 @@ input[type="radio"] {
     padding-top: 7px !important;
   }
 }
+
 /* Tariff management shares one polished, responsive control system. */
 .tariff-module .tariff-card-content {
   overflow-x: auto;
@@ -1011,6 +1171,6 @@ input[type="radio"] {
   padding: 1rem;
 }
 
-.tariff-module .tariff-sidebar-card > div:first-child {
+.tariff-module .tariff-sidebar-card>div:first-child {
   padding: 0.8rem 1rem;
 }

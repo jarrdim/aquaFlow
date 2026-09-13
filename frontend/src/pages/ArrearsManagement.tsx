@@ -629,7 +629,13 @@ export function ArrearsAgingReport() {
       </div>
       {error && <Alert>{error}</Alert>}
       <Card className="arrears-aging-screen-filters mb-4">
-        <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+        <form
+          className="grid gap-3 md:grid-cols-2 xl:grid-cols-4 xl:items-end 2xl:grid-cols-7"
+          onSubmit={(event) => {
+            event.preventDefault();
+            search();
+          }}
+        >
           <Field label="Report date">
             <DateInput
               className={INPUT}
@@ -701,41 +707,49 @@ export function ArrearsAgingReport() {
               }
             />
           </Field>
-          <Field label="Customer account">
-            <div className="flex gap-2">
-              <SearchableSelect
-                className={INPUT}
-                disabled={loading || loadingAccounts}
-                value={filters.accountIds}
-                onChange={(e) => {
-                  setFilters({ ...filters, accountIds: e.target.value });
-                  setAccountSearch("");
-                }}
-                onSearchQuery={setAccountSearch}
-              >
-                <option value="">
-                  {loadingAccounts ? "Loading accounts..." : "All accounts"}
-                </option>
-                {accountOptions.map((account: Row) => (
-                  <option key={account.accountId} value={account.accountId}>
-                    {account.accountNumber} - {account.customer.organizationName ||
-                      [account.customer.firstName, account.customer.middleName, account.customer.lastName]
-                        .filter(Boolean)
-                        .join(" ")}
+          <div className="md:col-span-2 xl:col-span-2">
+            <Field label="Customer account">
+              <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+                <SearchableSelect
+                  className={INPUT}
+                  disabled={loading || (loadingAccounts && !accountOptions.length)}
+                  value={filters.accountIds}
+                  onChange={(e) => {
+                    setFilters({ ...filters, accountIds: e.target.value });
+                    setAccountSearch("");
+                  }}
+                  onSearchQuery={setAccountSearch}
+                >
+                  <option value="">
+                    {loadingAccounts && !accountOptions.length
+                      ? "Loading accounts..."
+                      : "All accounts"}
                   </option>
-                ))}
-              </SearchableSelect>
-              <Button disabled={loading || loadingAccounts} onClick={search}>
-                <span className="inline-flex items-center gap-2">
-                  {loading && (
-                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
-                  )}
-                  {loading ? "Searching…" : "Search"}
-                </span>
-              </Button>
-            </div>
-          </Field>
-        </div>
+                  {accountOptions.map((account: Row) => (
+                    <option key={account.accountId} value={account.accountId}>
+                      {account.accountNumber} - {account.customer.organizationName ||
+                        [account.customer.firstName, account.customer.middleName, account.customer.lastName]
+                          .filter(Boolean)
+                          .join(" ")}
+                    </option>
+                  ))}
+                </SearchableSelect>
+                <Button
+                  type="submit"
+                  disabled={loading}
+                  className="min-w-[6.5rem] whitespace-nowrap"
+                >
+                  <span className="inline-flex items-center gap-2">
+                    {loading && (
+                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                    )}
+                    {loading ? "Searching…" : "Search"}
+                  </span>
+                </Button>
+              </div>
+            </Field>
+          </div>
+        </form>
       </Card>
       <Card
         className="arrears-aging-report-card"
@@ -2559,17 +2573,26 @@ export function DisconnectionLists({ view = "builder" }: { view?: "builder" | "r
   const [filters, setFilters] = useState<Row>({
     minimumAgeDays: "90",
     minimumBalance: "2000",
-    zoneId: "",
+    zoneIds: "",
     requireFinalDemandNotice: "true",
   });
+  const selectedZoneIds = String(filters.zoneIds ?? "")
+    .split(",")
+    .filter(Boolean);
+  const loadRequestId = useRef(0);
   const load = async () => {
+    const requestId = ++loadRequestId.current;
     setLoading(true);
     setError("");
     try {
       const [eligibilityResult, listRows] = await Promise.all([
         api.disconnectionEligible(filters),
-        api.listDisconnectionLists(String(filters.zoneId || "")),
+        api.listDisconnectionLists(
+          selectedZoneIds.length === 1 ? selectedZoneIds[0] : "",
+        ),
       ]);
+      // Ignore this response if a newer filter change has already started another request.
+      if (requestId !== loadRequestId.current) return;
       // Accept the legacy array response while the API deployment rolls forward.
       const eligibleRows = Array.isArray(eligibilityResult)
         ? eligibilityResult
@@ -2608,14 +2631,15 @@ export function DisconnectionLists({ view = "builder" }: { view?: "builder" | "r
         ),
       );
     } catch (e: any) {
+      if (requestId !== loadRequestId.current) return;
       setError(e.message);
     } finally {
-      setLoading(false);
+      if (requestId === loadRequestId.current) setLoading(false);
     }
   };
   useEffect(() => {
     void load();
-  }, [filters.minimumAgeDays, filters.minimumBalance, filters.zoneId, filters.requireFinalDemandNotice]);
+  }, [filters.minimumAgeDays, filters.minimumBalance, filters.zoneIds, filters.requireFinalDemandNotice]);
   useEffect(() => {
     api.listZones().then(setZones).catch((e) => setError(e.message));
   }, []);
@@ -2627,7 +2651,7 @@ export function DisconnectionLists({ view = "builder" }: { view?: "builder" | "r
         accountIds: selected,
         minimumAgeDays: filters.minimumAgeDays,
         minimumBalance: filters.minimumBalance,
-        zoneId: filters.zoneId || undefined,
+        zoneId: selectedZoneIds.length === 1 ? selectedZoneIds[0] : undefined,
         requireFinalDemandNotice: filters.requireFinalDemandNotice === "true",
         remarks: filters.requireFinalDemandNotice === "true"
           ? "Generated from queued formal recovery notices"
@@ -2678,7 +2702,11 @@ export function DisconnectionLists({ view = "builder" }: { view?: "builder" | "r
       setBulkAction("");
     }
   }
-  const selectedZoneName = zones.find((zone) => String(zone.zoneId) === String(filters.zoneId))?.zoneName;
+  const selectedZoneName = selectedZoneIds.length === 1
+    ? zones.find((zone) => String(zone.zoneId) === selectedZoneIds[0])?.zoneName
+    : selectedZoneIds.length > 1
+      ? `${selectedZoneIds.length} zones`
+      : undefined;
   const accountsNeedingNotice = Math.max(
     0,
     Number(eligibility.thresholdMatches ?? 0) -
@@ -2705,9 +2733,19 @@ export function DisconnectionLists({ view = "builder" }: { view?: "builder" | "r
     .map((row) => String(row.disconnectionListId));
   const allPendingVisibleSelected = pendingVisibleListIds.length > 0 &&
     pendingVisibleListIds.every((id) => selectedListIds.includes(id));
-  const visibleEligible = customerFilter
-    ? eligible.filter((row) => String(row.accountId) === customerFilter)
+  const zoneFilteredEligible = selectedZoneIds.length
+    ? eligible.filter((row) => selectedZoneIds.includes(String(row.zone?.zoneId)))
     : eligible;
+  const visibleEligible = customerFilter
+    ? zoneFilteredEligible.filter((row) => String(row.accountId) === customerFilter)
+    : zoneFilteredEligible;
+  const eligibleByZone = Object.entries(
+    visibleEligible.reduce((groups: Record<string, Row[]>, row: Row) => {
+      const zoneName = row.zone?.zoneName ?? "Unassigned zone";
+      (groups[zoneName] ??= []).push(row);
+      return groups;
+    }, {}),
+  ).sort(([left], [right]) => left.localeCompare(right));
   const compactTH = "px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500";
   const compactTD = "px-3 py-2 text-sm text-slate-600";
   function eligibleExportRows() {
@@ -2744,6 +2782,13 @@ export function DisconnectionLists({ view = "builder" }: { view?: "builder" | "r
     } catch (e: any) { setError(e.message); }
     finally { setExportingEligible(""); }
   }
+  function printEligible() {
+    const cleanup = () =>
+      document.body.classList.remove("printing-disconnection-eligible");
+    document.body.classList.add("printing-disconnection-eligible");
+    window.addEventListener("afterprint", cleanup, { once: true });
+    window.print();
+  }
   return (
     <Page
       compact
@@ -2751,11 +2796,60 @@ export function DisconnectionLists({ view = "builder" }: { view?: "builder" | "r
       subtitle={isRegister ? "Review submitted lists and record approval decisions" : `${selectedZoneName ?? "All zones"} · Controlled escalation after formal recovery notices`}
       actions={isRegister
         ? <><Button tone="slate" disabled={!review?.items?.length} onClick={() => review && void exportDisconnectionListExcel(review)}>Export selected list</Button><LinkButton to="/arrears/disconnections">Build disconnection list</LinkButton></>
-        : <><Button tone="slate" disabled={loading || !visibleEligible.length || Boolean(exportingEligible)} onClick={() => void exportEligible("excel")}>{exportingEligible === "excel" ? "Exporting…" : "Export Excel"}</Button><Button tone="slate" disabled={loading || !visibleEligible.length || Boolean(exportingEligible)} onClick={() => void exportEligible("csv")}>{exportingEligible === "csv" ? "Exporting…" : "Export CSV"}</Button><LinkButton to="/arrears/disconnections/register" tone="slate">Open list register</LinkButton><LinkButton to="/arrears/notices">Manage demand notices</LinkButton></>}
+        : <><Button tone="slate" disabled={loading || !visibleEligible.length || Boolean(exportingEligible)} onClick={() => void exportEligible("excel")}>{exportingEligible === "excel" ? "Exporting…" : "Export Excel"}</Button><Button tone="slate" disabled={loading || !visibleEligible.length || Boolean(exportingEligible)} onClick={() => void exportEligible("csv")}>{exportingEligible === "csv" ? "Exporting…" : "Export CSV"}</Button><Button tone="slate" disabled={loading || !visibleEligible.length || Boolean(exportingEligible)} onClick={printEligible}>Print / Save PDF</Button><LinkButton to="/arrears/disconnections/register" tone="slate">Open list register</LinkButton></>}
     >
       {error && <Alert>{error}</Alert>}
       {message && <Alert success>{message}</Alert>}
       {!isRegister && <>
+      <section className="disconnection-eligible-print-report hidden">
+        <header>
+          <img
+            src="/samdamte-water-logo-print.png"
+            alt="Samdamte Water Utility Management"
+          />
+          <div>
+            <h1>Samdamte Water Utility Management</h1>
+            <h2>Disconnection Eligible Accounts</h2>
+            <p>
+              {filterDescription} | {visibleEligible.length.toLocaleString()} account(s) |
+              Printed {new Date().toLocaleString("en-KE")}
+            </p>
+          </div>
+        </header>
+        {eligibleByZone.map(([zoneName, accounts], zoneIndex) => (
+          <section className="disconnection-print-zone" key={zoneName}>
+            <table>
+              <thead>
+                <tr className="disconnection-print-zone-title">
+                  <th colSpan={4}>
+                    {zoneName} <span>{accounts.length.toLocaleString()} account(s)</span>
+                  </th>
+                </tr>
+                <tr>
+                  <th>S/No.</th>
+                  <th>Account</th>
+                  <th>Customer</th>
+                  <th>Balance</th>
+                </tr>
+              </thead>
+              <tbody>
+                {accounts.map((row: Row, rowIndex: number) => (
+                  <tr key={row.accountId}>
+                    <td>
+                      {eligibleByZone
+                        .slice(0, zoneIndex)
+                        .reduce((total, [, zoneRows]) => total + zoneRows.length, 0) + rowIndex + 1}
+                    </td>
+                    <td>{row.accountNumber}</td>
+                    <td>{row.customerName}</td>
+                    <td>{money(row.currentBalance)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </section>
+        ))}
+      </section>
       <section className="mb-2 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
         <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
           <div className="min-w-0">
@@ -2816,10 +2910,19 @@ export function DisconnectionLists({ view = "builder" }: { view?: "builder" | "r
             />
           </Field>
           <Field label="Zone">
-            <SearchableSelect className={INPUT} value={filters.zoneId} onChange={(e) => { setSelected([]); setFilters({ ...filters, zoneId: e.target.value }); }}>
-              <option value="">All zones</option>
-              {zones.map((zone) => <option key={zone.zoneId} value={zone.zoneId}>{zone.zoneName}</option>)}
-            </SearchableSelect>
+            <CheckboxMultiSelect
+              className={INPUT}
+              placeholder="All zones"
+              value={selectedZoneIds}
+              options={zones.map((zone) => ({
+                value: String(zone.zoneId),
+                label: zone.zoneName,
+              }))}
+              onChange={(values) => {
+                setSelected([]);
+                setFilters({ ...filters, zoneIds: values.join(",") });
+              }}
+            />
           </Field>
           <Field label="Customer / account">
             <SearchableSelect className={INPUT} value={customerFilter} onChange={(event) => setCustomerFilter(event.target.value)}>
