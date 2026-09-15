@@ -677,6 +677,10 @@ function Shell({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate();
   const location = useLocation();
   const { enabled: privacyMode, setEnabled: setPrivacyMode } = usePrivacyMode();
+  const [isMobile, setIsMobile] = useState(
+    () => typeof window !== "undefined" && window.innerWidth < 768,
+  );
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => localStorage.getItem("aquaflow_sidebar_collapsed") === "true",
   );
@@ -862,7 +866,25 @@ function Shell({ children }: { children: React.ReactNode }) {
     setNotificationOpen(false);
     setProfileOpen(false);
     setSidebarFlyout(null);
+    setMobileSidebarOpen(false);
   }, [location.pathname]);
+
+  useEffect(() => {
+    function closeMobileNavigation(event: KeyboardEvent) {
+      if (event.key === "Escape") setMobileSidebarOpen(false);
+    }
+    function resetMobileNavigation() {
+      const mobile = window.innerWidth < 768;
+      setIsMobile(mobile);
+      if (!mobile) setMobileSidebarOpen(false);
+    }
+    document.addEventListener("keydown", closeMobileNavigation);
+    window.addEventListener("resize", resetMobileNavigation);
+    return () => {
+      document.removeEventListener("keydown", closeMobileNavigation);
+      window.removeEventListener("resize", resetMobileNavigation);
+    };
+  }, []);
 
   useEffect(() => {
     if (!sidebarCollapsed) setSidebarFlyout(null);
@@ -911,14 +933,20 @@ function Shell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="app-shell flex h-screen overflow-hidden bg-slate-50">
+      <button
+        type="button"
+        aria-label="Close navigation"
+        className={`mobile-sidebar-backdrop ${mobileSidebarOpen ? "is-open" : ""}`}
+        onClick={() => setMobileSidebarOpen(false)}
+      />
       {/* ── Sidebar ── */}
       <aside
-        className={`app-sidebar flex h-screen flex-shrink-0 flex-col overflow-hidden bg-navy-900 text-white ${
+        className={`app-sidebar flex h-screen flex-shrink-0 flex-col overflow-hidden bg-navy-900 text-white ${mobileSidebarOpen ? "mobile-sidebar-open" : ""} ${
           sidebarCollapsed ? "app-sidebar-collapsed w-20" : "w-64"
         }`}
       >
         {/* Utility logo */}
-        <div className={`flex items-center border-b border-white/10 px-3 py-3 ${sidebarCollapsed ? "justify-center" : ""}`}>
+        <div className={`sidebar-brand-row flex items-center border-b border-white/10 px-3 py-3 ${sidebarCollapsed ? "justify-center" : ""}`}>
           <Link
             to="/dashboard"
             aria-label="Go to dashboard"
@@ -934,6 +962,16 @@ function Shell({ children }: { children: React.ReactNode }) {
               }`}
             />
           </Link>
+          <button
+            type="button"
+            aria-label="Close navigation"
+            className="mobile-sidebar-close ml-auto rounded-lg p-2 text-blue-100 hover:bg-white/10 hover:text-white"
+            onClick={() => setMobileSidebarOpen(false)}
+          >
+            <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5">
+              <path d="M6 6l12 12M18 6 6 18" strokeLinecap="round" />
+            </svg>
+          </button>
         </div>
 
         {/* Nav */}
@@ -1277,7 +1315,7 @@ function Shell({ children }: { children: React.ReactNode }) {
         </div>
       </aside>
 
-      {sidebarCollapsed && sidebarFlyout && flyoutModule?.path && (
+      {sidebarCollapsed && !mobileSidebarOpen && sidebarFlyout && flyoutModule?.path && (
         <div
           role="menu"
           aria-label={`${sidebarFlyout} navigation`}
@@ -1349,15 +1387,38 @@ function Shell({ children }: { children: React.ReactNode }) {
         <header className="app-topbar h-14 bg-white border-b border-slate-200 flex items-center gap-3 px-4 flex-shrink-0">
           <button
             type="button"
-            title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-            aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-            aria-expanded={!sidebarCollapsed}
+            title={
+              isMobile
+                ? mobileSidebarOpen
+                  ? "Close navigation"
+                  : "Open navigation"
+                : sidebarCollapsed
+                  ? "Expand sidebar"
+                  : "Collapse sidebar"
+            }
+            aria-label={
+              isMobile
+                ? mobileSidebarOpen
+                  ? "Close navigation"
+                  : "Open navigation"
+                : sidebarCollapsed
+                  ? "Expand sidebar"
+                  : "Collapse sidebar"
+            }
+            aria-expanded={isMobile ? mobileSidebarOpen : !sidebarCollapsed}
             className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
-            onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
+            onClick={() => {
+              if (isMobile) {
+                setSidebarCollapsed(false);
+                setMobileSidebarOpen((open) => !open);
+              } else {
+                setSidebarCollapsed((collapsed) => !collapsed);
+              }
+            }}
           >
             <IcoMenu />
           </button>
-          <div ref={searchRef} className="relative max-w-xl flex-1">
+          <div ref={searchRef} className="topbar-search relative max-w-xl flex-1">
             <div className="relative flex items-center">
               <span className="absolute left-3 text-slate-400 pointer-events-none">
                 <IcoSearch />
@@ -1461,7 +1522,7 @@ function Shell({ children }: { children: React.ReactNode }) {
               aria-pressed={privacyMode}
               title={privacyMode ? "Turn off demo privacy mode" : "Turn on demo privacy mode"}
               onClick={() => setPrivacyMode(!privacyMode)}
-              className={`mr-2 rounded-lg px-3 py-1.5 text-xs font-bold transition-colors ${privacyMode ? "bg-amber-100 text-amber-800 ring-1 ring-amber-300" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
+              className={`topbar-privacy mr-2 rounded-lg px-3 py-1.5 text-xs font-bold transition-colors ${privacyMode ? "bg-amber-100 text-amber-800 ring-1 ring-amber-300" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
             >
               {privacyMode ? "Privacy mode on" : "Privacy mode"}
             </button>
@@ -1570,7 +1631,7 @@ function Shell({ children }: { children: React.ReactNode }) {
               type="button"
               title="Send notification"
               aria-label="Send notification"
-              className="topbar-icon rounded-lg p-2 text-sky-600 hover:bg-sky-50 hover:text-sky-700"
+              className="topbar-icon topbar-send-notification rounded-lg p-2 text-sky-600 hover:bg-sky-50 hover:text-sky-700"
               onClick={() => navigate("/notifications/send")}
             >
               <IcoMail />
