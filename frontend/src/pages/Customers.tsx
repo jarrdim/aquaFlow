@@ -74,6 +74,10 @@ function initials(customer: Customer) {
     .toUpperCase();
 }
 
+function isGooglePlayTestCustomer(customer: Customer) {
+  return customer.customerNumber.toUpperCase().startsWith("PLAYTEST");
+}
+
 function StatusBadge({ status }: { status: string }) {
   const classes =
     STATUS_COLORS[status] ?? "border-slate-200 bg-slate-100 text-slate-600";
@@ -1171,12 +1175,15 @@ export default function Customers() {
                 customers.map((customer) => {
                   const id = String(customer.customerId);
                   const detailPath = `/customers/${encodeId(id)}`;
+                  const googlePlayTestUser = isGooglePlayTestCustomer(customer);
                   const unmeteredAccounts = (customer.accounts ?? []).filter((account) => !account.hasActiveMeter);
                   const meterAccount = unmeteredAccounts.length === 1 ? unmeteredAccounts[0] : null;
                   return (
                     <tr
                       key={id}
-                      className={`group transition hover:bg-slate-50/80 ${
+                      className={`group transition ${
+                        googlePlayTestUser ? "bg-violet-50/70 hover:bg-violet-100/70" : "hover:bg-slate-50/80"
+                      } ${
                         selected.includes(id) ? "bg-sky-50/70" : ""
                       }`}
                     >
@@ -1199,7 +1206,7 @@ export default function Customers() {
                           <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-sky-50 to-violet-100 text-xs font-extrabold text-violet-700 ring-1 ring-violet-100">
                             {privacyMode ? "CU" : initials(customer)}
                           </span>
-                          <div>
+                          <div className="min-w-0">
                             <Link
                               to={detailPath}
                               className="text-sm font-bold text-slate-900 hover:text-aqua-700"
@@ -1209,6 +1216,12 @@ export default function Customers() {
                             <div className="mt-0.5 text-xs font-semibold text-aqua-700">
                               {customer.customerNumber}
                             </div>
+                            {googlePlayTestUser && (
+                              <span className="mt-1.5 inline-flex items-center gap-1.5 rounded-full border border-violet-300 bg-violet-100 px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-[0.08em] text-violet-800">
+                                <span className="h-1.5 w-1.5 rounded-full bg-violet-600" />
+                                Google Play Store Test User
+                              </span>
+                            )}
                           </div>
                         </div>
                       </td>

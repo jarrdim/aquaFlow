@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { randomUUID } from "crypto";
 import { Prisma } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
@@ -473,4 +474,54 @@ authRouter.post("/change-password", requireAuth, async (req, res) => {
     },
   });
   return res.json({ message: "Password changed successfully" });
+});
+
+authRouter.delete("/account", requireAuth, async (req, res, next) => {
+  const parsed = z.object({
+    currentPassword: z.string().min(1).max(128),
+  }).safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "Current password is required" });
+  }
+
+  const authenticatedUserId = BigInt(req.user!.authUserId ?? req.user!.userId);
+  const user = await prisma.user.findUnique({ where: { userId: authenticatedUserId } });
+  if (!user || user.status !== "ACTIVE") {
+    return res.status(404).json({ error: "Active user not found" });
+  }
+  if (user.userType !== "CUSTOMER" || !req.user!.roles.includes("CUSTOMER")) {
+    return res.status(403).json({ error: "Account deletion is available only for customer accounts" });
+  }
+  if (!(await bcrypt.compare(parsed.data.currentPassword, user.passwordHash))) {
+    return res.status(400).json({ error: "Current password is incorrect" });
+  }
+
+  try {
+    const deletedIdentity = `deleted-${user.userId.toString()}`;
+    const unusablePasswordHash = await bcrypt.hash(randomUUID(), 12);
+    await prisma.$transaction(async (tx) => {
+      await tx.customerAccountAccess.deleteMany({ where: { userId: user.userId } });
+      await tx.userRole.updateMany({
+        where: { userId: user.userId, status: "ACTIVE" },
+        data: { status: "INACTIVE", effectiveTo: new Date() },
+      });
+      await tx.user.update({
+        where: { userId: user.userId },
+        data: {
+          username: deletedIdentity,
+          firstName: "Deleted",
+          lastName: "Account",
+          emailAddress: `${deletedIdentity}@deleted.samdamte.invalid`,
+          phoneNumber: null,
+          passwordHash: unusablePasswordHash,
+          customerId: null,
+          status: "DELETED",
+          updatedAt: new Date(),
+        },
+      });
+    });
+    return res.json({ message: "Your online account has been deleted" });
+  } catch (error) {
+    return next(error);
+  }
 });

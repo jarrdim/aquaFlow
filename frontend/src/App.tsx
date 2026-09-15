@@ -17,6 +17,7 @@ import {
 import Login from "./pages/Login";
 import LandingPage from "./pages/LandingPage";
 import PublicPaymentPage from "./pages/PublicPaymentPage";
+import { AccountDeletionPage, PrivacyPolicyPage } from "./pages/PublicLegalPages";
 import C2bIntegration from "./pages/C2bIntegration";
 import OperationalDashboard from "./pages/OperationalDashboard";
 import Reports from "./pages/Reports";
@@ -1642,6 +1643,8 @@ export default function App() {
   return (
     <Routes>
       <Route path="/" element={<LandingPage />} />
+      <Route path="/privacy" element={<PrivacyPolicyPage />} />
+      <Route path="/account-deletion" element={<AccountDeletionPage />} />
       <Route path="/pay/:token" element={<PublicPaymentPage />} />
       <Route
         path="/login"

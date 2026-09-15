@@ -58,7 +58,8 @@
     "verify:reconnection": "node scripts/verify-reconnection-contract.js",
     "verify:escalation": "node scripts/verify-escalation-contract.js",
     "customer:provision": "ts-node scripts/provision-customer-portal.ts",
-    "seed": "ts-node prisma/seed.ts"
+    "seed": "ts-node prisma/seed.ts",
+    "seed:playtest-customers": "ts-node scripts/seed-playtest-customers.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.20.0",
