@@ -1,4 +1,4 @@
-import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { exportDailyReceiptsWorkbook, exportExcel, parseMeterWorkbook } from "../lib/meterFiles";
@@ -56,7 +56,7 @@ function Page({
           <h1 className="text-2xl font-bold text-slate-900">{title}</h1>
           {subtitle && <p className="mt-1 text-[15px] text-slate-500">{subtitle}</p>}
         </div>
-        <div className="flex gap-2">{actions}</div>
+        <div className="page-actions flex w-full flex-wrap gap-2 sm:w-auto">{actions}</div>
       </div>
       {children}
     </div>
@@ -126,7 +126,7 @@ function LinkButton({
   return (
     <Link
       to={to}
-      className={`inline-flex items-center justify-center rounded-lg px-4 py-2 font-semibold text-white ${colors[tone]}`}
+      className={`inline-flex flex-1 items-center justify-center whitespace-nowrap rounded-lg px-4 py-2 font-semibold text-white sm:flex-none ${colors[tone]}`}
     >
       {children}
     </Link>
@@ -171,22 +171,34 @@ function Badge({ value }: { value: any }) {
 }
 function Kpi({ label, value }: { label: string; value: ReactNode }) {
   return (
-    <div className="rounded-xl border bg-white p-4 shadow-sm">
+    <div className="min-w-0 rounded-xl border bg-white p-4 shadow-sm">
       <div className="text-sm text-slate-500">{label}</div>
-      <div className="mt-1 text-2xl font-bold text-slate-900">{value}</div>
+      <div className="mt-1 break-words text-xl font-bold leading-tight text-slate-900 sm:text-2xl">{value}</div>
     </div>
   );
 }
 
 function CollectionTrendChart({ rows }: { rows: Row[] }) {
   const points = rows;
-  const width = Math.max(700, points.length * 90);
-  const height = 210;
-  const left = 16;
-  const right = 16;
-  const top = 20;
-  const bottom = 38;
+  const chartRef = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(700);
+  const height = 220;
+  const left = width < 480 ? 34 : 48;
+  const right = width < 480 ? 34 : 48;
+  const top = 28;
+  const bottom = 36;
+  useEffect(() => {
+    const element = chartRef.current;
+    if (!element) return;
+    const updateWidth = () => setWidth(Math.max(280, Math.floor(element.clientWidth)));
+    updateWidth();
+    const observer = new ResizeObserver(updateWidth);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
   const max = Math.max(1, ...points.map((row) => Number(row.amount ?? 0)));
+  const labelStride = Math.max(1, Math.ceil(points.length / Math.max(3, Math.floor(width / 90))));
+  const valueStride = Math.max(1, Math.ceil(points.length / Math.max(2, Math.floor(width / 125))));
   const coordinates: Array<Row & { x: number; y: number }> = points.map((row, index) => ({
     ...row,
     x: points.length === 1 ? width / 2 : left + (index / (points.length - 1)) * (width - left - right),
@@ -198,7 +210,7 @@ function CollectionTrendChart({ rows }: { rows: Row[] }) {
     : "";
   return (
     <Card title="Collection trend">
-      <div className="mb-3 flex items-start justify-between gap-3">
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="text-sm text-slate-500">Daily posted revenue</div>
           <div className="mt-1 text-xl font-bold text-slate-900">{money(points.reduce((sum, row) => sum + Number(row.amount ?? 0), 0))}</div>
@@ -206,8 +218,8 @@ function CollectionTrendChart({ rows }: { rows: Row[] }) {
         <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">Since first collection</span>
       </div>
       {coordinates.length ? (
-        <div className="overflow-x-auto overflow-y-hidden rounded-xl bg-gradient-to-b from-emerald-50/70 to-white px-2 pt-2">
-          <svg viewBox={`0 0 ${width} ${height}`} className="h-[220px]" style={{ minWidth: `${width}px`, width: "100%" }} role="img" aria-label="Daily collection trend">
+        <div ref={chartRef} className="w-full min-w-0 overflow-hidden rounded-xl bg-gradient-to-b from-emerald-50/70 to-white pt-2">
+          <svg viewBox={`0 0 ${width} ${height}`} className="block h-[220px] w-full" role="img" aria-label="Daily collection trend">
             <defs>
               <linearGradient id="payment-area" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor="#10b981" stopOpacity="0.3" />
@@ -222,12 +234,16 @@ function CollectionTrendChart({ rows }: { rows: Row[] }) {
             {coordinates.map((point, index) => (
               <g key={point.date} className="group">
                 <circle cx={point.x} cy={point.y} r="5" fill="white" stroke="#059669" strokeWidth="3" />
-                <text x={point.x} y={height - 13} textAnchor="middle" className="fill-slate-500 text-[11px]">
-                  {String(point.date).slice(5).replace("-", "/")}
-                </text>
-                <text x={point.x} y={Math.max(13, point.y - 11)} textAnchor="middle" className="fill-slate-700 text-[11px] font-bold">
-                  {Number(point.amount).toLocaleString("en-KE")}
-                </text>
+                {(index % labelStride === 0 || index === coordinates.length - 1) && (
+                  <text x={point.x} y={height - 11} textAnchor="middle" className="fill-slate-500 text-[11px]">
+                    {String(point.date).slice(5).replace("-", "/")}
+                  </text>
+                )}
+                {(index % valueStride === 0 || index === coordinates.length - 1) && (
+                  <text x={point.x} y={Math.max(14, point.y - 11)} textAnchor="middle" className="fill-slate-700 text-[11px] font-bold">
+                    {new Intl.NumberFormat("en-KE", { notation: "compact", maximumFractionDigits: 1 }).format(Number(point.amount))}
+                  </text>
+                )}
               </g>
             ))}
           </svg>
@@ -265,7 +281,7 @@ function RevenueChannelChart({ channels, breakdowns }: { channels: Record<string
                   {Object.entries(breakdowns[channel])
                     .sort((a, b) => Number(b[1]) - Number(a[1]))
                     .map(([source, amount]) => (
-                      <div key={source} className="flex items-center justify-between gap-3 text-xs text-slate-500">
+                      <div key={source} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs text-slate-500">
                         <span>{source}</span>
                         <span className="font-semibold text-slate-700">{money(amount)} · {((Number(amount) / Math.max(1, Number(total))) * 100).toFixed(1)}%</span>
                       </div>
@@ -348,7 +364,63 @@ function paymentSource(payment: Row) {
 
 function PaymentTable({ rows, loading = false }: { rows: Row[]; loading?: boolean }) {
   return (
-    <div className="overflow-x-auto rounded-xl border border-slate-200">
+    <>
+      <div className="space-y-3 md:hidden">
+        {loading && (
+          <div className="rounded-xl border border-slate-200 px-4 py-10 text-center">
+            <div className="mx-auto h-9 w-9 animate-spin rounded-full border-4 border-sky-100 border-t-aqua-700" />
+            <div className="mt-3 text-sm font-semibold text-slate-600">Loading payment register…</div>
+          </div>
+        )}
+        {!loading && rows.map((payment) => {
+          const suggested = payment.suggestedAccount;
+          const source = paymentSource(payment);
+          const allocation = payment.paymentStatus === "REVERSED"
+            ? "REVERSED"
+            : payment.matchingStatus === "PARTIALLY_MATCHED"
+              ? "MATCHED"
+              : payment.matchingStatus;
+          return (
+            <article key={payment.paymentId} className="min-w-0 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="truncate text-xs font-bold uppercase tracking-wide text-slate-500">{payment.transactionReference}</div>
+                  <div className="mt-1 truncate font-bold text-slate-900">
+                    {payment.customerName || suggested?.customerName || payment.payerName || (payment.account ? "Linked account" : "Unmatched")}
+                  </div>
+                  <div className="mt-0.5 truncate text-xs text-slate-500">
+                    {payment.account?.accountNumber || suggested?.accountNumber || payment.customerReference || "No linked account"}
+                  </div>
+                </div>
+                <div className="shrink-0 text-right">
+                  <div className="font-extrabold text-slate-900">{money(payment.amount)}</div>
+                  <div className="mt-1 text-xs text-slate-500">{dateTime(payment.paymentDate)}</div>
+                </div>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
+                {payment.channel?.channelName && <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700">{payment.channel.channelName}</span>}
+                <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${source.className}`}>{source.label}</span>
+                <Badge value={allocation} />
+                <Badge value={payment.paymentStatus} />
+                <span className="ml-auto">
+                  {payment.receipt ? (
+                    <Link className="inline-flex rounded-lg bg-sky-50 px-3 py-1.5 text-sm font-bold text-sky-700" to={`/payments/receipts/${payment.receipt.receiptId}`}>View receipt</Link>
+                  ) : payment.matchingStatus === "UNMATCHED" && payment.paymentStatus === "RECEIVED" ? (
+                    <Link className="inline-flex rounded-lg bg-amber-50 px-3 py-1.5 text-sm font-bold text-amber-700" to={`/payments/unmatched?paymentId=${encodeURIComponent(String(payment.paymentId))}`}>Match</Link>
+                  ) : null}
+                </span>
+              </div>
+            </article>
+          );
+        })}
+        {!loading && !rows.length && (
+          <div className="rounded-xl border border-dashed border-slate-200 px-4 py-10 text-center text-slate-400">
+            <div className="font-semibold text-slate-600">No payment records found</div>
+            <div className="mt-1 text-sm">Transactions will appear here when available.</div>
+          </div>
+        )}
+      </div>
+      <div className="hidden overflow-x-auto rounded-xl border border-slate-200 md:block">
       <table className="w-full min-w-[850px]">
         <thead>
           <tr className="bg-slate-50/80">
@@ -447,7 +519,8 @@ function PaymentTable({ rows, loading = false }: { rows: Row[]; loading?: boolea
           )}
         </tbody>
       </table>
-    </div>
+      </div>
+    </>
   );
 }
 
