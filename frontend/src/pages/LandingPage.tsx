@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
-import { getToken } from "../lib/api";
+import { hasSession } from "../lib/api";
 import { usePrivacyMode } from "../lib/privacyMode";
+import { usePublicContact } from "../lib/publicContact";
 
 type IconProps = { className?: string };
 
@@ -65,7 +66,8 @@ const modules = [
 
 export default function LandingPage() {
   const { enabled: privacyMode } = usePrivacyMode();
-  const authenticated = Boolean(getToken());
+  const contactEmail = usePublicContact().emailAddress?.trim() ?? "";
+  const authenticated = hasSession();
   const primaryPath = authenticated ? "/dashboard" : "/login";
   const primaryLabel = authenticated ? "Open workspace" : "Sign in securely";
 
@@ -289,17 +291,59 @@ export default function LandingPage() {
         </section>
       </main>
 
-      <footer className="border-t border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-7xl flex-col gap-4 px-6 py-8 text-sm text-slate-500 sm:flex-row sm:items-center sm:justify-between lg:px-8">
-          <div className={`overflow-hidden rounded-lg ${privacyMode ? "bg-white ring-1 ring-amber-200" : ""}`}>
-            <img
-              src={privacyMode ? "/zevra-demo-logo.png" : "/samdamte-water-logo-print.png"}
-              alt={privacyMode ? "Zevra Holdings Ltd demo branding" : "Samdamte Water Utility Management"}
-              className={`h-12 w-auto max-w-[220px] object-contain ${privacyMode ? "scale-[1.52]" : ""}`}
-            />
+      <footer className="border-t border-slate-200 bg-slate-50">
+        <div className="mx-auto grid max-w-7xl gap-10 px-6 py-12 sm:grid-cols-2 lg:grid-cols-[1.5fr_1fr_1fr_1fr] lg:px-8">
+          <div>
+            <Link
+              to="/"
+              className={`inline-flex overflow-hidden rounded-lg ${privacyMode ? "bg-white ring-1 ring-amber-200" : ""}`}
+              aria-label={privacyMode ? "Zevra Holdings demo home" : "Samdamte home"}
+            >
+              <img
+                src={privacyMode ? "/zevra-demo-logo.png" : "/samdamte-water-logo-print.png"}
+                alt={privacyMode ? "Zevra Holdings Ltd demo branding" : "Samdamte Water Utility Management"}
+                className={`h-12 w-auto max-w-[220px] object-contain ${privacyMode ? "scale-[1.52]" : ""}`}
+              />
+            </Link>
+            <p className="mt-4 max-w-xs text-sm leading-6 text-slate-600">
+              Professional water utility operations, connected end to end.
+            </p>
           </div>
-          <p>Professional water utility operations, connected end to end.</p>
-          <p>© {new Date().getFullYear()} Samdamte Water</p>
+
+          <nav aria-label="Product links">
+            <h2 className="text-sm font-extrabold text-navy-900">Product</h2>
+            <ul className="mt-4 space-y-3 text-sm text-slate-600">
+              <li><a href="#platform" className="transition hover:text-aqua-700">Platform</a></li>
+              <li><a href="#workflow" className="transition hover:text-aqua-700">Workflow</a></li>
+              <li><a href="#assurance" className="transition hover:text-aqua-700">Security &amp; assurance</a></li>
+            </ul>
+          </nav>
+
+          <nav aria-label="Account and legal links">
+            <h2 className="text-sm font-extrabold text-navy-900">Account &amp; legal</h2>
+            <ul className="mt-4 space-y-3 text-sm text-slate-600">
+              <li><Link to={primaryPath} className="transition hover:text-aqua-700">{primaryLabel}</Link></li>
+              <li><Link to="/privacy" className="font-semibold text-aqua-700 transition hover:text-aqua-600">Privacy Policy</Link></li>
+              <li><Link to="/account-deletion" className="transition hover:text-aqua-700">Account deletion</Link></li>
+            </ul>
+          </nav>
+
+          <div>
+            <h2 className="text-sm font-extrabold text-navy-900">Contact</h2>
+            <p className="mt-4 text-sm leading-6 text-slate-600">Questions about your privacy or account?</p>
+            {contactEmail ? (
+              <a href={`mailto:${contactEmail}`} className="mt-2 inline-block break-all text-sm font-semibold text-aqua-700 transition hover:text-aqua-600">
+                {contactEmail}
+              </a>
+            ) : <p className="mt-2 text-sm text-slate-500">Contact email not configured</p>}
+          </div>
+        </div>
+
+        <div className="border-t border-slate-200">
+          <div className="mx-auto flex max-w-7xl flex-col gap-2 px-6 py-5 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between lg:px-8">
+            <p>© {new Date().getFullYear()} Samdamte Water. All rights reserved.</p>
+            <p>Secure utility management for authorised users.</p>
+          </div>
         </div>
       </footer>
     </div>

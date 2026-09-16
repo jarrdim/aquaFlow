@@ -4,6 +4,24 @@ import { prisma } from "../lib/prisma";
 import { requireAuth, requireRole } from "../middleware/auth";
 
 export const settingsRouter = Router();
+
+// Expose only contact details that are intentionally displayed on public
+// legal pages. Operational and security settings remain administrator-only.
+settingsRouter.get("/public-contact", async (_req, res) => {
+  const settings = await prisma.systemSetting.findUnique({
+    where: { settingId: 1n },
+    select: {
+      utilityName: true,
+      emailAddress: true,
+      phoneNumber: true,
+      postalAddress: true,
+      postalCode: true,
+      physicalAddress: true,
+    },
+  });
+  res.json(settings ?? {});
+});
+
 settingsRouter.use(requireAuth, requireRole("SYSTEM_ADMIN"));
 
 const nullableText = (maximum: number) =>

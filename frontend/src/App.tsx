@@ -140,7 +140,7 @@ import {
 } from "./pages/ServiceRequestManagement";
 import SettingsManagement from "./pages/SettingsManagement";
 import ReconnectionManagement from "./pages/ReconnectionManagement";
-import { api, clearToken, getSessionUser, getToken } from "./lib/api";
+import { api, clearToken, getSessionUser, hasSession } from "./lib/api";
 import { encodeId } from "./lib/hashids";
 import { maskPhone, usePrivacyMode } from "./lib/privacyMode";
 
@@ -196,7 +196,7 @@ class PageErrorBoundary extends Component<
 }
 
 function Protected({ children }: { children: React.ReactNode }) {
-  if (!getToken()) return <Navigate to="/login" replace />;
+  if (!hasSession()) return <Navigate to="/login" replace />;
   return <>{children}</>;
 }
 
@@ -207,7 +207,7 @@ function SystemAdminOnly({ children }: { children: React.ReactNode }) {
 }
 
 function GuestOnly({ children }: { children: React.ReactNode }) {
-  if (getToken()) return <Navigate to="/dashboard" replace />;
+  if (hasSession()) return <Navigate to="/dashboard" replace />;
   return <>{children}</>;
 }
 
@@ -897,6 +897,7 @@ function Shell({ children }: { children: React.ReactNode }) {
     clearToken();
     setProfileOpen(false);
     navigate("/login");
+    void api.logout().catch(() => undefined);
   }
 
   function cancelSidebarFlyoutClose() {

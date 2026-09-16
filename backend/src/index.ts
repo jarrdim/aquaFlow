@@ -29,7 +29,50 @@ import { prisma } from "./lib/prisma";
 };
 
 const app = express();
-app.use(cors());
+const configuredOrigins = [
+  ...(process.env.FRONTEND_ORIGINS ?? "").split(","),
+  process.env.PUBLIC_APP_URL ?? "",
+  ...(process.env.NODE_ENV === "production"
+    ? []
+    : ["http://localhost:5173", "http://127.0.0.1:5173"]),
+].map((value) => value.trim().replace(/\/$/, "")).filter(Boolean);
+const allowedOrigins = new Set(configuredOrigins);
+
+if (process.env.NODE_ENV === "production") {
+  if (!allowedOrigins.size) {
+    throw new Error("Set PUBLIC_APP_URL or FRONTEND_ORIGINS before starting in production");
+  }
+  const jwtSecret = process.env.JWT_SECRET ?? "";
+  if (jwtSecret.length < 32 || jwtSecret.includes("replace-with")) {
+    throw new Error("JWT_SECRET must be a non-placeholder secret of at least 32 characters");
+  }
+}
+
+if (process.env.TRUST_PROXY === "true") app.set("trust proxy", 1);
+
+app.disable("x-powered-by");
+app.use((_req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  res.setHeader("Cross-Origin-Resource-Policy", "same-site");
+  next();
+});
+app.use(cors({
+  credentials: true,
+  origin(origin, callback) {
+    if (!origin || allowedOrigins.has(origin.replace(/\/$/, ""))) return callback(null, true);
+    return callback(new Error("Origin is not allowed"));
+  },
+}));
+app.use((req, res, next) => {
+  const origin = req.headers.origin?.replace(/\/$/, "");
+  if (origin && !allowedOrigins.has(origin) && !["GET", "HEAD", "OPTIONS"].includes(req.method)) {
+    return res.status(403).json({ error: "Cross-origin request rejected" });
+  }
+  next();
+});
 app.use(express.json({ limit: "15mb" }));
 
 app.get("/health", (_req, res) =>

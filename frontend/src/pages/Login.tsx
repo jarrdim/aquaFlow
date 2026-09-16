@@ -1,7 +1,7 @@
 import { FormEvent, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../lib/api";
-import { setSessionUser, setToken } from "../lib/api";
+import { setSessionUser } from "../lib/api";
 import { SweetAlertToast } from "../components/SweetAlertToast";
 import { usePrivacyMode } from "../lib/privacyMode";
 
@@ -20,8 +20,7 @@ export default function Login() {
     setError(null);
     setLoading(true);
     try {
-      const { token, user } = await api.login(username, password);
-      setToken(token);
+      const { user } = await api.login(username, password);
       setSessionUser({ ...user, userId: String(user.userId) });
       const requestedPath = searchParams.get("next");
       const next = requestedPath?.startsWith("/") && !requestedPath.startsWith("//")
@@ -78,6 +77,10 @@ export default function Login() {
         >
           {loading ? "Signing in..." : "Sign in"}
         </button>
+        <div className="mt-6 flex flex-wrap justify-center gap-x-4 gap-y-2 border-t border-slate-100 pt-4 text-xs">
+          <Link to="/privacy" className="font-semibold text-aqua-700 hover:underline">Privacy Policy</Link>
+          <Link to="/account-deletion" className="font-semibold text-aqua-700 hover:underline">Account deletion</Link>
+        </div>
       </form>
     </div>
   );

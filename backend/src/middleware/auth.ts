@@ -2,6 +2,17 @@ import { NextFunction, Request, Response } from "express";
 import jwt from "jsonwebtoken";
 import { prisma } from "../lib/prisma";
 
+export const WEB_SESSION_COOKIE = "aquaflow_session";
+
+function cookieValue(req: Request, name: string) {
+  const header = req.headers.cookie ?? "";
+  for (const entry of header.split(";")) {
+    const [key, ...value] = entry.trim().split("=");
+    if (key === name) return decodeURIComponent(value.join("="));
+  }
+  return null;
+}
+
 export interface AuthPayload {
   userId: string;
   authUserId?: string;
@@ -21,21 +32,36 @@ declare global {
   }
 }
 
-export function requireAuth(req: Request, res: Response, next: NextFunction) {
+export async function requireAuth(req: Request, res: Response, next: NextFunction) {
   const header = req.headers.authorization;
-  if (!header?.startsWith("Bearer ")) {
-    return res.status(401).json({ error: "Missing or invalid Authorization header" });
-  }
-  const token = header.slice("Bearer ".length);
+  const bearerToken = header?.startsWith("Bearer ")
+    ? header.slice("Bearer ".length)
+    : null;
+  const token = bearerToken ?? cookieValue(req, WEB_SESSION_COOKIE);
+  if (!token) return res.status(401).json({ error: "Authentication required" });
+  let payload: AuthPayload;
   try {
-    const payload = jwt.verify(token, process.env.JWT_SECRET as string) as AuthPayload;
+    payload = jwt.verify(token, process.env.JWT_SECRET as string) as AuthPayload;
     if (payload.tokenType === "refresh") {
       return res.status(401).json({ error: "A refresh token cannot access this resource" });
     }
-    req.user = payload;
-    next();
   } catch {
     return res.status(401).json({ error: "Invalid or expired token" });
+  }
+
+  try {
+    const credentialOwnerId = BigInt(payload.authUserId ?? payload.userId);
+    const activeUser = await prisma.user.findUnique({
+      where: { userId: credentialOwnerId },
+      select: { status: true },
+    });
+    if (!activeUser || activeUser.status !== "ACTIVE") {
+      return res.status(401).json({ error: "Account is not active" });
+    }
+    req.user = payload;
+    next();
+  } catch (error) {
+    next(error);
   }
 }
 

@@ -252,6 +252,29 @@ customer or incur provider charges.
 Billing officers, billing supervisors, finance managers, cashiers and
 accountants may send/process notifications. Auditors have read-only access.
 
+### Production privacy and browser security
+
+The web portal authenticates with an `HttpOnly`, `SameSite=Strict` cookie; do
+not reintroduce access-token storage in browser JavaScript. Before deployment:
+
+1. Set `NODE_ENV=production` so the session cookie is also marked `Secure`.
+2. Set `PUBLIC_APP_URL` and `FRONTEND_ORIGINS` to the exact HTTPS portal
+   origin(s). Do not use `*` with credentialed requests.
+3. Set `TRUST_PROXY=true` only when the API is directly behind one trusted
+   reverse proxy, so rate limiting receives the correct client address.
+4. Terminate TLS at the portal or trusted proxy and redirect HTTP to HTTPS.
+5. Confirm that the email in System Settings, the controller name, telephone
+   number and postal address displayed in `PublicLegalPages.tsx` are active and
+   match the organisation's registered and Google Play developer details.
+6. Keep the Google Play Data Safety answers aligned with the public privacy
+   notice, and place the privacy and deletion links inside each Android app.
+
+Browser-offline meter readings use tab-scoped `sessionStorage`, are removed on
+sign-out, and are not a substitute for Android encrypted offline storage. The
+Android source is not contained in this repository; its location/camera
+prompts and encrypted local database must be verified in that project before a
+store release.
+
 For real email, sign in as `admin`, open **Notifications → Providers**, select
 **SMTP Email Gateway**, and choose **Configure SMTP**. Gmail normally uses host
 `smtp.gmail.com`, port `587`, and STARTTLS (leave Direct TLS off). Use a newly

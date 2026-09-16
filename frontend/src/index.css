@@ -31,6 +31,16 @@ html,
   height: 100%;
 }
 
+/* Public pages must own their scroll because the dashboard locks body scroll. */
+.legal-page-scroll {
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overscroll-behavior-y: auto;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+}
+
 button,
 input,
 select,

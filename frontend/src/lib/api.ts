@@ -10,12 +10,6 @@ export type SessionUser = {
   roles: string[];
 };
 
-export function getToken() {
-  return localStorage.getItem(TOKEN_KEY);
-}
-export function setToken(token: string) {
-  localStorage.setItem(TOKEN_KEY, token);
-}
 export function setSessionUser(user: SessionUser) {
   localStorage.setItem(USER_KEY, JSON.stringify(user));
 }
@@ -23,23 +17,18 @@ export function getSessionUser(): SessionUser | null {
   try {
     const stored = localStorage.getItem(USER_KEY);
     if (stored) return JSON.parse(stored) as SessionUser;
-    const token = getToken();
-    if (!token) return null;
-    const payload = JSON.parse(
-      atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")),
-    );
-    return {
-      userId: String(payload.userId),
-      username: String(payload.username),
-      roles: Array.isArray(payload.roles) ? payload.roles : [],
-    };
+    return null;
   } catch {
     return null;
   }
 }
+export function hasSession() {
+  return getSessionUser() !== null;
+}
 export function clearToken() {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
+  sessionStorage.removeItem("aquaflow_reading_queue");
 }
 
 function wait(ms: number) {
@@ -63,6 +52,7 @@ async function fetchWithReadRetry(path: string, options: RequestOptions) {
     try {
       const response = await fetch(`/api${path}`, {
         ...fetchOptions,
+        credentials: fetchOptions.credentials ?? "include",
         signal: timeoutController.signal,
       });
       const contentType = response.headers.get("content-type") ?? "";
@@ -96,12 +86,10 @@ async function fetchWithReadRetry(path: string, options: RequestOptions) {
 }
 
 async function request(path: string, options: RequestOptions = {}) {
-  const token = getToken();
   const requestOptions: RequestOptions = {
     ...options,
     headers: {
       "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(options.headers ?? {}),
     },
   };
@@ -115,10 +103,9 @@ async function request(path: string, options: RequestOptions = {}) {
       body = {};
     }
 
-    // A token can remain in localStorage after its JWT expiry. Treat a 401 from
-    // an authenticated request as a session boundary, clear it once, and send
-    // the user through login while preserving the page they were viewing.
-    if (res.status === 401 && token && path !== "/auth/login") {
+    // Treat a 401 from an authenticated request as a session boundary, clear
+    // the local display record, and preserve the page for the next sign-in.
+    if (res.status === 401 && hasSession() && path !== "/auth/login") {
       clearToken();
       if (!redirectingToLogin && window.location.pathname !== "/login") {
         redirectingToLogin = true;
@@ -180,25 +167,27 @@ async function request(path: string, options: RequestOptions = {}) {
     requestError.requestId = requestId;
     throw requestError;
   }
+  if (res.status === 204) return null;
   return res.json();
 }
 
 async function protectedBlobUrl(path: string) {
-  const token = getToken();
   const normalized = path.startsWith("/api/") ? path.slice(4) : path;
   const response = await fetchWithReadRetry(normalized, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    credentials: "include",
   });
   if (!response.ok) throw new Error("Protected content could not be loaded");
   return URL.createObjectURL(await response.blob());
 }
 
 export const api = {
+  getPublicContact: () => request("/settings/public-contact"),
   login: (username: string, password: string) =>
     request("/auth/login", {
       method: "POST",
       body: JSON.stringify({ username, password }),
     }),
+  logout: () => request("/auth/logout", { method: "POST", body: "{}" }),
   listCustomers: (search = "", page = 1, status = "", meterAssignment = "") =>
     request(
       `/customers?search=${encodeURIComponent(search)}&page=${page}${status ? `&status=${encodeURIComponent(status)}` : ""}${meterAssignment ? `&meterAssignment=${encodeURIComponent(meterAssignment)}` : ""}`,

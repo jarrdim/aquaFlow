@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Response, Router } from "express";
 import { randomUUID } from "crypto";
 import { Prisma } from "@prisma/client";
 import bcrypt from "bcryptjs";
@@ -6,7 +6,7 @@ import jwt from "jsonwebtoken";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { rateLimit } from "../middleware/rateLimit";
-import { requireAuth } from "../middleware/auth";
+import { requireAuth, WEB_SESSION_COOKIE } from "../middleware/auth";
 
 export const authRouter = Router();
 
@@ -94,6 +94,17 @@ function issueCustomerTokens(user: SessionUser, customerId: bigint) {
       roles: ["CUSTOMER"],
     },
   };
+}
+
+function setWebSessionCookie(res: Response, token: string) {
+  const secure = process.env.NODE_ENV === "production";
+  res.cookie(WEB_SESSION_COOKIE, token, {
+    httpOnly: true,
+    secure,
+    sameSite: "strict",
+    path: "/",
+    maxAge: 8 * 60 * 60 * 1000,
+  });
 }
 
 function normalizedPhone(value: string) {
@@ -244,7 +255,21 @@ authRouter.post("/login", loginLimiter, async (req, res) => {
     data: { lastLoginAt: new Date() },
   });
 
-  res.json(issueTokens(user));
+  const session = issueTokens(user);
+  setWebSessionCookie(res, session.token);
+  // Browser authentication uses the HttpOnly cookie. Bearer tokens remain
+  // available only from the dedicated shared/field/customer mobile flows.
+  res.json({ expiresIn: session.expiresIn, user: session.user });
+});
+
+authRouter.post("/logout", (_req, res) => {
+  res.clearCookie(WEB_SESSION_COOKIE, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "strict",
+    path: "/",
+  });
+  return res.status(204).send();
 });
 
 authRouter.post("/shared/login", loginLimiter, async (req, res) => {
@@ -519,6 +544,12 @@ authRouter.delete("/account", requireAuth, async (req, res, next) => {
           updatedAt: new Date(),
         },
       });
+    });
+    res.clearCookie(WEB_SESSION_COOKIE, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+      path: "/",
     });
     return res.json({ message: "Your online account has been deleted" });
   } catch (error) {
