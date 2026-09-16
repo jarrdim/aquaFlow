@@ -142,7 +142,7 @@ import SettingsManagement from "./pages/SettingsManagement";
 import ReconnectionManagement from "./pages/ReconnectionManagement";
 import { api, clearToken, getSessionUser, hasSession } from "./lib/api";
 import { encodeId } from "./lib/hashids";
-import { maskPhone, usePrivacyMode } from "./lib/privacyMode";
+import { maskName, maskPhone, usePrivacyMode } from "./lib/privacyMode";
 
 class PageErrorBoundary extends Component<
   { children: ReactNode; resetKey: string },
@@ -690,6 +690,14 @@ function Shell({ children }: { children: React.ReactNode }) {
   const [searchOpen, setSearchOpen] = useState(false);
   const [notificationOpen, setNotificationOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [reconnectionModalOpen, setReconnectionModalOpen] = useState(false);
+  const [eligibleReconnections, setEligibleReconnections] = useState<any[]>([]);
+  const [selectedReconnections, setSelectedReconnections] = useState<string[]>([]);
+  const [reconnectionReviewConfirmed, setReconnectionReviewConfirmed] = useState(false);
+  const [reconnectionLoading, setReconnectionLoading] = useState(false);
+  const [reconnectionSubmitting, setReconnectionSubmitting] = useState(false);
+  const [reconnectionError, setReconnectionError] = useState("");
+  const [reconnectionResult, setReconnectionResult] = useState("");
   const [notificationData, setNotificationData] = useState<any>({
     queued: 0,
     failed: 0,
@@ -703,6 +711,9 @@ function Shell({ children }: { children: React.ReactNode }) {
   const profileRef = useRef<HTMLDivElement>(null);
   const sidebarFlyoutTimer = useRef<number | null>(null);
   const sessionUser = getSessionUser();
+  const canReviewDirectReconnections = (sessionUser?.roles ?? []).some((role) =>
+    ["ADMIN", "SYSTEM_ADMIN", "METER_MANAGER", "METER_SUPERVISOR", "SUPERVISOR"].includes(role),
+  );
   const displayName =
     [sessionUser?.firstName, sessionUser?.lastName].filter(Boolean).join(" ") ||
     sessionUser?.username ||
@@ -900,6 +911,62 @@ function Shell({ children }: { children: React.ReactNode }) {
     void api.logout().catch(() => undefined);
   }
 
+  async function openReconnectionReview() {
+    setReconnectionModalOpen(true);
+    setReconnectionLoading(true);
+    setSelectedReconnections([]);
+    setReconnectionReviewConfirmed(false);
+    setReconnectionError("");
+    setReconnectionResult("");
+    setSearchOpen(false);
+    setNotificationOpen(false);
+    setProfileOpen(false);
+    try {
+      const result = await api.getEligibleDirectReconnections();
+      setEligibleReconnections(result.items ?? []);
+    } catch (error: any) {
+      setEligibleReconnections([]);
+      setReconnectionError(error.message ?? "Eligible disconnected meters could not be loaded.");
+    } finally {
+      setReconnectionLoading(false);
+    }
+  }
+
+  async function confirmReviewedReconnections() {
+    const selected = eligibleReconnections.filter((item) =>
+      selectedReconnections.includes(`${item.accountId}:${item.meterId}`),
+    );
+    if (!selected.length || !reconnectionReviewConfirmed) return;
+    setReconnectionSubmitting(true);
+    setReconnectionError("");
+    setReconnectionResult("");
+    const completed: string[] = [];
+    const failures: string[] = [];
+    for (const item of selected) {
+      try {
+        await api.createDirectMeterReconnection({
+          accountId: String(item.accountId),
+          meterId: String(item.meterId),
+          actionDateTime: new Date().toISOString(),
+          reason: "Physical reconnection confirmed from zero-balance eligibility review",
+          remarks: "Completed from the navigation reconnection review",
+          confirmed: true,
+        });
+        completed.push(String(item.accountNumber));
+      } catch (error: any) {
+        failures.push(`${item.accountNumber}: ${error.message ?? "reconnection failed"}`);
+      }
+    }
+    setEligibleReconnections((current) => current.filter((item) =>
+      !completed.includes(String(item.accountNumber)),
+    ));
+    setSelectedReconnections([]);
+    setReconnectionReviewConfirmed(false);
+    if (completed.length) setReconnectionResult(`${completed.length} meter${completed.length === 1 ? "" : "s"} reconnected successfully: ${completed.join(", ")}.`);
+    if (failures.length) setReconnectionError(failures.join(" "));
+    setReconnectionSubmitting(false);
+  }
+
   function cancelSidebarFlyoutClose() {
     if (sidebarFlyoutTimer.current !== null) {
       window.clearTimeout(sidebarFlyoutTimer.current);
@@ -934,6 +1001,26 @@ function Shell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="app-shell flex h-screen overflow-hidden bg-slate-50">
+      {reconnectionModalOpen && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="eligible-reconnections-title" onMouseDown={(event) => { if (event.target === event.currentTarget && !reconnectionSubmitting) setReconnectionModalOpen(false); }}>
+          <div className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+              <div><p className="text-xs font-bold uppercase tracking-wider text-emerald-700">Review and confirm</p><h2 id="eligible-reconnections-title" className="mt-1 text-xl font-extrabold text-slate-900">Zero-balance disconnected meters</h2><p className="mt-1 text-sm text-slate-500">Only meters with a disconnected account, a disconnected meter, a zero balance, and verified settlement of the disconnection-time fee are listed.</p></div>
+              <button type="button" disabled={reconnectionSubmitting} onClick={() => setReconnectionModalOpen(false)} className="rounded-lg px-2 py-1 text-2xl leading-none text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label="Close reconnection review">×</button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-5">
+              {reconnectionError && <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{reconnectionError}</div>}
+              {reconnectionResult && <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">{reconnectionResult}</div>}
+              {reconnectionLoading ? <div className="flex items-center justify-center gap-3 py-16 text-sm font-semibold text-slate-500"><span className="h-6 w-6 animate-spin rounded-full border-2 border-emerald-200 border-t-emerald-600" />Checking disconnected meters…</div> : eligibleReconnections.length ? <>
+                <div className="mb-3 flex items-center justify-between gap-3"><p className="text-sm font-semibold text-slate-700">{eligibleReconnections.length} eligible meter{eligibleReconnections.length === 1 ? "" : "s"}</p><button type="button" className="text-sm font-bold text-aqua-700 hover:underline" onClick={() => setSelectedReconnections(selectedReconnections.length === eligibleReconnections.length ? [] : eligibleReconnections.map((item) => `${item.accountId}:${item.meterId}`))}>{selectedReconnections.length === eligibleReconnections.length ? "Clear selection" : "Select all"}</button></div>
+                <div className="overflow-hidden rounded-xl border border-slate-200"><div className="overflow-x-auto"><table className="w-full min-w-[700px] text-sm"><thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500"><tr><th className="w-12 px-4 py-3"></th><th className="px-4 py-3">Account / customer</th><th className="px-4 py-3">Meter</th><th className="px-4 py-3">Latest reading</th><th className="px-4 py-3">Balance</th><th className="px-4 py-3">Request</th></tr></thead><tbody>{eligibleReconnections.map((item) => { const key = `${item.accountId}:${item.meterId}`; const checked = selectedReconnections.includes(key); return <tr key={key} className={`border-t border-slate-100 ${checked ? "bg-emerald-50/60" : ""}`}><td className="px-4 py-3"><input type="checkbox" className="h-4 w-4" checked={checked} disabled={reconnectionSubmitting} onChange={() => setSelectedReconnections((current) => current.includes(key) ? current.filter((value) => value !== key) : [...current, key])} aria-label={`Select ${item.accountNumber}`} /></td><td className="px-4 py-3"><strong className="block text-slate-900">{item.accountNumber}</strong><span className="text-xs text-slate-500">{privacyMode ? maskName(item.customerName) : item.customerName}</span></td><td className="px-4 py-3"><strong className="text-slate-800">{item.meterNumber}</strong><div className="text-xs text-slate-400">{item.serialNumber || "No serial"}</div></td><td className="px-4 py-3 font-semibold text-slate-700">{Number(item.latestReading ?? 0).toLocaleString()}</td><td className="px-4 py-3 font-extrabold text-emerald-700">KSh 0.00</td><td className="px-4 py-3 text-xs font-semibold text-slate-600">{item.reconnectionRequestNumber || "Will be created"}</td></tr>; })}</tbody></table></div></div>
+                <label className="mt-4 flex cursor-pointer gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><input type="checkbox" className="mt-0.5 h-4 w-4" checked={reconnectionReviewConfirmed} disabled={!selectedReconnections.length || reconnectionSubmitting} onChange={(event) => setReconnectionReviewConfirmed(event.target.checked)} /><span><strong>I confirm the selected meters have been physically reconnected.</strong><span className="mt-1 block text-xs leading-5 text-amber-800">This will change both the customer account and meter from Disconnected to Active. No additional fee will be posted.</span></span></label>
+              </> : !reconnectionError && <div className="py-16 text-center"><div className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-emerald-50 text-emerald-700">✓</div><h3 className="mt-3 font-bold text-slate-800">No eligible meters found</h3><p className="mt-1 text-sm text-slate-500">There are no zero-balance disconnected meters ready for direct reconnection.</p></div>}
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-slate-200 bg-slate-50 px-5 py-4"><button type="button" disabled={reconnectionSubmitting} onClick={() => setReconnectionModalOpen(false)} className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-100">Close</button><button type="button" disabled={!selectedReconnections.length || !reconnectionReviewConfirmed || reconnectionLoading || reconnectionSubmitting} onClick={() => void confirmReviewedReconnections()} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50">{reconnectionSubmitting ? "Reconnecting…" : `Reconnect selected (${selectedReconnections.length})`}</button></div>
+          </div>
+        </div>
+      )}
       <button
         type="button"
         aria-label="Close navigation"
@@ -1518,6 +1605,7 @@ function Shell({ children }: { children: React.ReactNode }) {
             )}
           </div>
           <div className="ml-auto flex items-center gap-1">
+            {canReviewDirectReconnections && <button type="button" title="Review zero-balance disconnected meters" onClick={() => void openReconnectionReview()} className="mr-1 inline-flex items-center gap-1.5 rounded-lg bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-700 ring-1 ring-emerald-200 transition hover:bg-emerald-100"><span aria-hidden="true">↻</span><span className="hidden lg:inline">Reconnect check</span></button>}
             <button
               type="button"
               aria-pressed={privacyMode}

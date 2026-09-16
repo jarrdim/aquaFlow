@@ -3512,14 +3512,14 @@ export function DirectMeterService() {
           )}
           {canReconnect && selected.reconnectionSettlementMethod === "ACCOUNT_LEDGER" && (
             <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-800">
-              Overpayment applied automatically. The KSh {money(reconnectionFee)} reconnection fee is settled. Remaining account credit: KSh {money(accountCreditAvailable)}.
+              Posted disconnection charges are settled. No additional reconnection charge will be added.
             </div>
           )}
           <div className="mt-4 grid gap-2">
             <Button tone="red" disabled={!canDisconnect} onClick={() => openAction("DISCONNECT")}>Disconnect meter</Button>
             <Button tone="green" disabled={!canReconnect || !paymentConfirmed || Boolean(selected.workOrderId)} onClick={() => openAction("RECONNECT")}>Reconnect meter</Button>
           </div>
-          <p className="mt-3 text-xs leading-5 text-slate-400">These controls record work already completed on site. Reconnection never bypasses the posted-fee requirement.</p>
+          <p className="mt-3 text-xs leading-5 text-slate-400">These controls record work already completed on site. Reconnection verifies the charges posted during disconnection are settled and does not add another fee.</p>
         </>}
       </Card></div>
     </div>
@@ -3555,7 +3555,7 @@ export function DirectMeterService() {
             </div>}
             {previewError && <p className="mt-2 text-xs font-semibold text-red-600">{previewError}</p>}
           </div>}
-          {mode === "RECONNECT" && <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800"><p className="font-extrabold">Payment verified</p><p className="mt-1">{selected.reconnectionRequestNumber} · KSh {money(selected.reconnectionFee)}{selected.reconnectionReceiptNumber ? ` · receipt ${selected.reconnectionReceiptNumber}` : ""}</p></div>}
+          {mode === "RECONNECT" && <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800"><p className="font-extrabold">Account balance verified</p><p className="mt-1">{selected.reconnectionRequestNumber} · Posted disconnection charges settled{selected.reconnectionReceiptNumber ? ` · receipt ${selected.reconnectionReceiptNumber}` : ""}. No additional reconnection charge will be added.</p></div>}
           <label className="flex cursor-pointer gap-3 rounded-xl border border-slate-200 p-3 text-sm text-slate-700"><input type="checkbox" className="mt-0.5 h-4 w-4" checked={form.confirmed} onChange={(e) => setForm({ ...form, confirmed: e.target.checked })} /><span>I confirm the physical {mode === "DISCONNECT" ? "disconnection" : "reconnection"} is complete and the details above are correct.</span></label>
         </div>
         <div className="flex justify-end gap-2 border-t border-slate-100 px-5 py-4"><Button type="button" tone="slate" onClick={closeAction} disabled={saving}>Cancel</Button><Button type="submit" tone={mode === "DISCONNECT" ? "red" : "green"} disabled={saving || !form.confirmed || (mode === "DISCONNECT" && (!preview || previewLoading))}>{saving ? "Saving…" : mode === "DISCONNECT" ? "Disconnect and post charge" : "Reconnect now"}</Button></div>

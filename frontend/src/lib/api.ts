@@ -353,6 +353,8 @@ export const api = {
     request("/meters/replacements/direct/preview", { method: "POST", body: JSON.stringify(data) }),
   getDirectMeterServiceOptions: (search = "") =>
     request(`/meters/service-actions/direct/options${search ? `?search=${encodeURIComponent(search)}` : ""}`),
+  getEligibleDirectReconnections: () =>
+    request("/meters/service-actions/direct/reconnection/eligible"),
   getDirectMeterServiceHistory: (page = 1, pageSize = 10) =>
     request(`/meters/service-actions/direct/history?page=${page}&pageSize=${pageSize}`),
   previewDirectMeterDisconnection: (data: Record<string, unknown>) =>

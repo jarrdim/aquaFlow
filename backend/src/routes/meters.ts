@@ -1342,6 +1342,80 @@ metersRouter.get("/service-actions/direct/options", directServiceRoles, async (r
   } catch (error) { next(error); }
 });
 
+metersRouter.get("/service-actions/direct/reconnection/eligible", directServiceRoles, async (_req, res, next) => {
+  try {
+    const rows = await prisma.$queryRaw<any[]>`
+      SELECT ca.account_id AS "accountId",ca.account_number AS "accountNumber",
+        ca.current_balance AS "currentBalance",
+        COALESCE(NULLIF(TRIM(CONCAT_WS(' ',c.first_name,c.middle_name,c.last_name)),''),c.organization_name,c.customer_number) AS "customerName",
+        ma.assignment_id AS "assignmentId",m.meter_id AS "meterId",m.meter_number AS "meterNumber",
+        m.serial_number AS "serialNumber",COALESCE(latest.current_reading,m.opening_reading) AS "latestReading",
+        latest.reading_date AS "latestReadingDate",
+        rr.reconnection_request_id AS "reconnectionRequestId",rr.request_number AS "reconnectionRequestNumber",
+        rr.fee_payment_status AS "reconnectionFeePaymentStatus",rr.fee_payment_id AS "reconnectionFeePaymentId",
+        rr.decision_notes AS "reconnectionDecisionNotes",rr.work_order_id AS "workOrderId",
+        COALESCE(rr.reconnection_fee,settings.reconnection_fee,0) AS "reconnectionFee",
+        pay.payment_status AS "reconnectionPaymentStatus",pay.payment_type AS "reconnectionPaymentType",
+        pay.amount AS "reconnectionPaidAmount"
+      FROM aquaflow.customer_accounts ca
+      JOIN aquaflow.customers c ON c.customer_id=ca.customer_id
+      JOIN LATERAL (
+        SELECT current_assignment.* FROM aquaflow.meter_assignments current_assignment
+        WHERE current_assignment.account_id=ca.account_id
+          AND current_assignment.assignment_status='ACTIVE' AND current_assignment.removal_date IS NULL
+        ORDER BY current_assignment.assignment_date DESC,current_assignment.assignment_id DESC LIMIT 1
+      ) ma ON TRUE
+      JOIN aquaflow.meters m ON m.meter_id=ma.meter_id
+      LEFT JOIN aquaflow.system_settings settings ON settings.setting_id=1
+      LEFT JOIN LATERAL (
+        SELECT reading.current_reading,reading.reading_date FROM aquaflow.meter_readings reading
+        WHERE reading.meter_id=m.meter_id AND reading.approval_status='APPROVED'
+        ORDER BY reading.reading_date DESC,reading.reading_id DESC LIMIT 1
+      ) latest ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT request.* FROM aquaflow.reconnection_requests request
+        WHERE request.account_id=ca.account_id AND request.status IN ('SUBMITTED','APPROVED','WORK_ORDER_CREATED')
+        ORDER BY request.created_at DESC LIMIT 1
+      ) rr ON TRUE
+      LEFT JOIN aquaflow.payments pay ON pay.payment_id=rr.fee_payment_id
+      WHERE ca.account_status='DISCONNECTED' AND m.status='DISCONNECTED'
+        AND ca.current_balance=0
+        AND rr.work_order_id IS NULL
+        AND COALESCE(rr.fee_payment_status,'UNPAID')<>'PENDING'
+      ORDER BY ca.account_number`;
+    const ledgerFeeCharges = await ledgerReconnectionFeeCharges(
+      prisma,
+      rows.map((row) => BigInt(row.accountId)),
+    );
+    const ledgerFeeChargeByAccount = new Map(
+      ledgerFeeCharges.map((charge) => [String(charge.accountId), charge]),
+    );
+    const items = rows.filter((row) => {
+      const ledgerCharge = ledgerFeeChargeByAccount.get(String(row.accountId));
+      const expectedFee = Number(row.reconnectionFee);
+      const settledThroughDisconnectionLedger = Boolean(
+        ledgerCharge
+        && expectedFee > 0
+        && Math.abs(Number(ledgerCharge.settledAmount) - expectedFee) < 0.01,
+      );
+      const settlementNote = String(row.reconnectionDecisionNotes ?? "").toLowerCase();
+      const paidWithoutPaymentRecord = row.reconnectionFeePaymentStatus === "PAID"
+        && !row.reconnectionFeePaymentId
+        && (settlementNote.includes("account credit") || settlementNote.includes("account ledger"));
+      const paidThroughPostedPayment = row.reconnectionFeePaymentStatus === "PAID"
+        && row.reconnectionPaymentStatus === "POSTED"
+        && row.reconnectionPaymentType === "RECONNECTION_FEE"
+        && Number(row.reconnectionPaidAmount) >= expectedFee;
+      return settledThroughDisconnectionLedger || paidWithoutPaymentRecord || paidThroughPostedPayment;
+    }).map((row) => ({
+      ...row,
+      eligibility: "ZERO_BALANCE_AND_SETTLED_RECONNECTION_REQUIREMENT",
+      reconnectionLedgerDebitAdjustmentId: ledgerFeeChargeByAccount.get(String(row.accountId))?.debitAdjustmentId,
+    }));
+    res.json({ items, count: items.length });
+  } catch (error) { next(error); }
+});
+
 metersRouter.get("/service-actions/direct/history", directServiceRoles, async (req, res, next) => {
   try {
     const page = Math.max(1, Number(req.query.page) || 1);
