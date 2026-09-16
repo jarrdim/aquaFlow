@@ -233,7 +233,11 @@ readingsRouter.get("/cycles", async (req, res, next) => {
         })),
       },
       include: { creator: true, _count: { select: { readings: true, routeAssignments: true } } },
-      orderBy: [{ startDate: "desc" }, { readingCycleId: "desc" }],
+      orderBy: [
+        { startDate: "desc" },
+        { endDate: "desc" },
+        { readingCycleId: "desc" },
+      ],
     });
     res.json(cycles);
   } catch (error) { next(error); }

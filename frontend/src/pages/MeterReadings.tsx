@@ -886,18 +886,32 @@ export function ReadingCycles() {
   }, []);
   const filteredCycles = useMemo(() => {
     const query = cycleSearch.trim().toLowerCase();
-    if (!query) return cycles;
-    return cycles.filter((cycle) =>
-      [
-        cycle.cycleCode,
-        cycle.cycleName,
-        cycle.status,
-        formatDmyDate(cycle.startDate),
-        formatDmyDate(cycle.endDate),
-      ]
-        .filter(Boolean)
-        .some((value) => String(value).toLowerCase().includes(query)),
-    );
+    return cycles
+      .filter(
+        (cycle) =>
+          !query ||
+          [
+            cycle.cycleCode,
+            cycle.cycleName,
+            cycle.status,
+            formatDmyDate(cycle.startDate),
+            formatDmyDate(cycle.endDate),
+          ]
+            .filter(Boolean)
+            .some((value) => String(value).toLowerCase().includes(query)),
+      )
+      .sort((left, right) => {
+        const startDateOrder =
+          new Date(right.startDate).getTime() -
+          new Date(left.startDate).getTime();
+        if (startDateOrder) return startDateOrder;
+
+        const endDateOrder =
+          new Date(right.endDate).getTime() - new Date(left.endDate).getTime();
+        if (endDateOrder) return endDateOrder;
+
+        return 0;
+      });
   }, [cycles, cycleSearch]);
   const cyclePages = Math.max(
     1,
