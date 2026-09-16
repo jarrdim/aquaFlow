@@ -2049,6 +2049,7 @@ export function ReadingRouteAssignments() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [saving, setSaving] = useState(false);
+  const [deletingAssignmentId, setDeletingAssignmentId] = useState("");
   const [registerSearch, setRegisterSearch] = useState("");
   const [selectedRouteIds, setSelectedRouteIds] = useState<string[]>([]);
   const [selectedOfficerIds, setSelectedOfficerIds] = useState<string[]>([]);
@@ -2065,6 +2066,11 @@ export function ReadingRouteAssignments() {
     homeZoneId: "",
   });
   const [zones, setZones] = useState<Row[]>([]);
+  const canDeleteAssignments = Boolean(
+    getSessionUser()?.roles.some((role) =>
+      ["SYSTEM_ADMIN", "SUPERVISOR", "METER_SUPERVISOR"].includes(role),
+    ),
+  );
   const load = async () => {
     try {
       const [c, r, o, a, s, z] = await Promise.all([
@@ -2138,6 +2144,22 @@ export function ReadingRouteAssignments() {
       await load();
     } catch (e: any) {
       setError(e.message);
+    }
+  }
+  async function deleteAssignment(assignment: Row) {
+    const routeName = assignment.route?.routeName ?? "this route";
+    if (!window.confirm(`Delete the ${routeName} assignment? This cannot be undone.`)) return;
+    setDeletingAssignmentId(String(assignment.routeAssignmentId));
+    setError("");
+    setSuccess("");
+    try {
+      await api.deleteRouteAssignment(String(assignment.routeAssignmentId));
+      setSuccess(`${routeName} assignment deleted.`);
+      await load();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setDeletingAssignmentId("");
     }
   }
   const assignedCount = items.filter((assignment) => ["ASSIGNED", "ACCEPTED"].includes(assignment.status)).length;
@@ -2358,20 +2380,32 @@ export function ReadingRouteAssignments() {
                     <Badge value={a.status} />
                   </td>
                   <td className={TD}>
-                    {a.status !== "COMPLETED" && (
-                      <button
-                        className="inline-flex rounded-lg bg-emerald-50 px-3 py-2 text-sm font-bold text-emerald-700 transition hover:bg-emerald-600 hover:text-white"
-                        onClick={async () => {
-                          await api.updateRouteAssignmentStatus(
-                            String(a.routeAssignmentId),
-                            "COMPLETED",
-                          );
-                          load();
-                        }}
-                      >
-                        Complete
-                      </button>
-                    )}
+                    <div className="flex flex-wrap gap-2">
+                      {a.status !== "COMPLETED" && (
+                        <button
+                          className="inline-flex rounded-lg bg-emerald-50 px-3 py-2 text-sm font-bold text-emerald-700 transition hover:bg-emerald-600 hover:text-white"
+                          onClick={async () => {
+                            await api.updateRouteAssignmentStatus(
+                              String(a.routeAssignmentId),
+                              "COMPLETED",
+                            );
+                            load();
+                          }}
+                        >
+                          Complete
+                        </button>
+                      )}
+                      {canDeleteAssignments && ["ASSIGNED", "ACCEPTED"].includes(a.status) && (
+                        <button
+                          type="button"
+                          disabled={deletingAssignmentId === String(a.routeAssignmentId)}
+                          className="inline-flex rounded-lg bg-red-50 px-3 py-2 text-sm font-bold text-red-700 transition hover:bg-red-600 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                          onClick={() => deleteAssignment(a)}
+                        >
+                          {deletingAssignmentId === String(a.routeAssignmentId) ? "Deleting…" : "Delete"}
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}

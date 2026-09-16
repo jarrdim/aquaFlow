@@ -108,6 +108,23 @@ export function requestedRoutesAreAllowed(requestedRouteIds: bigint[], allowedRo
   return requestedRouteIds.every((requested) => allowedRouteIds.some((allowed) => allowed === requested));
 }
 
+export function routeAssignmentDeletionIssue(
+  assignmentStatus: string,
+  cycleStatus: string,
+  readingCount: number,
+) {
+  if (!["PLANNED", "OPEN"].includes(cycleStatus)) {
+    return "Assignments can only be deleted from planned or open reading cycles";
+  }
+  if (!["ASSIGNED", "ACCEPTED"].includes(assignmentStatus)) {
+    return "Completed or historical assignments cannot be deleted";
+  }
+  if (readingCount > 0) {
+    return "This assignment already has readings and cannot be deleted";
+  }
+  return null;
+}
+
 export function buildReadingWorklistPage<T extends { meterId: bigint }>(
   eligibleItems: T[],
   visibleItems: T[],

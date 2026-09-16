@@ -8,6 +8,7 @@ import {
   readingEligibilityWarning,
   requestedRoutesAreAllowed,
   resolveReadableAssignments,
+  routeAssignmentDeletionIssue,
 } from "./readingEligibility";
 
 function assignment(overrides: Record<string, any> = {}) {
@@ -96,6 +97,14 @@ test("meter readers can request only routes assigned to them", () => {
   assert.equal(requestedRoutesAreAllowed([11n], [11n, 12n]), true);
   assert.equal(requestedRoutesAreAllowed([], [11n]), true);
   assert.equal(requestedRoutesAreAllowed([13n], [11n, 12n]), false);
+});
+
+test("route assignments can only be deleted before readings or completion", () => {
+  assert.equal(routeAssignmentDeletionIssue("ASSIGNED", "OPEN", 0), null);
+  assert.equal(routeAssignmentDeletionIssue("ACCEPTED", "PLANNED", 0), null);
+  assert.match(routeAssignmentDeletionIssue("COMPLETED", "OPEN", 0) ?? "", /historical/i);
+  assert.match(routeAssignmentDeletionIssue("ASSIGNED", "CLOSED", 0) ?? "", /planned or open/i);
+  assert.match(routeAssignmentDeletionIssue("ASSIGNED", "OPEN", 1) ?? "", /readings/i);
 });
 
 test("worklist paging returns only the requested rows while keeping full-scope counts", () => {

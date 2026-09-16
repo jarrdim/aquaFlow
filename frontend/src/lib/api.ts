@@ -451,6 +451,8 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ status }),
     }),
+  deleteRouteAssignment: (id: string) =>
+    request(`/readings/assignments/${id}`, { method: "DELETE" }),
   readingWorklist: (filters: Record<string, string> = {}) => {
     const query = new URLSearchParams(
       Object.entries(filters).filter(([, value]) => value),

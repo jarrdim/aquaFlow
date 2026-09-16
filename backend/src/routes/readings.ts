@@ -9,6 +9,7 @@ import {
   readingEligibilityWarning,
   requestedRoutesAreAllowed,
   resolveReadableAssignments,
+  routeAssignmentDeletionIssue,
 } from "../lib/readingEligibility";
 import { SYSTEM_GENERATED_REPLACEMENT_CYCLE_PREFIXES } from "../lib/readingBilling";
 
@@ -483,6 +484,71 @@ readingsRouter.patch("/assignments/:id/status", async (req, res, next) => {
     res.json(updated);
   } catch (error) { next(error); }
 });
+
+readingsRouter.delete(
+  "/assignments/:id",
+  requireRole("SYSTEM_ADMIN", "SUPERVISOR", "METER_SUPERVISOR"),
+  async (req, res, next) => {
+    const routeAssignmentId = parse(id, req.params.id, res);
+    if (!routeAssignmentId) return;
+    try {
+      const deleted = await prisma.$transaction(async (tx) => {
+        const assignment = await tx.routeAssignment.findUnique({
+          where: { routeAssignmentId },
+          include: {
+            cycle: { select: { status: true } },
+            route: { select: { routeName: true } },
+          },
+        });
+        if (!assignment) {
+          throw Object.assign(new Error("Route assignment not found"), { status: 404 });
+        }
+        const readingCount = await tx.meterReading.count({
+          where: {
+            readingCycleId: assignment.readingCycleId,
+            OR: [
+              { account: { routeId: assignment.routeId } },
+              {
+                account: {
+                  routeId: null,
+                  property: { routeId: assignment.routeId },
+                },
+              },
+            ],
+          },
+        });
+        const issue = routeAssignmentDeletionIssue(
+          assignment.status,
+          assignment.cycle.status,
+          readingCount,
+        );
+        if (issue) throw Object.assign(new Error(issue), { status: 409 });
+
+        await tx.routeAssignment.delete({ where: { routeAssignmentId } });
+        const remainingActiveAssignments = await tx.routeAssignment.count({
+          where: {
+            fieldOfficerId: assignment.fieldOfficerId,
+            status: { in: ["ASSIGNED", "ACCEPTED"] },
+          },
+        });
+        if (!remainingActiveAssignments) {
+          await tx.fieldOfficer.update({
+            where: { fieldOfficerId: assignment.fieldOfficerId },
+            data: { availabilityStatus: "AVAILABLE", updatedAt: new Date() },
+          });
+        }
+        return assignment;
+      });
+      res.json({
+        deleted: true,
+        routeAssignmentId: deleted.routeAssignmentId,
+        routeName: deleted.route.routeName,
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
 
 readingsRouter.get("/worklist/captured-count", async (req, res, next) => {
   try {
