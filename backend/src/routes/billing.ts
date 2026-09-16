@@ -1297,7 +1297,7 @@ billingRouter.post("/notifications", requireRole("SYSTEM_ADMIN", "BILLING_OFFICE
     // BILL_ISSUED is a final bill/payment-demand notification. Reading data is
     // included in the message, but approval alone does not make the charge part
     // of the customer ledger; only posted bills may be queued.
-    const bills = await prisma.bill.findMany({ where: { billingCycleId: data.billingCycleId, status: { in: [...postedBillStatuses] }, readingId: { not: null }, ...(data.billIds ? { billId: { in: data.billIds } } : {}) }, include: { account: { include: { customer: true } }, billingCycle: true, reading: true } });
+    const bills = await prisma.bill.findMany({ where: { billingCycleId: data.billingCycleId, status: { in: [...postedBillStatuses] }, readingId: { not: null }, ...(data.billIds ? { billId: { in: data.billIds } } : {}) }, include: { account: { include: { customer: true } }, billingCycle: { include: { billingPeriodGroup: true } }, reading: true } });
     if (data.billIds && bills.length !== new Set(data.billIds.map(String)).size) {
       return res.status(409).json({ error: "Final bill notifications can only be sent after every selected bill is posted" });
     }
@@ -1344,9 +1344,9 @@ billingRouter.post("/notifications", requireRole("SYSTEM_ADMIN", "BILLING_OFFICE
         expiresAt: expiresAt.toISOString(),
       });
       const paymentUrl = `${publicAppUrl()}/pay/${paymentToken}`;
-      const billDate = bill.billingCycle?.periodEnd ?? bill.issueDate;
+      const billingGroupName = bill.billingCycle.billingPeriodGroup.groupName;
       const dueDate = bill.billingCycle?.dueDate ?? bill.dueDate;
-      const message = `Dear ${name} A/C ${accountNumber} your bill as at ${smsDate(billDate)}. Prev Read ${smsReading(previousReading)} Curr Read ${smsReading(currentReading)} Consumption ${smsReading(Number(bill.consumptionUnits))} Arrears KSh ${smsNumber(Number(bill.previousBalance))} Amount Paid KSh ${smsNumber(amountPaid)} Current Bill KSh ${smsNumber(Number(bill.totalCurrentCharges))} Total Amount KSh ${smsNumber(totalAmount)}. Due date is ${smsDate(dueDate)}. Reconnection Fee is KSh ${smsNumber(Number(settings?.reconnectionFee ?? 1155), 0)}. Bills payable through PayBill No 823496 using ${accountNumber} as the account number. WE MAKE IT SAFE BECAUSE WATER IS LIFE. THANK YOU.\n\nPay now: ${paymentUrl}`;
+      const message = `Dear ${name} A/C ${accountNumber} your bill for ${billingGroupName}. Prev Read ${smsReading(previousReading)} Curr Read ${smsReading(currentReading)} Consumption ${smsReading(Number(bill.consumptionUnits))} Arrears KSh ${smsNumber(Number(bill.previousBalance))} Amount Paid KSh ${smsNumber(amountPaid)} Current Bill KSh ${smsNumber(Number(bill.totalCurrentCharges))} Total Amount KSh ${smsNumber(totalAmount)}. Due date is ${smsDate(dueDate)}. Reconnection Fee is KSh ${smsNumber(Number(settings?.reconnectionFee ?? 1155), 0)}. Bills payable through PayBill No 823496 using ${accountNumber} as the account number. WE MAKE IT SAFE BECAUSE WATER IS LIFE. THANK YOU.\n\nPay now: ${paymentUrl}`;
       for (const channel of data.channels) {
         const deliveryChannel = channel === "APP" ? "PUSH" : "SMS";
         if (!data.resend && existingNotificationKeys.has(`${bill.billId}:${deliveryChannel}`)) continue;
