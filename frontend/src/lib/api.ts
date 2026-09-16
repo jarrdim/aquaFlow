@@ -193,6 +193,7 @@ export const api = {
       `/customers?search=${encodeURIComponent(search)}&page=${page}${status ? `&status=${encodeURIComponent(status)}` : ""}${meterAssignment ? `&meterAssignment=${encodeURIComponent(meterAssignment)}` : ""}`,
     ),
   getCustomer: (id: string) => request(`/customers/${id}`),
+  getCustomerActivity: (id: string) => request(`/customers/${id}/activity`),
   createCustomer: (data: Record<string, unknown>) =>
     request("/customers", { method: "POST", body: JSON.stringify(data) }),
   updateCustomer: (id: string, data: Record<string, unknown>) =>
@@ -227,6 +228,8 @@ export const api = {
     request(`/properties${customerId ? `?customerId=${customerId}` : ""}`),
   createProperty: (data: Record<string, unknown>) =>
     request("/properties", { method: "POST", body: JSON.stringify(data) }),
+  updateProperty: (id: string, data: Record<string, unknown>) =>
+    request(`/properties/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   bulkImportProperties: (properties: Record<string, unknown>[]) =>
     request("/properties/bulk-import", {
       method: "POST",

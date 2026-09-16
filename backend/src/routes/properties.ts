@@ -18,6 +18,16 @@ const createPropertySchema = z.object({
   occupancyStatus: z.enum(["OWNER_OCCUPIED", "TENANTED", "VACANT"]).default("OWNER_OCCUPIED"),
 });
 
+const updatePropertySchema = z.object({
+  zoneId: z.string().min(1),
+  serviceAreaId: z.string().optional().nullable(),
+  routeId: z.string().optional().nullable(),
+  plotNumber: z.string().trim().max(100).optional().nullable(),
+  buildingName: z.string().trim().max(200).optional().nullable(),
+  physicalAddress: z.string().trim().min(1).max(500),
+  occupancyStatus: z.enum(["OWNER_OCCUPIED", "TENANTED", "VACANT"]),
+});
+
 const bulkPropertySchema = z.object({
   properties: z.array(z.object({
     propertyCode: z.string().trim().min(1).max(50),
@@ -131,4 +141,44 @@ propertiesRouter.post("/", async (req, res) => {
     }
     throw error;
   }
+});
+
+propertiesRouter.patch("/:id", async (req, res) => {
+  const propertyId = z.coerce.bigint().positive().safeParse(req.params.id);
+  const parsed = updatePropertySchema.safeParse(req.body);
+  if (!propertyId.success) return res.status(400).json({ error: "Invalid property id" });
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+  const data = parsed.data;
+  const zoneId = BigInt(data.zoneId);
+  const serviceAreaId = data.serviceAreaId ? BigInt(data.serviceAreaId) : null;
+  const routeId = data.routeId ? BigInt(data.routeId) : null;
+  const [existing, serviceArea, route] = await Promise.all([
+    prisma.property.findUnique({ where: { propertyId: propertyId.data } }),
+    serviceAreaId ? prisma.serviceArea.findUnique({ where: { serviceAreaId } }) : null,
+    routeId ? prisma.route.findUnique({ where: { routeId } }) : null,
+  ]);
+  if (!existing) return res.status(404).json({ error: "Property not found" });
+  if (serviceAreaId && (!serviceArea || serviceArea.zoneId !== zoneId)) {
+    return res.status(400).json({ error: "The selected service area does not belong to the selected zone" });
+  }
+  if (routeId && (!route || route.zoneId !== zoneId)) {
+    return res.status(400).json({ error: "The selected route does not belong to the selected zone" });
+  }
+
+  const property = await prisma.property.update({
+    where: { propertyId: propertyId.data },
+    data: {
+      zoneId,
+      serviceAreaId,
+      routeId,
+      plotNumber: data.plotNumber || null,
+      buildingName: data.buildingName || null,
+      physicalAddress: data.physicalAddress,
+      occupancyStatus: data.occupancyStatus,
+      updatedAt: new Date(),
+    },
+    include: { zone: true, serviceArea: true, route: true },
+  });
+  res.json(property);
 });

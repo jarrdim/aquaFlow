@@ -54,8 +54,24 @@ interface Property {
   propertyId: string;
   propertyCode: string;
   physicalAddress: string;
-  zone?: { zoneName: string };
+  plotNumber?: string;
+  buildingName?: string;
+  occupancyStatus: string;
+  zone?: { zoneId: string; zoneName: string };
+  serviceArea?: { serviceAreaId: string; areaName: string };
+  route?: { routeId: string; routeName: string };
   status: string;
+}
+interface CustomerActivity {
+  id: string;
+  group: "CUSTOMER" | "SERVICE_REQUEST" | "METER" | "PAYMENT" | "BILLING" | "ACCOUNT" | "CONNECTION";
+  activityType: string;
+  reference?: string;
+  status?: string;
+  details?: string;
+  reason?: string;
+  actor?: string;
+  occurredAt: string;
 }
 interface Lookup { [key: string]: any; }
 interface CustomerMeter {
@@ -110,6 +126,15 @@ const STATUS_COLORS: Record<string, string> = {
   REVERSED:     "bg-slate-200 text-slate-600",
   PENDING_APPROVAL: "bg-amber-100 text-amber-700",
 };
+const ACTIVITY_GROUPS: Record<string, { label: string; dot: string; badge: string }> = {
+  CUSTOMER: { label: "Customer", dot: "bg-slate-500", badge: "bg-slate-100 text-slate-700" },
+  SERVICE_REQUEST: { label: "Service requests", dot: "bg-amber-500", badge: "bg-amber-50 text-amber-700" },
+  METER: { label: "Meter", dot: "bg-cyan-500", badge: "bg-cyan-50 text-cyan-700" },
+  PAYMENT: { label: "Payments", dot: "bg-emerald-500", badge: "bg-emerald-50 text-emerald-700" },
+  BILLING: { label: "Billing", dot: "bg-violet-500", badge: "bg-violet-50 text-violet-700" },
+  ACCOUNT: { label: "Account", dot: "bg-blue-500", badge: "bg-blue-50 text-blue-700" },
+  CONNECTION: { label: "Connection", dot: "bg-rose-500", badge: "bg-rose-50 text-rose-700" },
+};
 const ACCOUNT_STATUSES = ["PENDING", "ACTIVE", "SUSPENDED", "DISCONNECTED", "CLOSED"] as const;
 function StatusBadge({ status }: { status: string }) {
   const cls = STATUS_COLORS[status] ?? "bg-slate-100 text-slate-500";
@@ -125,6 +150,14 @@ const money = (value: unknown) =>
   `KSh ${Number(value ?? 0).toLocaleString("en-KE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const date = (value?: string) =>
   value ? new Date(value).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "—";
+const dateTime = (value: string) => new Date(value).toLocaleString("en-GB", {
+  day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit",
+});
+const activityLabel = (value: string) => value
+  .toLowerCase()
+  .split("_")
+  .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+  .join(" ");
 const initials = (value?: string) =>
   (value ?? "Customer").split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("");
 function InfoRow({ label, value, valueClass }: { label: string; value: React.ReactNode; valueClass?: string }) {
@@ -146,7 +179,7 @@ function Field({ label, error, children }: { label: string; error?: string; chil
   );
 }
 
-type Tab = "properties" | "billing" | "payments" | "service_requests" | "meters" | "documents" | "notes";
+type Tab = "properties" | "billing" | "payments" | "service_requests" | "meters" | "documents" | "activity";
 
 // ── Component ──────────────────────────────────────────────────────────────────
 export default function CustomerDetail() {
@@ -162,6 +195,8 @@ export default function CustomerDetail() {
   const [meters, setMeters]         = useState<CustomerMeter[]>([]);
   const [bills, setBills]           = useState<CustomerBill[]>([]);
   const [payments, setPayments]     = useState<CustomerPayment[]>([]);
+  const [activities, setActivities] = useState<CustomerActivity[]>([]);
+  const [activityFilter, setActivityFilter] = useState("ALL");
   const [historyLoading, setHistoryLoading] = useState(true);
   const [error, setError]         = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>("billing");
@@ -192,6 +227,15 @@ export default function CustomerDetail() {
     zoneId: "", serviceAreaId: "", routeId: "",
     plotNumber: "", buildingName: "", physicalAddress: "",
   });
+  const [editingProperty, setEditingProperty] = useState<Property | null>(null);
+  const [propertySaving, setPropertySaving] = useState(false);
+  const [propertyError, setPropertyError] = useState<string | null>(null);
+  const [editPropertyForm, setEditPropertyForm] = useState({
+    zoneId: "", serviceAreaId: "", routeId: "", plotNumber: "", buildingName: "",
+    physicalAddress: "", occupancyStatus: "OWNER_OCCUPIED",
+  });
+  const [editServiceAreas, setEditServiceAreas] = useState<Lookup[]>([]);
+  const [editRoutes, setEditRoutes] = useState<Lookup[]>([]);
 
   const [showAccountForm, setShowAccountForm] = useState(false);
   const [accountForm, setAccountForm] = useState({ propertyId: "", categoryId: "" });
@@ -203,20 +247,33 @@ export default function CustomerDetail() {
     api.listRoutes(propertyForm.zoneId).then(setRoutes);
   }, [propertyForm.zoneId]);
 
+  useEffect(() => {
+    if (!editPropertyForm.zoneId) { setEditServiceAreas([]); setEditRoutes([]); return; }
+    Promise.all([
+      api.listServiceAreas(editPropertyForm.zoneId),
+      api.listRoutes(editPropertyForm.zoneId),
+    ]).then(([areas, zoneRoutes]) => {
+      setEditServiceAreas(areas);
+      setEditRoutes(zoneRoutes);
+    });
+  }, [editPropertyForm.zoneId]);
+
   async function loadAll() {
     if (!rawId || rawId === "0") { setError("Invalid customer link."); return; }
-    const [c, props, z, cats, customerMeters] = await Promise.all([
+    const [c, props, z, cats, customerMeters, customerActivity] = await Promise.all([
       api.getCustomer(rawId),
       api.listProperties(rawId),
       api.listZones(),
       api.listCategories(),
       api.listMeters({ customerId: rawId }),
+      api.getCustomerActivity(rawId),
     ]);
     setCustomer(c);
     setProperties(props);
     setZones(z);
     setCategories(cats);
     setMeters(customerMeters);
+    setActivities(customerActivity);
     const accountIds = (c.accounts ?? []).map((account: Account) => String(account.accountId));
     setHistoryLoading(true);
     try {
@@ -386,6 +443,37 @@ export default function CustomerDetail() {
     } catch (err: any) { setError(err.message); }
   }
 
+  function openPropertyEditor(property: Property) {
+    setPropertyError(null);
+    setEditingProperty(property);
+    setEditPropertyForm({
+      zoneId: String(property.zone?.zoneId ?? ""),
+      serviceAreaId: String(property.serviceArea?.serviceAreaId ?? ""),
+      routeId: String(property.route?.routeId ?? ""),
+      plotNumber: property.plotNumber ?? "",
+      buildingName: property.buildingName ?? "",
+      physicalAddress: property.physicalAddress,
+      occupancyStatus: property.occupancyStatus ?? "OWNER_OCCUPIED",
+    });
+  }
+
+  async function saveProperty(e: FormEvent) {
+    e.preventDefault();
+    if (!editingProperty) return;
+    setPropertySaving(true);
+    setPropertyError(null);
+    try {
+      await api.updateProperty(editingProperty.propertyId, editPropertyForm);
+      setEditingProperty(null);
+      await loadAll();
+      setPortalSuccess("Property area and address updated.");
+    } catch (err: any) {
+      setPropertyError(err.message ?? "The property could not be updated.");
+    } finally {
+      setPropertySaving(false);
+    }
+  }
+
   async function submitAccount(e: FormEvent) {
     e.preventDefault();
     if (!rawId) return;
@@ -469,7 +557,7 @@ export default function CustomerDetail() {
     { key: "meters",           label: "Meters" },
     { key: "properties",       label: "Properties & Accounts" },
     { key: "documents",        label: `Documents (${customer.documents?.length ?? 0})` },
-    { key: "notes",            label: "Notes" },
+    { key: "activity",         label: `Activity (${activities.length})` },
   ];
 
   const primaryAccount  = customer.accounts?.[0];
@@ -478,6 +566,15 @@ export default function CustomerDetail() {
   const validPayments = payments.filter((payment) => payment.paymentStatus !== "REVERSED");
   const totalPaid = validPayments.reduce((sum, payment) => sum + Number(payment.amount), 0);
   const totalBilled = bills.reduce((sum, bill) => sum + Number(bill.totalAmountDue), 0);
+  const activityFilters = ["ALL", ...Object.keys(ACTIVITY_GROUPS).filter((group) => activities.some((item) => item.group === group))];
+  const filteredActivities = activityFilter === "ALL" ? activities : activities.filter((item) => item.group === activityFilter);
+  const activitiesByDay = filteredActivities.reduce<Array<{ day: string; items: CustomerActivity[] }>>((groups, item) => {
+    const day = date(item.occurredAt);
+    const current = groups[groups.length - 1];
+    if (current?.day === day) current.items.push(item);
+    else groups.push({ day, items: [item] });
+    return groups;
+  }, []);
 
   return (
     <div className="mx-auto w-full max-w-[1600px] px-5 py-5 lg:px-8">
@@ -616,6 +713,65 @@ export default function CustomerDetail() {
                 <button type="submit" disabled={accountStatusSaving || accountStatus === primaryAccount.accountStatus} className="rounded-lg bg-aqua-700 px-4 py-2 text-sm font-semibold text-white hover:bg-aqua-600 disabled:cursor-not-allowed disabled:opacity-50">
                   {accountStatusSaving ? "Saving…" : "Save status"}
                 </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {editingProperty && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="edit-property-title">
+          <div className="w-full max-w-2xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+            <div className="flex items-start justify-between border-b border-slate-100 px-6 py-5">
+              <div>
+                <h2 id="edit-property-title" className="text-xl font-bold text-slate-900">Edit property area</h2>
+                <p className="mt-1 text-sm text-slate-500">{editingProperty.propertyCode} · Update the service location and address details</p>
+              </div>
+              <button type="button" onClick={() => setEditingProperty(null)} className="grid h-9 w-9 place-items-center rounded-full text-xl text-slate-400 hover:bg-slate-100" aria-label="Close">×</button>
+            </div>
+            <form onSubmit={saveProperty} className="space-y-4 p-6">
+              <div className="grid gap-4 sm:grid-cols-3">
+                <Field label="Zone *">
+                  <SearchableSelect required className={FIELD_CLS} value={editPropertyForm.zoneId} onChange={(e) => setEditPropertyForm((form) => ({ ...form, zoneId: e.target.value, serviceAreaId: "", routeId: "" }))}>
+                    <option value="">Select zone</option>
+                    {zones.map((zone) => <option key={zone.zoneId} value={zone.zoneId}>{zone.zoneName}</option>)}
+                  </SearchableSelect>
+                </Field>
+                <Field label="Service area">
+                  <SearchableSelect className={FIELD_CLS} value={editPropertyForm.serviceAreaId} onChange={(e) => setEditPropertyForm((form) => ({ ...form, serviceAreaId: e.target.value }))}>
+                    <option value="">Not assigned</option>
+                    {editServiceAreas.map((area) => <option key={area.serviceAreaId} value={area.serviceAreaId}>{area.areaName}</option>)}
+                  </SearchableSelect>
+                </Field>
+                <Field label="Meter-reading route">
+                  <SearchableSelect className={FIELD_CLS} value={editPropertyForm.routeId} onChange={(e) => setEditPropertyForm((form) => ({ ...form, routeId: e.target.value }))}>
+                    <option value="">Not assigned</option>
+                    {editRoutes.map((route) => <option key={route.routeId} value={route.routeId}>{route.routeName}</option>)}
+                  </SearchableSelect>
+                </Field>
+              </div>
+              <Field label="Physical address *">
+                <input required className={FIELD_CLS} value={editPropertyForm.physicalAddress} onChange={(e) => setEditPropertyForm((form) => ({ ...form, physicalAddress: e.target.value }))} />
+              </Field>
+              <div className="grid gap-4 sm:grid-cols-3">
+                <Field label="Plot number">
+                  <input className={FIELD_CLS} value={editPropertyForm.plotNumber} onChange={(e) => setEditPropertyForm((form) => ({ ...form, plotNumber: e.target.value }))} />
+                </Field>
+                <Field label="Building name">
+                  <input className={FIELD_CLS} value={editPropertyForm.buildingName} onChange={(e) => setEditPropertyForm((form) => ({ ...form, buildingName: e.target.value }))} />
+                </Field>
+                <Field label="Occupancy">
+                  <SearchableSelect className={FIELD_CLS} value={editPropertyForm.occupancyStatus} onChange={(e) => setEditPropertyForm((form) => ({ ...form, occupancyStatus: e.target.value }))}>
+                    <option value="OWNER_OCCUPIED">Owner occupied</option>
+                    <option value="TENANTED">Tenanted</option>
+                    <option value="VACANT">Vacant</option>
+                  </SearchableSelect>
+                </Field>
+              </div>
+              {propertyError && <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{propertyError}</div>}
+              <div className="flex justify-end gap-3 border-t border-slate-100 pt-4">
+                <button type="button" onClick={() => setEditingProperty(null)} className="rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">Cancel</button>
+                <button type="submit" disabled={propertySaving} className="rounded-lg bg-aqua-700 px-5 py-2.5 text-sm font-semibold text-white hover:bg-aqua-600 disabled:opacity-60">{propertySaving ? "Saving…" : "Save property"}</button>
               </div>
             </form>
           </div>
@@ -955,15 +1111,17 @@ export default function CustomerDetail() {
               </form>
             )}
 
-            <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+            <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
               {properties.length ? (
-                <table className="w-full text-sm">
+                <table className="w-full min-w-[860px] text-sm">
                   <thead>
                     <tr className="bg-slate-50 border-b border-slate-200">
                       <th className="px-4 py-2 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Property Code</th>
                       <th className="px-4 py-2 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Address</th>
                       <th className="px-4 py-2 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Zone</th>
-                      <th className="px-4 py-2 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Status / Action</th>
+                      <th className="px-4 py-2 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Service area / route</th>
+                      <th className="px-4 py-2 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Status</th>
+                      <th className="px-4 py-2 text-right text-xs font-semibold text-slate-500 uppercase tracking-wide">Action</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -972,10 +1130,17 @@ export default function CustomerDetail() {
                         <td className="px-4 py-2 font-medium text-aqua-700">{p.propertyCode}</td>
                         <td className="px-4 py-2 text-slate-600">{p.physicalAddress}</td>
                         <td className="px-4 py-2 text-slate-500">{p.zone?.zoneName ?? "—"}</td>
+                        <td className="px-4 py-2 text-slate-500">
+                          <div className="font-medium text-slate-700">{p.serviceArea?.areaName ?? "Not assigned"}</div>
+                          <div className="mt-0.5 text-xs text-slate-400">{p.route?.routeName ?? "No reading route"}</div>
+                        </td>
                         <td className="px-4 py-2">
                           <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${p.status === "ACTIVE" ? "bg-green-100 text-green-700" : "bg-slate-100 text-slate-500"}`}>
                             {p.status.charAt(0) + p.status.slice(1).toLowerCase()}
                           </span>
+                        </td>
+                        <td className="px-4 py-2 text-right">
+                          <button type="button" onClick={() => openPropertyEditor(p)} className="rounded-lg border border-aqua-200 bg-aqua-50 px-3 py-1.5 text-xs font-semibold text-aqua-800 hover:bg-aqua-100">Edit area</button>
                         </td>
                       </tr>
                     ))}
@@ -1146,11 +1311,86 @@ export default function CustomerDetail() {
         </section>
       )}
 
-      {/* Tab: Notes */}
-      {activeTab === "notes" && (
-        <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-8 text-center text-sm text-slate-400">
-          Customer notes will be available in a future update.
-        </div>
+      {/* Tab: Activity */}
+      {activeTab === "activity" && (
+        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="border-b border-slate-100 px-5 py-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <div>
+                <h2 className="font-semibold text-slate-900">Customer activity and remarks</h2>
+                <p className="mt-0.5 text-xs text-slate-500">A single history of actions, reasons, comments and resolutions across this customer&apos;s accounts</p>
+              </div>
+              <span className="w-fit rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">Latest {activities.length} records</span>
+            </div>
+            <div className="mt-4 flex gap-2 overflow-x-auto pb-1" aria-label="Filter activity">
+              {activityFilters.map((group) => {
+                const meta = group === "ALL" ? { label: "All activity" } : ACTIVITY_GROUPS[group];
+                const count = group === "ALL" ? activities.length : activities.filter((item) => item.group === group).length;
+                return (
+                  <button key={group} type="button" onClick={() => setActivityFilter(group)} className={`whitespace-nowrap rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors ${activityFilter === group ? "border-aqua-700 bg-aqua-700 text-white" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}>
+                    {meta.label} <span className={activityFilter === group ? "text-white/75" : "text-slate-400"}>{count}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {filteredActivities.length === 0 ? (
+            <div className="p-12 text-center">
+              <p className="font-semibold text-slate-700">No activity in this group</p>
+              <p className="mt-1 text-sm text-slate-500">Actions and staff remarks will appear here as work is recorded.</p>
+            </div>
+          ) : (
+            <div className="px-5 py-5 sm:px-7">
+              {activitiesByDay.map((day) => (
+                <div key={day.day} className="mb-7 last:mb-0">
+                  <div className="mb-3 flex items-center gap-3">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">{day.day}</h3>
+                    <div className="h-px flex-1 bg-slate-100" />
+                  </div>
+                  <div className="space-y-3">
+                    {day.items.map((item) => {
+                      const meta = ACTIVITY_GROUPS[item.group] ?? ACTIVITY_GROUPS.CUSTOMER;
+                      return (
+                        <article key={item.id} className="relative rounded-xl border border-slate-200 bg-slate-50/40 p-4 pl-6">
+                          <span className={`absolute left-0 top-5 h-8 w-1 rounded-r-full ${meta.dot}`} />
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <h4 className="font-semibold text-slate-900">{activityLabel(item.activityType)}</h4>
+                                <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${meta.badge}`}>{meta.label}</span>
+                                {item.status && <StatusBadge status={item.status} />}
+                              </div>
+                              {item.reference && <p className="mt-1 text-xs font-medium text-slate-500">Reference: {item.reference}</p>}
+                            </div>
+                            <time className="shrink-0 text-xs text-slate-400" dateTime={item.occurredAt}>{dateTime(item.occurredAt)}</time>
+                          </div>
+                          {(item.reason || item.details) && (
+                            <div className="mt-3 grid gap-2 md:grid-cols-2">
+                              {item.reason && (
+                                <div className="rounded-lg border border-amber-100 bg-amber-50 px-3 py-2">
+                                  <p className="text-[11px] font-bold uppercase tracking-wide text-amber-700">Reason</p>
+                                  <p className="mt-1 whitespace-pre-wrap text-sm text-slate-700">{item.reason}</p>
+                                </div>
+                              )}
+                              {item.details && (
+                                <div className={`rounded-lg border border-slate-200 bg-white px-3 py-2 ${item.reason ? "" : "md:col-span-2"}`}>
+                                  <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Remarks / details</p>
+                                  <p className="mt-1 whitespace-pre-wrap text-sm text-slate-700">{item.details}</p>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                          <p className="mt-3 text-xs text-slate-400">{item.actor ? `Recorded by ${item.actor}` : "System recorded"}</p>
+                        </article>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
       )}
 
       {documentPreview && (
