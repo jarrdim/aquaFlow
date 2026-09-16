@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
+import { isAccountLedgerReconnectionSettlement } from "../lib/directReconnection";
 import { queryStkPush } from "../lib/mpesa";
 import { initiateMpesaStk } from "../lib/mpesaStk";
 import { requireAuth, requireRole } from "../middleware/auth";
@@ -1353,10 +1354,12 @@ metersRouter.get("/service-actions/direct/reconnection/eligible", directServiceR
         latest.reading_date AS "latestReadingDate",
         rr.reconnection_request_id AS "reconnectionRequestId",rr.request_number AS "reconnectionRequestNumber",
         rr.fee_payment_status AS "reconnectionFeePaymentStatus",rr.fee_payment_id AS "reconnectionFeePaymentId",
+        rr.fee_paid_at AS "reconnectionFeePaidAt",
         rr.decision_notes AS "reconnectionDecisionNotes",rr.work_order_id AS "workOrderId",
         COALESCE(rr.reconnection_fee,settings.reconnection_fee,0) AS "reconnectionFee",
         pay.payment_status AS "reconnectionPaymentStatus",pay.payment_type AS "reconnectionPaymentType",
-        pay.amount AS "reconnectionPaidAmount"
+        pay.amount AS "reconnectionPaidAmount",pay.payment_date AS "reconnectionPaymentDate",
+        latest_account_payment.payment_date AS "latestAccountPaymentDate"
       FROM aquaflow.customer_accounts ca
       JOIN aquaflow.customers c ON c.customer_id=ca.customer_id
       JOIN LATERAL (
@@ -1378,8 +1381,15 @@ metersRouter.get("/service-actions/direct/reconnection/eligible", directServiceR
         ORDER BY request.created_at DESC LIMIT 1
       ) rr ON TRUE
       LEFT JOIN aquaflow.payments pay ON pay.payment_id=rr.fee_payment_id
+      LEFT JOIN LATERAL (
+        SELECT account_payment.payment_date
+        FROM aquaflow.payments account_payment
+        WHERE account_payment.account_id=ca.account_id
+          AND account_payment.payment_status='POSTED'
+        ORDER BY account_payment.payment_date DESC,account_payment.payment_id DESC LIMIT 1
+      ) latest_account_payment ON TRUE
       WHERE ca.account_status='DISCONNECTED' AND m.status='DISCONNECTED'
-        AND ca.current_balance=0
+        AND ca.current_balance<=0
         AND rr.work_order_id IS NULL
         AND COALESCE(rr.fee_payment_status,'UNPAID')<>'PENDING'
       ORDER BY ca.account_number`;
@@ -1390,7 +1400,7 @@ metersRouter.get("/service-actions/direct/reconnection/eligible", directServiceR
     const ledgerFeeChargeByAccount = new Map(
       ledgerFeeCharges.map((charge) => [String(charge.accountId), charge]),
     );
-    const items = rows.filter((row) => {
+    const items = rows.flatMap((row) => {
       const ledgerCharge = ledgerFeeChargeByAccount.get(String(row.accountId));
       const expectedFee = Number(row.reconnectionFee);
       const settledThroughDisconnectionLedger = Boolean(
@@ -1401,17 +1411,24 @@ metersRouter.get("/service-actions/direct/reconnection/eligible", directServiceR
       const settlementNote = String(row.reconnectionDecisionNotes ?? "").toLowerCase();
       const paidWithoutPaymentRecord = row.reconnectionFeePaymentStatus === "PAID"
         && !row.reconnectionFeePaymentId
-        && (settlementNote.includes("account credit") || settlementNote.includes("account ledger"));
+        && (settlementNote.includes("account credit")
+          || isAccountLedgerReconnectionSettlement(settlementNote));
       const paidThroughPostedPayment = row.reconnectionFeePaymentStatus === "PAID"
         && row.reconnectionPaymentStatus === "POSTED"
         && row.reconnectionPaymentType === "RECONNECTION_FEE"
         && Number(row.reconnectionPaidAmount) >= expectedFee;
-      return settledThroughDisconnectionLedger || paidWithoutPaymentRecord || paidThroughPostedPayment;
-    }).map((row) => ({
-      ...row,
-      eligibility: "ZERO_BALANCE_AND_SETTLED_RECONNECTION_REQUIREMENT",
-      reconnectionLedgerDebitAdjustmentId: ledgerFeeChargeByAccount.get(String(row.accountId))?.debitAdjustmentId,
-    }));
+      if (!settledThroughDisconnectionLedger && !paidWithoutPaymentRecord && !paidThroughPostedPayment) return [];
+      return [{
+        ...row,
+        paidAt: paidThroughPostedPayment
+          ? row.reconnectionPaymentDate ?? row.reconnectionFeePaidAt
+          : paidWithoutPaymentRecord
+            ? row.reconnectionFeePaidAt ?? row.latestAccountPaymentDate
+            : row.latestAccountPaymentDate ?? row.reconnectionFeePaidAt,
+        eligibility: "NON_POSITIVE_BALANCE_AND_SETTLED_RECONNECTION_REQUIREMENT",
+        reconnectionLedgerDebitAdjustmentId: ledgerCharge?.debitAdjustmentId,
+      }];
+    });
     res.json({ items, count: items.length });
   } catch (error) { next(error); }
 });
@@ -1952,7 +1969,7 @@ metersRouter.post("/service-actions/direct/reconnect", directServiceRoles, async
       );
       if (paidInAccountLedger && request?.feePaymentStatus !== "PAID") {
         request = request ?? await ensureDirectReconnectionRequest(tx, context, actorId, data.reason);
-        const settlementNote = `Reconnection fee settled through account balance after debit adjustment ${ledgerSettlement.debitAdjustmentId}`;
+        const settlementNote = `Reconnection fee settled through account ledger balance after debit adjustment ${ledgerSettlement.debitAdjustmentId}`;
         await tx.$executeRaw`UPDATE aquaflow.reconnection_requests SET fee_payment_status='PAID',
           fee_payment_id=NULL,fee_paid_at=NOW(),decision_notes=${settlementNote},updated_at=NOW()
           WHERE reconnection_request_id=${request.reconnectionRequestId}`;
@@ -1972,8 +1989,9 @@ metersRouter.post("/service-actions/direct/reconnect", directServiceRoles, async
       }
       const paidFromAccountCredit = request?.feePaymentStatus === "PAID" && !request?.paymentId &&
         String(request?.decisionNotes ?? "").toLowerCase().includes("account credit");
+      const ledgerDecisionNote = String(request?.decisionNotes ?? "").toLowerCase();
       const paidFromAccountLedger = request?.feePaymentStatus === "PAID" && !request?.paymentId &&
-        String(request?.decisionNotes ?? "").toLowerCase().includes("account ledger");
+        isAccountLedgerReconnectionSettlement(ledgerDecisionNote);
       const paid = paidFromAccountCredit || paidFromAccountLedger || (request?.feePaymentStatus === "PAID" && request?.paymentStatus === "POSTED" &&
         request?.paymentType === "RECONNECTION_FEE" && Number(request?.paidAmount) >= Number(request?.reconnectionFee));
       if (!paid) throw Object.assign(new Error("A posted reconnection-fee payment is required before direct reconnection"), { status: 409 });
