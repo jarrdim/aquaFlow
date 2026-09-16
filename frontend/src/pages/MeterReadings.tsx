@@ -33,15 +33,22 @@ function ReadingEvidenceModal({ reading, onClose }: { reading: Row; onClose: () 
   const photos = (reading.evidence ?? []).filter((item: Row) =>
     String(item.mimeType ?? "image/jpeg").startsWith("image/"),
   );
+  const capturedEvent = (reading.events ?? []).find(
+    (event: Row) => event.eventType === "CAPTURED",
+  );
   const customerSubmittedReading = (reading.events ?? []).find(
     (event: Row) => event.eventType === "CUSTOMER_SUBMITTED",
   );
   const customerEvidence = (reading.events ?? []).find(
     (event: Row) => event.eventType === "CUSTOMER_EVIDENCE_SUBMITTED",
   );
-  const primarySource = customerSubmittedReading ? "customer" : reading.fieldOfficer ? "meter-reader" : "system";
+  const primarySource = customerSubmittedReading
+    ? "customer"
+    : reading.fieldOfficerId || reading.fieldOfficer || capturedEvent
+      ? "meter-reader"
+      : "system";
   const meterReaderPhotos = primarySource === "meter-reader"
-    ? photos.filter((item: Row) => item.evidenceType !== "SUPPORTING_DOCUMENT")
+    ? photos.filter((item: Row) => item.evidenceType === "METER_PHOTO")
     : [];
   const customerPhotos = primarySource === "customer"
     ? photos
@@ -54,13 +61,31 @@ function ReadingEvidenceModal({ reading, onClose }: { reading: Row; onClose: () 
     : null;
   const fieldOfficerName = reading.fieldOfficer?.user
     ? [reading.fieldOfficer.user.firstName, reading.fieldOfficer.user.lastName].filter(Boolean).join(" ")
-    : "Meter reader";
+    : capturedEvent?.performer
+      ? [capturedEvent.performer.firstName, capturedEvent.performer.lastName].filter(Boolean).join(" ")
+      : "Meter reader";
   const customerDisplayName = customerName(reading) === "—" ? "Customer" : customerName(reading);
-  const photoSource = (photo: Row) => customerPhotos.includes(photo)
-    ? { label: "Customer evidence", classes: "bg-violet-100 text-violet-700" }
-    : meterReaderPhotos.includes(photo)
-      ? { label: "Meter reader evidence", classes: "bg-sky-100 text-sky-700" }
-      : { label: "Reading evidence", classes: "bg-slate-100 text-slate-600" };
+  const hasBothSubmissions = primarySource === "meter-reader" && Boolean(customerEvidence);
+  const renderPhotos = (items: Row[], source: string, emptyText: string) => items.length ? (
+    <div className={`grid gap-2 ${items.length > 1 ? "sm:grid-cols-2" : ""}`}>
+      {items.map((photo: Row, index: number) => (
+        <figure key={photo.evidenceId ?? index} className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
+          <img
+            src={evidenceImageSource(photo)}
+            alt={`${source} evidence ${index + 1}`}
+            className="h-64 w-full object-contain sm:h-72"
+          />
+          <figcaption className="truncate border-t border-slate-200 bg-white px-3 py-2 text-xs text-slate-500">
+            {photo.fileName || `${source} photo ${index + 1}`}
+          </figcaption>
+        </figure>
+      ))}
+    </div>
+  ) : (
+    <div className="grid h-72 place-items-center rounded-xl border border-dashed border-slate-300 bg-slate-50 px-6 text-center text-sm text-slate-500">
+      {emptyText}
+    </div>
+  );
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => event.key === "Escape" && onClose();
     window.addEventListener("keydown", closeOnEscape);
@@ -75,7 +100,7 @@ function ReadingEvidenceModal({ reading, onClose }: { reading: Row; onClose: () 
       aria-labelledby="reading-evidence-title"
       onMouseDown={(event) => event.target === event.currentTarget && onClose()}
     >
-      <section className="max-h-[92vh] w-full max-w-5xl overflow-y-auto rounded-2xl bg-white shadow-2xl">
+      <section className="max-h-[94vh] w-full max-w-6xl overflow-y-auto rounded-2xl bg-slate-50 shadow-2xl">
         <header className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-slate-200 bg-white/95 px-5 py-4 backdrop-blur">
           <div>
             <h2 id="reading-evidence-title" className="text-xl font-extrabold text-slate-900">Reading evidence</h2>
@@ -85,95 +110,97 @@ function ReadingEvidenceModal({ reading, onClose }: { reading: Row; onClose: () 
           </div>
           <button type="button" onClick={onClose} aria-label="Close evidence" className="grid h-10 w-10 place-items-center rounded-full bg-slate-100 text-xl font-bold text-slate-600 transition hover:bg-slate-200">×</button>
         </header>
-        <div className="border-b border-slate-100 px-5 py-3">
-          <div className="flex flex-wrap items-center gap-2 text-xs font-bold">
-            {primarySource === "meter-reader" && <span className="rounded-full bg-sky-100 px-3 py-1.5 text-sky-700">Meter reader submitted</span>}
-            {primarySource === "customer" && <span className="rounded-full bg-violet-100 px-3 py-1.5 text-violet-700">Customer submitted</span>}
-            {customerEvidence && <span className="rounded-full bg-violet-100 px-3 py-1.5 text-violet-700">Customer evidence also received</span>}
-            {primarySource === "system" && <span className="rounded-full bg-slate-100 px-3 py-1.5 text-slate-600">System / imported reading</span>}
-          </div>
-        </div>
-        <div className="grid gap-5 p-5 lg:grid-cols-[1.15fr_0.85fr]">
-          <div>
-            <div className="mb-3 flex items-center justify-between">
-              <h3 className="font-bold text-slate-900">Evidence photos</h3>
-              <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700">{photos.length} attached</span>
-            </div>
-            {photos.length ? (
-              <div className="space-y-3">
-                {photos.map((photo: Row, index: number) => {
-                  const source = photoSource(photo);
-                  return (
-                    <figure key={photo.evidenceId ?? index} className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
-                      <div className="flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-3 py-2">
-                        <span className={`rounded-full px-2.5 py-1 text-xs font-extrabold ${source.classes}`}>{source.label}</span>
-                        <span className="truncate text-xs text-slate-500">{photo.fileName || `Meter photo ${index + 1}`}</span>
-                      </div>
-                      <img src={evidenceImageSource(photo)} alt={`${source.label} ${index + 1}`} className="max-h-[460px] w-full object-contain" />
-                    </figure>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-10 text-center text-sm text-slate-500">No photo evidence is attached.</div>
-            )}
-          </div>
-          <div className="space-y-4">
-            <div className="rounded-2xl border border-slate-200 bg-white p-4">
-              <h3 className="font-bold text-slate-900">Reading comparison</h3>
-              <div className="mt-3 space-y-3">
-                <div className={`rounded-xl p-3 ${primarySource === "customer" ? "bg-violet-50" : "bg-sky-50"}`}>
-                  <div className={`text-xs font-extrabold uppercase tracking-wider ${primarySource === "customer" ? "text-violet-700" : "text-sky-700"}`}>
-                    {primarySource === "customer" ? "Customer reading" : primarySource === "meter-reader" ? "Meter reader reading" : "Recorded reading"}
-                  </div>
-                  <div className="mt-1 flex items-end justify-between gap-3">
-                    <strong className="text-2xl text-slate-950">{number(reading.currentReading)}</strong>
-                    <span className="text-right text-xs text-slate-600">{primarySource === "meter-reader" ? fieldOfficerName : primarySource === "customer" ? customerDisplayName : "System / import"}<br />{date(reading.capturedAt ?? reading.readingDate)}</span>
-                  </div>
-                </div>
-                {customerEvidence && (
-                  <div className="rounded-xl bg-violet-50 p-3">
-                    <div className="text-xs font-extrabold uppercase tracking-wider text-violet-700">Customer-proposed reading</div>
-                    <div className="mt-1 flex items-end justify-between gap-3">
-                      <strong className="text-2xl text-slate-950">{number(customerReading)}</strong>
-                      <span className="text-right text-xs text-violet-800">{customerDisplayName}<br />{date(customerEvidence.createdAt)}</span>
-                    </div>
-                  </div>
-                )}
-                {readingDifference !== null && (
-                  <div className={`rounded-xl px-3 py-2 text-sm font-bold ${Math.abs(readingDifference) < 0.001 ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-800"}`}>
-                    {Math.abs(readingDifference) < 0.001
-                      ? "The two readings match."
-                      : `Difference: ${readingDifference > 0 ? "+" : ""}${number(readingDifference)} units (customer vs meter reader)`}
-                  </div>
-                )}
-              </div>
-            </div>
-            {customerEvidence && (
-              <div className="rounded-2xl border border-violet-200 bg-violet-50 p-4">
-                <div className="text-xs font-extrabold uppercase tracking-wider text-violet-700">Customer note</div>
-                {customerEvidence.remarks && <p className="mt-1 text-sm text-violet-800">{customerEvidence.remarks}</p>}
-                {!customerEvidence.remarks && <p className="mt-1 text-sm text-violet-700">No note was provided.</p>}
-              </div>
-            )}
-            <div>
-              <h3 className="mb-3 font-bold text-slate-900">{primarySource === "customer" ? "Customer reading location" : "Meter reader location"}</h3>
-              <GpsMap latitude={reading.gpsLatitude} longitude={reading.gpsLongitude} label={primarySource === "customer" ? "Customer reading location" : "Meter reader location"} empty />
-            </div>
-            {customerEvidence && (
+        <div className="space-y-5 p-5">
+          <div className={`rounded-2xl border p-4 ${hasBothSubmissions ? "border-amber-200 bg-amber-50" : "border-slate-200 bg-white"}`}>
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <h3 className="mb-3 font-bold text-slate-900">Customer evidence location</h3>
-                <GpsMap latitude={customerGps?.gpsLatitude} longitude={customerGps?.gpsLongitude} label="Customer evidence location" empty />
+                <div className="font-extrabold text-slate-900">{hasBothSubmissions ? "Two submissions received" : "Reading submission"}</div>
+                <p className="mt-0.5 text-sm text-slate-600">
+                  {hasBothSubmissions
+                    ? "Compare the meter reader's captured value with the customer's proposed value and evidence."
+                    : primarySource === "customer"
+                      ? "This reading was submitted directly by the customer."
+                      : "Review the captured reading and its supporting evidence."}
+                </p>
               </div>
-            )}
-            <dl className="grid grid-cols-2 gap-3 rounded-2xl bg-slate-50 p-4 text-sm">
-              <div><dt className="text-slate-500">Previous</dt><dd className="mt-1 font-bold text-slate-900">{number(reading.previousReading)}</dd></div>
-              <div><dt className="text-slate-500">Recorded current</dt><dd className="mt-1 font-bold text-aqua-700">{number(reading.currentReading)}</dd></div>
-              <div><dt className="text-slate-500">Consumption</dt><dd className="mt-1 font-bold text-emerald-700">{number(reading.consumption)} units</dd></div>
-              <div><dt className="text-slate-500">Approval</dt><dd className="mt-1"><Badge value={reading.approvalStatus} /></dd></div>
-              <div className="col-span-2"><dt className="text-slate-500">Captured</dt><dd className="mt-1 font-semibold text-slate-800">{date(reading.capturedAt ?? reading.readingDate)}</dd></div>
-            </dl>
+              <Badge value={reading.approvalStatus} />
+            </div>
+            <div className={`mt-4 grid gap-3 ${hasBothSubmissions ? "sm:grid-cols-[1fr_auto_1fr]" : "sm:grid-cols-2"}`}>
+              <div className="rounded-xl border border-sky-200 bg-white p-3">
+                <div className="text-xs font-extrabold uppercase tracking-wider text-sky-700">
+                  {primarySource === "customer" ? "Recorded customer reading" : primarySource === "meter-reader" ? "Meter reader reading" : "Recorded reading"}
+                </div>
+                <div className="mt-1 text-3xl font-black text-slate-950">{number(reading.currentReading)}</div>
+              </div>
+              {hasBothSubmissions && (
+                <div className={`flex min-w-32 flex-col items-center justify-center rounded-xl px-4 py-2 text-center ${readingDifference !== null && Math.abs(readingDifference) < 0.001 ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-900"}`}>
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider">Difference</span>
+                  <strong className="mt-0.5 text-xl">{readingDifference === null ? "—" : `${readingDifference > 0 ? "+" : ""}${number(readingDifference)}`}</strong>
+                  <span className="text-xs">units</span>
+                </div>
+              )}
+              {customerEvidence && (
+                <div className="rounded-xl border border-violet-200 bg-white p-3 sm:text-right">
+                  <div className="text-xs font-extrabold uppercase tracking-wider text-violet-700">Customer-proposed reading</div>
+                  <div className="mt-1 text-3xl font-black text-slate-950">{number(customerReading)}</div>
+                </div>
+              )}
+              {!customerEvidence && primarySource !== "customer" && (
+                <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-3">
+                  <div className="text-xs font-extrabold uppercase tracking-wider text-slate-500">Customer submission</div>
+                  <div className="mt-1 text-sm font-semibold text-slate-600">Not submitted</div>
+                </div>
+              )}
+            </div>
           </div>
+
+          <div className={`grid items-start gap-5 ${hasBothSubmissions ? "lg:grid-cols-2" : "lg:grid-cols-[1.2fr_0.8fr]"}`}>
+            <section className="overflow-hidden rounded-2xl border border-sky-200 bg-white shadow-sm">
+              <div className="flex items-center justify-between gap-3 border-b border-sky-100 bg-sky-50 px-4 py-3">
+                <div>
+                  <div className="font-extrabold text-sky-950">{primarySource === "customer" ? "Customer submission" : primarySource === "meter-reader" ? "Meter reader submission" : "Recorded submission"}</div>
+                  <div className="mt-0.5 text-xs text-sky-700">{primarySource === "meter-reader" ? fieldOfficerName : primarySource === "customer" ? customerDisplayName : "System / imported"} · {date(reading.capturedAt ?? reading.readingDate)}</div>
+                </div>
+                <span className="rounded-full bg-white px-2.5 py-1 text-xs font-bold text-sky-700">Primary reading</span>
+              </div>
+              <div className="space-y-4 p-4">
+                {renderPhotos(primarySource === "customer" ? customerPhotos : meterReaderPhotos, primarySource === "customer" ? "Customer" : "Meter reader", "No photo was attached to this reading.")}
+                <GpsMap latitude={reading.gpsLatitude} longitude={reading.gpsLongitude} label={primarySource === "customer" ? "Customer reading location" : "Meter reader location"} empty compact />
+              </div>
+            </section>
+
+            {customerEvidence ? (
+              <section className="overflow-hidden rounded-2xl border border-violet-200 bg-white shadow-sm">
+                <div className="flex items-center justify-between gap-3 border-b border-violet-100 bg-violet-50 px-4 py-3">
+                  <div>
+                    <div className="font-extrabold text-violet-950">Customer submission</div>
+                    <div className="mt-0.5 text-xs text-violet-700">{customerDisplayName} · {date(customerEvidence.createdAt)}</div>
+                  </div>
+                  <span className="rounded-full bg-white px-2.5 py-1 text-xs font-bold text-violet-700">Supporting evidence</span>
+                </div>
+                <div className="space-y-4 p-4">
+                  {renderPhotos(customerPhotos, "Customer", "The customer did not attach an image.")}
+                  {customerEvidence.remarks && (
+                    <div className="rounded-xl bg-violet-50 px-3 py-2.5 text-sm text-violet-900"><span className="font-bold">Customer note:</span> {customerEvidence.remarks}</div>
+                  )}
+                  <GpsMap latitude={customerGps?.gpsLatitude} longitude={customerGps?.gpsLongitude} label="Customer evidence location" empty compact />
+                </div>
+              </section>
+            ) : (
+              <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <h3 className="font-extrabold text-slate-900">Reading details</h3>
+                <p className="mt-1 text-sm text-slate-500">No separate customer evidence was submitted.</p>
+              </section>
+            )}
+          </div>
+
+          <dl className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 text-sm sm:grid-cols-5">
+            <div><dt className="text-slate-500">Previous</dt><dd className="mt-1 font-bold text-slate-900">{number(reading.previousReading)}</dd></div>
+            <div><dt className="text-slate-500">Recorded current</dt><dd className="mt-1 font-bold text-aqua-700">{number(reading.currentReading)}</dd></div>
+            <div><dt className="text-slate-500">Consumption</dt><dd className="mt-1 font-bold text-emerald-700">{number(reading.consumption)} units</dd></div>
+            <div><dt className="text-slate-500">Approval</dt><dd className="mt-1"><Badge value={reading.approvalStatus} /></dd></div>
+            <div><dt className="text-slate-500">Captured</dt><dd className="mt-1 font-semibold text-slate-800">{date(reading.capturedAt ?? reading.readingDate)}</dd></div>
+          </dl>
         </div>
       </section>
     </div>

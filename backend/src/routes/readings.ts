@@ -80,6 +80,12 @@ const readingInclude = {
   events: { include: { performer: true }, orderBy: { createdAt: "desc" as const } },
 };
 
+const worklistReadingInclude = {
+  evidence: true,
+  fieldOfficer: { include: { user: true } },
+  events: { include: { performer: true }, orderBy: { createdAt: "desc" as const } },
+};
+
 function worklistSearch(search: string, exact: boolean): Prisma.MeterAssignmentWhereInput {
   const text = exact
     ? { equals: search, mode: Prisma.QueryMode.insensitive }
@@ -686,7 +692,7 @@ readingsRouter.get("/worklist", async (req, res, next) => {
         })
       : prisma.meterReading.findMany({
           where: { readingCycleId: cycleId, meterId: { in: meterIds } },
-          include: { evidence: true },
+          include: worklistReadingInclude,
         });
     const [currentReadings, missedCycle] = await Promise.all([
       currentReadingsPromise,
@@ -776,7 +782,7 @@ readingsRouter.get("/worklist", async (req, res, next) => {
       const pageReadings = pageMeterIds.length
         ? await prisma.meterReading.findMany({
             where: { readingCycleId: cycleId, meterId: { in: pageMeterIds } },
-            include: { evidence: true },
+            include: worklistReadingInclude,
           })
         : [];
       const pageByMeter = new Map(pageReadings.map((reading) => [reading.meterId.toString(), reading]));
