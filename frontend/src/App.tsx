@@ -84,6 +84,7 @@ import {
   BillingDashboard,
   BillingHistory,
   BillNotifications,
+  BillingPeriodGroups,
   BillingPeriods,
   BillingPeriodRecords,
   ReadingCorrections,
@@ -351,6 +352,7 @@ const METER_MENU = [
 const READING_MENU = [
   ["Overview", "/readings"],
   ["Reading Cycles", "/readings/cycles"],
+  ["Period Groups", "/period-groups"],
   ["Reader Assignments", "/readings/assignments"],
   ["Reading Worklist", "/readings/worklist"],
   ["All Readings", "/readings/register"],
@@ -394,6 +396,7 @@ const BILLING_MENU = [
 ] as const;
 
 const NEW_SIDEBAR_ROUTES = new Set([
+  "/period-groups",
   "/billing/individual",
   "/billing/reading-corrections",
   "/billing/account-adjustments",
@@ -480,6 +483,13 @@ const SIDEBAR_CHILD_MENUS: Record<
   "Work Orders": WORK_ORDER_MENU,
   Admin: ADMIN_MENU,
 };
+
+function sidebarSectionForPath(pathname: string) {
+  if (pathname === "/period-groups") return "Meter Readings";
+  return NAV_ITEMS.find((item) =>
+    item.path && SIDEBAR_CHILD_MENUS[item.label]?.length && pathname.startsWith(item.path),
+  )?.label ?? null;
+}
 
 const MODULE_LABELS: Record<string, string> = {
   customers: "Customers",
@@ -698,6 +708,9 @@ function Shell({ children }: { children: React.ReactNode }) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => localStorage.getItem("aquaflow_sidebar_collapsed") === "true",
   );
+  const [expandedSidebarSection, setExpandedSidebarSection] = useState<string | null>(
+    () => sidebarSectionForPath(location.pathname),
+  );
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<GlobalSearchResult[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
@@ -892,6 +905,7 @@ function Shell({ children }: { children: React.ReactNode }) {
     setProfileOpen(false);
     setSidebarFlyout(null);
     setMobileSidebarOpen(false);
+    setExpandedSidebarSection(sidebarSectionForPath(location.pathname));
   }, [location.pathname]);
 
   useEffect(() => {
@@ -1017,6 +1031,11 @@ function Shell({ children }: { children: React.ReactNode }) {
     );
   }
 
+  function toggleSidebarSection(label: string) {
+    if (sidebarCollapsed || !SIDEBAR_CHILD_MENUS[label]?.length) return;
+    setExpandedSidebarSection((current) => current === label ? null : label);
+  }
+
   const flyoutMenu = sidebarFlyout
     ? SIDEBAR_CHILD_MENUS[sidebarFlyout]
     : undefined;
@@ -1090,9 +1109,14 @@ function Shell({ children }: { children: React.ReactNode }) {
         {/* Nav */}
         <nav className="flex-1 space-y-0.5 overflow-y-auto px-2 py-3 text-sm">
           {NAV_ITEMS.map(({ label, Icon: NavIcon, path, iconClass }) => {
-            const active = path !== null && location.pathname.startsWith(path);
-            const cls = `flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm ${sidebarCollapsed ? "justify-center" : ""} ${
-              active
+            const active = path !== null && (
+              location.pathname.startsWith(path) ||
+              (label === "Meter Readings" && location.pathname === "/period-groups")
+            );
+            const hasChildren = Boolean(SIDEBAR_CHILD_MENUS[label]?.length);
+            const expanded = expandedSidebarSection === label;
+            const cls = `flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm ${sidebarCollapsed ? "justify-center" : ""} ${hasChildren ? "cursor-pointer" : ""} ${
+              active || expanded
                 ? "bg-navy-600 text-white font-medium"
                 : "text-blue-100/60 hover:text-white hover:bg-white/10 cursor-default"
             }`;
@@ -1108,19 +1132,24 @@ function Shell({ children }: { children: React.ReactNode }) {
                 }
                 onBlur={scheduleSidebarFlyoutClose}
               >
-                <Link
-                  to={path}
-                  className={cls}
-                  aria-label={sidebarCollapsed ? label : undefined}
-                >
-                  <span className={`nav-icon ${iconClass}`}>
-                    <NavIcon />
-                  </span>
-                  <span className={sidebarCollapsed ? "sr-only" : ""}>
-                    {label}
-                  </span>
-                </Link>
-                {!sidebarCollapsed && label === "Customers" && active && (
+                {hasChildren ? (
+                  <button
+                    type="button"
+                    className={`${cls} w-full text-left`}
+                    aria-label={sidebarCollapsed ? label : undefined}
+                    aria-expanded={expanded}
+                    onClick={() => toggleSidebarSection(label)}
+                  >
+                    <span className={`nav-icon ${iconClass}`}><NavIcon /></span>
+                    <span className={sidebarCollapsed ? "sr-only" : ""}>{label}</span>
+                  </button>
+                ) : (
+                  <Link to={path} className={cls} aria-label={sidebarCollapsed ? label : undefined}>
+                    <span className={`nav-icon ${iconClass}`}><NavIcon /></span>
+                    <span className={sidebarCollapsed ? "sr-only" : ""}>{label}</span>
+                  </Link>
+                )}
+                {!sidebarCollapsed && label === "Customers" && expanded && (
                   <div className="ml-7 mt-1 space-y-0.5 border-l border-white/10 pl-2">
                     {CUSTOMER_MENU.map(([itemLabel, itemPath]) => {
                       const itemActive =
@@ -1143,7 +1172,21 @@ function Shell({ children }: { children: React.ReactNode }) {
                     })}
                   </div>
                 )}
-                {!sidebarCollapsed && label === "Billing" && active && (
+                {!sidebarCollapsed && label === "New Connections" && expanded && (
+                  <div className="ml-7 mt-1 space-y-0.5 border-l border-white/10 pl-2">
+                    {CONNECTION_MENU.map(([itemLabel, itemPath]) => {
+                      const itemActive = itemPath === "/connections"
+                        ? location.pathname === itemPath
+                        : location.pathname.startsWith(itemPath);
+                      return (
+                        <Link key={itemPath} to={itemPath} className={`block rounded px-2 py-1.5 text-xs font-medium transition-colors ${itemActive ? "bg-white/10 text-white" : "text-blue-100/50 hover:bg-white/5 hover:text-white"}`}>
+                          {itemLabel}
+                        </Link>
+                      );
+                    })}
+                  </div>
+                )}
+                {!sidebarCollapsed && label === "Billing" && expanded && (
                   <div className="ml-7 mt-1 space-y-0.5 border-l border-white/10 pl-2">
                     {BILLING_MENU.filter(([, itemPath]) =>
                       itemPath !== "/billing/reading-corrections" || sessionUser?.roles?.includes("SYSTEM_ADMIN"),
@@ -1178,7 +1221,7 @@ function Shell({ children }: { children: React.ReactNode }) {
                     })}
                   </div>
                 )}
-                {!sidebarCollapsed && label === "Payments & Revenue" && active && (
+                {!sidebarCollapsed && label === "Payments & Revenue" && expanded && (
                   <div className="ml-7 mt-1 space-y-0.5 border-l border-white/10 pl-2">
                     {PAYMENT_MENU.map(([itemLabel, itemPath]) => {
                       const itemActive =
@@ -1207,7 +1250,7 @@ function Shell({ children }: { children: React.ReactNode }) {
                     })}
                   </div>
                 )}
-                {!sidebarCollapsed && label === "Notifications" && active && (
+                {!sidebarCollapsed && label === "Notifications" && expanded && (
                   <div className="ml-7 mt-1 space-y-0.5 border-l border-white/10 pl-2">
                     {NOTIFICATION_MENU.map(([itemLabel, itemPath]) => {
                       const itemActive =
@@ -1226,7 +1269,7 @@ function Shell({ children }: { children: React.ReactNode }) {
                     })}
                   </div>
                 )}
-                {!sidebarCollapsed && label === "Arrears & Debt" && active && (
+                {!sidebarCollapsed && label === "Arrears & Debt" && expanded && (
                   <div className="ml-7 mt-1 space-y-0.5 border-l border-white/10 pl-2">
                     {ARREARS_MENU.map(([itemLabel, itemPath]) => {
                       const itemActive =
@@ -1249,7 +1292,7 @@ function Shell({ children }: { children: React.ReactNode }) {
                     })}
                   </div>
                 )}
-                {!sidebarCollapsed && label === "Meter Management" && active && (
+                {!sidebarCollapsed && label === "Meter Management" && expanded && (
                   <div className="ml-7 mt-1 space-y-0.5 border-l border-white/10 pl-2">
                     {METER_MENU.map(([itemLabel, itemPath]) => {
                       const itemActive =
@@ -1277,7 +1320,7 @@ function Shell({ children }: { children: React.ReactNode }) {
                     })}
                   </div>
                 )}
-                {!sidebarCollapsed && label === "Meter Readings" && active && (
+                {!sidebarCollapsed && label === "Meter Readings" && expanded && (
                   <div className="ml-7 mt-1 space-y-0.5 border-l border-white/10 pl-2">
                     {READING_MENU.map(([itemLabel, itemPath]) => {
                       const itemActive =
@@ -1313,7 +1356,7 @@ function Shell({ children }: { children: React.ReactNode }) {
                     })}
                   </div>
                 )}
-                {!sidebarCollapsed && label === "Tariff Management" && active && (
+                {!sidebarCollapsed && label === "Tariff Management" && expanded && (
                   <div className="ml-7 mt-1 space-y-0.5 border-l border-white/10 pl-2">
                     {TARIFF_MENU.map(([itemLabel, itemPath]) => {
                       const itemActive =
@@ -1336,7 +1379,7 @@ function Shell({ children }: { children: React.ReactNode }) {
                     })}
                   </div>
                 )}
-                {!sidebarCollapsed && label === "Service Requests" && active && (
+                {!sidebarCollapsed && label === "Service Requests" && expanded && (
                   <div className="ml-7 mt-1 space-y-0.5 border-l border-white/10 pl-2">
                     {SERVICE_REQUEST_MENU.map(([itemLabel, itemPath]) => {
                       const itemActive =
@@ -1359,7 +1402,21 @@ function Shell({ children }: { children: React.ReactNode }) {
                     })}
                   </div>
                 )}
-                {!sidebarCollapsed && label === "Admin" && active && (
+                {!sidebarCollapsed && label === "Work Orders" && expanded && (
+                  <div className="ml-7 mt-1 space-y-0.5 border-l border-white/10 pl-2">
+                    {WORK_ORDER_MENU.map(([itemLabel, itemPath]) => {
+                      const itemActive = itemPath === "/work-orders"
+                        ? location.pathname === itemPath
+                        : location.pathname.startsWith(itemPath);
+                      return (
+                        <Link key={itemPath} to={itemPath} className={`block rounded px-2 py-1.5 text-xs font-medium transition-colors ${itemActive ? "bg-white/10 text-white" : "text-blue-100/50 hover:bg-white/5 hover:text-white"}`}>
+                          {itemLabel}
+                        </Link>
+                      );
+                    })}
+                  </div>
+                )}
+                {!sidebarCollapsed && label === "Admin" && expanded && (
                   <div className="ml-7 mt-1 space-y-0.5 border-l border-white/10 pl-2">
                     {ADMIN_MENU.map(([itemLabel, itemPath]) => {
                       const itemActive =
@@ -2176,6 +2233,24 @@ export default function App() {
             <Shell>
               <CollectionReport />
             </Shell>
+          </Protected>
+        }
+      />
+      <Route
+        path="/period-groups"
+        element={
+          <Protected>
+            <Shell>
+              <BillingPeriodGroups />
+            </Shell>
+          </Protected>
+        }
+      />
+      <Route
+        path="/billing/groups"
+        element={
+          <Protected>
+            <Navigate to="/period-groups" replace />
           </Protected>
         }
       />

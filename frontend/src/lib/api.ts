@@ -403,10 +403,15 @@ export const api = {
     ).toString();
     return request(`/readings/dashboard/summary${query ? `?${query}` : ""}`);
   },
-  listReadingCycles: (status = "") =>
-    request(
-      `/readings/cycles${status ? `?status=${encodeURIComponent(status)}` : ""}`,
-    ),
+  listReadingPeriodGroups: () => request("/readings/period-groups"),
+  createReadingPeriodGroup: (data: Record<string, unknown>) =>
+    request("/readings/period-groups", { method: "POST", body: JSON.stringify(data) }),
+  listReadingCycles: (status = "", billingPeriodGroupId = "") => {
+    const query = new URLSearchParams(
+      Object.entries({ status, billingPeriodGroupId }).filter(([, value]) => value),
+    ).toString();
+    return request(`/readings/cycles${query ? `?${query}` : ""}`);
+  },
   createReadingCycle: (data: Record<string, unknown>) =>
     request("/readings/cycles", { method: "POST", body: JSON.stringify(data) }),
   updateReadingCycle: (id: string, data: Record<string, unknown>) =>
@@ -418,6 +423,11 @@ export const api = {
     request(`/readings/cycles/${id}/status`, {
       method: "PATCH",
       body: JSON.stringify({ status }),
+    }),
+  assignReadingCyclePeriodGroup: (id: string, billingPeriodGroupId: string) =>
+    request(`/readings/cycles/${id}/period-group`, {
+      method: "PATCH",
+      body: JSON.stringify({ billingPeriodGroupId }),
     }),
   listReadingOfficers: () => request("/readings/officers"),
   listReadingStaffCandidates: () => request("/readings/staff-candidates"),
@@ -569,6 +579,8 @@ export const api = {
   listBillingPeriodGroups: () => request("/billing/period-groups"),
   createBillingPeriodGroup: (data: Record<string, unknown>) =>
     request("/billing/period-groups", { method: "POST", body: JSON.stringify(data) }),
+  updateBillingPeriodGroup: (id: string, data: Record<string, unknown>) =>
+    request(`/billing/period-groups/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   listBillingCycles: (status = "") =>
     request(
       `/billing/cycles${status ? `?status=${encodeURIComponent(status)}` : ""}`,

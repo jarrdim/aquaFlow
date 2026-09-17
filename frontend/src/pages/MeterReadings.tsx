@@ -952,6 +952,7 @@ export function ReadingDashboard() {
 
 export function ReadingCycles() {
   const [cycles, setCycles] = useState<Row[]>([]);
+  const [periodGroups, setPeriodGroups] = useState<Row[]>([]);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
@@ -959,8 +960,33 @@ export function ReadingCycles() {
   const [cycleSearch, setCycleSearch] = useState("");
   const [cyclePage, setCyclePage] = useState(1);
   const [cyclePageSize, setCyclePageSize] = useState(10);
+  const [showGroupForm, setShowGroupForm] = useState(false);
+  const [groupSaving, setGroupSaving] = useState(false);
+  const [groupAssigningId, setGroupAssigningId] = useState("");
+  const [groupSearch, setGroupSearch] = useState("");
+  const periodGroupRailRef = useRef<HTMLDivElement>(null);
+  const currentGroupResolvedRef = useRef(false);
   const now = new Date();
+  const localIso = (value: Date) => `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
+  const todayIso = localIso(now);
+  const groupFormForStart = (startDate: Date) => ({
+    groupCode: `BPG-${startDate.getFullYear()}-${String(startDate.getMonth() + 1).padStart(2, "0")}`,
+    groupName: `${startDate.toLocaleString(undefined, { month: "long", year: "numeric" })} Billing`,
+    periodStart: localIso(startDate),
+    periodEnd: localIso(new Date(startDate.getFullYear(), startDate.getMonth() + 1, 0)),
+  });
+  const nextGroupForm = (groups: Row[] = []) => {
+    const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const sortedEnds = groups.map((group) => String(group.periodEnd).slice(0, 10)).filter(Boolean).sort();
+    const latestEnd = sortedEnds[sortedEnds.length - 1];
+    if (!latestEnd) return groupFormForStart(currentMonthStart);
+    const firstAvailable = new Date(`${latestEnd}T00:00:00`);
+    firstAvailable.setDate(firstAvailable.getDate() + 1);
+    return groupFormForStart(firstAvailable > currentMonthStart ? firstAvailable : currentMonthStart);
+  };
+  const [groupForm, setGroupForm] = useState(() => nextGroupForm());
   const [form, setForm] = useState({
+    billingPeriodGroupId: "",
     cycleCode: `RC-${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`,
     cycleName: now.toLocaleString(undefined, {
       month: "long",
@@ -975,14 +1001,43 @@ export function ReadingCycles() {
     status: "PLANNED",
     remarks: "",
   });
-  const load = () =>
-    api
-      .listReadingCycles()
-      .then(setCycles)
-      .catch((e) => setError(e.message));
+  const load = () => Promise.all([
+    api.listReadingCycles(),
+    api.listReadingPeriodGroups(),
+  ]).then(([cycleRows, groupRows]) => {
+    setCycles(cycleRows);
+    setPeriodGroups(groupRows);
+    setGroupForm(nextGroupForm(groupRows));
+  }).catch((e) => setError(e.message));
   useEffect(() => {
     void load();
   }, []);
+  useEffect(() => {
+    if (form.billingPeriodGroupId || !form.startDate || !form.endDate) return;
+    if (!periodGroups.length) return;
+    const dateMatchingGroup = periodGroups.find((group) => {
+      const groupStart = String(group.periodStart).slice(0, 10);
+      const groupEnd = String(group.periodEnd).slice(0, 10);
+      return form.startDate >= groupStart && form.endDate <= groupEnd;
+    });
+    const currentGroup = !currentGroupResolvedRef.current
+      ? periodGroups.find((group) => {
+          const groupStart = String(group.periodStart).slice(0, 10);
+          const groupEnd = String(group.periodEnd).slice(0, 10);
+          return todayIso >= groupStart && todayIso <= groupEnd;
+        })
+      : undefined;
+    currentGroupResolvedRef.current = true;
+    const matchingGroup = currentGroup ?? dateMatchingGroup;
+    if (!matchingGroup) return;
+    const groupStart = String(matchingGroup.periodStart).slice(0, 10);
+    const groupEnd = String(matchingGroup.periodEnd).slice(0, 10);
+    setForm((current) => ({
+      ...current,
+      billingPeriodGroupId: String(matchingGroup.billingPeriodGroupId),
+      ...(currentGroup ? { startDate: groupStart, endDate: groupEnd } : {}),
+    }));
+  }, [periodGroups, form.billingPeriodGroupId, form.startDate, form.endDate, todayIso]);
   const filteredCycles = useMemo(() => {
     const query = cycleSearch.trim().toLowerCase();
     return cycles
@@ -993,6 +1048,8 @@ export function ReadingCycles() {
             cycle.cycleCode,
             cycle.cycleName,
             cycle.status,
+            cycle.billingPeriodGroup?.groupCode,
+            cycle.billingPeriodGroup?.groupName,
             formatDmyDate(cycle.startDate),
             formatDmyDate(cycle.endDate),
           ]
@@ -1032,6 +1089,23 @@ export function ReadingCycles() {
   const plannedCycles = cycles.filter((cycle) => cycle.status === "PLANNED").length;
   const totalReadings = cycles.reduce((sum, cycle) => sum + Number(cycle._count?.readings ?? 0), 0);
   const totalAssignments = cycles.reduce((sum, cycle) => sum + Number(cycle._count?.routeAssignments ?? 0), 0);
+  const selectedPeriodGroup = periodGroups.find(
+    (group) => String(group.billingPeriodGroupId) === form.billingPeriodGroupId,
+  );
+  const selectedGroupStart = selectedPeriodGroup
+    ? String(selectedPeriodGroup.periodStart).slice(0, 10)
+    : undefined;
+  const selectedGroupEnd = selectedPeriodGroup
+    ? String(selectedPeriodGroup.periodEnd).slice(0, 10)
+    : undefined;
+  const visiblePeriodGroups = useMemo(() => {
+    const query = groupSearch.trim().toLocaleLowerCase();
+    if (!query) return periodGroups;
+    return periodGroups.filter((group) =>
+      [group.groupCode, group.groupName, formatDmyDate(group.periodStart), formatDmyDate(group.periodEnd)]
+        .some((value) => String(value ?? "").toLocaleLowerCase().includes(query)),
+    );
+  }, [periodGroups, groupSearch]);
   useEffect(() => {
     setCyclePage(1);
   }, [cycleSearch, cyclePageSize]);
@@ -1106,6 +1180,7 @@ export function ReadingCycles() {
     setMessage("");
     setEditingId(String(c.readingCycleId));
     setForm({
+      billingPeriodGroupId: String(c.billingPeriodGroupId ?? ""),
       cycleCode: c.cycleCode,
       cycleName: c.cycleName,
       startDate: c.startDate.slice(0, 10),
@@ -1113,6 +1188,88 @@ export function ReadingCycles() {
       status: c.status,
       remarks: c.remarks ?? "",
     });
+  }
+  function selectPeriodGroup(billingPeriodGroupId: string) {
+    const group = periodGroups.find(
+      (item) => String(item.billingPeriodGroupId) === billingPeriodGroupId,
+    );
+    setForm((current) => ({
+      ...current,
+      billingPeriodGroupId,
+      ...(group
+        ? {
+            startDate: String(group.periodStart).slice(0, 10),
+            endDate: String(group.periodEnd).slice(0, 10),
+          }
+        : {}),
+    }));
+  }
+  function updateCycleDate(field: "startDate" | "endDate", value: string) {
+    setForm((current) => {
+      const matchingGroup = periodGroups.find((group) => {
+        const groupStart = String(group.periodStart).slice(0, 10);
+        const groupEnd = String(group.periodEnd).slice(0, 10);
+        return value >= groupStart && value <= groupEnd;
+      });
+      if (!matchingGroup) {
+        return { ...current, [field]: value, billingPeriodGroupId: "" };
+      }
+      const groupStart = String(matchingGroup.periodStart).slice(0, 10);
+      const groupEnd = String(matchingGroup.periodEnd).slice(0, 10);
+      const next = {
+        ...current,
+        [field]: value,
+        billingPeriodGroupId: String(matchingGroup.billingPeriodGroupId),
+      };
+      if (field === "startDate" && (next.endDate < value || next.endDate > groupEnd)) {
+        next.endDate = groupEnd;
+      }
+      if (field === "endDate" && (next.startDate > value || next.startDate < groupStart)) {
+        next.startDate = groupStart;
+      }
+      return next;
+    });
+  }
+  function updateGroupStart(periodStart: string) {
+    const parsed = new Date(`${periodStart}T00:00:00`);
+    setGroupForm(Number.isNaN(parsed.getTime())
+      ? (current) => ({ ...current, periodStart })
+      : groupFormForStart(parsed));
+  }
+  async function createPeriodGroup(e: FormEvent) {
+    e.preventDefault();
+    setGroupSaving(true);
+    setError("");
+    setMessage("");
+    try {
+      const created = await api.createReadingPeriodGroup(groupForm);
+      await load();
+      setForm((current) => ({
+        ...current,
+        billingPeriodGroupId: String(created.billingPeriodGroupId),
+      }));
+      setShowGroupForm(false);
+      setMessage(`Period group ${created.groupCode} created. You can now add its reading cycle.`);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setGroupSaving(false);
+    }
+  }
+  async function assignCycleGroup(cycle: Row, billingPeriodGroupId: string) {
+    if (!billingPeriodGroupId) return;
+    setGroupAssigningId(String(cycle.readingCycleId));
+    setError("");
+    setMessage("");
+    try {
+      await api.assignReadingCyclePeriodGroup(String(cycle.readingCycleId), billingPeriodGroupId);
+      await load();
+      setMessage(`${cycle.cycleCode} is now associated with its period group.`);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setGroupAssigningId("");
+    }
   }
   async function status(c: Row, next: string) {
     if (
@@ -1140,19 +1297,127 @@ export function ReadingCycles() {
     <Page
       title="Reading cycles"
       subtitle="Create and control the periods in which meter readings are collected"
+      actions={
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-xl border border-slate-200 bg-white px-4 py-2 shadow-sm">
+          {[
+            ["Open", openCycles, "text-emerald-700"],
+            ["Planned", plannedCycles, "text-sky-700"],
+            ["Assignments", totalAssignments.toLocaleString(), "text-violet-700"],
+            ["Readings", totalReadings.toLocaleString(), "text-amber-700"],
+          ].map(([label, value, tone]) => (
+            <div key={label} className="flex items-baseline gap-1.5 whitespace-nowrap">
+              <span className={`text-base font-extrabold ${tone}`}>{value}</span>
+              <span className="text-[11px] font-bold uppercase tracking-wide text-slate-400">{label}</span>
+            </div>
+          ))}
+        </div>
+      }
     >
       {error && <Notice>{error}</Notice>}
       {message && <Notice tone="green">{message}</Notice>}
-      <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-emerald-700">Open cycles</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{openCycles}</div></div>
-        <div className="rounded-2xl border border-sky-100 bg-sky-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-sky-700">Planned cycles</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{plannedCycles}</div></div>
-        <div className="rounded-2xl border border-violet-100 bg-violet-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-violet-700">Route assignments</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{totalAssignments.toLocaleString()}</div></div>
-        <div className="rounded-2xl border border-amber-100 bg-amber-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-amber-700">Captured readings</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{totalReadings.toLocaleString()}</div></div>
-      </div>
-      <div className="grid gap-5 xl:grid-cols-[370px_minmax(0,1fr)] xl:items-start">
+      <section className="mb-3 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div>
+          <div className="flex flex-col gap-2 border-b border-slate-100 bg-white px-4 py-2.5 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-base font-extrabold text-slate-900">Reading & billing period groups</h2>
+                <span className="rounded-full bg-violet-50 px-2 py-0.5 text-xs font-bold text-violet-700">{periodGroups.length}</span>
+              </div>
+              <p className="mt-0.5 text-xs text-slate-500">First cycles load all eligible meters; follow-up cycles load only meters still unread.</p>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <Link to="/period-groups" className="rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm font-bold text-slate-700 transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800">Manage groups</Link>
+              <Button type="button" tone={showGroupForm ? "slate" : "blue"} className="shrink-0" onClick={() => setShowGroupForm((visible) => !visible)}>
+                {showGroupForm ? "Close form" : "+ New period group"}
+              </Button>
+            </div>
+          </div>
+
+          <div className="min-w-0">
+
+            {showGroupForm && (
+              <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/35 p-4 backdrop-blur-[2px]" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowGroupForm(false); }}>
+                <form onSubmit={createPeriodGroup} role="dialog" aria-modal="true" aria-labelledby="create-billing-group-title" className="w-full max-w-5xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+                  <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-5 py-4">
+                    <div>
+                      <h3 id="create-billing-group-title" className="font-extrabold text-slate-900">Create a new period group</h3>
+                      <p className="mt-1 text-sm text-slate-500">The first available date is selected automatically. Earlier dates are already covered by an existing group.</p>
+                    </div>
+                    <button type="button" aria-label="Close billing group form" onClick={() => setShowGroupForm(false)} className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-slate-200 text-lg text-slate-500 transition hover:bg-slate-50 hover:text-slate-800">×</button>
+                  </div>
+                  <div className="grid gap-4 bg-slate-50/60 p-5 md:grid-cols-2 xl:grid-cols-4">
+                    <Field label="Group code" required><input required className={INPUT} value={groupForm.groupCode} onChange={(e) => setGroupForm({ ...groupForm, groupCode: e.target.value })} /><span className="mt-1 block text-xs text-slate-400">Example: BPG-2026-09</span></Field>
+                    <Field label="Group name" required><input required className={INPUT} value={groupForm.groupName} onChange={(e) => setGroupForm({ ...groupForm, groupName: e.target.value })} /><span className="mt-1 block text-xs text-slate-400">A recognizable billing-period name</span></Field>
+                    <Field label="Period start" required><DateInput required min={nextGroupForm(periodGroups).periodStart} className={INPUT} value={groupForm.periodStart} onChange={(e) => updateGroupStart(e.target.value)} /><span className="mt-1 block text-xs text-slate-400">First free date: {formatDmyDate(nextGroupForm(periodGroups).periodStart)}</span></Field>
+                    <Field label="Period end" required><DateInput required min={groupForm.periodStart || undefined} className={INPUT} value={groupForm.periodEnd} onChange={(e) => setGroupForm({ ...groupForm, periodEnd: e.target.value })} /><span className="mt-1 block text-xs text-slate-400">Last day covered by this group</span></Field>
+                  </div>
+                  <div className="flex flex-col-reverse gap-3 border-t border-slate-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+                    <p className="text-xs leading-5 text-slate-500">The new group will be selected automatically in the reading-cycle form.</p>
+                    <div className="flex gap-2"><Button type="button" tone="slate" onClick={() => setShowGroupForm(false)}>Cancel</Button><Button disabled={groupSaving} className="sm:min-w-44">{groupSaving ? "Creating..." : "Create period group"}</Button></div>
+                  </div>
+                </form>
+              </div>
+            )}
+
+            <div className="flex min-w-0 flex-col gap-2 p-3 lg:flex-row lg:items-center">
+              <div className="flex shrink-0 items-center gap-2 lg:w-40 lg:block">
+                <div className="text-[11px] font-extrabold uppercase tracking-wider text-slate-400">Available periods</div>
+                <span className="mt-1 inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-bold text-slate-600">{visiblePeriodGroups.length} of {periodGroups.length}</span>
+              </div>
+              <div ref={periodGroupRailRef} className="flex min-w-0 flex-1 snap-x snap-mandatory gap-2 overflow-x-auto scroll-smooth pb-1">
+                {visiblePeriodGroups.map((group) => {
+                  const selected = form.billingPeriodGroupId === String(group.billingPeriodGroupId);
+                  const cycleCount = Number(group._count?.readingCycles ?? 0);
+                  const groupStart = String(group.periodStart).slice(0, 10);
+                  const groupEnd = String(group.periodEnd).slice(0, 10);
+                  const isCurrent = todayIso >= groupStart && todayIso <= groupEnd;
+                  return (
+                    <button key={group.billingPeriodGroupId} type="button" onClick={() => selectPeriodGroup(String(group.billingPeriodGroupId))} className={`group w-[330px] flex-none snap-start rounded-xl border px-3 py-2 text-left transition ${selected ? "border-violet-400 bg-violet-50 shadow-sm ring-2 ring-violet-100" : "border-slate-200 bg-white hover:border-violet-200 hover:bg-slate-50"}`}>
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span className={`shrink-0 rounded-md px-2 py-1 font-mono text-[10px] font-extrabold ${selected ? "bg-violet-600 text-white" : "bg-slate-100 text-violet-700"}`}>{group.groupCode}</span>
+                        <span title={group.groupName} className="min-w-0 flex-1 truncate text-sm font-extrabold text-slate-900">{group.groupName}</span>
+                        {isCurrent && <span className="shrink-0 rounded-full bg-emerald-100 px-2 py-0.5 text-[9px] font-extrabold uppercase text-emerald-700">Current</span>}
+                        <span className="shrink-0 text-[11px] font-bold text-slate-500">{cycleCount} cycle{cycleCount === 1 ? "" : "s"}</span>
+                      </div>
+                      <div className="mt-1.5 flex items-center justify-between gap-3 text-[11px]"><span className="text-slate-500">{formatDmyDate(group.periodStart)} – {formatDmyDate(group.periodEnd)}</span><span className={`font-bold ${selected ? "text-violet-700" : "text-slate-400 group-hover:text-violet-600"}`}>{selected ? "Selected" : "Select"}</span></div>
+                    </button>
+                  );
+                })}
+                {!periodGroups.length && <div className="min-w-[320px] flex-1 rounded-xl border border-dashed border-violet-200 bg-violet-50/40 px-4 py-3 text-sm text-slate-500"><strong className="text-slate-800">No period groups yet.</strong> Create the first group before preparing a reading cycle.</div>}
+                {periodGroups.length > 0 && !visiblePeriodGroups.length && <div className="min-w-[320px] flex-1 rounded-xl border border-dashed border-slate-200 px-4 py-3 text-sm text-slate-500">No periods match “{groupSearch}”.</div>}
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <input type="search" aria-label="Search billing period groups" value={groupSearch} onChange={(event) => setGroupSearch(event.target.value)} placeholder="Search periods..." className="h-8 w-44 rounded-lg border border-slate-200 bg-white px-3 text-xs text-slate-700 outline-none transition focus:border-violet-400 focus:ring-2 focus:ring-violet-100" />
+                <button type="button" aria-label="Scroll billing periods left" onClick={() => periodGroupRailRef.current?.scrollBy({ left: -340, behavior: "smooth" })} className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 bg-white text-lg text-slate-500 transition hover:border-violet-200 hover:bg-violet-50 hover:text-violet-700">‹</button>
+                <button type="button" aria-label="Scroll billing periods right" onClick={() => periodGroupRailRef.current?.scrollBy({ left: 340, behavior: "smooth" })} className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 bg-white text-lg text-slate-500 transition hover:border-violet-200 hover:bg-violet-50 hover:text-violet-700">›</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+      <div className="grid gap-3 xl:grid-cols-[480px_minmax(0,1fr)] xl:items-start">
         <Card title={editingId ? "Edit reading cycle" : "Create reading cycle"} className="overflow-hidden shadow-md shadow-slate-200/50 xl:sticky xl:top-24">
-          <div className="mb-4 flex items-start gap-3 rounded-xl border border-sky-100 bg-sky-50/70 p-3.5"><span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-sky-600 text-white"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5"><rect x="4" y="5" width="16" height="15" rx="2" /><path d="M8 3v4M16 3v4M4 10h16" /></svg></span><div><div className="font-bold text-slate-800">Define a collection period</div><p className="mt-0.5 text-xs leading-5 text-slate-500">Planned cycles can be prepared first, then opened when field collection begins.</p></div></div>
-          <form onSubmit={submit} className="space-y-4">
+          <form onSubmit={submit} className="grid grid-cols-2 gap-3">
+            <div className="col-span-2">
+              <Field label="Billing period group" required>
+                <SearchableSelect required className={INPUT} value={form.billingPeriodGroupId} onChange={(e) => selectPeriodGroup(e.target.value)}>
+                  <option value="">Set dates to match a billing period</option>
+                  {periodGroups.map((group) => <option key={group.billingPeriodGroupId} value={group.billingPeriodGroupId}>{group.groupCode} — {group.groupName}</option>)}
+                </SearchableSelect>
+                <span className="mt-1 block text-[11px] text-slate-400">Automatically matched from the cycle dates. Selecting a group sets its allowed date range.</span>
+              </Field>
+            </div>
+            {selectedPeriodGroup && (
+              <div className={`col-span-2 flex items-center justify-between gap-3 rounded-lg border px-3 py-2 ${Number(selectedPeriodGroup._count?.readingCycles ?? 0) > 0 ? "border-emerald-200 bg-emerald-50" : "border-sky-200 bg-sky-50"}`}>
+                <p className="text-xs leading-5 text-slate-600">
+                  <strong className="text-slate-800">{Number(selectedPeriodGroup._count?.readingCycles ?? 0) > 0 ? "Follow-up cycle: " : "First cycle: "}</strong>
+                  {Number(selectedPeriodGroup._count?.readingCycles ?? 0) > 0
+                    ? "the worklist will contain only accounts still unread in this group."
+                    : "the worklist will begin with all eligible meters."}
+                </p>
+                <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-slate-600 ring-1 ring-inset ring-slate-200">{selectedPeriodGroup._count?.readingCycles ?? 0} existing</span>
+              </div>
+            )}
             <Field label="Cycle code" required>
               <input
                 required
@@ -1173,15 +1438,17 @@ export function ReadingCycles() {
                 }
               />
             </Field>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="col-span-2 grid grid-cols-2 gap-3">
               <Field label="Start date" required>
                 <DateInput
                   required
                   className={INPUT}
                   value={form.startDate}
-                  onChange={(e) =>
-                    setForm({ ...form, startDate: e.target.value })
-                  }
+                  min={selectedGroupStart}
+                  max={selectedGroupEnd && form.endDate
+                    ? (form.endDate < selectedGroupEnd ? form.endDate : selectedGroupEnd)
+                    : selectedGroupEnd}
+                  onChange={(e) => updateCycleDate("startDate", e.target.value)}
                 />
               </Field>
               <Field label="End date" required>
@@ -1189,9 +1456,11 @@ export function ReadingCycles() {
                   required
                   className={INPUT}
                   value={form.endDate}
-                  onChange={(e) =>
-                    setForm({ ...form, endDate: e.target.value })
-                  }
+                  min={selectedGroupStart && form.startDate
+                    ? (form.startDate > selectedGroupStart ? form.startDate : selectedGroupStart)
+                    : selectedGroupStart}
+                  max={selectedGroupEnd}
+                  onChange={(e) => updateCycleDate("endDate", e.target.value)}
                 />
               </Field>
             </div>
@@ -1208,25 +1477,16 @@ export function ReadingCycles() {
             </Field>
             <Field label="Remarks">
               <textarea
-                rows={2}
+                rows={1}
                 className={INPUT}
                 value={form.remarks}
                 onChange={(e) => setForm({ ...form, remarks: e.target.value })}
               />
             </Field>
-            {editingId && (
-              <Button
-                type="button"
-                tone="slate"
-                className="mb-2 w-full"
-                onClick={() => setEditingId("")}
-              >
-                Cancel edit
-              </Button>
-            )}
-            <Button disabled={saving} className="w-full">
-              {saving ? "Saving..." : editingId ? "Save changes" : "Create cycle"}
-            </Button>
+            <div className="col-span-2 flex gap-2 pt-1">
+              {editingId && <Button type="button" tone="slate" className="flex-1" onClick={() => setEditingId("")}>Cancel edit</Button>}
+              <Button disabled={saving} className="flex-1">{saving ? "Saving..." : editingId ? "Save changes" : "Create cycle"}</Button>
+            </div>
           </form>
         </Card>
         <Card title="Cycle register" className="min-w-0 overflow-hidden shadow-md shadow-slate-200/50">
@@ -1256,10 +1516,11 @@ export function ReadingCycles() {
           </div>
           <CyclePagination position="top" />
           <div className="mt-3 overflow-x-auto rounded-xl border border-slate-200">
-            <table className="w-full min-w-[900px]">
+            <table className="w-full min-w-[1040px]">
               <thead>
                 <tr className="bg-slate-50/90">
                   <th className={TH}>Code</th>
+                  <th className={TH}>Period group</th>
                   <th className={TH}>Cycle</th>
                   <th className={TH}>Cycle date</th>
                   <th className={TH}>Routes</th>
@@ -1276,6 +1537,24 @@ export function ReadingCycles() {
                   >
                     <td className={`${TD} font-medium text-slate-800`}>
                       <span className="inline-flex rounded-lg bg-slate-100 px-2.5 py-1 font-mono text-xs font-bold text-slate-700">{c.cycleCode}</span>
+                    </td>
+                    <td className={TD}>
+                      {c.billingPeriodGroup ? (
+                        <div><div className="font-semibold text-slate-800">{c.billingPeriodGroup.groupName}</div><div className="mt-0.5 font-mono text-xs text-violet-600">{c.billingPeriodGroup.groupCode}</div></div>
+                      ) : (
+                        <SearchableSelect
+                          aria-label={`Assign a period group to ${c.cycleCode}`}
+                          className="min-w-40 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs font-semibold text-amber-800"
+                          value=""
+                          disabled={groupAssigningId === String(c.readingCycleId)}
+                          onChange={(event) => void assignCycleGroup(c, event.target.value)}
+                        >
+                          <option value="">{groupAssigningId === String(c.readingCycleId) ? "Assigning…" : "Assign group"}</option>
+                          {periodGroups.map((group) => (
+                            <option key={group.billingPeriodGroupId} value={group.billingPeriodGroupId}>{group.groupCode}</option>
+                          ))}
+                        </SearchableSelect>
+                      )}
                     </td>
                     <td className={TD}><div className="flex items-center gap-3"><span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-sky-50 text-sky-700"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><rect x="4" y="5" width="16" height="15" rx="2" /><path d="M4 10h16" /></svg></span><span className="font-bold text-slate-800">{c.cycleName}</span></div></td>
                     <td className={TD}>
@@ -2520,6 +2799,7 @@ export function ReadingRouteAssignments() {
 export function ReadingWorklist() {
   const [params, setParams] = useSearchParams();
   const [cycles, setCycles] = useState<Row[]>([]);
+  const [periodGroups, setPeriodGroups] = useState<Row[]>([]);
   const [routes, setRoutes] = useState<Row[]>([]);
   const [routeAssignments, setRouteAssignments] = useState<Row[]>([]);
   const [items, setItems] = useState<Row[]>([]);
@@ -2545,7 +2825,11 @@ export function ReadingWorklist() {
   const worklistTableRef = useRef<HTMLDivElement>(null);
   const [operation, setOperation] = useState("");
   const [operationProgress, setOperationProgress] = useState(0);
-  const cycleId = params.get("cycleId") ?? "";
+  const cycleIdsParam = params.get("cycleIds") ?? params.get("cycleId") ?? "";
+  const cycleIds = useMemo(() => Array.from(new Set(cycleIdsParam.split(",").map((value) => value.trim()).filter(Boolean))), [cycleIdsParam]);
+  const cycleId = cycleIds[0] ?? "";
+  const periodGroupId = params.get("periodGroupId") ?? "";
+  const cycleScope = params.get("cycleScope") ?? "";
   const routeIdsParam = params.get("routeIds") ?? params.get("routeId") ?? "";
   const routeIds = useMemo(
     () =>
@@ -2571,9 +2855,20 @@ export function ReadingWorklist() {
   const selectedCycle = cycles.find(
     (cycle) => String(cycle.readingCycleId) === cycleId,
   );
-  const canCaptureReadings = selectedCycle?.status === "OPEN";
+  const selectedCycles = cycles.filter((cycle) => cycleIds.includes(String(cycle.readingCycleId)));
+  const groupCycles = periodGroupId
+    ? cycles.filter((cycle) => String(cycle.billingPeriodGroupId ?? "") === periodGroupId)
+    : cycles;
+  const canCaptureReadings = cycleScope !== "group" && selectedCycles.length === 1 && selectedCycle?.status === "OPEN";
+  const isContinuationCycle = Boolean(
+    cycleScope !== "group" &&
+      selectedCycle?.billingPeriodGroupId &&
+      groupCycles.some(
+        (cycle) => String(cycle.readingCycleId) !== String(selectedCycle.readingCycleId),
+      ),
+  );
   const selectedCycleIsLocked = Boolean(
-    selectedCycle && !canCaptureReadings,
+    selectedCycle && cycleScope !== "group" && selectedCycles.length === 1 && !canCaptureReadings,
   );
   const closedSourceCycles = cycles
     .filter((cycle) => {
@@ -2598,14 +2893,30 @@ export function ReadingWorklist() {
   );
   const selectedMissedCycle = previousClosedCycle;
   useEffect(() => {
-    Promise.all([api.listReadingCycles(), api.listRoutes()])
-      .then(([c, r]) => {
+    Promise.all([api.listReadingCycles(), api.listReadingPeriodGroups(), api.listRoutes()])
+      .then(([c, groups, r]) => {
         setError("");
         setCycles(c);
+        setPeriodGroups(groups);
         setRoutes(r);
         if (!cycleId) {
           const open = c.find((x: Row) => x.status === "OPEN");
-          if (open) setParams({ cycleId: String(open.readingCycleId) });
+          if (open) {
+            const next = new URLSearchParams(params);
+            next.set("cycleId", String(open.readingCycleId));
+            next.delete("cycleIds");
+            if (open.billingPeriodGroupId) next.set("periodGroupId", String(open.billingPeriodGroupId));
+            next.set("status", "UNREAD");
+            setParams(next, { replace: true });
+          }
+        } else if (!periodGroupId) {
+          const selected = c.find((x: Row) => String(x.readingCycleId) === cycleId);
+          if (selected?.billingPeriodGroupId) {
+            const next = new URLSearchParams(params);
+            next.set("periodGroupId", String(selected.billingPeriodGroupId));
+            if (!next.get("status")) next.set("status", "UNREAD");
+            setParams(next, { replace: true });
+          }
         }
       })
       .catch((e) => setError(e.message));
@@ -2654,7 +2965,9 @@ export function ReadingWorklist() {
     setLoading(true);
     const timer = window.setTimeout(() => {
       const worklistFilters = {
-          cycleId,
+          cycleIds: cycleIds.join(","),
+          periodGroupId,
+          cycleScope,
           routeIds: routeIds.join(","),
           search: search.trim(),
           quickSearch: quickSearch.trim(),
@@ -2685,7 +2998,7 @@ export function ReadingWorklist() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [cycleId, routeIdsParam, search, quickSearch, readingStatus, effectiveMissedCycleId, page, pageSize]);
+  }, [cycleIdsParam, periodGroupId, cycleScope, routeIdsParam, search, quickSearch, readingStatus, effectiveMissedCycleId, page, pageSize]);
   const selectedRoutes = routes.filter((route) =>
     routeIds.includes(String(route.routeId)),
   );
@@ -2705,7 +3018,9 @@ export function ReadingWorklist() {
     try {
       await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
       const allItems = await api.readingWorklist({
-        cycleId,
+        cycleIds: cycleIds.join(","),
+        periodGroupId,
+        cycleScope,
         routeIds: routeIds.join(","),
         search: [search.trim(), quickSearch.trim()].filter(Boolean).join(" "),
         missedCycleId:
@@ -3332,37 +3647,64 @@ export function ReadingWorklist() {
     setParams(next);
   };
 
-  const updateReadingCycle = (value: string) => {
+  const updatePeriodGroup = (value: string) => {
     const next = new URLSearchParams(params);
-    value ? next.set("cycleId", value) : next.delete("cycleId");
-    if (readingStatus === "MISSED_CLOSED") {
-      const target = cycles.find(
-        (cycle) => String(cycle.readingCycleId) === value,
+    value ? next.set("periodGroupId", value) : next.delete("periodGroupId");
+    const candidates = value
+      ? cycles.filter((cycle) => String(cycle.billingPeriodGroupId ?? "") === value)
+      : cycles;
+    if (value && candidates.length) {
+      next.set(
+        "cycleIds",
+        candidates.slice(0, 24).map((cycle) => String(cycle.readingCycleId)).join(","),
       );
-      const sources = cycles
-        .filter(
-          (cycle) =>
-            cycle.status === "CLOSED" &&
-            String(cycle.readingCycleId) !== value &&
-            (!target?.startDate ||
-              !cycle.endDate ||
-              new Date(cycle.endDate) <= new Date(target.startDate)),
-        )
-        .sort(
-          (left, right) =>
-            new Date(right.endDate).getTime() -
-              new Date(left.endDate).getTime() ||
-            String(right.readingCycleId).localeCompare(
-              String(left.readingCycleId),
-              undefined,
-              { numeric: true },
-            ),
-        );
-      const previousSourceId = String(sources[0]?.readingCycleId ?? "");
-      previousSourceId
-        ? next.set("missedCycleId", previousSourceId)
-        : next.delete("missedCycleId");
+      next.set("cycleScope", "group");
+      next.delete("cycleId");
+    } else if (!value && candidates.length) {
+      const preferred = candidates.find((cycle) => cycle.status === "OPEN") ??
+        candidates.find((cycle) => cycle.status === "PLANNED") ?? candidates[0];
+      next.set("cycleIds", String(preferred.readingCycleId));
+      next.delete("cycleId");
+      next.delete("cycleScope");
+    } else {
+      next.delete("cycleIds");
+      next.delete("cycleId");
+      next.delete("cycleScope");
     }
+    next.delete("routeIds");
+    next.delete("routeId");
+    next.set("status", "UNREAD");
+    next.delete("missedCycleId");
+    next.delete("page");
+    setParams(next);
+  };
+
+  const updateReadingCycles = (values: string[]) => {
+    const next = new URLSearchParams(params);
+    const requestedCycles = values
+      .map((value) => cycles.find((cycle) => String(cycle.readingCycleId) === value))
+      .filter((cycle): cycle is Row => Boolean(cycle));
+    const anchorGroupId = requestedCycles[0]?.billingPeriodGroupId;
+    const allowedValues = requestedCycles
+      .filter((cycle) =>
+        periodGroupId
+          ? String(cycle.billingPeriodGroupId ?? "") === periodGroupId
+          : cycle.billingPeriodGroupId === anchorGroupId,
+      )
+      .map((cycle) => String(cycle.readingCycleId));
+    if (allowedValues.length) next.set("cycleIds", allowedValues.join(","));
+    else next.delete("cycleIds");
+    next.delete("cycleId");
+    next.delete("cycleScope");
+    const selected = cycles.find(
+      (cycle) => String(cycle.readingCycleId) === allowedValues[0],
+    );
+    if (selected?.billingPeriodGroupId) {
+      next.set("periodGroupId", String(selected.billingPeriodGroupId));
+    }
+    if (allowedValues.length) next.set("status", "UNREAD");
+    else next.delete("status");
+    next.delete("missedCycleId");
     next.delete("page");
     setParams(next);
   };
@@ -3562,6 +3904,25 @@ export function ReadingWorklist() {
           </Link>
         </section>
       )}
+      {(cycleScope === "group" || selectedCycles.length > 1) && (
+        <section className="mb-4 rounded-2xl border border-sky-200 bg-sky-50 px-5 py-4 text-sky-950 shadow-sm">
+          <div className="font-extrabold">Multi-cycle review mode</div>
+          <p className="mt-1 text-sm text-sky-800">
+            Combining {selectedCycles.length} visible reading cycles in this group. An account is unread only when it has
+            no reading in any selected cycle. Readings from a replaced meter remain linked to the
+            account, and hidden replacement-final readings are included automatically. Select one open cycle to capture readings.
+          </p>
+        </section>
+      )}
+      {isContinuationCycle && (
+        <section className="mb-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-emerald-950 shadow-sm">
+          <div className="font-extrabold">Remaining unread workload</div>
+          <p className="mt-1 text-sm text-emerald-800">
+            This cycle continues an existing period group, so accounts already read in another
+            cycle in the group are excluded. Replacement-final readings are also respected.
+          </p>
+        </section>
+      )}
       {operation && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/35 px-4 backdrop-blur-[2px]">
           <div
@@ -3686,20 +4047,31 @@ export function ReadingWorklist() {
         id="reading-worklist-filters"
         className="mb-4 scroll-mt-3 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_16px_42px_-30px_rgba(15,32,56,0.45)]"
       >
-        <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-5">
-          <Field label="Reading cycle">
-            <SearchableSelect
-              className={INPUT}
-              value={cycleId}
-              onChange={(e) => updateReadingCycle(e.target.value)}
-            >
-              <option value="">Select cycle</option>
-              {cycles.map((c) => (
-                <option key={c.readingCycleId} value={c.readingCycleId}>
-                  {c.cycleName} ({pretty(c.status)})
+        <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-6">
+          <Field label="Period group">
+            <SearchableSelect className={INPUT} value={periodGroupId} onChange={(e) => updatePeriodGroup(e.target.value)}>
+              <option value="">All period groups</option>
+              {periodGroups.map((group) => (
+                <option key={group.billingPeriodGroupId} value={group.billingPeriodGroupId}>
+                  {group.groupCode} — {group.groupName}
                 </option>
               ))}
             </SearchableSelect>
+          </Field>
+          <Field label="Reading cycle">
+            <CheckboxMultiSelect
+              className={INPUT}
+              value={cycleIds}
+              onChange={updateReadingCycles}
+              placeholder="Select cycles"
+              searchPlaceholder="Search reading cycles..."
+              emptyMessage="No reading cycles in this group"
+              maxSelected={24}
+              options={groupCycles.map((cycle) => ({
+                value: String(cycle.readingCycleId),
+                label: `${cycle.cycleName} (${pretty(cycle.status)})`,
+              }))}
+            />
           </Field>
           <Field label="Status">
             <SearchableSelect
@@ -3709,7 +4081,9 @@ export function ReadingWorklist() {
             >
               <option value="">All meters</option>
               <option value="UNREAD">Unread</option>
-              <option value="MISSED_CLOSED">Unread from a closed cycle</option>
+              <option value="MISSED_CLOSED" disabled={cycleScope === "group" || selectedCycles.length > 1}>
+                Unread from a closed cycle
+              </option>
               <option value="CAPTURED">Captured</option>
             </SearchableSelect>
           </Field>
@@ -3756,7 +4130,9 @@ export function ReadingWorklist() {
               Selected workload
             </div>
             <div className="mt-1 truncate text-sm font-bold text-slate-800">
-              {selectedCycle?.cycleName ?? "Select a reading cycle"}
+              {selectedCycles.length > 1
+                ? `${selectedCycles.length} reading cycles`
+                : selectedCycle?.cycleName ?? "Select a reading cycle"}
               {` · ${selectedRouteSummary}`}
             </div>
           </div>
@@ -3770,7 +4146,7 @@ export function ReadingWorklist() {
           </div>
           <div className="px-4 py-3">
             <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
-              Captured in this cycle
+              {selectedCycles.length > 1 ? "Captured in selected cycles" : "Captured in this cycle"}
             </div>
             <div className="mt-1 text-lg font-extrabold text-emerald-600">
               {capturedInCycle.toLocaleString()}
@@ -3956,7 +4332,21 @@ export function ReadingWorklist() {
                     </span>
                   </td>
                   <td className="px-4 py-3.5">
-                    {a.cycleReading ? (
+                    {selectedCycles.length > 1 ? (
+                      <div>
+                        <span className="font-extrabold tabular-nums text-slate-800">
+                          {new Set((a.cycleReadings ?? []).map((reading: Row) => String(reading.readingCycleId))).size.toLocaleString()} / {selectedCycles.length.toLocaleString()}
+                        </span>
+                        <div className="mt-0.5 text-[11px] font-semibold text-slate-500">
+                          cycles captured
+                        </div>
+                        {a.includesReplacedMeterReading && (
+                          <div className="mt-1 text-[11px] font-bold text-violet-600">
+                            Includes replaced meter
+                          </div>
+                        )}
+                      </div>
+                    ) : a.cycleReading ? (
                       <div>
                         <span
                           className={`font-extrabold tabular-nums ${
@@ -4016,7 +4406,19 @@ export function ReadingWorklist() {
                     )}
                   </td>
                   <td className="px-4 py-3.5">
-                    {a.cycleReading ? (
+                    {selectedCycles.length > 1 ? (
+                      a.cycleReading ? (
+                        <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700 ring-1 ring-inset ring-emerald-200">
+                          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                          Captured in group
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5 rounded-full bg-orange-50 px-2.5 py-1 text-xs font-bold text-orange-700 ring-1 ring-inset ring-orange-200">
+                          <span className="h-1.5 w-1.5 rounded-full bg-orange-500" />
+                          Unread
+                        </span>
+                      )
+                    ) : a.cycleReading ? (
                       <Badge value={a.cycleReading.approvalStatus} />
                     ) : (
                       <span className="inline-flex items-center gap-1.5 rounded-full bg-orange-50 px-2.5 py-1 text-xs font-bold text-orange-700 ring-1 ring-inset ring-orange-200">
@@ -4026,7 +4428,14 @@ export function ReadingWorklist() {
                     )}
                   </td>
                   <td className="px-4 py-3.5 text-right">
-                    {a.cycleReading ? (
+                    {selectedCycles.length > 1 ? (
+                      <Link
+                        className="inline-flex rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-aqua-700 transition hover:border-sky-200 hover:bg-sky-50"
+                        to={`/readings/register?search=${encodeURIComponent(a.meter.meterNumber)}`}
+                      >
+                        View readings
+                      </Link>
+                    ) : a.cycleReading ? (
                       <div className="flex items-center justify-end gap-2">
                         {a.cycleReading.evidence?.length > 0 && (
                           <button
@@ -4034,7 +4443,7 @@ export function ReadingWorklist() {
                             className="inline-flex rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm font-bold text-aqua-700 transition hover:border-sky-300 hover:bg-sky-100"
                             onClick={() => setEvidenceReading({
                               ...a.cycleReading,
-                              meter: a.meter,
+                              meter: a.cycleReading.meter ?? a.meter,
                               account: a.account,
                             })}
                           >

@@ -426,6 +426,7 @@ billingRouter.get("/period-groups", async (_req, res, next) => {
   try {
     const groups = await prisma.billingPeriodGroup.findMany({
       include: {
+        _count: { select: { readingCycles: true, billingCycles: true } },
         billingCycles: {
           include: { bills: { select: { status: true, totalCurrentCharges: true, notificationStatus: true } } },
           orderBy: [{ cycleType: "asc" }, { billingCycleId: "asc" }],
@@ -447,6 +448,7 @@ billingRouter.get("/period-groups", async (_req, res, next) => {
         billingCycles: cyclesWithCompletion,
         status: aggregateBillingGroupStatus(cyclesWithCompletion.map((cycle) => cycle.completionStatus)),
         memberCount: billingCycles.length,
+        readingCycleCount: group._count.readingCycles,
         replacementCount: billingCycles.filter((cycle) => cycle.cycleType === "METER_REPLACEMENT").length,
         totals: {
           bills: bills.length,
@@ -492,6 +494,60 @@ billingRouter.post("/period-groups", requireRole("SYSTEM_ADMIN", "BILLING_OFFICE
   }
 });
 
+billingRouter.patch("/period-groups/:id", requireRole("SYSTEM_ADMIN", "BILLING_OFFICER", "BILLING_SUPERVISOR"), async (req, res, next) => {
+  const groupId = parse(id, req.params.id, res);
+  const data = parse(z.object({
+    groupCode: z.string().trim().min(2).max(40),
+    groupName: z.string().trim().min(3).max(150),
+    periodStart: dayText,
+    periodEnd: dayText,
+  }).superRefine((value, ctx) => {
+    if (value.periodEnd < value.periodStart) ctx.addIssue({ code: "custom", path: ["periodEnd"], message: "Group end date must be on or after its start date" });
+  }), req.body, res);
+  if (!groupId || !data) return;
+  try {
+    const periodStart = day(data.periodStart);
+    const periodEnd = day(data.periodEnd);
+    const existing = await prisma.billingPeriodGroup.findUnique({ where: { billingPeriodGroupId: groupId } });
+    if (!existing) return res.status(404).json({ error: "Billing period group not found" });
+    const overlapping = await prisma.billingPeriodGroup.findFirst({
+      where: {
+        billingPeriodGroupId: { not: groupId },
+        periodStart: { lte: periodEnd },
+        periodEnd: { gte: periodStart },
+      },
+    });
+    if (overlapping) {
+      return res.status(409).json({ error: `The selected dates overlap ${overlapping.groupName} (${overlapping.groupCode})` });
+    }
+    const [outsideBillingCycle, outsideReadingCycle] = await Promise.all([
+      prisma.billingCycle.findFirst({
+        where: {
+          billingPeriodGroupId: groupId,
+          OR: [{ periodStart: { lt: periodStart } }, { periodEnd: { gt: periodEnd } }],
+        },
+      }),
+      prisma.readingCycle.findFirst({
+        where: {
+          billingPeriodGroupId: groupId,
+          OR: [{ startDate: { lt: periodStart } }, { endDate: { gt: periodEnd } }],
+        },
+      }),
+    ]);
+    if (outsideBillingCycle || outsideReadingCycle) {
+      return res.status(409).json({ error: "The new date range must still contain every reading and billing cycle already linked to this group" });
+    }
+    const updated = await prisma.billingPeriodGroup.update({
+      where: { billingPeriodGroupId: groupId },
+      data: { ...data, periodStart, periodEnd, updatedAt: new Date() },
+    });
+    res.json(updated);
+  } catch (error: any) {
+    if (error.code === "P2002") return res.status(409).json({ error: "Billing period group code already exists" });
+    next(error);
+  }
+});
+
 billingRouter.post("/cycles", requireRole("SYSTEM_ADMIN", "BILLING_OFFICER", "BILLING_SUPERVISOR"), async (req, res, next) => {
   const data = parse(z.object({
     billingPeriodGroupId: optionalId,
@@ -517,21 +573,33 @@ billingRouter.post("/cycles", requireRole("SYSTEM_ADMIN", "BILLING_OFFICER", "BI
     if (!readingCycle) return res.status(404).json({ error: "Reading cycle not found" });
     if (readingCycle.billingCycleId) return res.status(409).json({ error: "This reading cycle is already linked to a billing period" });
     const created = await prisma.$transaction(async (tx) => {
+      const periodStart = day(data.periodStart);
+      const periodEnd = day(data.periodEnd);
       const dueDate = day(data.dueDate);
       const group = data.billingPeriodGroupId
         ? await tx.billingPeriodGroup.findUnique({ where: { billingPeriodGroupId: BigInt(String(data.billingPeriodGroupId)) } })
-        : await ensureBillingPeriodGroup(tx, dueDate);
+        : await ensureBillingPeriodGroup(tx, periodStart);
       if (!group) throw Object.assign(new Error("Selected billing period group was not found"), { status: 404 });
-      if (dueDate < group.periodStart || dueDate > group.periodEnd) {
-        throw Object.assign(new Error("The billing period due date must fall within the selected billing period group"), { status: 400 });
+      if (readingCycle.billingPeriodGroupId && readingCycle.billingPeriodGroupId !== group.billingPeriodGroupId) {
+        throw Object.assign(new Error("The reading cycle belongs to a different period group"), { status: 409 });
+      }
+      if (periodStart < group.periodStart || periodEnd > group.periodEnd) {
+        throw Object.assign(new Error("The billing period dates must fall within the selected billing period group"), { status: 400 });
       }
       const cycle = await tx.billingCycle.create({ data: {
         billingPeriodGroupId: group.billingPeriodGroupId, cycleType: billingCycleType(data.cycleCode),
-        cycleCode: data.cycleCode, cycleName: data.cycleName, periodStart: day(data.periodStart), periodEnd: day(data.periodEnd), dueDate,
+        cycleCode: data.cycleCode, cycleName: data.cycleName, periodStart, periodEnd, dueDate,
         penaltyDate: data.penaltyDate ? day(data.penaltyDate) : null, frequency: data.frequency, status: data.status,
         defaultNotification: data.defaultNotification, remarks: data.remarks, createdBy: uid(req),
       } });
-      await tx.readingCycle.update({ where: { readingCycleId: data.readingCycleId }, data: { billingCycleId: cycle.billingCycleId, updatedAt: new Date() } });
+      await tx.readingCycle.update({
+        where: { readingCycleId: data.readingCycleId },
+        data: {
+          billingCycleId: cycle.billingCycleId,
+          billingPeriodGroupId: group.billingPeriodGroupId,
+          updatedAt: new Date(),
+        },
+      });
       await tx.billingEvent.create({ data: { billingCycleId: cycle.billingCycleId, eventType: "PERIOD_CREATED", newStatus: cycle.status, details: data.remarks, performedBy: uid(req) } });
       return cycle;
     });

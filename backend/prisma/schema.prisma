@@ -589,6 +589,7 @@ model FieldOfficer {
 
 model ReadingCycle {
   readingCycleId BigInt   @id @default(autoincrement()) @map("reading_cycle_id")
+  billingPeriodGroupId BigInt?  @map("billing_period_group_id")
   cycleCode      String   @unique @map("cycle_code")
   cycleName      String   @map("cycle_name")
   startDate      DateTime @map("start_date") @db.Date
@@ -603,8 +604,10 @@ model ReadingCycle {
   creator          User?             @relation("ReadingCycleCreator", fields: [createdBy], references: [userId])
   routeAssignments RouteAssignment[]
   readings         MeterReading[]
-  billingCycle     BillingCycle?     @relation(fields: [billingCycleId], references: [billingCycleId])
+  billingCycle       BillingCycle?       @relation(fields: [billingCycleId], references: [billingCycleId])
+  billingPeriodGroup BillingPeriodGroup? @relation(fields: [billingPeriodGroupId], references: [billingPeriodGroupId])
 
+  @@index([billingPeriodGroupId])
   @@map("reading_cycles")
   @@schema("aquaflow")
 }
@@ -892,6 +895,7 @@ model BillingPeriodGroup {
   updatedAt            DateTime @default(now()) @map("updated_at")
 
   billingCycles BillingCycle[]
+  readingCycles ReadingCycle[]
 
   @@map("billing_period_groups")
   @@schema("aquaflow")

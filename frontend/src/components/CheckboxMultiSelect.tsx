@@ -17,6 +17,7 @@ type Props = {
   options: CheckboxMultiSelectOption[];
   placement?: "auto" | "top" | "bottom";
   placeholder: string;
+  searchPlaceholder?: string;
   value: string[];
   onChange: (value: string[]) => void;
 };
@@ -33,6 +34,7 @@ export function CheckboxMultiSelect({
   options,
   placement = "auto",
   placeholder,
+  searchPlaceholder = "Search options...",
   value,
   onChange,
 }: Props) {
@@ -125,7 +127,7 @@ export function CheckboxMultiSelect({
       {open && !disabled && position && createPortal(
         <div ref={menuRef} style={position} className="fixed z-[1000] overflow-hidden rounded-lg border border-slate-200 bg-white shadow-xl">
           <div className="border-b border-slate-100 p-2">
-            <input ref={searchRef} type="search" disabled={loading} value={query} onChange={(event) => { setQuery(event.target.value); onSearchQuery?.(event.target.value); }} onKeyDown={(event) => { if (event.key === "Escape") setOpen(false); }} className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm outline-none focus:border-aqua-500 focus:ring-2 focus:ring-aqua-500/20 disabled:cursor-wait disabled:bg-slate-50" placeholder={loading ? "Loading accounts…" : "Search account number or customer..."} />
+            <input ref={searchRef} type="search" disabled={loading} value={query} onChange={(event) => { setQuery(event.target.value); onSearchQuery?.(event.target.value); }} onKeyDown={(event) => { if (event.key === "Escape") setOpen(false); }} className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm outline-none focus:border-aqua-500 focus:ring-2 focus:ring-aqua-500/20 disabled:cursor-wait disabled:bg-slate-50" placeholder={loading ? "Loading options…" : searchPlaceholder} />
             {!loading && selectableFiltered.length > 0 && (
               <button type="button" className="mt-2 flex w-full items-center justify-between rounded-md bg-slate-50 px-3 py-2 text-left text-sm font-semibold text-aqua-700 hover:bg-sky-50" onClick={toggleAllFiltered}>
                 <span>{allFilteredSelected ? "Deselect all results" : selectAllFits ? "Select all results" : `Select up to ${maxSelected?.toLocaleString()} total`}</span>

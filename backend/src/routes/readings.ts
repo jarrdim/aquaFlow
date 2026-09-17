@@ -81,6 +81,7 @@ const readingInclude = {
 };
 
 const worklistReadingInclude = {
+  meter: true,
   evidence: true,
   fieldOfficer: { include: { user: true } },
   events: { include: { performer: true }, orderBy: { createdAt: "desc" as const } },
@@ -229,17 +230,62 @@ async function getEligibleAssignments(
   return meterId ? resolved.filter((assignment) => assignment.meterId === meterId) : resolved;
 }
 
+readingsRouter.get("/period-groups", async (_req, res, next) => {
+  try {
+    const groups = await prisma.billingPeriodGroup.findMany({
+      include: {
+        _count: { select: { readingCycles: true, billingCycles: true } },
+      },
+      orderBy: [{ periodStart: "desc" }, { billingPeriodGroupId: "desc" }],
+    });
+    res.json(groups);
+  } catch (error) { next(error); }
+});
+
+readingsRouter.post("/period-groups", requireRole("SYSTEM_ADMIN", "SUPERVISOR", "METER_SUPERVISOR"), async (req, res, next) => {
+  const data = parse(z.object({
+    groupCode: z.string().trim().min(2).max(40),
+    groupName: z.string().trim().min(3).max(150),
+    periodStart: dateText,
+    periodEnd: dateText,
+  }).refine((value) => asDate(value.periodEnd) >= asDate(value.periodStart), {
+    path: ["periodEnd"], message: "Group end date must be on or after its start date",
+  }), req.body, res);
+  if (!data) return;
+  try {
+    const periodStart = asDate(data.periodStart);
+    const periodEnd = asDate(data.periodEnd);
+    const overlapping = await prisma.billingPeriodGroup.findFirst({
+      where: { periodStart: { lte: periodEnd }, periodEnd: { gte: periodStart } },
+    });
+    if (overlapping) {
+      return res.status(409).json({ error: `The selected dates overlap ${overlapping.groupName} (${overlapping.groupCode})` });
+    }
+    const group = await prisma.billingPeriodGroup.create({
+      data: { ...data, periodStart, periodEnd },
+    });
+    res.status(201).json(group);
+  } catch (error: any) {
+    if (error.code === "P2002") return res.status(409).json({ error: "Period group code already exists" });
+    next(error);
+  }
+});
+
 readingsRouter.get("/cycles", async (req, res, next) => {
   try {
     const status = String(req.query.status ?? "");
+    const billingPeriodGroupId = req.query.billingPeriodGroupId
+      ? BigInt(String(req.query.billingPeriodGroupId))
+      : undefined;
     const cycles = await prisma.readingCycle.findMany({
       where: {
         ...(status ? { status } : {}),
+        ...(billingPeriodGroupId ? { billingPeriodGroupId } : {}),
         NOT: SYSTEM_GENERATED_REPLACEMENT_CYCLE_PREFIXES.map((prefix) => ({
           cycleCode: { startsWith: prefix },
         })),
       },
-      include: { creator: true, _count: { select: { readings: true, routeAssignments: true } } },
+      include: { billingPeriodGroup: true, creator: true, _count: { select: { readings: true, routeAssignments: true } } },
       orderBy: [
         { startDate: "desc" },
         { endDate: "desc" },
@@ -263,6 +309,7 @@ readingsRouter.get("/pending-count", async (_req, res, next) => {
 
 readingsRouter.post("/cycles", requireRole("SYSTEM_ADMIN", "SUPERVISOR", "METER_SUPERVISOR"), async (req, res, next) => {
   const data = parse(z.object({
+    billingPeriodGroupId: id,
     cycleCode: z.string().trim().min(2).max(30),
     cycleName: z.string().trim().min(3).max(150),
     startDate: dateText,
@@ -272,7 +319,16 @@ readingsRouter.post("/cycles", requireRole("SYSTEM_ADMIN", "SUPERVISOR", "METER_
   }).refine((v) => asDate(v.endDate) >= asDate(v.startDate), { path: ["endDate"], message: "End date must be on or after start date" }), req.body, res);
   if (!data) return;
   try {
-    const created = await prisma.readingCycle.create({ data: { ...data, startDate: asDate(data.startDate), endDate: asDate(data.endDate), createdBy: userId(req) } });
+    const group = await prisma.billingPeriodGroup.findUnique({ where: { billingPeriodGroupId: data.billingPeriodGroupId } });
+    if (!group) return res.status(404).json({ error: "Period group not found" });
+    const startDate = asDate(data.startDate);
+    const endDate = asDate(data.endDate);
+    if (startDate < group.periodStart || endDate > group.periodEnd) {
+      return res.status(400).json({
+        error: `Reading cycle dates must stay within ${group.groupName} (${group.periodStart.toISOString().slice(0, 10)} to ${group.periodEnd.toISOString().slice(0, 10)})`,
+      });
+    }
+    const created = await prisma.readingCycle.create({ data: { ...data, startDate, endDate, createdBy: userId(req) } });
     res.status(201).json(created);
   } catch (error: any) {
     if (error.code === "P2002") {
@@ -290,6 +346,7 @@ readingsRouter.post("/cycles", requireRole("SYSTEM_ADMIN", "SUPERVISOR", "METER_
 readingsRouter.patch("/cycles/:id", requireRole("SYSTEM_ADMIN", "SUPERVISOR", "METER_SUPERVISOR"), async (req, res, next) => {
   const cycleId = parse(id, req.params.id, res);
   const data = parse(z.object({
+    billingPeriodGroupId: id,
     cycleCode: z.string().trim().min(2).max(30),
     cycleName: z.string().trim().min(3).max(150),
     startDate: dateText,
@@ -302,9 +359,18 @@ readingsRouter.patch("/cycles/:id", requireRole("SYSTEM_ADMIN", "SUPERVISOR", "M
     if (!cycle) return res.status(404).json({ error: "Reading cycle not found" });
     if (!["PLANNED", "CANCELLED"].includes(cycle.status)) return res.status(409).json({ error: "Only planned or cancelled cycles can be edited" });
     if (cycle._count.readings) return res.status(409).json({ error: "A cycle with captured readings cannot be edited" });
+    const group = await prisma.billingPeriodGroup.findUnique({ where: { billingPeriodGroupId: data.billingPeriodGroupId } });
+    if (!group) return res.status(404).json({ error: "Period group not found" });
+    const startDate = asDate(data.startDate);
+    const endDate = asDate(data.endDate);
+    if (startDate < group.periodStart || endDate > group.periodEnd) {
+      return res.status(400).json({
+        error: `Reading cycle dates must stay within ${group.groupName} (${group.periodStart.toISOString().slice(0, 10)} to ${group.periodEnd.toISOString().slice(0, 10)})`,
+      });
+    }
     const updated = await prisma.readingCycle.update({
       where: { readingCycleId: cycleId },
-      data: { ...data, startDate: asDate(data.startDate), endDate: asDate(data.endDate), updatedAt: new Date() },
+      data: { ...data, startDate, endDate, updatedAt: new Date() },
     });
     res.json(updated);
   } catch (error: any) {
@@ -340,6 +406,36 @@ readingsRouter.patch("/cycles/:id/status", requireRole("SYSTEM_ADMIN", "SUPERVIS
       if (pending) return res.status(409).json({ error: `${pending} reading(s) still await approval` });
     }
     res.json(await prisma.readingCycle.update({ where: { readingCycleId: cycleId }, data: { status: data.status, updatedAt: new Date() } }));
+  } catch (error) { next(error); }
+});
+
+readingsRouter.patch("/cycles/:id/period-group", requireRole("SYSTEM_ADMIN", "SUPERVISOR", "METER_SUPERVISOR"), async (req, res, next) => {
+  const cycleId = parse(id, req.params.id, res);
+  const data = parse(z.object({ billingPeriodGroupId: id }), req.body, res);
+  if (!cycleId || !data) return;
+  try {
+    const [cycle, group] = await Promise.all([
+      prisma.readingCycle.findUnique({
+        where: { readingCycleId: cycleId },
+        include: { billingCycle: { select: { billingPeriodGroupId: true } } },
+      }),
+      prisma.billingPeriodGroup.findUnique({ where: { billingPeriodGroupId: data.billingPeriodGroupId } }),
+    ]);
+    if (!cycle) return res.status(404).json({ error: "Reading cycle not found" });
+    if (!group) return res.status(404).json({ error: "Period group not found" });
+    if (cycle.startDate < group.periodStart || cycle.endDate > group.periodEnd) {
+      return res.status(409).json({
+        error: `Cycle dates fall outside ${group.groupName}. Edit the cycle dates before assigning this group.`,
+      });
+    }
+    if (cycle.billingCycle && cycle.billingCycle.billingPeriodGroupId !== group.billingPeriodGroupId) {
+      return res.status(409).json({ error: "The linked billing period belongs to a different group" });
+    }
+    res.json(await prisma.readingCycle.update({
+      where: { readingCycleId: cycleId },
+      data: { billingPeriodGroupId: group.billingPeriodGroupId, updatedAt: new Date() },
+      include: { billingPeriodGroup: true },
+    }));
   } catch (error) { next(error); }
 });
 
@@ -621,8 +717,40 @@ readingsRouter.get("/worklist/captured-count", async (req, res, next) => {
 
 readingsRouter.get("/worklist", async (req, res, next) => {
   try {
-    const cycleId = req.query.cycleId ? BigInt(String(req.query.cycleId)) : undefined;
-    if (!cycleId) return res.status(400).json({ error: "cycleId is required" });
+    const rawCycleIds = String(req.query.cycleIds ?? req.query.cycleId ?? "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
+    if (!rawCycleIds.length || rawCycleIds.some((value) => !/^\d+$/.test(value))) {
+      return res.status(400).json({ error: "Select at least one valid reading cycle" });
+    }
+    const uniqueCycleIds = Array.from(new Set(rawCycleIds));
+    if (uniqueCycleIds.length > 24) {
+      return res.status(400).json({ error: "A maximum of 24 reading cycles can be compared" });
+    }
+    const requestedCycleIds = uniqueCycleIds.map((value) => BigInt(value));
+    let cycleIds = [...requestedCycleIds];
+    const requestedPeriodGroupId = req.query.periodGroupId
+      ? BigInt(String(req.query.periodGroupId))
+      : undefined;
+    const groupScope = String(req.query.cycleScope ?? "") === "group";
+    if (groupScope) {
+      if (!requestedPeriodGroupId) {
+        return res.status(400).json({ error: "A period group is required for group-wide review" });
+      }
+      const groupCycles = await prisma.readingCycle.findMany({
+        where: {
+          billingPeriodGroupId: requestedPeriodGroupId,
+          NOT: { cycleCode: { startsWith: "MR-BASE-" } },
+        },
+        select: { readingCycleId: true },
+      });
+      if (!groupCycles.length) {
+        return res.status(404).json({ error: "No reading cycles belong to this period group" });
+      }
+      cycleIds = groupCycles.map((cycle) => cycle.readingCycleId);
+    }
+    const cycleId = requestedCycleIds[0];
     const rawRouteIds = String(req.query.routeIds ?? req.query.routeId ?? "")
       .split(",")
       .map((value) => value.trim())
@@ -650,6 +778,53 @@ readingsRouter.get("/worklist", async (req, res, next) => {
     if (status && !["UNREAD", "CAPTURED", "MISSED_CLOSED"].includes(status)) {
       return res.status(400).json({ error: "status must be UNREAD, CAPTURED, or MISSED_CLOSED" });
     }
+    if (cycleIds.length > 1 && missedCycleId) {
+      return res.status(400).json({ error: "Carry-forward review can only use one target reading cycle" });
+    }
+    const selectedCycles = await prisma.readingCycle.findMany({
+      where: { readingCycleId: { in: cycleIds } },
+      select: { readingCycleId: true, billingPeriodGroupId: true },
+    });
+    if (selectedCycles.length !== cycleIds.length) {
+      return res.status(404).json({ error: "One or more selected reading cycles were not found" });
+    }
+    if (cycleIds.length > 1) {
+      const groupIds = new Set(
+        selectedCycles.map((cycle) => cycle.billingPeriodGroupId?.toString() ?? ""),
+      );
+      if (groupIds.size !== 1 || groupIds.has("")) {
+        return res.status(400).json({
+          error: "Multiple reading cycles must belong to the same period group",
+        });
+      }
+    }
+    if (
+      requestedPeriodGroupId &&
+      selectedCycles.some((cycle) => cycle.billingPeriodGroupId !== requestedPeriodGroupId)
+    ) {
+      return res.status(400).json({ error: "The selected reading cycles do not belong to this period group" });
+    }
+    let coverageCycleIds = [...cycleIds];
+    let continuationScope = false;
+    if (!groupScope && requestedCycleIds.length === 1 && status !== "MISSED_CLOSED") {
+      const targetCycle = selectedCycles.find(
+        (cycle) => cycle.readingCycleId === requestedCycleIds[0],
+      );
+      if (targetCycle?.billingPeriodGroupId) {
+        const groupCycles = await prisma.readingCycle.findMany({
+          where: {
+            billingPeriodGroupId: targetCycle.billingPeriodGroupId,
+            NOT: { cycleCode: { startsWith: "MR-BASE-" } },
+          },
+          select: { readingCycleId: true },
+        });
+        coverageCycleIds = groupCycles.map((cycle) => cycle.readingCycleId);
+        continuationScope = coverageCycleIds.some(
+          (groupCycleId) => groupCycleId !== requestedCycleIds[0],
+        );
+      }
+    }
+    const effectiveStatus = !status && continuationScope ? "UNREAD" : status;
     let allowedRouteIds: bigint[] | undefined;
     if (req.user?.roles.includes("METER_READER")) {
       const officer = await prisma.fieldOfficer.findUnique({
@@ -658,7 +833,7 @@ readingsRouter.get("/worklist", async (req, res, next) => {
           status: true,
           routeAssignments: {
             where: {
-              readingCycleId: cycleId,
+              readingCycleId: { in: groupScope ? cycleIds : requestedCycleIds },
               status: { in: ["ASSIGNED", "ACCEPTED"] },
             },
             select: { routeId: true },
@@ -685,13 +860,43 @@ readingsRouter.get("/worklist", async (req, res, next) => {
       !paginated,
     );
     const meterIds = items.map((assignment) => assignment.meterId);
+    const worklistAccountIds = Array.from(
+      new Set(
+        items.flatMap((assignment) =>
+          assignment.accountId == null ? [] : [assignment.accountId.toString()],
+        ),
+      ),
+    ).map((value) => BigInt(value));
+    const historicalMeterAssignments = worklistAccountIds.length
+      ? await prisma.meterAssignment.findMany({
+          where: { accountId: { in: worklistAccountIds } },
+          select: { accountId: true, meterId: true },
+        })
+      : [];
+    const accountByMeterId = new Map(
+      historicalMeterAssignments.flatMap((assignment) =>
+        assignment.accountId == null
+          ? []
+          : [[assignment.meterId.toString(), assignment.accountId.toString()] as const],
+      ),
+    );
+    const historicalMeterIds = Array.from(
+      new Set(historicalMeterAssignments.map((assignment) => assignment.meterId.toString())),
+    ).map((value) => BigInt(value));
+    const readingScope = {
+      readingCycleId: { in: coverageCycleIds },
+      OR: [
+        ...(worklistAccountIds.length ? [{ accountId: { in: worklistAccountIds } }] : []),
+        ...(historicalMeterIds.length ? [{ meterId: { in: historicalMeterIds } }] : []),
+      ],
+    };
     const currentReadingsPromise: Promise<any[]> = paginated
       ? prisma.meterReading.findMany({
-          where: { readingCycleId: cycleId, meterId: { in: meterIds } },
-          select: { meterId: true },
+          where: readingScope,
+          select: { accountId: true, meterId: true, readingCycleId: true },
         })
       : prisma.meterReading.findMany({
-          where: { readingCycleId: cycleId, meterId: { in: meterIds } },
+          where: readingScope,
           include: worklistReadingInclude,
         });
     const [currentReadings, missedCycle] = await Promise.all([
@@ -723,21 +928,42 @@ readingsRouter.get("/worklist", async (req, res, next) => {
       ? await prisma.meterReading.findMany({
           where: {
             readingCycleId: missedCycle.readingCycleId,
-            meterId: { in: meterIds },
+            OR: [
+              ...(worklistAccountIds.length ? [{ accountId: { in: worklistAccountIds } }] : []),
+              ...(historicalMeterIds.length ? [{ meterId: { in: historicalMeterIds } }] : []),
+            ],
           },
-          select: { meterId: true },
+          select: { accountId: true, meterId: true },
         })
       : [];
-    const byMeter = new Map(currentReadings.map((reading) => [reading.meterId.toString(), reading]));
+    const readingAccountKey = (reading: { accountId?: bigint | null; meterId: bigint }) =>
+      reading.accountId?.toString() ?? accountByMeterId.get(reading.meterId.toString());
+    const assignmentAccountKey = (assignment: { accountId?: bigint | null; meterId: bigint }) =>
+      assignment.accountId?.toString() ?? accountByMeterId.get(assignment.meterId.toString());
+    const readingsByAccount = new Map<string, any[]>();
+    currentReadings.forEach((reading) => {
+      const key = readingAccountKey(reading);
+      if (key) readingsByAccount.set(key, [...(readingsByAccount.get(key) ?? []), reading]);
+    });
+    const capturedAccountKeys = new Set(readingsByAccount.keys());
+    const capturedMeterIds = new Set(
+      items.flatMap((assignment) => {
+        const key = assignmentAccountKey(assignment);
+        return key && capturedAccountKeys.has(key) ? [assignment.meterId.toString()] : [];
+      }),
+    );
     const readInMissedCycle = new Set(
-      missedCycleReadings.map((reading) => reading.meterId.toString()),
+      missedCycleReadings.flatMap((reading) => {
+        const key = readingAccountKey(reading);
+        return key ? [key] : [];
+      }),
     );
     let visibleItems = missedCycle
       ? items.filter(
           (assignment) =>
             assignment.assignmentDate <= missedCycle.endDate &&
-            !byMeter.has(assignment.meterId.toString()) &&
-            !readInMissedCycle.has(assignment.meterId.toString()),
+            !capturedAccountKeys.has(assignmentAccountKey(assignment) ?? "") &&
+            !readInMissedCycle.has(assignmentAccountKey(assignment) ?? ""),
         )
       : items;
     if (paginated) {
@@ -748,7 +974,7 @@ readingsRouter.get("/worklist", async (req, res, next) => {
           String(left.account?.accountNumber ?? "").localeCompare(String(right.account?.accountNumber ?? ""), undefined, { numeric: true, sensitivity: "base" }) ||
           String(left.meter?.meterNumber ?? "").localeCompare(String(right.meter?.meterNumber ?? ""), undefined, { numeric: true, sensitivity: "base" });
       });
-      const worklistPage = buildReadingWorklistPage(items, visibleItems, new Set(byMeter.keys()), status, page, pageSize);
+      const worklistPage = buildReadingWorklistPage(items, visibleItems, capturedMeterIds, effectiveStatus, page, pageSize);
       const { total, summary } = worklistPage;
       const pageAssignments = worklistPage.items;
       const assignmentIds = pageAssignments.map((assignment) => assignment.assignmentId);
@@ -779,18 +1005,40 @@ readingsRouter.get("/worklist", async (req, res, next) => {
         return detail ? [detail] : [];
       });
       const pageMeterIds = pageDetails.map((assignment) => assignment.meterId);
+      const pageAccountIds = pageDetails.flatMap((assignment) =>
+        assignment.accountId == null ? [] : [assignment.accountId],
+      );
+      const pageAccountIdSet = new Set(pageAccountIds.map((accountId) => accountId.toString()));
+      const pageHistoricalMeterIds = historicalMeterAssignments
+        .filter((assignment) => assignment.accountId != null && pageAccountIdSet.has(assignment.accountId.toString()))
+        .map((assignment) => assignment.meterId);
       const pageReadings = pageMeterIds.length
         ? await prisma.meterReading.findMany({
-            where: { readingCycleId: cycleId, meterId: { in: pageMeterIds } },
+            where: {
+              readingCycleId: { in: coverageCycleIds },
+              OR: [
+                ...(pageAccountIds.length ? [{ accountId: { in: pageAccountIds } }] : []),
+                ...(pageHistoricalMeterIds.length ? [{ meterId: { in: pageHistoricalMeterIds } }] : []),
+              ],
+            },
             include: worklistReadingInclude,
           })
         : [];
-      const pageByMeter = new Map(pageReadings.map((reading) => [reading.meterId.toString(), reading]));
-      const serialized = pageDetails.map((a) => ({
+      const pageReadingsByAccount = new Map<string, any[]>();
+      pageReadings.forEach((reading) => {
+        const key = readingAccountKey(reading);
+        if (key) pageReadingsByAccount.set(key, [...(pageReadingsByAccount.get(key) ?? []), reading]);
+      });
+      const serialized = pageDetails.map((a) => {
+        const accountReadings = pageReadingsByAccount.get(assignmentAccountKey(a) ?? "") ?? [];
+        return ({
         ...a,
         legacyMeterException: Boolean(readingEligibilityWarning(a.meter)),
         eligibilityWarning: readingEligibilityWarning(a.meter),
-        cycleReading: pageByMeter.get(a.meterId.toString()) ?? null,
+        cycleReadings: accountReadings,
+        unreadCycleIds: coverageCycleIds.filter((selectedCycleId) => !accountReadings.some((reading) => reading.readingCycleId === selectedCycleId)),
+        cycleReading: accountReadings[0] ?? null,
+        includesReplacedMeterReading: accountReadings.some((reading) => reading.meterId !== a.meterId),
         missedCycleUnread: Boolean(missedCycle),
         missedCycle: missedCycle ? {
           readingCycleId: missedCycle.readingCycleId,
@@ -804,7 +1052,8 @@ readingsRouter.get("/worklist", async (req, res, next) => {
           a.account?.customer.middleName,
           a.account?.customer.lastName,
         ].filter(Boolean).join(" "),
-      }));
+      });
+      });
       return res.json({
         items: serialized,
         total,
@@ -814,11 +1063,16 @@ readingsRouter.get("/worklist", async (req, res, next) => {
         summary,
       });
     }
-    res.json(visibleItems.map((a) => ({
+    res.json(visibleItems.map((a) => {
+      const accountReadings = readingsByAccount.get(assignmentAccountKey(a) ?? "") ?? [];
+      return ({
       ...a,
       legacyMeterException: Boolean(readingEligibilityWarning(a.meter)),
       eligibilityWarning: readingEligibilityWarning(a.meter),
-      cycleReading: byMeter.get(a.meterId.toString()) ?? null,
+      cycleReadings: accountReadings,
+      unreadCycleIds: coverageCycleIds.filter((selectedCycleId) => !accountReadings.some((reading) => reading.readingCycleId === selectedCycleId)),
+      cycleReading: accountReadings[0] ?? null,
+      includesReplacedMeterReading: accountReadings.some((reading) => reading.meterId !== a.meterId),
       missedCycleUnread: Boolean(missedCycle),
       missedCycle: missedCycle
         ? {
@@ -838,7 +1092,8 @@ readingsRouter.get("/worklist", async (req, res, next) => {
         ]
           .filter(Boolean)
           .join(" "),
-    })));
+    });
+    }));
   } catch (error) { next(error); }
 });
 

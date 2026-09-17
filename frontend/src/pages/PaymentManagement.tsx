@@ -182,11 +182,11 @@ function CollectionTrendChart({ rows }: { rows: Row[] }) {
   const points = rows;
   const chartRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(700);
-  const height = 220;
-  const left = width < 480 ? 34 : 48;
-  const right = width < 480 ? 34 : 48;
-  const top = 28;
-  const bottom = 36;
+  const height = width < 640 ? 250 : 300;
+  const left = width < 480 ? 52 : 68;
+  const right = width < 480 ? 16 : 24;
+  const top = 34;
+  const bottom = 42;
   useEffect(() => {
     const element = chartRef.current;
     if (!element) return;
@@ -196,52 +196,79 @@ function CollectionTrendChart({ rows }: { rows: Row[] }) {
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
-  const max = Math.max(1, ...points.map((row) => Number(row.amount ?? 0)));
-  const labelStride = Math.max(1, Math.ceil(points.length / Math.max(3, Math.floor(width / 90))));
-  const valueStride = Math.max(1, Math.ceil(points.length / Math.max(2, Math.floor(width / 125))));
+  const rawMax = Math.max(1, ...points.map((row) => Number(row.amount ?? 0)));
+  const magnitude = 10 ** Math.floor(Math.log10(rawMax));
+  const step = magnitude / (rawMax / magnitude >= 5 ? 1 : 2);
+  const max = Math.ceil(rawMax / step) * step;
+  const plotHeight = height - top - bottom;
+  const labelStride = Math.max(1, Math.ceil(points.length / Math.max(3, Math.floor((width - left - right) / 76))));
   const coordinates: Array<Row & { x: number; y: number }> = points.map((row, index) => ({
     ...row,
     x: points.length === 1 ? width / 2 : left + (index / (points.length - 1)) * (width - left - right),
-    y: top + (1 - Number(row.amount ?? 0) / max) * (height - top - bottom),
+    y: top + (1 - Number(row.amount ?? 0) / max) * plotHeight,
   }));
   const line = coordinates.map((point) => `${point.x},${point.y}`).join(" ");
   const area = coordinates.length
     ? `M ${coordinates[0].x} ${height - bottom} L ${coordinates.map((point) => `${point.x} ${point.y}`).join(" L ")} L ${coordinates[coordinates.length - 1].x} ${height - bottom} Z`
     : "";
+  const total = points.reduce((sum, row) => sum + Number(row.amount ?? 0), 0);
+  const paymentCount = points.reduce((sum, row) => sum + Number(row.count ?? 0), 0);
+  const average = points.length ? total / points.length : 0;
+  const averageY = top + (1 - average / max) * plotHeight;
+  const peakIndex = points.reduce((highest, row, index) => Number(row.amount ?? 0) > Number(points[highest]?.amount ?? 0) ? index : highest, 0);
+  const compact = (value: number) => new Intl.NumberFormat("en-KE", { notation: "compact", maximumFractionDigits: 1 }).format(value);
+  const shortDate = (value: string) => new Date(`${value}T00:00:00Z`).toLocaleDateString("en-GB", { day: "2-digit", month: "short", timeZone: "UTC" });
+  const period = points.length
+    ? `${shortDate(String(points[0].date))} – ${shortDate(String(points[points.length - 1].date))}`
+    : "Current period";
   return (
-    <Card title="Collection trend">
+    <Card title="Collection trend" className="flex h-full min-w-0 flex-col" contentClassName="flex min-h-0 flex-1 flex-col">
       <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <div className="text-sm text-slate-500">Daily posted revenue</div>
-          <div className="mt-1 text-xl font-bold text-slate-900">{money(points.reduce((sum, row) => sum + Number(row.amount ?? 0), 0))}</div>
+          <div className="text-sm text-slate-500">Posted collections for the period</div>
+          <div className="mt-1 text-xl font-bold text-slate-900">{money(total)}</div>
+          <div className="mt-1 text-xs text-slate-400">{paymentCount.toLocaleString("en-KE")} payment{paymentCount === 1 ? "" : "s"}</div>
         </div>
-        <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">Since first collection</span>
+        <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">{period}</span>
       </div>
       {coordinates.length ? (
-        <div ref={chartRef} className="w-full min-w-0 overflow-hidden rounded-xl bg-gradient-to-b from-emerald-50/70 to-white pt-2">
-          <svg viewBox={`0 0 ${width} ${height}`} className="block h-[220px] w-full" role="img" aria-label="Daily collection trend">
+        <div ref={chartRef} className="min-h-[250px] w-full min-w-0 flex-1 overflow-hidden rounded-xl border border-emerald-100/70 bg-gradient-to-b from-emerald-50/80 to-white">
+          <svg viewBox={`0 0 ${width} ${height}`} className="block h-full min-h-[250px] w-full" role="img" aria-label={`Daily collection trend from ${period}`}>
             <defs>
               <linearGradient id="payment-area" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor="#10b981" stopOpacity="0.3" />
                 <stop offset="100%" stopColor="#10b981" stopOpacity="0.02" />
               </linearGradient>
             </defs>
-            {[0, 0.5, 1].map((ratio) => (
-              <line key={ratio} x1={left} x2={width - right} y1={top + ratio * (height - top - bottom)} y2={top + ratio * (height - top - bottom)} stroke="#cbd5e1" strokeDasharray="4 6" opacity="0.65" />
-            ))}
+            {[1, 0.75, 0.5, 0.25, 0].map((ratio) => {
+              const y = top + (1 - ratio) * plotHeight;
+              return (
+                <g key={ratio}>
+                  <line x1={left} x2={width - right} y1={y} y2={y} stroke="#cbd5e1" strokeDasharray={ratio === 0 ? undefined : "4 6"} opacity={ratio === 0 ? 0.9 : 0.55} />
+                  <text x={left - 10} y={y + 4} textAnchor="end" className="fill-slate-400 text-[10px] font-medium">{ratio === 0 ? "0" : compact(max * ratio)}</text>
+                </g>
+              );
+            })}
+            {average > 0 && (
+              <g>
+                <line x1={left} x2={width - right} y1={averageY} y2={averageY} stroke="#0f766e" strokeDasharray="7 5" opacity="0.55" />
+                <text x={width - right} y={Math.max(top + 10, averageY - 6)} textAnchor="end" className="fill-teal-700 text-[10px] font-semibold">Avg {compact(average)}</text>
+              </g>
+            )}
             <path d={area} fill="url(#payment-area)" />
-            {coordinates.length > 1 && <polyline points={line} fill="none" stroke="#059669" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />}
+            {coordinates.length > 1 && <polyline points={line} fill="none" stroke="#059669" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />}
             {coordinates.map((point, index) => (
               <g key={point.date} className="group">
-                <circle cx={point.x} cy={point.y} r="5" fill="white" stroke="#059669" strokeWidth="3" />
+                <title>{`${shortDate(String(point.date))}: ${money(point.amount)} · ${Number(point.count ?? 0)} payment${Number(point.count ?? 0) === 1 ? "" : "s"}`}</title>
+                <circle cx={point.x} cy={point.y} r={index === peakIndex ? 6 : 4.5} fill="white" stroke="#059669" strokeWidth={index === peakIndex ? 3.5 : 2.5} />
                 {(index % labelStride === 0 || index === coordinates.length - 1) && (
-                  <text x={point.x} y={height - 11} textAnchor="middle" className="fill-slate-500 text-[11px]">
-                    {String(point.date).slice(5).replace("-", "/")}
+                  <text x={point.x} y={height - 15} textAnchor="middle" className="fill-slate-500 text-[10px] font-medium">
+                    {shortDate(String(point.date))}
                   </text>
                 )}
-                {(index % valueStride === 0 || index === coordinates.length - 1) && (
-                  <text x={point.x} y={Math.max(14, point.y - 11)} textAnchor="middle" className="fill-slate-700 text-[11px] font-bold">
-                    {new Intl.NumberFormat("en-KE", { notation: "compact", maximumFractionDigits: 1 }).format(Number(point.amount))}
+                {(index === peakIndex || index === coordinates.length - 1) && (
+                  <text x={point.x} y={Math.max(17, point.y - 11)} textAnchor={index === coordinates.length - 1 ? "end" : "middle"} className="fill-slate-700 text-[10px] font-bold">
+                    {compact(Number(point.amount))}
                   </text>
                 )}
               </g>
@@ -249,7 +276,7 @@ function CollectionTrendChart({ rows }: { rows: Row[] }) {
           </svg>
         </div>
       ) : (
-        <div className="grid h-[220px] place-items-center rounded-xl border border-dashed border-slate-200 bg-slate-50 text-sm text-slate-400">Collection activity will appear here.</div>
+        <div className="grid min-h-[250px] flex-1 place-items-center rounded-xl border border-dashed border-slate-200 bg-slate-50 text-sm text-slate-400">Collection activity will appear here.</div>
       )}
     </Card>
   );

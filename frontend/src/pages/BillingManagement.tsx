@@ -712,6 +712,7 @@ export function IndividualBillingWorkspace() {
   const [accounts, setAccounts] = useState<Row[]>([]);
   const [readingCycles, setReadingCycles] = useState<Row[]>([]);
   const [billingCycles, setBillingCycles] = useState<Row[]>([]);
+  const [periodGroups, setPeriodGroups] = useState<Row[]>([]);
   const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>(savedSelection.accountIds);
   const [readingCycleId, setReadingCycleId] = useState(savedSelection.readingCycleId);
   const [billingCycleId, setBillingCycleId] = useState(savedSelection.billingCycleId);
@@ -754,12 +755,28 @@ export function IndividualBillingWorkspace() {
   const canNotify = hasRole("SYSTEM_ADMIN", "BILLING_OFFICER", "BILLING_SUPERVISOR");
 
   async function loadReferenceData(preferredReadingCycleId = readingCycleId, preferredBillingCycleId = billingCycleId) {
-    const [accountRows, readingRows, billingRows] = await Promise.all([
-      api.listReadingAccounts(), api.listReadingCycles(), api.listBillingCycles(),
+    const [accountRows, readingRows, billingRows, groupRows] = await Promise.all([
+      api.listReadingAccounts(), api.listReadingCycles(), api.listBillingCycles(), api.listReadingPeriodGroups(),
     ]);
     setAccounts(accountRows);
     setReadingCycles(readingRows);
     setBillingCycles(billingRows);
+    setPeriodGroups(groupRows);
+    const today = iso(new Date());
+    const matchingGroup = groupRows.find((group: Row) => {
+      const groupStart = String(group.periodStart).slice(0, 10);
+      const groupEnd = String(group.periodEnd).slice(0, 10);
+      return billingForm.periodStart >= groupStart && billingForm.periodEnd <= groupEnd;
+    }) ?? groupRows.find((group: Row) => {
+      const groupStart = String(group.periodStart).slice(0, 10);
+      const groupEnd = String(group.periodEnd).slice(0, 10);
+      return today >= groupStart && today <= groupEnd;
+    });
+    if (matchingGroup) {
+      const groupId = String(matchingGroup.billingPeriodGroupId);
+      setReadingForm((current: Row) => current.billingPeriodGroupId ? current : { ...current, billingPeriodGroupId: groupId });
+      setBillingForm((current: Row) => current.billingPeriodGroupId ? current : { ...current, billingPeriodGroupId: groupId });
+    }
     const validAccountIds = selectedAccountIds.filter((accountId) =>
       accountRows.some((account: Row) => String(account.accountId) === accountId),
     );
@@ -939,7 +956,11 @@ export function IndividualBillingWorkspace() {
   async function createBillingPeriod() {
     if (!readingCycleId) return;
     await operation("creating-billing-period", async () => {
-      const created = await api.createBillingCycle({ ...billingForm, readingCycleId });
+      const created = await api.createBillingCycle({
+        ...billingForm,
+        billingPeriodGroupId: selectedReadingCycle?.billingPeriodGroupId ?? billingForm.billingPeriodGroupId,
+        readingCycleId,
+      });
       await loadReferenceData(readingCycleId, String(created.billingCycleId));
       setBillingCycleId(String(created.billingCycleId));
       setShowSetup(false);
@@ -1066,7 +1087,7 @@ export function IndividualBillingWorkspace() {
           <button type="button" onClick={() => setShowSetup(true)} className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-bold text-white shadow-sm hover:bg-amber-700">Create billing period</button>
         </div>}
         {showSetup && <div className={`grid gap-4 border-t border-slate-100 bg-slate-50/60 p-4 ${needsBillingPeriod || needsReadingCycle ? "" : "xl:grid-cols-2"}`}>
-          {!needsBillingPeriod && <div><div className="mb-3 flex items-center justify-between"><div><h3 className="font-bold text-slate-900">New reading cycle</h3><p className="text-xs text-slate-500">Create it open so readings can be captured</p></div><Badge value={readingForm.status} /></div><div className="grid gap-3 sm:grid-cols-2"><Field label="Cycle code" required><input className={INPUT} value={readingForm.cycleCode} onChange={(e) => setReadingForm({ ...readingForm, cycleCode: e.target.value })} /></Field><Field label="Cycle name" required><input className={INPUT} value={readingForm.cycleName} onChange={(e) => setReadingForm({ ...readingForm, cycleName: e.target.value })} /></Field><Field label="Start date" required><DateInput className={INPUT} value={readingForm.startDate} onChange={(e) => setReadingForm({ ...readingForm, startDate: e.target.value })} /></Field><Field label="End date" required><DateInput className={INPUT} value={readingForm.endDate} onChange={(e) => setReadingForm({ ...readingForm, endDate: e.target.value })} /></Field></div><div className="mt-3">{actionButton("Create and select reading cycle", "creating-reading-cycle", !canManageReadingCycles || !readingForm.cycleCode || !readingForm.cycleName, createReadingCycle, "slate")}</div></div>}
+          {!needsBillingPeriod && <div><div className="mb-3 flex items-center justify-between"><div><h3 className="font-bold text-slate-900">New reading cycle</h3><p className="text-xs text-slate-500">Create it open so readings can be captured</p></div><Badge value={readingForm.status} /></div><div className="grid gap-3 sm:grid-cols-2"><Field label="Period group" required><SearchableSelect className={INPUT} value={readingForm.billingPeriodGroupId ?? ""} onChange={(e) => { const billingPeriodGroupId = e.target.value; setReadingForm({ ...readingForm, billingPeriodGroupId }); setBillingForm({ ...billingForm, billingPeriodGroupId }); }}><option value="">Select period group</option>{periodGroups.map((group) => <option key={group.billingPeriodGroupId} value={group.billingPeriodGroupId}>{group.groupCode} — {group.groupName}</option>)}</SearchableSelect></Field><Field label="Cycle code" required><input className={INPUT} value={readingForm.cycleCode} onChange={(e) => setReadingForm({ ...readingForm, cycleCode: e.target.value })} /></Field><Field label="Cycle name" required><input className={INPUT} value={readingForm.cycleName} onChange={(e) => setReadingForm({ ...readingForm, cycleName: e.target.value })} /></Field><Field label="Start date" required><DateInput className={INPUT} value={readingForm.startDate} onChange={(e) => setReadingForm({ ...readingForm, startDate: e.target.value })} /></Field><Field label="End date" required><DateInput className={INPUT} value={readingForm.endDate} onChange={(e) => setReadingForm({ ...readingForm, endDate: e.target.value })} /></Field></div>{!periodGroups.length && <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">Create a period group from Meter Readings → Reading Cycles first.</p>}<div className="mt-3">{actionButton("Create and select reading cycle", "creating-reading-cycle", !canManageReadingCycles || !readingForm.billingPeriodGroupId || !readingForm.cycleCode || !readingForm.cycleName, createReadingCycle, "slate")}</div></div>}
           {!needsReadingCycle && <div>
             <div className="mb-3 flex items-center justify-between"><div><h3 className="font-bold text-slate-900">New billing period</h3><p className="text-xs text-slate-500">Links to the selected closed reading cycle</p></div><Badge value={billingForm.status} /></div>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -1149,7 +1170,10 @@ export function BillingPeriods() {
   const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
   const due = new Date(now.getFullYear(), now.getMonth() + 1, 10);
   const penalty = new Date(now.getFullYear(), now.getMonth() + 1, 15);
-  const iso = (value: Date) => value.toISOString().slice(0, 10);
+  const iso = (value: Date) =>
+    `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
+  const todayIso = iso(now);
+  const currentGroupResolvedRef = useRef(false);
   const [cycles, setCycles] = useState<Row[]>([]);
   const [readingCycles, setReadingCycles] = useState<Row[]>([]);
   const [periodGroups, setPeriodGroups] = useState<Row[]>([]);
@@ -1158,11 +1182,11 @@ export function BillingPeriods() {
   const [saving, setSaving] = useState(false);
   const [groupModalOpen, setGroupModalOpen] = useState(false);
   const [savingGroup, setSavingGroup] = useState(false);
-  const groupStart = new Date(due.getFullYear(), due.getMonth(), 1);
-  const groupEnd = new Date(due.getFullYear(), due.getMonth() + 1, 0);
+  const groupStart = new Date(start.getFullYear(), start.getMonth(), 1);
+  const groupEnd = new Date(start.getFullYear(), start.getMonth() + 1, 0);
   const [groupForm, setGroupForm] = useState<Row>({
-    groupCode: `BPG-${due.getFullYear()}-${String(due.getMonth() + 1).padStart(2, "0")}`,
-    groupName: `${due.toLocaleString(undefined, { month: "long", year: "numeric" })} Billing`,
+    groupCode: `BPG-${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}`,
+    groupName: `${start.toLocaleString(undefined, { month: "long", year: "numeric" })} Billing`,
     periodStart: iso(groupStart),
     periodEnd: iso(groupEnd),
   });
@@ -1189,20 +1213,100 @@ export function BillingPeriods() {
         setCycles(b);
         setReadingCycles(r);
         setPeriodGroups(groups);
-        setForm((current: Row) => {
-          if (current.billingPeriodGroupId) return current;
-          const dueDate = String(current.dueDate);
-          const matchingGroup = groups.find((group: Row) =>
-            dueDate >= String(group.periodStart).slice(0, 10) && dueDate <= String(group.periodEnd).slice(0, 10),
-          );
-          return matchingGroup ? { ...current, billingPeriodGroupId: String(matchingGroup.billingPeriodGroupId) } : current;
-        });
         setError("");
       },
     );
   useEffect(() => {
     load().catch((e) => setError(e.message));
   }, []);
+  useEffect(() => {
+    if (form.billingPeriodGroupId || !form.periodStart || !form.periodEnd || !periodGroups.length) return;
+    const dateMatchingGroup = periodGroups.find((group) => {
+      const groupStart = String(group.periodStart).slice(0, 10);
+      const groupEnd = String(group.periodEnd).slice(0, 10);
+      return form.periodStart >= groupStart && form.periodEnd <= groupEnd;
+    });
+    const currentGroup = !currentGroupResolvedRef.current
+      ? periodGroups.find((group) => {
+          const groupStart = String(group.periodStart).slice(0, 10);
+          const groupEnd = String(group.periodEnd).slice(0, 10);
+          return todayIso >= groupStart && todayIso <= groupEnd;
+        })
+      : undefined;
+    currentGroupResolvedRef.current = true;
+    const matchingGroup = currentGroup ?? dateMatchingGroup;
+    if (!matchingGroup) return;
+    setForm((current: Row) => {
+      const groupStart = String(matchingGroup.periodStart).slice(0, 10);
+      const groupEnd = String(matchingGroup.periodEnd).slice(0, 10);
+      const nextEnd = currentGroup ? groupEnd : current.periodEnd;
+      const nextDue = String(current.dueDate) < nextEnd ? nextEnd : String(current.dueDate);
+      return {
+        ...current,
+        billingPeriodGroupId: String(matchingGroup.billingPeriodGroupId),
+        ...(currentGroup ? { periodStart: groupStart, periodEnd: groupEnd } : {}),
+        dueDate: nextDue,
+        penaltyDate: current.penaltyDate && String(current.penaltyDate) >= nextDue ? current.penaltyDate : nextDue,
+      };
+    });
+  }, [periodGroups, form.billingPeriodGroupId, form.periodStart, form.periodEnd, todayIso]);
+  const selectedPeriodGroup = periodGroups.find(
+    (group) => String(group.billingPeriodGroupId) === String(form.billingPeriodGroupId),
+  );
+  const selectedGroupStart = selectedPeriodGroup
+    ? String(selectedPeriodGroup.periodStart).slice(0, 10)
+    : undefined;
+  const selectedGroupEnd = selectedPeriodGroup
+    ? String(selectedPeriodGroup.periodEnd).slice(0, 10)
+    : undefined;
+  function selectBillingPeriodGroup(billingPeriodGroupId: string) {
+    const group = periodGroups.find(
+      (item) => String(item.billingPeriodGroupId) === billingPeriodGroupId,
+    );
+    setForm((current: Row) => {
+      if (!group) return { ...current, billingPeriodGroupId };
+      const groupStart = String(group.periodStart).slice(0, 10);
+      const groupEnd = String(group.periodEnd).slice(0, 10);
+      const dueDate = String(current.dueDate) < groupEnd ? groupEnd : String(current.dueDate);
+      const selectedCycle = readingCycles.find(
+        (cycle) => String(cycle.readingCycleId) === String(current.readingCycleId),
+      );
+      return {
+        ...current,
+        billingPeriodGroupId,
+        periodStart: groupStart,
+        periodEnd: groupEnd,
+        dueDate,
+        penaltyDate: current.penaltyDate && String(current.penaltyDate) >= dueDate ? current.penaltyDate : dueDate,
+        readingCycleId: selectedCycle && String(selectedCycle.billingPeriodGroupId) !== billingPeriodGroupId
+          ? ""
+          : current.readingCycleId,
+      };
+    });
+  }
+  function updateBillingPeriodDate(field: "periodStart" | "periodEnd", value: string) {
+    setForm((current: Row) => {
+      const matchingGroup = periodGroups.find((group) => {
+        const groupStart = String(group.periodStart).slice(0, 10);
+        const groupEnd = String(group.periodEnd).slice(0, 10);
+        return value >= groupStart && value <= groupEnd;
+      });
+      if (!matchingGroup) return { ...current, [field]: value, billingPeriodGroupId: "", readingCycleId: "" };
+      const groupStart = String(matchingGroup.periodStart).slice(0, 10);
+      const groupEnd = String(matchingGroup.periodEnd).slice(0, 10);
+      const billingPeriodGroupId = String(matchingGroup.billingPeriodGroupId);
+      const next: Row = { ...current, [field]: value, billingPeriodGroupId };
+      if (field === "periodStart" && (String(next.periodEnd) < value || String(next.periodEnd) > groupEnd)) next.periodEnd = groupEnd;
+      if (field === "periodEnd" && (String(next.periodStart) > value || String(next.periodStart) < groupStart)) next.periodStart = groupStart;
+      if (String(next.dueDate) < String(next.periodEnd)) next.dueDate = next.periodEnd;
+      if (next.penaltyDate && String(next.penaltyDate) < String(next.dueDate)) next.penaltyDate = next.dueDate;
+      const selectedCycle = readingCycles.find(
+        (cycle) => String(cycle.readingCycleId) === String(next.readingCycleId),
+      );
+      if (selectedCycle && String(selectedCycle.billingPeriodGroupId) !== billingPeriodGroupId) next.readingCycleId = "";
+      return next;
+    });
+  }
   const visibleCycles = useMemo(
     () => selectedGroupId
       ? cycles.filter((cycle) => String(cycle.billingPeriodGroupId) === selectedGroupId)
@@ -1302,8 +1406,8 @@ export function BillingPeriods() {
     }
   }
   function openGroupModal() {
-    const dueDate = new Date(`${form.dueDate}T00:00:00`);
-    const base = Number.isNaN(dueDate.getTime()) ? new Date() : dueDate;
+    const periodStart = new Date(`${form.periodStart}T00:00:00`);
+    const base = Number.isNaN(periodStart.getTime()) ? new Date() : periodStart;
     const firstDay = new Date(base.getFullYear(), base.getMonth(), 1);
     const lastDay = new Date(base.getFullYear(), base.getMonth() + 1, 0);
     setGroupForm({
@@ -1336,7 +1440,7 @@ export function BillingPeriods() {
       subtitle={registerOnly ? "Review billing periods and their consolidated totals" : "Create, link and control billing periods"}
       actions={registerOnly
         ? <LinkButton to="/billing/periods" tone="slate">Manage billing periods</LinkButton>
-        : <LinkButton to="/billing/generate">Generate bills</LinkButton>}
+        : <><LinkButton to="/period-groups" tone="slate">Manage period groups</LinkButton><LinkButton to="/billing/generate">Generate bills</LinkButton></>}
     >
       {error && <Notice>{error}</Notice>}
       {message && <Notice tone="green">{message}</Notice>}
@@ -1352,24 +1456,26 @@ export function BillingPeriods() {
                   required
                   className={INPUT}
                   value={form.billingPeriodGroupId}
-                  onChange={(e) => setForm({ ...form, billingPeriodGroupId: e.target.value })}
+                  onChange={(e) => selectBillingPeriodGroup(e.target.value)}
                 >
                   <option value="">Select billing period group</option>
                   {periodGroups.map((group) => (
                     <option key={group.billingPeriodGroupId} value={group.billingPeriodGroupId}>
                       {group.groupName} · {group.groupCode}
+                      {todayIso >= String(group.periodStart).slice(0, 10) && todayIso <= String(group.periodEnd).slice(0, 10) ? " — Current" : ""}
                     </option>
                   ))}
                 </SearchableSelect>
-                <button
-                  type="button"
-                  disabled
-                  onClick={openGroupModal}
-                  className="shrink-0 cursor-not-allowed rounded-xl border border-slate-200 bg-slate-100 px-3.5 py-2 text-sm font-bold text-slate-400"
+                <Link
+                  to="/period-groups"
+                  className="shrink-0 rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm font-bold text-slate-700 transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800"
                 >
-                  + New
-                </button>
+                  Manage groups
+                </Link>
               </div>
+              <span className="mt-1 block text-[11px] text-slate-400">
+                Automatically selected from today and the billing period dates. The group controls the allowed date range.
+              </span>
             </Field>
             <div className="grid grid-cols-2 gap-3">
               <Field label="Period code" required>
@@ -1417,7 +1523,11 @@ export function BillingPeriods() {
               >
                 <option value="">Select closed cycle</option>
                 {readingCycles
-                  .filter((r) => r.status === "CLOSED" && !r.billingCycleId)
+                  .filter((r) =>
+                    r.status === "CLOSED" &&
+                    !r.billingCycleId &&
+                    (!form.billingPeriodGroupId || String(r.billingPeriodGroupId) === String(form.billingPeriodGroupId)),
+                  )
                   .map((r) => (
                     <option key={r.readingCycleId} value={r.readingCycleId}>
                       {r.cycleName} · {r.cycleCode}
@@ -1431,9 +1541,11 @@ export function BillingPeriods() {
                   required
                   className={INPUT}
                   value={form.periodStart}
-                  onChange={(e) =>
-                    setForm({ ...form, periodStart: e.target.value })
-                  }
+                  min={selectedGroupStart}
+                  max={selectedGroupEnd && form.periodEnd
+                    ? (form.periodEnd < selectedGroupEnd ? form.periodEnd : selectedGroupEnd)
+                    : selectedGroupEnd}
+                  onChange={(e) => updateBillingPeriodDate("periodStart", e.target.value)}
                 />
               </Field>
               <Field label="End date" required>
@@ -1441,9 +1553,11 @@ export function BillingPeriods() {
                   required
                   className={INPUT}
                   value={form.periodEnd}
-                  onChange={(e) =>
-                    setForm({ ...form, periodEnd: e.target.value })
-                  }
+                  min={selectedGroupStart && form.periodStart
+                    ? (form.periodStart > selectedGroupStart ? form.periodStart : selectedGroupStart)
+                    : selectedGroupStart}
+                  max={selectedGroupEnd}
+                  onChange={(e) => updateBillingPeriodDate("periodEnd", e.target.value)}
                 />
               </Field>
               <Field label="Due date" required>
@@ -1451,8 +1565,13 @@ export function BillingPeriods() {
                   required
                   className={INPUT}
                   value={form.dueDate}
+                  min={form.periodEnd}
                   onChange={(e) =>
-                    setForm({ ...form, dueDate: e.target.value })
+                    setForm({
+                      ...form,
+                      dueDate: e.target.value,
+                      penaltyDate: form.penaltyDate && form.penaltyDate >= e.target.value ? form.penaltyDate : e.target.value,
+                    })
                   }
                 />
               </Field>
@@ -1460,6 +1579,7 @@ export function BillingPeriods() {
                 <DateInput
                   className={INPUT}
                   value={form.penaltyDate}
+                  min={form.dueDate}
                   onChange={(e) =>
                     setForm({ ...form, penaltyDate: e.target.value })
                   }
@@ -1665,10 +1785,10 @@ export function BillingPeriods() {
               <div className="grid gap-4 sm:grid-cols-2">
                 <Field label="Group code" required><input required maxLength={40} className={INPUT} value={groupForm.groupCode} onChange={(e) => setGroupForm({ ...groupForm, groupCode: e.target.value })} /></Field>
                 <Field label="Group name" required><input required maxLength={150} className={INPUT} value={groupForm.groupName} onChange={(e) => setGroupForm({ ...groupForm, groupName: e.target.value })} /></Field>
-                <Field label="Start date" required><DateInput required className={INPUT} value={groupForm.periodStart} onChange={(e) => setGroupForm({ ...groupForm, periodStart: e.target.value })} /></Field>
-                <Field label="End date" required><DateInput required className={INPUT} value={groupForm.periodEnd} onChange={(e) => setGroupForm({ ...groupForm, periodEnd: e.target.value })} /></Field>
+                <Field label="Start date" required><DateInput required max={groupForm.periodEnd} className={INPUT} value={groupForm.periodStart} onChange={(e) => setGroupForm({ ...groupForm, periodStart: e.target.value })} /></Field>
+                <Field label="End date" required><DateInput required min={groupForm.periodStart} className={INPUT} value={groupForm.periodEnd} onChange={(e) => setGroupForm({ ...groupForm, periodEnd: e.target.value })} /></Field>
               </div>
-              <p className="rounded-xl bg-sky-50 px-3.5 py-3 text-sm text-sky-700">A billing period can join this group when its due date falls between these dates.</p>
+              <p className="rounded-xl bg-sky-50 px-3.5 py-3 text-sm text-sky-700">A billing period can join this group only when its start and end dates fall inside this range.</p>
               <div className="flex justify-end gap-2 border-t border-slate-100 pt-4">
                 <Button type="button" tone="slate" disabled={savingGroup} onClick={() => setGroupModalOpen(false)}>Cancel</Button>
                 <Button disabled={savingGroup}>{savingGroup ? "Creating…" : "Create and select"}</Button>
@@ -1677,6 +1797,225 @@ export function BillingPeriods() {
           </div>
         </div>
       )}
+    </Page>
+  );
+}
+
+export function BillingPeriodGroups() {
+  const now = new Date();
+  const localIso = (value: Date) =>
+    `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
+  const today = localIso(now);
+  const groupFormForStart = (startDate: Date): Row => ({
+    groupCode: `BPG-${startDate.getFullYear()}-${String(startDate.getMonth() + 1).padStart(2, "0")}`,
+    groupName: `${startDate.toLocaleString(undefined, { month: "long", year: "numeric" })} Billing`,
+    periodStart: localIso(startDate),
+    periodEnd: localIso(new Date(startDate.getFullYear(), startDate.getMonth() + 1, 0)),
+  });
+  const newGroupForm = (existingGroups: Row[] = []): Row => {
+    const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const sortedEnds = existingGroups
+      .map((group) => String(group.periodEnd).slice(0, 10))
+      .filter(Boolean)
+      .sort();
+    const latestEnd = sortedEnds[sortedEnds.length - 1];
+    if (!latestEnd) return groupFormForStart(currentMonthStart);
+    const firstAvailable = new Date(`${latestEnd}T00:00:00`);
+    firstAvailable.setDate(firstAvailable.getDate() + 1);
+    return groupFormForStart(firstAvailable > currentMonthStart ? firstAvailable : currentMonthStart);
+  };
+  const [groups, setGroups] = useState<Row[]>([]);
+  const [form, setForm] = useState<Row>(newGroupForm);
+  const [editingId, setEditingId] = useState("");
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const pageSize = 10;
+
+  async function loadGroups(): Promise<Row[]> {
+    setLoading(true);
+    try {
+      const rows = await api.listBillingPeriodGroups();
+      setGroups(rows);
+      setError("");
+      return rows;
+    } catch (e: any) {
+      setError(e.message);
+      return [];
+    } finally {
+      setLoading(false);
+    }
+  }
+  useEffect(() => {
+    void loadGroups().then((rows) => setForm(newGroupForm(rows)));
+  }, []);
+
+  const filteredGroups = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    if (!query) return groups;
+    return groups.filter((group) =>
+      [group.groupCode, group.groupName, date(group.periodStart), date(group.periodEnd), group.status]
+        .some((value) => String(value ?? "").toLowerCase().includes(query)),
+    );
+  }, [groups, search]);
+  const totalPages = Math.max(1, Math.ceil(filteredGroups.length / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const visibleGroups = filteredGroups.slice((safePage - 1) * pageSize, safePage * pageSize);
+  const currentGroup = groups.find((group) => {
+    const start = String(group.periodStart).slice(0, 10);
+    const end = String(group.periodEnd).slice(0, 10);
+    return today >= start && today <= end;
+  });
+  const totals = groups.reduce((summary, group) => ({
+    readingCycles: summary.readingCycles + Number(group.readingCycleCount ?? 0),
+    billingPeriods: summary.billingPeriods + Number(group.memberCount ?? 0),
+    bills: summary.bills + Number(group.totals?.bills ?? 0),
+  }), { readingCycles: 0, billingPeriods: 0, bills: 0 });
+  const nextAvailableStart = editingId ? undefined : String(newGroupForm(groups).periodStart);
+
+  function resetForm(sourceGroups: Row[] = groups) {
+    setEditingId("");
+    setForm(newGroupForm(sourceGroups));
+    setError("");
+  }
+  function updateGroupStart(periodStart: string) {
+    if (editingId) {
+      setForm((current: Row) => ({ ...current, periodStart }));
+      return;
+    }
+    const parsed = new Date(`${periodStart}T00:00:00`);
+    if (Number.isNaN(parsed.getTime())) {
+      setForm((current: Row) => ({ ...current, periodStart }));
+      return;
+    }
+    setForm(groupFormForStart(parsed));
+  }
+  function editGroup(group: Row) {
+    setEditingId(String(group.billingPeriodGroupId));
+    setForm({
+      groupCode: group.groupCode,
+      groupName: group.groupName,
+      periodStart: String(group.periodStart).slice(0, 10),
+      periodEnd: String(group.periodEnd).slice(0, 10),
+    });
+    setMessage("");
+    setError("");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+  async function submitGroup(event: FormEvent) {
+    event.preventDefault();
+    setSaving(true);
+    setError("");
+    setMessage("");
+    try {
+      if (editingId) {
+        await api.updateBillingPeriodGroup(editingId, form);
+        setMessage("Period group updated successfully.");
+      } else {
+        await api.createBillingPeriodGroup(form);
+        setMessage("Period group created successfully.");
+      }
+      const rows = await loadGroups();
+      resetForm(rows);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Page
+      title="Reading & billing period groups"
+      subtitle="Manage the shared date windows that connect reading cycles with their billing periods"
+      actions={<><LinkButton to="/readings/cycles" tone="slate">Reading cycles</LinkButton><LinkButton to="/billing/periods">Billing periods</LinkButton></>}
+    >
+      {error && <Notice>{error}</Notice>}
+      {message && <Notice tone="green">{message}</Notice>}
+
+      <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Kpi label="Period groups" value={groups.length.toLocaleString()} />
+        <Kpi label="Reading cycles" value={totals.readingCycles.toLocaleString()} />
+        <Kpi label="Billing periods" value={totals.billingPeriods.toLocaleString()} />
+        <Kpi label="Bills grouped" value={totals.bills.toLocaleString()} />
+      </div>
+
+      <div className="grid gap-5 xl:grid-cols-[390px_minmax(0,1fr)] xl:items-start">
+        <Card title={editingId ? "Edit period group" : "Create period group"} className="xl:sticky xl:top-24">
+          <form onSubmit={submitGroup} className="space-y-4">
+            <div className="rounded-xl border border-sky-100 bg-sky-50 px-3.5 py-3 text-sm leading-5 text-sky-800">
+              One group represents one billing window. Reading and billing cycles must stay inside its start and end dates.
+            </div>
+            <Field label="Group code" required>
+              <input required maxLength={40} className={INPUT} value={form.groupCode} onChange={(event) => setForm({ ...form, groupCode: event.target.value })} />
+            </Field>
+            <Field label="Group name" required>
+              <input required maxLength={150} className={INPUT} value={form.groupName} onChange={(event) => setForm({ ...form, groupName: event.target.value })} />
+            </Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Start date" required>
+                <DateInput required min={nextAvailableStart} max={editingId ? form.periodEnd : undefined} className={INPUT} value={form.periodStart} onChange={(event) => updateGroupStart(event.target.value)} />
+              </Field>
+              <Field label="End date" required>
+                <DateInput required min={form.periodStart} className={INPUT} value={form.periodEnd} onChange={(event) => setForm({ ...form, periodEnd: event.target.value })} />
+              </Field>
+            </div>
+            {!editingId && nextAvailableStart && (
+              <p className="text-xs leading-5 text-slate-500">
+                Next available start: <strong className="text-slate-700">{date(nextAvailableStart)}</strong>. Earlier dates are already covered by an existing period group.
+              </p>
+            )}
+            {editingId && (
+              <p className="rounded-xl bg-amber-50 px-3.5 py-3 text-xs leading-5 text-amber-800">
+                You can rename this group. Its date range can change only if every linked cycle still fits inside it.
+              </p>
+            )}
+            <div className="flex gap-2">
+              <Button disabled={saving || !form.groupCode || !form.groupName || !form.periodStart || !form.periodEnd || form.periodEnd < form.periodStart} className="flex-1">
+                {saving ? "Saving…" : editingId ? "Save changes" : "Create group"}
+              </Button>
+              {editingId && <Button type="button" tone="slate" disabled={saving} onClick={() => resetForm()}>Cancel</Button>}
+            </div>
+          </form>
+        </Card>
+
+        <Card title="Period group register" className="min-w-0">
+          <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+            <Field label="Search groups">
+              <input className={`${INPUT} min-w-[280px]`} value={search} placeholder="Code, name, date or status" onChange={(event) => { setSearch(event.target.value); setPage(1); }} />
+            </Field>
+            <div className="text-right">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Current group</p>
+              <p className="mt-1 text-sm font-bold text-slate-800">{currentGroup ? currentGroup.groupName : "No group covers today"}</p>
+            </div>
+          </div>
+          <div className="overflow-x-auto rounded-xl border border-slate-200">
+            <table className="w-full min-w-[860px]">
+              <thead><tr className="bg-slate-50/90"><th className={TH}>Group</th><th className={TH}>Date window</th><th className={TH}>Reading cycles</th><th className={TH}>Billing periods</th><th className={TH}>Bills</th><th className={TH}>Status</th><th className={TH}>Action</th></tr></thead>
+              <tbody className="divide-y divide-slate-100">
+                {visibleGroups.map((group) => {
+                  const isCurrent = today >= String(group.periodStart).slice(0, 10) && today <= String(group.periodEnd).slice(0, 10);
+                  return <tr key={group.billingPeriodGroupId} className={isCurrent ? "bg-emerald-50/45" : "hover:bg-slate-50/60"}>
+                    <td className={TD}><div className="flex items-center gap-2"><strong className="text-slate-900">{group.groupName}</strong>{isCurrent && <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold uppercase text-emerald-700">Current</span>}</div><div className="mt-1 font-mono text-xs text-violet-700">{group.groupCode}</div></td>
+                    <td className={TD}><div className="font-medium text-slate-700">{date(group.periodStart)} – {date(group.periodEnd)}</div></td>
+                    <td className={TD}><span className="rounded-full bg-sky-50 px-2.5 py-1 text-xs font-bold text-sky-700">{Number(group.readingCycleCount ?? 0).toLocaleString()}</span></td>
+                    <td className={TD}><span className="rounded-full bg-violet-50 px-2.5 py-1 text-xs font-bold text-violet-700">{Number(group.memberCount ?? 0).toLocaleString()}</span></td>
+                    <td className={TD}><div className="font-bold text-slate-800">{Number(group.totals?.bills ?? 0).toLocaleString()}</div><div className="mt-0.5 text-xs text-slate-400">{money(group.totals?.amount)}</div></td>
+                    <td className={TD}><Badge value={group.status} /></td>
+                    <td className={TD}><button type="button" onClick={() => editGroup(group)} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800">Edit</button></td>
+                  </tr>;
+                })}
+                {!loading && !visibleGroups.length && <tr><td colSpan={7} className="px-4 py-12 text-center text-sm text-slate-400">No period groups match your search.</td></tr>}
+                {loading && <tr><td colSpan={7} className="px-4 py-12 text-center text-sm text-slate-400">Loading period groups…</td></tr>}
+              </tbody>
+            </table>
+          </div>
+          <Pagination page={safePage} totalPages={totalPages} total={filteredGroups.length} pageSize={pageSize} onPageChange={setPage} disabled={loading} label="groups" />
+        </Card>
+      </div>
     </Page>
   );
 }
