@@ -1,4 +1,4 @@
-import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { exportDailyReceiptsWorkbook, exportExcel, parseMeterWorkbook } from "../lib/meterFiles";
@@ -182,6 +182,7 @@ function CollectionTrendChart({ rows }: { rows: Row[] }) {
   const points = rows;
   const chartRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(700);
+  const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const height = width < 640 ? 250 : 300;
   const left = width < 480 ? 52 : 68;
   const right = width < 480 ? 16 : 24;
@@ -218,9 +219,33 @@ function CollectionTrendChart({ rows }: { rows: Row[] }) {
   const peakIndex = points.reduce((highest, row, index) => Number(row.amount ?? 0) > Number(points[highest]?.amount ?? 0) ? index : highest, 0);
   const compact = (value: number) => new Intl.NumberFormat("en-KE", { notation: "compact", maximumFractionDigits: 1 }).format(value);
   const shortDate = (value: string) => new Date(`${value}T00:00:00Z`).toLocaleDateString("en-GB", { day: "2-digit", month: "short", timeZone: "UTC" });
+  const fullDate = (value: string) => new Date(`${value}T00:00:00Z`).toLocaleDateString("en-KE", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC" });
   const period = points.length
     ? `${shortDate(String(points[0].date))} – ${shortDate(String(points[points.length - 1].date))}`
     : "Current period";
+  const activePoint = activeIndex === null ? null : coordinates[activeIndex];
+  const tooltipWidth = Math.min(205, width - 20);
+  const tooltipHeight = 92;
+  const tooltipX = activePoint
+    ? Math.min(width - tooltipWidth - 10, Math.max(10, activePoint.x - tooltipWidth / 2))
+    : 0;
+  const tooltipY = activePoint
+    ? activePoint.y - tooltipHeight - 18 < 8
+      ? Math.min(height - bottom - tooltipHeight - 8, activePoint.y + 18)
+      : activePoint.y - tooltipHeight - 18
+    : 0;
+  const activateNearestPoint = (event: ReactPointerEvent<SVGSVGElement>) => {
+    const matrix = event.currentTarget.getScreenCTM();
+    if (!matrix || !coordinates.length) return;
+    const cursor = new DOMPoint(event.clientX, event.clientY).matrixTransform(matrix.inverse());
+    const nearest = coordinates.reduce(
+      (best, point, index) => Math.abs(point.x - cursor.x) < best.distance
+        ? { index, distance: Math.abs(point.x - cursor.x) }
+        : best,
+      { index: 0, distance: Number.POSITIVE_INFINITY },
+    );
+    setActiveIndex(nearest.index);
+  };
   return (
     <Card title="Collection trend" className="flex h-full min-w-0 flex-col" contentClassName="flex min-h-0 flex-1 flex-col">
       <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
@@ -232,8 +257,18 @@ function CollectionTrendChart({ rows }: { rows: Row[] }) {
         <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">{period}</span>
       </div>
       {coordinates.length ? (
-        <div ref={chartRef} className="min-h-[250px] w-full min-w-0 flex-1 overflow-hidden rounded-xl border border-emerald-100/70 bg-gradient-to-b from-emerald-50/80 to-white">
-          <svg viewBox={`0 0 ${width} ${height}`} className="block h-full min-h-[250px] w-full" role="img" aria-label={`Daily collection trend from ${period}`}>
+        <div
+          ref={chartRef}
+          className="min-h-[250px] w-full min-w-0 flex-1 overflow-hidden rounded-xl border border-emerald-100/70 bg-gradient-to-b from-emerald-50/80 to-white"
+          onPointerLeave={() => setActiveIndex(null)}
+        >
+          <svg
+            viewBox={`0 0 ${width} ${height}`}
+            className="block h-full min-h-[250px] w-full touch-pan-y select-none"
+            role="img"
+            aria-label={`Daily collection trend from ${period}. Move across the chart or focus a data point for daily details.`}
+            onPointerMove={activateNearestPoint}
+          >
             <defs>
               <linearGradient id="payment-area" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor="#10b981" stopOpacity="0.3" />
@@ -257,10 +292,34 @@ function CollectionTrendChart({ rows }: { rows: Row[] }) {
             )}
             <path d={area} fill="url(#payment-area)" />
             {coordinates.length > 1 && <polyline points={line} fill="none" stroke="#059669" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />}
-            {coordinates.map((point, index) => (
-              <g key={point.date} className="group">
-                <title>{`${shortDate(String(point.date))}: ${money(point.amount)} · ${Number(point.count ?? 0)} payment${Number(point.count ?? 0) === 1 ? "" : "s"}`}</title>
-                <circle cx={point.x} cy={point.y} r={index === peakIndex ? 6 : 4.5} fill="white" stroke="#059669" strokeWidth={index === peakIndex ? 3.5 : 2.5} />
+            {coordinates.map((point, index) => {
+              const hitStart = index === 0 ? left : (coordinates[index - 1].x + point.x) / 2;
+              const hitEnd = index === coordinates.length - 1 ? width - right : (point.x + coordinates[index + 1].x) / 2;
+              return (
+              <g key={point.date}>
+                <rect
+                  x={hitStart}
+                  y={top}
+                  width={Math.max(1, hitEnd - hitStart)}
+                  height={plotHeight}
+                  fill="transparent"
+                  className="cursor-crosshair outline-none"
+                  tabIndex={0}
+                  role="button"
+                  aria-label={`${fullDate(String(point.date))}: ${money(point.amount)}, ${Number(point.count ?? 0)} payment${Number(point.count ?? 0) === 1 ? "" : "s"}`}
+                  onFocus={() => setActiveIndex(index)}
+                  onBlur={() => setActiveIndex(null)}
+                  onPointerDown={() => setActiveIndex(index)}
+                />
+                <circle
+                  cx={point.x}
+                  cy={point.y}
+                  r={activeIndex === index ? 7 : index === peakIndex ? 6 : 4.5}
+                  fill="white"
+                  stroke={activeIndex === index ? "#047857" : "#059669"}
+                  strokeWidth={activeIndex === index ? 4 : index === peakIndex ? 3.5 : 2.5}
+                  className="pointer-events-none transition-all"
+                />
                 {(index % labelStride === 0 || index === coordinates.length - 1) && (
                   <text x={point.x} y={height - 15} textAnchor="middle" className="fill-slate-500 text-[10px] font-medium">
                     {shortDate(String(point.date))}
@@ -272,8 +331,30 @@ function CollectionTrendChart({ rows }: { rows: Row[] }) {
                   </text>
                 )}
               </g>
-            ))}
+              );
+            })}
+            {activePoint && (
+              <g className="pointer-events-none" aria-hidden="true">
+                <line x1={activePoint.x} x2={activePoint.x} y1={top} y2={height - bottom} stroke="#059669" strokeWidth="1.5" strokeDasharray="4 4" opacity="0.5" />
+                <circle cx={activePoint.x} cy={activePoint.y} r="10" fill="#10b981" opacity="0.16" />
+                <g transform={`translate(${tooltipX} ${tooltipY})`}>
+                  <rect width={tooltipWidth} height={tooltipHeight} rx="10" fill="#0f172a" opacity="0.97" />
+                  <text x="12" y="20" fill="#cbd5e1" fontSize="10" fontWeight="600">{fullDate(String(activePoint.date))}</text>
+                  <text x="12" y="45" fill="white" fontSize="16" fontWeight="700">{money(activePoint.amount)}</text>
+                  <line x1="12" x2={tooltipWidth - 12} y1="56" y2="56" stroke="#334155" />
+                  <text x="12" y="75" fill="#a7f3d0" fontSize="10" fontWeight="600">
+                    {Number(activePoint.count ?? 0).toLocaleString("en-KE")} payment{Number(activePoint.count ?? 0) === 1 ? "" : "s"}
+                  </text>
+                  <text x={tooltipWidth - 12} y="75" textAnchor="end" fill="#cbd5e1" fontSize="10" fontWeight="600">
+                    {total > 0 ? `${((Number(activePoint.amount ?? 0) / total) * 100).toFixed(1)}% of period` : "0% of period"}
+                  </text>
+                </g>
+              </g>
+            )}
           </svg>
+          <span className="sr-only" aria-live="polite">
+            {activePoint ? `${fullDate(String(activePoint.date))}: ${money(activePoint.amount)} from ${Number(activePoint.count ?? 0)} payments.` : ""}
+          </span>
         </div>
       ) : (
         <div className="grid min-h-[250px] flex-1 place-items-center rounded-xl border border-dashed border-slate-200 bg-slate-50 text-sm text-slate-400">Collection activity will appear here.</div>
