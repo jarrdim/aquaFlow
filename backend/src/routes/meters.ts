@@ -152,6 +152,74 @@ function presentMeter(meter: any) {
   return { ...meter, assignment, assignedTo: target, latestReading: meter.readings?.[0] ?? null };
 }
 
+async function withDisconnectionDetails(meters: any[]) {
+  const meterIds = meters.map((meter) => meter.meterId);
+  if (!meterIds.length) return meters;
+  const details = await prisma.$queryRaw<any[]>`
+    SELECT m.meter_id AS "meterId",
+      COALESCE(
+        NULLIF(TRIM(disconnection.description),''),
+        NULLIF(TRIM(disconnection.completion_notes),''),
+        NULLIF(TRIM(disconnection_event.reason),''),
+        NULLIF(TRIM(disconnection_event.remarks),''),
+        'Not recorded'
+      ) AS "disconnectionReason",
+      COALESCE(
+        disconnection.closed_at,
+        disconnection.completed_at,
+        disconnection_event.event_date,
+        m.updated_at
+      ) AS "disconnectedAt",
+      disconnection.work_order_number AS "disconnectionWorkOrderNumber"
+    FROM aquaflow.meters m
+    LEFT JOIN LATERAL (
+      SELECT assignment.account_id
+      FROM aquaflow.meter_assignments assignment
+      WHERE assignment.meter_id=m.meter_id
+        AND assignment.assignment_status='ACTIVE'
+        AND assignment.removal_date IS NULL
+      ORDER BY assignment.assignment_date DESC,assignment.assignment_id DESC
+      LIMIT 1
+    ) active_assignment ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT work_order.work_order_number,work_order.description,
+        work_order.completion_notes,work_order.completed_at,work_order.closed_at
+      FROM aquaflow.work_orders work_order
+      JOIN aquaflow.work_order_types work_order_type
+        ON work_order_type.work_order_type_id=work_order.work_order_type_id
+      WHERE work_order.account_id=active_assignment.account_id
+        AND work_order_type.type_code='DISCONNECTION'
+        AND work_order.status IN ('COMPLETED','VERIFIED','CLOSED')
+      ORDER BY COALESCE(work_order.closed_at,work_order.completed_at,work_order.updated_at) DESC,
+        work_order.work_order_id DESC
+      LIMIT 1
+    ) disconnection ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT event.reason,event.remarks,event.event_date
+      FROM aquaflow.meter_events event
+      WHERE event.meter_id=m.meter_id
+        AND (
+          event.new_status='DISCONNECTED'
+          OR event.metadata->>'action'='DISCONNECTION'
+          OR event.metadata->>'source'='FIELD_APP_DISCONNECTION'
+        )
+      ORDER BY event.event_date DESC,event.event_id DESC
+      LIMIT 1
+    ) disconnection_event ON TRUE
+    WHERE m.meter_id IN (${Prisma.join(meterIds)})`;
+  const detailByMeterId = new Map(
+    details.map((detail) => [String(detail.meterId), detail]),
+  );
+  return meters.map((meter) => ({
+    ...meter,
+    ...(detailByMeterId.get(String(meter.meterId)) ?? {
+      disconnectionReason: "Not recorded",
+      disconnectedAt: meter.updatedAt,
+      disconnectionWorkOrderNumber: null,
+    }),
+  }));
+}
+
 function userId(req: Express.Request) {
   return req.user ? BigInt(req.user.userId) : null;
 }
@@ -484,6 +552,7 @@ metersRouter.get("/", async (req, res) => {
   const where: any = {};
   if (search) where.OR = [
     { meterNumber: { contains: search, mode: "insensitive" } }, { serialNumber: { contains: search, mode: "insensitive" } },
+    { assignments: { some: { account: { accountNumber: { contains: search, mode: "insensitive" } } } } },
     { assignments: { some: { account: { customer: { firstName: { contains: search, mode: "insensitive" } } } } } },
     { assignments: { some: { account: { customer: { middleName: { contains: search, mode: "insensitive" } } } } } },
     { assignments: { some: { account: { customer: { lastName: { contains: search, mode: "insensitive" } } } } } },
@@ -495,8 +564,12 @@ metersRouter.get("/", async (req, res) => {
     prisma.meter.findMany({ where, include: meterListInclude, orderBy: { createdAt: "desc" }, take: paginated ? pageSize : take, skip: paginated ? (page - 1) * pageSize : undefined }),
     paginated ? prisma.meter.count({ where }) : Promise.resolve(0),
   ]);
-  if (!paginated) return res.json(items.map(presentMeter));
-  res.json({ items: items.map(presentMeter), page, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) });
+  const presentedItems = items.map(presentMeter);
+  const responseItems = status === "DISCONNECTED"
+    ? await withDisconnectionDetails(presentedItems)
+    : presentedItems;
+  if (!paginated) return res.json(responseItems);
+  res.json({ items: responseItems, page, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) });
 });
 
 metersRouter.post("/", async (req, res) => {

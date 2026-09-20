@@ -138,6 +138,99 @@ function meterUrl(meter: AnyRecord) {
   return `/meters/${encodeId(meter.meterId)}`;
 }
 
+function escapePrintHtml(value: unknown) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+export async function printDisconnectedMeterRegister(
+  meters: AnyRecord[],
+  printedBy: string,
+) {
+  const rowsPerPage = 24;
+  const totalPages = Math.max(1, Math.ceil(meters.length / rowsPerPage));
+  const printedAt = new Date().toLocaleString("en-KE", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+  const pages = Array.from({ length: totalPages }, (_, pageIndex) => {
+    const rows = meters.slice(pageIndex * rowsPerPage, (pageIndex + 1) * rowsPerPage);
+    const tableRows = rows.map((meter, rowIndex) => {
+      const account = meter.assignment?.account;
+      return `<tr>
+        <td class="center">${pageIndex * rowsPerPage + rowIndex + 1}</td>
+        <td>${escapePrintHtml(account?.accountNumber)}</td>
+        <td>${escapePrintHtml(meter.assignedTo)}</td>
+        <td>${escapePrintHtml(meter.meterNumber)}</td>
+        <td>${escapePrintHtml(assignmentZone(meter))}</td>
+        <td>${escapePrintHtml(formatDmyDate(meter.disconnectedAt))}</td>
+        <td class="reason">${escapePrintHtml(meter.disconnectionReason || "Not recorded")}</td>
+      </tr>`;
+    }).join("");
+    return `<section class="sheet">
+      <header><h1>SAMDAMTE WATER</h1><h2>DISCONNECTED METERS REGISTER</h2></header>
+      <div class="summary"><span>Total disconnected meters: <strong>${meters.length.toLocaleString()}</strong></span><span>Page ${pageIndex + 1} of ${totalPages}</span></div>
+      <table>
+        <colgroup><col class="no"><col class="account"><col class="customer"><col class="meter"><col class="zone"><col class="date"><col class="reason"></colgroup>
+        <thead><tr><th>NO.</th><th>ACCOUNT NO.</th><th>CUSTOMER NAME</th><th>METER NO.</th><th>ZONE</th><th>DISCONNECTED ON</th><th>REASON</th></tr></thead>
+        <tbody>${tableRows}</tbody>
+      </table>
+      <footer>Printed by: ${escapePrintHtml(printedBy)} &nbsp;|&nbsp; Printed date and time: ${escapePrintHtml(printedAt)} &nbsp;|&nbsp; Page ${pageIndex + 1} of ${totalPages}</footer>
+    </section>`;
+  }).join("");
+  const source = `<!doctype html><html><head><meta charset="utf-8"><title>Disconnected Meters Register</title><style>
+    @page { size: A4 landscape; margin: 0; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: #fff; color: #000; font-family: Arial, Helvetica, sans-serif; }
+    .sheet { position: relative; width: 297mm; height: 210mm; padding: 10mm 10mm 9mm; overflow: hidden; break-after: page; page-break-after: always; }
+    .sheet:last-child { break-after: auto; page-break-after: auto; }
+    header { text-align: center; }
+    h1 { margin: 0; font-size: 15pt; line-height: 1.15; }
+    h2 { margin: 1.5mm 0 0; font-size: 12pt; line-height: 1.15; }
+    .summary { display: flex; justify-content: space-between; margin: 6mm 0 3mm; color: #444; font-size: 8pt; }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 7.5pt; }
+    col.no { width: 4%; } col.account { width: 11%; } col.customer { width: 18%; } col.meter { width: 13%; }
+    col.zone { width: 12%; } col.date { width: 13%; } col.reason { width: 29%; }
+    th { height: 8mm; padding: 1mm; border: .2mm solid #111; text-align: center; }
+    td { height: 5.7mm; padding: .8mm 1.2mm; overflow: hidden; border: .15mm solid #aaa; line-height: 1.15; white-space: nowrap; text-overflow: ellipsis; }
+    td.center { text-align: center; } td.reason { white-space: normal; }
+    footer { position: absolute; left: 10mm; bottom: 4mm; color: #60758f; font-size: 6.5pt; }
+  </style></head><body>${pages}</body></html>`;
+  const frame = document.createElement("iframe");
+  frame.setAttribute("aria-hidden", "true");
+  frame.style.position = "fixed";
+  frame.style.left = "-10000px";
+  frame.style.top = "0";
+  frame.style.width = "1123px";
+  frame.style.height = "794px";
+  frame.style.border = "0";
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = () => frame.remove();
+    frame.onload = () => window.setTimeout(() => {
+      if (!frame.contentWindow) {
+        cleanup();
+        reject(new Error("The browser could not open the print preview."));
+        return;
+      }
+      frame.contentWindow.addEventListener("afterprint", cleanup, { once: true });
+      frame.contentWindow.focus();
+      frame.contentWindow.print();
+      window.setTimeout(cleanup, 60_000);
+      resolve();
+    }, 100);
+    frame.onerror = () => {
+      cleanup();
+      reject(new Error("The browser could not prepare the print preview."));
+    };
+    frame.srcdoc = source;
+    document.body.appendChild(frame);
+  });
+}
+
 function Button({
   children,
   tone = "blue",
@@ -789,6 +882,7 @@ export function RegisterMeter() {
 }
 
 export function MeterList({ initialStatus = "" }: { initialStatus?: string }) {
+  const disconnectedView = initialStatus === "DISCONNECTED";
   const [meters, setMeters] = useState<AnyRecord[]>([]);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
@@ -839,6 +933,16 @@ export function MeterList({ initialStatus = "" }: { initialStatus?: string }) {
     return all;
   }
   function exportRows(rows: AnyRecord[]): Record<string, unknown>[] {
+    if (disconnectedView) {
+      return rows.map((meter) => ({
+        "Account Number": meter.assignment?.account?.accountNumber ?? "",
+        "Customer Name": meter.assignedTo ?? "",
+        "Meter Number": meter.meterNumber,
+        Zone: assignmentZone(meter),
+        "Disconnected On": meter.disconnectedAt ? formatDmyDate(meter.disconnectedAt) : "",
+        "Disconnection Reason": meter.disconnectionReason ?? "Not recorded",
+      }));
+    }
     return rows.map((m) => ({
       "Meter Number": m.meterNumber,
       Type: pretty(m.meterType),
@@ -852,9 +956,9 @@ export function MeterList({ initialStatus = "" }: { initialStatus?: string }) {
     setExporting(format); setError("");
     try {
       const rows = exportRows(await allFilteredMeters());
-      const baseName = initialStatus === "DISCONNECTED" ? "disconnected-meters" : "meter-register";
+      const baseName = disconnectedView ? "disconnected-meters" : "meter-register";
       if (format === "excel") {
-        await exportExcel(`${baseName}.xlsx`, initialStatus === "DISCONNECTED" ? "Disconnected Meters" : "Meter Register", rows);
+        await exportExcel(`${baseName}.xlsx`, disconnectedView ? "Disconnected Meters" : "Meter Register", rows);
       } else if (rows.length) {
         const headers = Object.keys(rows[0]);
         const escape = (value: unknown) => `"${String(value ?? "").replace(/"/g, '""')}"`;
@@ -868,10 +972,23 @@ export function MeterList({ initialStatus = "" }: { initialStatus?: string }) {
     } catch (err: any) { setError(err.message); }
     finally { setExporting(""); }
   }
+  async function printDisconnectedMeters() {
+    setExporting("print"); setError("");
+    try {
+      const sessionUser = getSessionUser();
+      const printedBy = [sessionUser?.firstName, sessionUser?.lastName]
+        .filter(Boolean)
+        .join(" ") || sessionUser?.username || "Signed-in user";
+      await printDisconnectedMeterRegister(await allFilteredMeters(), printedBy);
+    } catch (err: any) { setError(err.message); }
+    finally { setExporting(""); }
+  }
   return (
     <Page
-      title={initialStatus === "DISCONNECTED" ? "Disconnected meters" : "Meter register"}
-      subtitle={`${total.toLocaleString()} meters found`}
+      title={disconnectedView ? "Disconnected meters" : "Meter register"}
+      subtitle={disconnectedView
+        ? `${total.toLocaleString()} disconnected meters with recorded disconnection details`
+        : `${total.toLocaleString()} meters found`}
       actions={
         <>
           <LinkButton to="/meters/register">Register meter</LinkButton>
@@ -910,6 +1027,7 @@ export function MeterList({ initialStatus = "" }: { initialStatus?: string }) {
             <SearchableSelect
               className={INPUT}
               value={filters.status}
+              disabled={disconnectedView}
               onChange={(e) =>
                 setFilters({ ...filters, status: e.target.value })
               }
@@ -957,42 +1075,46 @@ export function MeterList({ initialStatus = "" }: { initialStatus?: string }) {
         {loading ? (
           <Spinner />
         ) : meters.length ? (
-          <Table
-            headers={[
-              "Meter no.",
-              "Type",
-              "Size",
-              "Assigned to",
-              "Zone",
-              "Status",
-              "Action",
-            ]}
-          >
-            {meters.map((m) => (
-              <tr key={m.meterId} className="hover:bg-slate-50">
-                <td className={`${TD} font-semibold text-slate-800`}>
-                  {m.meterNumber}
-                </td>
-                <td className={TD}>{pretty(m.meterType)}</td>
-                <td className={TD}>{displaySize(m.meterSizeMm)}</td>
-                <td className={TD}>{m.assignedTo ?? "—"}</td>
-                <td className={TD}>{assignmentZone(m)}</td>
-                <td className={TD}>
-                  <Status value={m.status} />
-                </td>
-                <td className={TD}>
-                  <Link
-                    className="font-semibold text-aqua-700 hover:underline"
-                    to={meterUrl(m)}
-                  >
-                    View
-                  </Link>
-                </td>
-              </tr>
-            ))}
-          </Table>
+          disconnectedView ? (
+            <Table headers={["Account no.", "Customer", "Meter no.", "Zone", "Disconnected on", "Reason", "Action"]}>
+              {meters.map((meter) => (
+                <tr key={meter.meterId} className="align-top hover:bg-slate-50">
+                  <td className={`${TD} font-semibold text-slate-800`}>{meter.assignment?.account?.accountNumber ?? "—"}</td>
+                  <td className={TD}>{meter.assignedTo ?? "—"}</td>
+                  <td className={`${TD} font-semibold text-slate-800`}>{meter.meterNumber}</td>
+                  <td className={TD}>{assignmentZone(meter)}</td>
+                  <td className={`${TD} whitespace-nowrap`}>{meter.disconnectedAt ? formatDmyDate(meter.disconnectedAt) : "—"}</td>
+                  <td className={`${TD} max-w-md whitespace-normal text-slate-700`}>
+                    <span className="font-medium">{meter.disconnectionReason || "Not recorded"}</span>
+                    {meter.disconnectionWorkOrderNumber && (
+                      <span className="mt-1 block text-xs text-slate-400">{meter.disconnectionWorkOrderNumber}</span>
+                    )}
+                  </td>
+                  <td className={TD}>
+                    <Link className="font-semibold text-aqua-700 hover:underline" to={meterUrl(meter)}>View</Link>
+                  </td>
+                </tr>
+              ))}
+            </Table>
+          ) : (
+            <Table headers={["Meter no.", "Type", "Size", "Assigned to", "Zone", "Status", "Action"]}>
+              {meters.map((m) => (
+                <tr key={m.meterId} className="hover:bg-slate-50">
+                  <td className={`${TD} font-semibold text-slate-800`}>{m.meterNumber}</td>
+                  <td className={TD}>{pretty(m.meterType)}</td>
+                  <td className={TD}>{displaySize(m.meterSizeMm)}</td>
+                  <td className={TD}>{m.assignedTo ?? "—"}</td>
+                  <td className={TD}>{assignmentZone(m)}</td>
+                  <td className={TD}><Status value={m.status} /></td>
+                  <td className={TD}>
+                    <Link className="font-semibold text-aqua-700 hover:underline" to={meterUrl(m)}>View</Link>
+                  </td>
+                </tr>
+              ))}
+            </Table>
+          )
         ) : (
-          <Empty text="No meters match these filters." />
+          <Empty text={disconnectedView ? "No disconnected meters match these filters." : "No meters match these filters."} />
         )}
         {total > 0 && (
           <Pagination
@@ -1020,8 +1142,12 @@ export function MeterList({ initialStatus = "" }: { initialStatus?: string }) {
           >
             {exporting === "csv" ? "Exporting…" : "Export CSV"}
           </Button>
-          <Button tone="slate" onClick={() => window.print()}>
-            Print register
+          <Button
+            tone="slate"
+            disabled={Boolean(exporting) || total === 0}
+            onClick={() => disconnectedView ? void printDisconnectedMeters() : window.print()}
+          >
+            {exporting === "print" ? "Preparing print…" : disconnectedView ? "Print disconnected meters" : "Print register"}
           </Button>
         </div>
       </Card>
