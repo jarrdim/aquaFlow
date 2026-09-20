@@ -433,7 +433,6 @@ export async function exportMeterReadingZonePdf(
   zoneSheets: MeterReadingZoneSheet[],
   _logoUrl = "/samdamte-water-logo-print.png",
   printedBy = "Signed-in user",
-  preparedPrintWindow?: Window | null,
 ) {
   if (!zoneSheets.length) return;
   const { PDFDocument, StandardFonts, rgb } = await import("pdf-lib");
@@ -610,26 +609,45 @@ export async function exportMeterReadingZonePdf(
   const pdfUrl = URL.createObjectURL(
     new Blob([pdfBytes], { type: "application/pdf" }),
   );
-  const printWindow = preparedPrintWindow ?? window.open("", "_blank");
-  if (!printWindow) {
-    URL.revokeObjectURL(pdfUrl);
-    throw new Error("The print window was blocked. Allow pop-ups for this site and try again.");
-  }
-  let printAttempted = false;
-  const openPrintDialog = () => {
-    if (printAttempted || printWindow.closed) return;
-    printAttempted = true;
-    try {
+  const printFrame = document.createElement("iframe");
+  printFrame.setAttribute("aria-hidden", "true");
+  printFrame.style.position = "fixed";
+  printFrame.style.left = "-10000px";
+  printFrame.style.top = "0";
+  printFrame.style.width = "595px";
+  printFrame.style.height = "842px";
+  printFrame.style.border = "0";
+  printFrame.style.zIndex = "-1";
+  await new Promise<void>((resolve, reject) => {
+    let printAttempted = false;
+    const cleanup = () => {
+      printFrame.remove();
+      URL.revokeObjectURL(pdfUrl);
+    };
+    const openPrintDialog = () => {
+      if (printAttempted) return;
+      const printWindow = printFrame.contentWindow;
+      if (!printWindow) {
+        cleanup();
+        reject(new Error("The browser could not open the print preview."));
+        return;
+      }
+      printAttempted = true;
+      printWindow.addEventListener("afterprint", cleanup, { once: true });
       printWindow.focus();
       printWindow.print();
-    } catch {
-      // The PDF remains open so the browser's own Print control is available.
-    }
-  };
-  printWindow.addEventListener("load", openPrintDialog, { once: true });
-  printWindow.location.replace(pdfUrl);
-  window.setTimeout(openPrintDialog, 1_500);
-  window.setTimeout(() => URL.revokeObjectURL(pdfUrl), 300_000);
+      window.setTimeout(cleanup, 60_000);
+      resolve();
+    };
+    printFrame.onload = () => window.setTimeout(openPrintDialog, 500);
+    printFrame.onerror = () => {
+      cleanup();
+      reject(new Error("The browser could not load the print preview."));
+    };
+    printFrame.src = pdfUrl;
+    document.body.appendChild(printFrame);
+    window.setTimeout(openPrintDialog, 2_000);
+  });
 }
 
 
