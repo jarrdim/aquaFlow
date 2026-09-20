@@ -275,6 +275,126 @@ export interface MeterReadingZoneSheet {
   rows: Record<string, unknown>[];
 }
 
+function escapePrintHtml(value: unknown) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+export async function printMeterReadingZoneSheets(
+  zoneSheets: MeterReadingZoneSheet[],
+  printedBy = "Signed-in user",
+) {
+  if (!zoneSheets.length) return;
+  const rowsPerPage = 48;
+  const printPages = zoneSheets.flatMap((group) => {
+    const pageCount = Math.max(1, Math.ceil(group.rows.length / rowsPerPage));
+    return Array.from({ length: pageCount }, (_, pageIndex) => ({
+      group,
+      pageIndex,
+      pageCount,
+      rows: group.rows.slice(pageIndex * rowsPerPage, (pageIndex + 1) * rowsPerPage),
+    }));
+  });
+  const printedAt = new Date().toLocaleString("en-KE", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+  const pagesHtml = printPages.map(({ group, pageIndex, pageCount, rows }, globalPageIndex) => {
+    const area = [group.zoneName, ...group.areaNames].filter(Boolean).join(" / ");
+    const reader = group.readerNames.length ? group.readerNames.join(", ") : "";
+    const tableRows = rows.map((row, rowIndex) => `
+      <tr>
+        <td class="center">${pageIndex * rowsPerPage + rowIndex + 1}</td>
+        <td class="center">${escapePrintHtml(row["Account Number"])}</td>
+        <td>${escapePrintHtml(row["Customer Names"])}</td>
+        <td class="number">${escapePrintHtml(row["Previous Reading"])}</td>
+        <td class="number">${escapePrintHtml(row["Meter Reading"])}</td>
+        <td>${escapePrintHtml(row.Comment)}</td>
+      </tr>`).join("");
+    return `
+      <section class="sheet">
+        <div class="zone-page">Zone sheet ${pageIndex + 1} of ${pageCount}</div>
+        <header>
+          <h1>SAMDAMTE WATER</h1>
+          <h2>READING SHEETS FOR ${escapePrintHtml(group.readingCycle).toUpperCase()}</h2>
+        </header>
+        <div class="meta">
+          <div><span>AREA / ZONE:</span><strong>${escapePrintHtml(area)}</strong></div>
+          <div><span>METER READER:</span><strong class="reader">${escapePrintHtml(reader)}</strong></div>
+          <div><span>READING DATE:</span><strong>${escapePrintHtml(group.readingDate)}</strong></div>
+        </div>
+        <table>
+          <colgroup><col class="no"><col class="account"><col class="customer"><col class="previous"><col class="reading"><col class="comment"></colgroup>
+          <thead><tr><th>NO.</th><th>ACCOUNT NO.</th><th>CUSTOMER NAME</th><th>PREVIOUS</th><th>METER READING</th><th>COMMENT</th></tr></thead>
+          <tbody>${tableRows}</tbody>
+        </table>
+        <footer>Printed by: ${escapePrintHtml(printedBy)} &nbsp;|&nbsp; Printed date and time: ${escapePrintHtml(printedAt)} &nbsp;|&nbsp; Page ${globalPageIndex + 1} of ${printPages.length}</footer>
+      </section>`;
+  }).join("");
+  const printDocument = `<!doctype html>
+    <html><head><meta charset="utf-8"><title>Meter Reading Sheets</title><style>
+      @page { size: A4 portrait; margin: 0; }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; padding: 0; background: #fff; color: #000; font-family: Arial, Helvetica, sans-serif; }
+      .sheet { position: relative; width: 210mm; height: 297mm; padding: 12mm 10mm 10mm; overflow: hidden; break-after: page; page-break-after: always; }
+      .sheet:last-child { break-after: auto; page-break-after: auto; }
+      .zone-page { position: absolute; top: 8mm; right: 10mm; color: #444; font-size: 7pt; }
+      header { margin-top: 9mm; text-align: center; }
+      h1 { margin: 0; font-size: 14pt; line-height: 1.15; }
+      h2 { margin: 1.5mm 0 0; font-size: 12pt; line-height: 1.15; }
+      .meta { display: grid; grid-template-columns: repeat(3, 1fr); align-items: baseline; margin: 11mm 2mm 6mm; font-size: 7pt; text-align: center; white-space: nowrap; }
+      .meta span { color: #555; font-weight: 700; }
+      .meta strong { margin-left: 1.5mm; font-size: 9pt; }
+      .meta .reader { display: inline-block; min-width: 28mm; padding: 0 1mm .5mm; border-bottom: .2mm solid #000; }
+      table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 7pt; }
+      col.no { width: 6.4%; } col.account { width: 13.7%; } col.customer { width: 27.4%; }
+      col.previous { width: 12.8%; } col.reading { width: 14.6%; } col.comment { width: 25.1%; }
+      th { height: 7mm; padding: 1mm; border: .2mm solid #111; font-size: 7pt; text-align: center; }
+      td { height: 4.55mm; padding: .55mm 1mm; overflow: hidden; border: .15mm solid #aaa; line-height: 1; white-space: nowrap; text-overflow: ellipsis; }
+      td.center { text-align: center; } td.number { text-align: right; }
+      footer { position: absolute; left: 10mm; bottom: 5mm; color: #60758f; font-size: 6.5pt; }
+    </style></head><body>${pagesHtml}</body></html>`;
+
+  const printFrame = document.createElement("iframe");
+  printFrame.setAttribute("aria-hidden", "true");
+  printFrame.style.position = "fixed";
+  printFrame.style.left = "-10000px";
+  printFrame.style.top = "0";
+  printFrame.style.width = "794px";
+  printFrame.style.height = "1123px";
+  printFrame.style.border = "0";
+  await new Promise<void>((resolve, reject) => {
+    let printAttempted = false;
+    const cleanup = () => printFrame.remove();
+    const openPrintDialog = () => {
+      if (printAttempted) return;
+      const printWindow = printFrame.contentWindow;
+      if (!printWindow) {
+        cleanup();
+        reject(new Error("The browser could not open the print preview."));
+        return;
+      }
+      printAttempted = true;
+      printWindow.addEventListener("afterprint", cleanup, { once: true });
+      printWindow.focus();
+      printWindow.print();
+      window.setTimeout(cleanup, 60_000);
+      resolve();
+    };
+    printFrame.onload = () => window.setTimeout(openPrintDialog, 100);
+    printFrame.onerror = () => {
+      cleanup();
+      reject(new Error("The browser could not prepare the print preview."));
+    };
+    printFrame.srcdoc = printDocument;
+    document.body.appendChild(printFrame);
+  });
+}
+
 function safeWorksheetName(name: string, usedNames: Set<string>) {
   const base = name.replace(/[\\/*?:[\]]/g, " ").replace(/\s+/g, " ").trim() || "Unassigned zone";
   let candidate = base.slice(0, 31);

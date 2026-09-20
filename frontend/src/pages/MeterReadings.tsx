@@ -3,10 +3,10 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, getSessionUser } from "../lib/api";
 import {
   exportExcel,
-  exportMeterReadingZonePdf,
   exportMeterReadingZoneWorkbook,
   openEvidence,
   parseMeterWorkbook,
+  printMeterReadingZoneSheets,
 } from "../lib/meterFiles";
 import { CheckboxMultiSelect } from "../components/CheckboxMultiSelect";
 import { SearchableSelect } from "../components/SearchableSelect";
@@ -3154,10 +3154,8 @@ export function ReadingWorklist() {
             .join(" ") ||
           sessionUser?.username ||
           "Signed-in user";
-        await exportMeterReadingZonePdf(
-          `meter-reading-sheets-${cycleCode}.pdf`,
+        await printMeterReadingZoneSheets(
           zoneSheets,
-          "/samdamte-water-logo-print.png",
           printedBy,
         );
       } else {
