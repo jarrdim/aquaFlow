@@ -548,7 +548,7 @@ metersRouter.get("/", async (req, res) => {
     : undefined;
   const paginated = req.query.page !== undefined || req.query.pageSize !== undefined;
   const page = Math.max(1, Number(req.query.page) || 1);
-  const pageSize = Math.min(100, Math.max(10, Number(req.query.pageSize) || 25));
+  const pageSize = Math.min(200, Math.max(10, Number(req.query.pageSize) || 25));
   const where: any = {};
   if (search) where.OR = [
     { meterNumber: { contains: search, mode: "insensitive" } }, { serialNumber: { contains: search, mode: "insensitive" } },

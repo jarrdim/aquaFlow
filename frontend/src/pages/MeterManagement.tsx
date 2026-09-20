@@ -887,8 +887,11 @@ export function MeterList({ initialStatus = "" }: { initialStatus?: string }) {
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
-  const pageSize = 25;
+  const [pageSize, setPageSize] = useState(50);
   const [zones, setZones] = useState<AnyRecord[]>([]);
+  const [meterOptions, setMeterOptions] = useState<AnyRecord[]>([]);
+  const [meterOptionSearch, setMeterOptionSearch] = useState("");
+  const [loadingMeterOptions, setLoadingMeterOptions] = useState(disconnectedView);
   const [filters, setFilters] = useState({
     search: "",
     type: "",
@@ -898,13 +901,13 @@ export function MeterList({ initialStatus = "" }: { initialStatus?: string }) {
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState("");
   const [error, setError] = useState("");
-  function load(nextPage = page) {
+  function load(nextPage = page, nextPageSize = pageSize) {
     setLoading(true);
     Promise.all([
       api.listMeters({
         ...filters,
         page: String(nextPage),
-        pageSize: String(pageSize),
+        pageSize: String(nextPageSize),
       }),
       zones.length ? Promise.resolve(zones) : api.listZones(),
     ])
@@ -922,6 +925,41 @@ export function MeterList({ initialStatus = "" }: { initialStatus?: string }) {
   useEffect(() => {
     load(1);
   }, []);
+  useEffect(() => {
+    if (!disconnectedView) return;
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      setLoadingMeterOptions(true);
+      try {
+        const result = await api.listMeters({
+          search: meterOptionSearch,
+          status: "DISCONNECTED",
+          page: "1",
+          pageSize: "75",
+        });
+        if (cancelled) return;
+        setMeterOptions((current) => {
+          const unique = new Map<string, AnyRecord>();
+          [...current, ...(result.items ?? [])].forEach((meter) =>
+            unique.set(String(meter.meterId), meter),
+          );
+          return Array.from(unique.values()).sort((a, b) =>
+            String(a.assignment?.account?.accountNumber ?? a.meterNumber).localeCompare(
+              String(b.assignment?.account?.accountNumber ?? b.meterNumber),
+            ),
+          );
+        });
+      } catch (e: any) {
+        if (!cancelled) setError(e.message);
+      } finally {
+        if (!cancelled) setLoadingMeterOptions(false);
+      }
+    }, meterOptionSearch ? 250 : 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [disconnectedView, meterOptionSearch]);
   async function allFilteredMeters() {
     const first = await api.listMeters({ ...filters, page: "1", pageSize: "100" });
     const all = [...(first.items ?? [])];
@@ -991,6 +1029,13 @@ export function MeterList({ initialStatus = "" }: { initialStatus?: string }) {
         : `${total.toLocaleString()} meters found`}
       actions={
         <>
+          <Button
+            tone="slate"
+            disabled={Boolean(exporting) || total === 0}
+            onClick={() => disconnectedView ? void printDisconnectedMeters() : window.print()}
+          >
+            {exporting === "print" ? "Preparing print…" : disconnectedView ? "Print disconnected meters" : "Print register"}
+          </Button>
           <LinkButton to="/meters/register">Register meter</LinkButton>
           <LinkButton to="/meters/assign" tone="green">
             Assign meter
@@ -1001,15 +1046,39 @@ export function MeterList({ initialStatus = "" }: { initialStatus?: string }) {
       <Card className="mb-5">
         <div className="grid gap-3 md:grid-cols-5">
           <Field label="Search">
-            <input
-              className={INPUT}
-              placeholder="Meter, serial or customer"
-              value={filters.search}
-              onChange={(e) =>
-                setFilters({ ...filters, search: e.target.value })
-              }
-              onKeyDown={(e) => e.key === "Enter" && load(1)}
-            />
+            {disconnectedView ? (
+              <SearchableSelect
+                className={INPUT}
+                disabled={loadingMeterOptions && !meterOptions.length}
+                value={filters.search}
+                onSearchQuery={setMeterOptionSearch}
+                onChange={(e) => {
+                  setFilters({ ...filters, search: e.target.value });
+                  setMeterOptionSearch("");
+                }}
+              >
+                <option value="">
+                  {loadingMeterOptions && !meterOptions.length
+                    ? "Loading disconnected meters..."
+                    : "All disconnected meters"}
+                </option>
+                {meterOptions.map((meter) => (
+                  <option key={meter.meterId} value={meter.meterNumber}>
+                    {meter.assignment?.account?.accountNumber ?? "No account"} - {meter.assignedTo ?? "No customer"} - {meter.meterNumber}
+                  </option>
+                ))}
+              </SearchableSelect>
+            ) : (
+              <input
+                className={INPUT}
+                placeholder="Meter, serial or customer"
+                value={filters.search}
+                onChange={(e) =>
+                  setFilters({ ...filters, search: e.target.value })
+                }
+                onKeyDown={(e) => e.key === "Enter" && load(1)}
+              />
+            )}
           </Field>
           <Field label="Type">
             <SearchableSelect
@@ -1072,6 +1141,23 @@ export function MeterList({ initialStatus = "" }: { initialStatus?: string }) {
       </Card>
       {error && <Notice>{error}</Notice>}
       <Card>
+        <div className="mb-3 flex items-center justify-end gap-2">
+          <span className="text-sm font-medium text-slate-500">Rows per page</span>
+          <SearchableSelect
+            className={`${INPUT} w-24`}
+            disabled={loading}
+            value={String(pageSize)}
+            onChange={(event) => {
+              const nextPageSize = Number(event.target.value);
+              setPageSize(nextPageSize);
+              load(1, nextPageSize);
+            }}
+          >
+            {[10, 50, 100, 200].map((size) => (
+              <option key={size} value={size}>{size}</option>
+            ))}
+          </SearchableSelect>
+        </div>
         {loading ? (
           <Spinner />
         ) : meters.length ? (
