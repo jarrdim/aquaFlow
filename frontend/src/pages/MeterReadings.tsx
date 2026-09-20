@@ -3834,7 +3834,7 @@ export function ReadingWorklist() {
             disabled={!cycleId || !worklistTotal || Boolean(operation)}
             onClick={() => exportWorklist("pdf")}
           >
-            Export PDF
+            Print PDF
           </Button>
           <Button
             tone="green"

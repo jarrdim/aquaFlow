@@ -429,7 +429,7 @@ export async function exportMeterReadingZoneWorkbook(
 }
 
 export async function exportMeterReadingZonePdf(
-  filename: string,
+  _filename: string,
   zoneSheets: MeterReadingZoneSheet[],
   _logoUrl = "/samdamte-water-logo-print.png",
   printedBy = "Signed-in user",
@@ -519,22 +519,40 @@ export async function exportMeterReadingZonePdf(
       const metaWidth = tableWidth / 3;
       meta.forEach(([label, value], index) => {
         const x = margin + index * metaWidth;
-        const fittedLabel = fit(label, metaWidth - 24, 7, bold);
-        const fittedValue = fit(value, metaWidth - 24, 9, bold);
+        const fittedLabel = `${fit(label, metaWidth - 24, 7, bold)}:`;
+        const labelWidth = bold.widthOfTextAtSize(fittedLabel, 7);
+        const fittedValue = fit(value, metaWidth - labelWidth - 18, 9, bold);
+        const valueWidth = bold.widthOfTextAtSize(fittedValue, 9);
+        const contentWidth = labelWidth + 5 + valueWidth;
+        const contentX = x + Math.max(4, (metaWidth - contentWidth) / 2);
+        const baselineY = metaY + 10;
         page.drawText(fittedLabel, {
-          x: x + (metaWidth - 8 - bold.widthOfTextAtSize(fittedLabel, 7)) / 2,
-          y: metaY + 21,
+          x: contentX,
+          y: baselineY + 0.5,
           size: 7,
           font: bold,
           color: muted,
         });
         page.drawText(fittedValue, {
-          x: x + (metaWidth - 8 - bold.widthOfTextAtSize(fittedValue, 9)) / 2,
-          y: metaY + 8,
+          x: contentX + labelWidth + 5,
+          y: baselineY,
           size: 9,
           font: bold,
           color: ink,
         });
+        if (index === 1) {
+          const underlineWidth = Math.min(
+            metaWidth - labelWidth - 14,
+            Math.max(90, valueWidth),
+          );
+          const underlineX = contentX + labelWidth + 5 - Math.max(0, (underlineWidth - valueWidth) / 2);
+          page.drawLine({
+            start: { x: underlineX, y: baselineY - 2.5 },
+            end: { x: underlineX + underlineWidth, y: baselineY - 2.5 },
+            thickness: 0.6,
+            color: ink,
+          });
+        }
       });
 
       const headerY = metaY - 31;
@@ -588,13 +606,35 @@ export async function exportMeterReadingZonePdf(
   const bytes = await pdf.save();
   const pdfBytes = new Uint8Array(bytes.byteLength);
   pdfBytes.set(bytes);
-  const link = document.createElement("a");
-  link.href = URL.createObjectURL(
+  const pdfUrl = URL.createObjectURL(
     new Blob([pdfBytes], { type: "application/pdf" }),
   );
-  link.download = filename.endsWith(".pdf") ? filename : `${filename}.pdf`;
-  link.click();
-  URL.revokeObjectURL(link.href);
+  const printFrame = document.createElement("iframe");
+  printFrame.setAttribute("aria-hidden", "true");
+  printFrame.style.position = "fixed";
+  printFrame.style.right = "0";
+  printFrame.style.bottom = "0";
+  printFrame.style.width = "0";
+  printFrame.style.height = "0";
+  printFrame.style.border = "0";
+  const cleanup = () => {
+    printFrame.remove();
+    URL.revokeObjectURL(pdfUrl);
+  };
+  printFrame.onload = () => {
+    window.setTimeout(() => {
+      const printWindow = printFrame.contentWindow;
+      if (!printWindow) {
+        cleanup();
+        return;
+      }
+      printWindow.focus();
+      printWindow.print();
+      window.setTimeout(cleanup, 60_000);
+    }, 250);
+  };
+  printFrame.src = pdfUrl;
+  document.body.appendChild(printFrame);
 }
 
 
