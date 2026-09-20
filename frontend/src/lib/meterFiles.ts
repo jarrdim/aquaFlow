@@ -455,13 +455,11 @@ export async function exportMeterReadingZonePdf(
     align?: "left" | "center" | "right";
   }> = [
     { label: "NO.", key: "Serial Number", width: 35, align: "center" },
-    { label: "ACCOUNT NO.", key: "Account Number", width: 70 },
-    { label: "CUSTOMER NAMES", key: "Customer Names", width: 110, align: "left" },
-    { label: "STATUS", key: "Account Status", width: 52 },
-    { label: "PREVIOUS", key: "Previous Reading", width: 62, align: "right" },
-    { label: "METER READING", key: "Meter Reading", width: 70, align: "right" },
-    { label: "METER WARNING", key: "Meter Warning", width: 100 },
-    { label: "COMMENT", key: "Comment", width: tableWidth - 499 },
+    { label: "ACCOUNT NO.", key: "Account Number", width: 75 },
+    { label: "CUSTOMER NAME", key: "Customer Names", width: 150, align: "left" },
+    { label: "PREVIOUS", key: "Previous Reading", width: 70, align: "right" },
+    { label: "METER READING", key: "Meter Reading", width: 80, align: "right" },
+    { label: "COMMENT", key: "Comment", width: tableWidth - 410 },
   ];
   const text = (value: unknown) => String(value ?? "");
   const fit = (value: unknown, width: number, size: number, font = regular) => {
@@ -521,7 +519,6 @@ export async function exportMeterReadingZonePdf(
       const metaWidth = tableWidth / 3;
       meta.forEach(([label, value], index) => {
         const x = margin + index * metaWidth;
-        page.drawRectangle({ x, y: metaY, width: metaWidth - 8, height: 34, color: paper, borderColor: border, borderWidth: 0.6 });
         const fittedLabel = fit(label, metaWidth - 24, 7, bold);
         const fittedValue = fit(value, metaWidth - 24, 9, bold);
         page.drawText(fittedLabel, {

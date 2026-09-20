@@ -287,8 +287,7 @@ readingsRouter.get("/cycles", async (req, res, next) => {
       },
       include: { billingPeriodGroup: true, creator: true, _count: { select: { readings: true, routeAssignments: true } } },
       orderBy: [
-        { startDate: "desc" },
-        { endDate: "desc" },
+        { createdAt: "desc" },
         { readingCycleId: "desc" },
       ],
     });
