@@ -3012,6 +3012,16 @@ export function ReadingWorklist() {
 
   async function exportWorklist(format: "excel" | "pdf") {
     if (!worklistTotal || operation) return;
+    const preparedPrintWindow = format === "pdf" ? window.open("", "_blank") : null;
+    if (format === "pdf" && !preparedPrintWindow) {
+      setError("The print window was blocked. Allow pop-ups for this site and try again.");
+      return;
+    }
+    if (preparedPrintWindow) {
+      preparedPrintWindow.document.title = "Preparing meter reading sheets";
+      preparedPrintWindow.document.body.innerHTML =
+        '<p style="font: 600 16px system-ui; padding: 32px; color: #334155">Preparing meter reading sheets for printing&hellip;</p>';
+    }
     setError("");
     setOperation(`Preparing ${format === "pdf" ? "PDF" : "Excel"} reading sheets`);
     setOperationProgress(10);
@@ -3023,9 +3033,12 @@ export function ReadingWorklist() {
         cycleScope,
         routeIds: routeIds.join(","),
         search: [search.trim(), quickSearch.trim()].filter(Boolean).join(" "),
+        status: readingStatus,
+        compact: "true",
         missedCycleId:
           readingStatus === "MISSED_CLOSED" ? effectiveMissedCycleId : "",
       });
+      setOperationProgress(35);
       const exportItems = (allItems as Row[]).filter((item) => {
         if (readingStatus === "UNREAD") return !item.cycleReading;
         if (readingStatus === "MISSED_CLOSED")
@@ -3156,6 +3169,7 @@ export function ReadingWorklist() {
           zoneSheets,
           "/samdamte-water-logo-print.png",
           printedBy,
+          preparedPrintWindow,
         );
       } else {
         await exportMeterReadingZoneWorkbook(
@@ -3166,6 +3180,7 @@ export function ReadingWorklist() {
       }
       setOperationProgress(100);
     } catch (e: any) {
+      preparedPrintWindow?.close();
       setError(`Could not export the worklist: ${e.message}`);
     } finally {
       setOperation("");

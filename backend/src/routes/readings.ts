@@ -771,6 +771,7 @@ readingsRouter.get("/worklist", async (req, res, next) => {
     const search = String(req.query.search ?? "").trim();
     const quickSearch = String(req.query.quickSearch ?? "").trim();
     const paginated = String(req.query.paginated ?? "") === "true";
+    const compact = String(req.query.compact ?? "") === "true";
     const page = Math.max(1, Number.parseInt(String(req.query.page ?? "1"), 10) || 1);
     const pageSize = Math.min(200, Math.max(10, Number.parseInt(String(req.query.pageSize ?? "50"), 10) || 50));
     const status = String(req.query.status ?? "");
@@ -894,6 +895,17 @@ readingsRouter.get("/worklist", async (req, res, next) => {
           where: readingScope,
           select: { accountId: true, meterId: true, readingCycleId: true },
         })
+      : compact
+        ? prisma.meterReading.findMany({
+            where: readingScope,
+            select: {
+              accountId: true,
+              meterId: true,
+              readingCycleId: true,
+              previousReading: true,
+              currentReading: true,
+            },
+          })
       : prisma.meterReading.findMany({
           where: readingScope,
           include: worklistReadingInclude,
@@ -965,6 +977,11 @@ readingsRouter.get("/worklist", async (req, res, next) => {
             !readInMissedCycle.has(assignmentAccountKey(assignment) ?? ""),
         )
       : items;
+    const unpaginatedVisibleItems = effectiveStatus === "CAPTURED"
+      ? visibleItems.filter((item) => capturedMeterIds.has(item.meterId.toString()))
+      : effectiveStatus === "UNREAD"
+        ? visibleItems.filter((item) => !capturedMeterIds.has(item.meterId.toString()))
+        : visibleItems;
     if (paginated) {
       visibleItems.sort((left, right) => {
         const leftRoute = left.account?.route?.routeName ?? left.account?.property?.route?.routeName ?? "";
@@ -1062,7 +1079,7 @@ readingsRouter.get("/worklist", async (req, res, next) => {
         summary,
       });
     }
-    res.json(visibleItems.map((a) => {
+    res.json(unpaginatedVisibleItems.map((a) => {
       const accountReadings = readingsByAccount.get(assignmentAccountKey(a) ?? "") ?? [];
       return ({
       ...a,

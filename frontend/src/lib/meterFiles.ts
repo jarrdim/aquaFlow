@@ -433,6 +433,7 @@ export async function exportMeterReadingZonePdf(
   zoneSheets: MeterReadingZoneSheet[],
   _logoUrl = "/samdamte-water-logo-print.png",
   printedBy = "Signed-in user",
+  preparedPrintWindow?: Window | null,
 ) {
   if (!zoneSheets.length) return;
   const { PDFDocument, StandardFonts, rgb } = await import("pdf-lib");
@@ -609,32 +610,26 @@ export async function exportMeterReadingZonePdf(
   const pdfUrl = URL.createObjectURL(
     new Blob([pdfBytes], { type: "application/pdf" }),
   );
-  const printFrame = document.createElement("iframe");
-  printFrame.setAttribute("aria-hidden", "true");
-  printFrame.style.position = "fixed";
-  printFrame.style.right = "0";
-  printFrame.style.bottom = "0";
-  printFrame.style.width = "0";
-  printFrame.style.height = "0";
-  printFrame.style.border = "0";
-  const cleanup = () => {
-    printFrame.remove();
+  const printWindow = preparedPrintWindow ?? window.open("", "_blank");
+  if (!printWindow) {
     URL.revokeObjectURL(pdfUrl);
-  };
-  printFrame.onload = () => {
-    window.setTimeout(() => {
-      const printWindow = printFrame.contentWindow;
-      if (!printWindow) {
-        cleanup();
-        return;
-      }
+    throw new Error("The print window was blocked. Allow pop-ups for this site and try again.");
+  }
+  let printAttempted = false;
+  const openPrintDialog = () => {
+    if (printAttempted || printWindow.closed) return;
+    printAttempted = true;
+    try {
       printWindow.focus();
       printWindow.print();
-      window.setTimeout(cleanup, 60_000);
-    }, 250);
+    } catch {
+      // The PDF remains open so the browser's own Print control is available.
+    }
   };
-  printFrame.src = pdfUrl;
-  document.body.appendChild(printFrame);
+  printWindow.addEventListener("load", openPrintDialog, { once: true });
+  printWindow.location.replace(pdfUrl);
+  window.setTimeout(openPrintDialog, 1_500);
+  window.setTimeout(() => URL.revokeObjectURL(pdfUrl), 300_000);
 }
 
 
