@@ -3084,7 +3084,7 @@ export function DirectMeterReplacement() {
   const [form, setForm] = useState({
     oldMeterId: "", replacementDate: today,
     oldFinalReading: "", newOpeningReading: "0", replacementReason: "",
-    remarks: "", confirmed: false,
+    newSerialNumber: "", remarks: "", confirmed: false,
   });
 
   async function loadOptions(filters: Record<string, string> = {}, background = false) {
@@ -3143,6 +3143,7 @@ export function DirectMeterReplacement() {
     const latestDate = meter?.latestReading?.readingDate ? String(meter.latestReading.readingDate).slice(0, 10) : "";
     setForm((current) => ({ ...current, oldMeterId: meterId,
       oldFinalReading: meterId ? String(latest) : "",
+      newSerialNumber: "",
       replacementDate: latestDate && current.replacementDate < latestDate ? latestDate : current.replacementDate,
       confirmed: false }));
   }
@@ -3152,18 +3153,19 @@ export function DirectMeterReplacement() {
     if (!account?.accountId || !oldMeter) return setError("Select the installed customer meter.");
     if (!form.confirmed) return setError("Confirm that the physical meter change has already been completed.");
     if (!billPreview) return setError("Wait for a valid bill preview before replacing the meter.");
-    if (!window.confirm(`Record the replacement using meter number ${oldMeter.meterNumber} and post KSh ${money(billPreview.totalCurrentCharges)} to account ${account.accountNumber}?`)) return;
+    if (!window.confirm(`Record replacement meter ${oldMeter.meterNumber} with new serial ${form.newSerialNumber} and post KSh ${money(billPreview.totalCurrentCharges)} to account ${account.accountNumber}?`)) return;
     setSaving(true); setError(""); setSuccess("");
     try {
       const result = await api.createDirectMeterReplacement({
         accountId: String(account.accountId), oldMeterId: form.oldMeterId,
         replacementDate: form.replacementDate, oldFinalReading: Number(form.oldFinalReading),
         newOpeningReading: Number(form.newOpeningReading), replacementReason: form.replacementReason,
+        newSerialNumber: form.newSerialNumber,
         remarks: form.remarks || undefined, confirmed: true,
       });
       setSuccess(`Meter replaced and billed successfully. Replacement REP-${String(result.replacementId).padStart(4, "0")}; bill ${result.bill?.billNumber ?? "created"} for KSh ${Number(result.bill?.totalCurrentCharges ?? 0).toLocaleString("en-KE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}.`);
       setForm({ oldMeterId: "", replacementDate: today, oldFinalReading: "",
-        newOpeningReading: "0", replacementReason: "", remarks: "", confirmed: false });
+        newOpeningReading: "0", replacementReason: "", newSerialNumber: "", remarks: "", confirmed: false });
       setInstalledSearch("");
       await loadOptions();
     } catch (err: any) { setError(err.message); }
@@ -3198,11 +3200,19 @@ export function DirectMeterReplacement() {
             <div><p className="text-xs font-semibold uppercase text-slate-400">Latest approved reading</p><p className="mt-1 font-bold text-slate-800">{previousReading.toLocaleString()}</p></div>
           </div>}
         </Card>
-        <Card title="2. Replacement meter number">
+        <Card title="2. Replacement meter identity">
+          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(260px,.75fr)]">
           <div className="rounded-xl border border-aqua-200 bg-aqua-50 px-4 py-3">
             <p className="text-xs font-semibold uppercase text-aqua-600">Meter number retained</p>
             <p className="mt-1 text-lg font-extrabold text-aqua-900">{oldMeter?.meterNumber || "Select the installed meter above"}</p>
             <p className="mt-1 text-xs text-aqua-700">No meter is taken from stock. The replacement continues under this same meter number.</p>
+          </div>
+          <Field label="New meter serial number" required>
+            <input className={INPUT} value={form.newSerialNumber}
+              onChange={(e) => setForm({ ...form, newSerialNumber: e.target.value, confirmed: false })}
+              placeholder="Enter serial printed on new meter" maxLength={100} required />
+            {oldMeter && <p className="mt-1 text-xs text-slate-500">Previous serial: {oldMeter.serialNumber || "Not recorded"}</p>}
+          </Field>
           </div>
         </Card>
         <Card title="3. Replacement readings and details"><div className="grid gap-3 lg:grid-cols-4">
@@ -3215,9 +3225,9 @@ export function DirectMeterReplacement() {
       </div>
       <div className="xl:sticky xl:top-24 xl:self-start"><Card title="Confirm immediate replacement">
         <div className="mb-4 grid grid-cols-[1fr_auto_1fr] items-center gap-2 rounded-xl bg-slate-50 p-3 text-center">
-          <div><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Current</p><p className="mt-1 text-sm font-extrabold text-slate-800">{oldMeter?.meterNumber || "Not selected"}</p></div>
+          <div><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Current</p><p className="mt-1 text-sm font-extrabold text-slate-800">{oldMeter?.meterNumber || "Not selected"}</p><p className="mt-0.5 truncate text-[11px] text-slate-500">S/N {oldMeter?.serialNumber || "not recorded"}</p></div>
           <span className="grid h-8 w-8 place-items-center rounded-full bg-white text-aqua-700 shadow-sm">→</span>
-          <div><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Replacement</p><p className="mt-1 text-sm font-extrabold text-slate-800">{oldMeter?.meterNumber || "Not selected"}</p></div>
+          <div><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Replacement</p><p className="mt-1 text-sm font-extrabold text-slate-800">{oldMeter?.meterNumber || "Not selected"}</p><p className="mt-0.5 truncate text-[11px] text-slate-500">S/N {form.newSerialNumber || "not entered"}</p></div>
         </div>
         <div className="overflow-hidden rounded-xl border border-aqua-200">
           <div className="bg-gradient-to-br from-aqua-700 to-cyan-600 px-4 py-2.5 text-white">

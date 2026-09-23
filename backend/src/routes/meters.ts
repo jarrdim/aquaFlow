@@ -817,6 +817,7 @@ const directReplacementInputSchema = z.object({
   accountId: z.string().min(1), oldMeterId: z.string().min(1),
   replacementDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), oldFinalReading: z.coerce.number().min(0),
   newOpeningReading: z.coerce.number().min(0), replacementReason: z.string().trim().min(2).max(1000),
+  newSerialNumber: z.string().trim().min(1, "Enter the new meter serial number").max(100),
   gpsLatitude: optNumber, gpsLongitude: optNumber, remarks: optText, confirmed: z.literal(true),
 });
 
@@ -1030,7 +1031,7 @@ async function validateDirectReplacementMeter(
   const accountId = BigInt(data.accountId);
   const meterId = BigInt(data.oldMeterId);
   const assignments = await tx.$queryRaw<any[]>`
-    SELECT ma.assignment_id,m.status,m.opening_reading,
+    SELECT ma.assignment_id,m.status,m.opening_reading,m.serial_number,
       COALESCE((SELECT mr.current_reading FROM aquaflow.meter_readings mr
         WHERE mr.meter_id=m.meter_id AND mr.approval_status='APPROVED'
         ORDER BY mr.reading_date DESC,mr.reading_id DESC LIMIT 1),m.opening_reading) AS previous_reading,
@@ -1060,6 +1061,31 @@ async function validateDirectReplacementMeter(
   if (conflicts[0]) {
     throw Object.assign(new Error("This meter already has an open replacement request"), { status: 409 });
   }
+  const oldSerialNumber = assignments[0].serial_number
+    ? String(assignments[0].serial_number)
+    : null;
+  if (
+    oldSerialNumber
+    && oldSerialNumber.toLocaleLowerCase() === data.newSerialNumber.toLocaleLowerCase()
+  ) {
+    throw Object.assign(
+      new Error("The new meter serial number must be different from the old meter serial number"),
+      { status: 409 },
+    );
+  }
+  const duplicateSerial = await tx.meter.findFirst({
+    where: {
+      serialNumber: { equals: data.newSerialNumber, mode: "insensitive" },
+      meterId: { not: meterId },
+    },
+    select: { meterNumber: true },
+  });
+  if (duplicateSerial) {
+    throw Object.assign(
+      new Error(`Serial number ${data.newSerialNumber} is already registered to meter ${duplicateSerial.meterNumber}`),
+      { status: 409 },
+    );
+  }
   return {
     accountId,
     oldMeterId: meterId,
@@ -1067,6 +1093,7 @@ async function validateDirectReplacementMeter(
     previousReading,
     assignmentId: BigInt(assignments[0].assignment_id),
     oldMeterStatus: String(assignments[0].status),
+    oldSerialNumber,
   };
 }
 
@@ -1253,18 +1280,21 @@ metersRouter.post("/replacements/direct", requireRole("ADMIN", "SYSTEM_ADMIN", "
       await tx.meter.update({ where: { meterId: ids.oldMeterId }, data: {
         status: "ACTIVE", installationStatus: "INSTALLED", installationDate: replacementDate,
         openingReading: data.newOpeningReading, gpsLatitude: data.gpsLatitude, gpsLongitude: data.gpsLongitude,
+        serialNumber: data.newSerialNumber,
       } });
       await tx.meterEvent.createMany({ data: [
         { meterId: ids.oldMeterId, assignmentId: ids.assignmentId, replacementId: replacement.replacementId,
           eventType: "REPLACEMENT_APPROVED", previousStatus: ids.oldMeterStatus, newStatus: "ACTIVE",
           reading: data.oldFinalReading, reason: data.replacementReason, remarks: data.remarks,
           gpsLatitude: data.gpsLatitude, gpsLongitude: data.gpsLongitude, performedBy: userId(req),
-          metadata: { retainedMeterNumber: true, openingBaselineReadingId: openingBaseline.readingId.toString(), direct: true } },
+          metadata: { retainedMeterNumber: true, oldSerialNumber: ids.oldSerialNumber,
+            newSerialNumber: data.newSerialNumber, openingBaselineReadingId: openingBaseline.readingId.toString(), direct: true } },
         { meterId: ids.oldMeterId, assignmentId: ids.assignmentId, replacementId: replacement.replacementId,
           eventType: "INSTALLATION_UPDATED", previousStatus: ids.oldMeterStatus, newStatus: "ACTIVE",
           reading: data.newOpeningReading, reason: data.replacementReason, remarks: data.remarks,
           gpsLatitude: data.gpsLatitude, gpsLongitude: data.gpsLongitude, performedBy: userId(req),
-          metadata: { retainedMeterNumber: true, replacementId: replacement.replacementId.toString(), direct: true } },
+          metadata: { retainedMeterNumber: true, oldSerialNumber: ids.oldSerialNumber,
+            newSerialNumber: data.newSerialNumber, replacementId: replacement.replacementId.toString(), direct: true } },
       ] });
 
       const consumption = roundMoney(data.oldFinalReading - ids.previousReading);
@@ -1326,6 +1356,9 @@ metersRouter.post("/replacements/direct", requireRole("ADMIN", "SYSTEM_ADMIN", "
     res.status(201).json(result);
   } catch (error: any) {
     if (error.status) return res.status(error.status).json({ error: error.message });
+    if (error.code === "P2002") {
+      return res.status(409).json({ error: "That meter serial number is already registered" });
+    }
     next(error);
   }
 });
