@@ -122,6 +122,55 @@ connectionsRouter.get("/", canView, async (req, res) => {
   res.json({ rows, total, page, pageSize, totalPages: Math.max(1, Math.ceil(total / pageSize)) });
 });
 
+connectionsRouter.delete("/:id", canProcess, async (req, res, next) => {
+  const parsed = positiveId.safeParse(req.params.id);
+  if (!parsed.success) return res.status(400).json({ error: "Invalid connection application" });
+
+  try {
+    const application = await prisma.newConnectionApplication.findUnique({
+      where: { connectionApplicationId: parsed.data },
+      select: {
+        connectionApplicationId: true,
+        applicationNumber: true,
+        status: true,
+        accountId: true,
+        workOrderId: true,
+      },
+    });
+    if (!application) return res.status(404).json({ error: "Connection application not found" });
+    if (application.status !== "PARTIALLY_PAID") {
+      return res.status(409).json({ error: "Only partially paid applications can be removed here" });
+    }
+    if (application.accountId || application.workOrderId) {
+      return res.status(409).json({ error: "Applications linked to an account or work order cannot be removed" });
+    }
+    const pendingStkRequests = await prisma.mpesaStkRequest.count({
+      where: {
+        purposeType: "NEW_CONNECTION_FEE",
+        purposeReference: application.applicationNumber,
+        status: "PENDING",
+      },
+    });
+    if (pendingStkRequests) {
+      return res.status(409).json({ error: "This application has a pending M-Pesa request. Wait for it to finish before removing the application" });
+    }
+
+    await prisma.$transaction(async (tx) => {
+      await tx.newConnectionActivity.deleteMany({
+        where: { connectionApplicationId: application.connectionApplicationId },
+      });
+      await tx.newConnectionApplication.delete({
+        where: { connectionApplicationId: application.connectionApplicationId },
+      });
+    });
+    res.json({
+      message: `${application.applicationNumber} removed. Posted payments and receipts were retained in the financial ledger.`,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 connectionsRouter.get("/:id", canView, async (req, res) => {
   const parsed = positiveId.safeParse(req.params.id);
   if (!parsed.success) return res.status(400).json({ error: "Invalid connection application" });

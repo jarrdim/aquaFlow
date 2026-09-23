@@ -545,6 +545,7 @@ export default function ConnectionDashboard() {
     pageSize: "25",
   });
   const [loading, setLoading] = useState(true);
+  const [removingId, setRemovingId] = useState("");
 
   async function load(next = filters) {
     setLoading(true);
@@ -578,6 +579,32 @@ export default function ConnectionDashboard() {
     const next = { ...filters, page: "1" };
     setFilters(next);
     void load(next);
+  }
+
+  async function removeApplication(row: Application) {
+    const confirmed = window.confirm(
+      `Remove ${row.applicationNumber}?\n\nThe incomplete application will be deleted and cannot be restored. The ${money(row.amountPaid)} posted payment and its receipt will remain in the financial ledger.`,
+    );
+    if (!confirmed) return;
+
+    setRemovingId(row.connectionApplicationId);
+    try {
+      const response = await api.removeConnection(row.connectionApplicationId);
+      showToast(response.message ?? "Connection application removed.", "success");
+      const next =
+        result?.rows?.length === 1 && Number(filters.page) > 1
+          ? { ...filters, page: String(Number(filters.page) - 1) }
+          : filters;
+      if (next !== filters) setFilters(next);
+      await load(next);
+    } catch (error) {
+      showToast(
+        error instanceof Error ? error.message : "Unable to remove the connection application.",
+        "error",
+      );
+    } finally {
+      setRemovingId("");
+    }
   }
 
   const metrics = [
@@ -724,12 +751,24 @@ export default function ConnectionDashboard() {
                         <StatusBadge status={row.status} />
                       </td>
                       <td className="px-4 py-3">
-                        <Link
-                          className="font-semibold text-aqua-700"
-                          to={`/connections/${row.connectionApplicationId}`}
-                        >
-                          Review →
-                        </Link>
+                        <div className="flex flex-wrap items-center gap-3">
+                          <Link
+                            className="font-semibold text-aqua-700"
+                            to={`/connections/${row.connectionApplicationId}`}
+                          >
+                            Review →
+                          </Link>
+                          {row.status === "PARTIALLY_PAID" && !row.accountId && (
+                            <button
+                              type="button"
+                              disabled={Boolean(removingId)}
+                              onClick={() => void removeApplication(row)}
+                              className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-bold text-red-700 transition hover:border-red-300 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {removingId === row.connectionApplicationId ? "Removing…" : "Remove"}
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}
