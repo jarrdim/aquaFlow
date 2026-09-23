@@ -4629,7 +4629,19 @@ export function BillNotifications() {
         const requestedCycleIsVisible = customerBillingCycles.some(
           (cycle: Row) => String(cycle.billingCycleId) === cycleId,
         );
-        if (!requestedCycleIsVisible) {
+        if (requestedCycleIsVisible) return;
+
+        const now = new Date();
+        const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+        const currentGroup = periodGroups.find((group: Row) => {
+          const start = String(group.periodStart ?? "").slice(0, 10);
+          const end = String(group.periodEnd ?? "").slice(0, 10);
+          return start <= today && today <= end;
+        });
+        if (currentGroup) {
+          setGroupId(String(currentGroup.billingPeriodGroupId));
+          setCycleId("");
+        } else {
           setCycleId(customerBillingCycles[0] ? String(customerBillingCycles[0].billingCycleId) : "");
         }
       })

@@ -338,6 +338,7 @@ function NotificationTable({
   rows,
   compact = false,
   onRetry,
+  onResend,
   onRemove,
   selected,
   onSelectionChange,
@@ -346,6 +347,7 @@ function NotificationTable({
   rows: Row[];
   compact?: boolean;
   onRetry?: (id: string) => void;
+  onResend?: (id: string) => void;
   onRemove?: (id: string) => void;
   selected?: string[];
   onSelectionChange?: (ids: string[]) => void;
@@ -396,7 +398,7 @@ function NotificationTable({
             <th className={TH}>Type / channel</th>
             {!compact && <th className={TH}>Message</th>}
             <th className={TH}>Status</th>
-            {(onRetry || onRemove) && <th className={TH}>Action</th>}
+            {(onRetry || onResend || onRemove) && <th className={TH}>Action</th>}
           </tr>
         </thead>
         <tbody>
@@ -461,7 +463,7 @@ function NotificationTable({
               <td className={TD}>
                 <Badge value={row.deliveryStatus} />
               </td>
-              {(onRetry || onRemove) && (
+              {(onRetry || onResend || onRemove) && (
                 <td className={TD}>
                   <div className="flex flex-wrap items-center gap-1">
                     <button
@@ -482,6 +484,17 @@ function NotificationTable({
                         Retry
                       </button>
                     )}
+                    {onResend && row.deliveryStatus !== "QUEUED" && (
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 font-semibold text-emerald-700 transition hover:bg-emerald-50"
+                        onClick={() => onResend(String(row.notificationId))}
+                        aria-label={`Resend notification to ${row.recipient}`}
+                      >
+                        <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="M22 2 11 13" /><path d="m22 2-7 20-4-9-9-4Z" /></svg>
+                        Resend
+                      </button>
+                    )}
                     {onRemove && ["QUEUED", "FAILED"].includes(row.deliveryStatus) && (
                       <button
                         className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 font-semibold text-red-600 transition hover:bg-red-50"
@@ -491,7 +504,7 @@ function NotificationTable({
                         Remove
                       </button>
                     )}
-                    {!(["QUEUED", "FAILED"].includes(row.deliveryStatus)) && "—"}
+                    {!onResend && !(["QUEUED", "FAILED"].includes(row.deliveryStatus)) && "—"}
                   </div>
                 </td>
               )}
@@ -501,7 +514,7 @@ function NotificationTable({
             <tr>
               <td
                 colSpan={
-                  (onRetry || onRemove ? 6 : compact ? 4 : 5) +
+                  (onRetry || onResend || onRemove ? 6 : compact ? 4 : 5) +
                   (selectionEnabled ? 1 : 0)
                 }
                 className="px-4 py-16 text-center text-slate-400"
@@ -1660,6 +1673,26 @@ function NotificationRegister({ queueOnly = false }: { queueOnly?: boolean }) {
       setBusy(false);
     }
   }
+  async function resend(id: string) {
+    setBusy(true);
+    setError("");
+    setSuccess("");
+    try {
+      const result = await api.resendNotification(id);
+      const resent = result.notification;
+      if (!["SENT", "DELIVERED"].includes(String(resent?.deliveryStatus))) {
+        throw new Error(resent?.failureReason ?? "The notification could not be resent.");
+      }
+      setSuccess(`Notification resent directly to ${resent.recipient}.`);
+      await load();
+    } catch (e) {
+      const message = errorText(e);
+      await load();
+      setError(message);
+    } finally {
+      setBusy(false);
+    }
+  }
   async function removeFromQueue(ids: string[]) {
     if (!ids.length) return;
     const confirmed = window.confirm(
@@ -1819,6 +1852,7 @@ function NotificationRegister({ queueOnly = false }: { queueOnly?: boolean }) {
             <NotificationTable
               rows={rows}
               onRetry={retry}
+              onResend={queueOnly ? undefined : resend}
               onRemove={queueOnly ? (id) => void removeFromQueue([id]) : undefined}
               selected={queueOnly ? selected : undefined}
               onSelectionChange={queueOnly ? setSelected : undefined}

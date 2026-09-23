@@ -868,6 +868,8 @@ export const api = {
     }),
   retryNotification: (id: string) =>
     request(`/notifications/${id}/retry`, { method: "POST" }),
+  resendNotification: (id: string) =>
+    request(`/notifications/${id}/resend`, { method: "POST" }),
   listNotificationTemplates: () => request("/notifications/templates"),
   createNotificationTemplate: (data: Record<string, unknown>) =>
     request("/notifications/templates", {

@@ -1954,3 +1954,49 @@ notificationsRouter.post("/:id/retry", managers, async (req, res, next) => {
     next(error);
   }
 });
+
+notificationsRouter.post("/:id/resend", managers, async (req, res, next) => {
+  const notificationId = id.safeParse(req.params.id);
+  if (!notificationId.success)
+    return res.status(400).json({ error: "Invalid notification" });
+  try {
+    const source = await prisma.notification.findUnique({
+      where: { notificationId: notificationId.data },
+    });
+    if (!source) return res.status(404).json({ error: "Notification not found" });
+    if (source.deliveryStatus === "QUEUED") {
+      return res.status(409).json({ error: "This notification is already queued. Process it from the delivery queue instead" });
+    }
+    const sourceMetadata =
+      source.metadata && typeof source.metadata === "object" && !Array.isArray(source.metadata)
+        ? source.metadata as Record<string, unknown>
+        : {};
+    const resent = await prisma.notification.create({
+      data: {
+        templateId: source.templateId,
+        customerId: source.customerId,
+        accountId: source.accountId,
+        billId: source.billId,
+        notificationType: source.notificationType,
+        channel: source.channel,
+        recipient: source.recipient,
+        subject: source.subject,
+        messageBody: source.messageBody,
+        scheduledAt: null,
+        deliveryStatus: "QUEUED",
+        retryCount: 0,
+        maxRetries: source.maxRetries,
+        requestedBy: uid(req),
+        metadata: {
+          ...sourceMetadata,
+          resend: true,
+          resentFromNotificationId: source.notificationId.toString(),
+        },
+      },
+    });
+    const processed = await processOne(resent.notificationId);
+    res.status(201).json({ notification: processed });
+  } catch (error) {
+    next(error);
+  }
+});
