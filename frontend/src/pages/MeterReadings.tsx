@@ -2873,7 +2873,11 @@ export function ReadingWorklist() {
   const groupCycles = periodGroupId
     ? cycles.filter((cycle) => String(cycle.billingPeriodGroupId ?? "") === periodGroupId)
     : cycles;
-  const canCaptureReadings = cycleScope !== "group" && selectedCycles.length === 1 && selectedCycle?.status === "OPEN";
+  const canCaptureReadings =
+    cycleScope !== "group" &&
+    selectedCycles.length === 1 &&
+    selectedCycle?.status === "OPEN" &&
+    !selectedPeriodGroupExpired;
   const isContinuationCycle = Boolean(
     cycleScope !== "group" &&
       selectedCycle?.billingPeriodGroupId &&
@@ -2882,7 +2886,11 @@ export function ReadingWorklist() {
       ),
   );
   const selectedCycleIsLocked = Boolean(
-    selectedCycle && cycleScope !== "group" && selectedCycles.length === 1 && !canCaptureReadings,
+    selectedCycle &&
+      cycleScope !== "group" &&
+      selectedCycles.length === 1 &&
+      !canCaptureReadings &&
+      !selectedPeriodGroupExpired,
   );
   const closedSourceCycles = cycles
     .filter((cycle) => {
@@ -3912,8 +3920,8 @@ export function ReadingWorklist() {
             </div>
             <p className="mt-1 text-sm text-amber-800">
               <strong>{selectedPeriodGroup?.groupName}</strong> covered {formatDmyDate(selectedPeriodGroup?.periodStart)} – {formatDmyDate(selectedPeriodGroup?.periodEnd)}. {currentPeriodGroup
-                ? `${currentPeriodGroup.groupName} now covers today's work.`
-                : "No period group covers today. Create the next group before opening a new reading cycle."}
+                ? `${currentPeriodGroup.groupName} now covers today's work. Reading entry is locked for the expired group.`
+                : "No period group covers today. Reading entry is locked until the next group and reading cycle are created."}
             </p>
           </div>
           {currentPeriodGroup ? (

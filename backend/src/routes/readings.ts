@@ -66,6 +66,25 @@ function parse<T>(schema: z.ZodType<T>, input: unknown, res: any): T | undefined
 function asDate(value: string) {
   return new Date(`${value}T00:00:00.000Z`);
 }
+function businessToday() {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Africa/Nairobi",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return asDate(`${value.year}-${value.month}-${value.day}`);
+}
+async function closeExpiredReadingCycles() {
+  await prisma.readingCycle.updateMany({
+    where: {
+      status: "OPEN",
+      billingPeriodGroup: { periodEnd: { lt: businessToday() } },
+    },
+    data: { status: "CLOSED", updatedAt: new Date() },
+  });
+}
 function nameOf(user: any) {
   return user ? `${user.firstName} ${user.lastName}`.trim() : "Unassigned";
 }
@@ -273,6 +292,7 @@ readingsRouter.post("/period-groups", requireRole("SYSTEM_ADMIN", "SUPERVISOR", 
 
 readingsRouter.get("/cycles", async (req, res, next) => {
   try {
+    await closeExpiredReadingCycles();
     const status = String(req.query.status ?? "");
     const billingPeriodGroupId = req.query.billingPeriodGroupId
       ? BigInt(String(req.query.billingPeriodGroupId))
@@ -320,6 +340,9 @@ readingsRouter.post("/cycles", requireRole("SYSTEM_ADMIN", "SUPERVISOR", "METER_
   try {
     const group = await prisma.billingPeriodGroup.findUnique({ where: { billingPeriodGroupId: data.billingPeriodGroupId } });
     if (!group) return res.status(404).json({ error: "Period group not found" });
+    if (data.status === "OPEN" && group.periodEnd < businessToday()) {
+      return res.status(409).json({ error: `${group.groupName} has ended and cannot accept an open reading cycle` });
+    }
     const startDate = asDate(data.startDate);
     const endDate = asDate(data.endDate);
     if (startDate < group.periodStart || endDate > group.periodEnd) {
@@ -383,7 +406,13 @@ readingsRouter.patch("/cycles/:id/status", requireRole("SYSTEM_ADMIN", "SUPERVIS
   const data = parse(z.object({ status: z.enum(["PLANNED", "OPEN", "CLOSED", "CANCELLED"]) }), req.body, res);
   if (!cycleId || !data) return;
   try {
-    const cycle = await prisma.readingCycle.findUnique({ where: { readingCycleId: cycleId }, include: { _count: { select: { readings: true } } } });
+    const cycle = await prisma.readingCycle.findUnique({
+      where: { readingCycleId: cycleId },
+      include: {
+        billingPeriodGroup: true,
+        _count: { select: { readings: true } },
+      },
+    });
     if (!cycle) return res.status(404).json({ error: "Reading cycle not found" });
     const allowedTransitions: Record<string, string[]> = {
       PLANNED: ["OPEN", "CANCELLED"],
@@ -393,6 +422,15 @@ readingsRouter.patch("/cycles/:id/status", requireRole("SYSTEM_ADMIN", "SUPERVIS
     };
     if (!(allowedTransitions[cycle.status] ?? []).includes(data.status)) {
       return res.status(409).json({ error: `A ${cycle.status.toLowerCase()} cycle cannot be changed to ${data.status.toLowerCase()}` });
+    }
+    if (
+      data.status === "OPEN" &&
+      cycle.billingPeriodGroup &&
+      cycle.billingPeriodGroup.periodEnd < businessToday()
+    ) {
+      return res.status(409).json({
+        error: `${cycle.billingPeriodGroup.groupName} has ended and its reading cycles cannot be reopened`,
+      });
     }
     if (cycle.status === "CANCELLED" && data.status === "PLANNED" && cycle._count.readings) {
       return res.status(409).json({ error: "A cancelled cycle with captured readings cannot be reopened. Create a new cycle with a new code." });
@@ -1120,8 +1158,18 @@ async function capture(input: any, req: any) {
   }
   const [eligibleAssignments, cycle] = await Promise.all([
     getEligibleAssignments(input.readingCycleId, undefined, undefined, "", input.meterId),
-    prisma.readingCycle.findUnique({ where: { readingCycleId: input.readingCycleId } }),
+    prisma.readingCycle.findUnique({
+      where: { readingCycleId: input.readingCycleId },
+      include: { billingPeriodGroup: true },
+    }),
   ]);
+  if (cycle?.billingPeriodGroup && cycle.billingPeriodGroup.periodEnd < businessToday()) {
+    await closeExpiredReadingCycles();
+    throw Object.assign(
+      new Error(`The ${cycle.billingPeriodGroup.groupName} period group has ended. Select the current period group to enter readings.`),
+      { status: 409 },
+    );
+  }
   if (!cycle || cycle.status !== "OPEN") throw Object.assign(new Error("Readings can only be captured in an open cycle"), { status: 409 });
   const assignment = eligibleAssignments[0];
   if (!assignment?.accountId) {
