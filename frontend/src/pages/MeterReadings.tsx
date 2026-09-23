@@ -1057,16 +1057,16 @@ export function ReadingCycles() {
             .some((value) => String(value).toLowerCase().includes(query)),
       )
       .sort((left, right) => {
-        const startDateOrder =
-          new Date(right.startDate).getTime() -
-          new Date(left.startDate).getTime();
-        if (startDateOrder) return startDateOrder;
+        const createdOrder =
+          new Date(right.createdAt).getTime() -
+          new Date(left.createdAt).getTime();
+        if (createdOrder) return createdOrder;
 
-        const endDateOrder =
-          new Date(right.endDate).getTime() - new Date(left.endDate).getTime();
-        if (endDateOrder) return endDateOrder;
-
-        return 0;
+        return String(right.readingCycleId).localeCompare(
+          String(left.readingCycleId),
+          undefined,
+          { numeric: true },
+        );
       });
   }, [cycles, cycleSearch]);
   const cyclePages = Math.max(
