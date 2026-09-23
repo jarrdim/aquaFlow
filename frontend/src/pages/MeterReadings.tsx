@@ -2913,7 +2913,40 @@ export function ReadingWorklist() {
         setCycles(c);
         setPeriodGroups(groups);
         setRoutes(r);
-        if (!cycleId) {
+        const loadedAt = new Date();
+        const loadedToday = `${loadedAt.getFullYear()}-${String(loadedAt.getMonth() + 1).padStart(2, "0")}-${String(loadedAt.getDate()).padStart(2, "0")}`;
+        const requestedGroup = groups.find(
+          (group: Row) => String(group.billingPeriodGroupId) === periodGroupId,
+        );
+        const currentGroup = groups.find((group: Row) => {
+          const groupStart = String(group.periodStart ?? "").slice(0, 10);
+          const groupEnd = String(group.periodEnd ?? "").slice(0, 10);
+          return groupStart <= loadedToday && loadedToday <= groupEnd;
+        });
+        const requestedGroupExpired = Boolean(
+          requestedGroup &&
+            String(requestedGroup.periodEnd ?? "").slice(0, 10) < loadedToday,
+        );
+
+        if (currentGroup && (!cycleId || requestedGroupExpired)) {
+          const currentGroupId = String(currentGroup.billingPeriodGroupId);
+          const currentCycles = c.filter(
+            (cycle: Row) => String(cycle.billingPeriodGroupId ?? "") === currentGroupId,
+          );
+          const preferredCycle =
+            currentCycles.find((cycle: Row) => cycle.status === "OPEN") ??
+            currentCycles.find((cycle: Row) => cycle.status === "PLANNED") ??
+            currentCycles[0];
+          const next = new URLSearchParams(params);
+          next.set("periodGroupId", currentGroupId);
+          next.delete("cycleIds");
+          next.delete("cycleScope");
+          if (preferredCycle) next.set("cycleId", String(preferredCycle.readingCycleId));
+          else next.delete("cycleId");
+          next.set("status", "UNREAD");
+          next.delete("page");
+          setParams(next, { replace: true });
+        } else if (!cycleId) {
           const open = c.find((x: Row) => x.status === "OPEN");
           if (open) {
             const next = new URLSearchParams(params);
