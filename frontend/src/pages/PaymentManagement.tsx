@@ -2510,15 +2510,29 @@ export function DailyReceiptsReport() {
 export function PaymentHistory() {
   const [accounts, setAccounts] = useState<Row[]>([]),
     [accountId, setAccountId] = useState(""),
-    [rows, setRows] = useState<Row[]>([]);
+    [rows, setRows] = useState<Row[]>([]),
+    [loading, setLoading] = useState(true),
+    [loadError, setLoadError] = useState("");
   useEffect(() => {
-    api.listPaymentAccounts().then((a) => {
-      setAccounts(a);
-      if (a[0]) setAccountId(String(a[0].accountId));
-    });
+    api.listPaymentAccounts("", false, true)
+      .then((a) => {
+        setAccounts(a);
+        if (a[0]) setAccountId(String(a[0].accountId));
+      })
+      .catch((error) => setLoadError(error.message))
+      .finally(() => setLoading(false));
   }, []);
   useEffect(() => {
-    if (accountId) api.listPayments({ accountId }).then(setRows);
+    if (!accountId) return;
+    setLoading(true);
+    setLoadError("");
+    api.listPayments({ accountId })
+      .then(setRows)
+      .catch((error) => {
+        setRows([]);
+        setLoadError(error.message);
+      })
+      .finally(() => setLoading(false));
   }, [accountId]);
   const selectedAccount = accounts.find((account) => String(account.accountId) === accountId);
   const historyTotal = rows.filter((payment) => payment.paymentStatus === "POSTED").reduce((sum, payment) => sum + Number(payment.amount ?? 0), 0);
@@ -2528,11 +2542,13 @@ export function PaymentHistory() {
       title="Customer payment history"
       subtitle="Valid, partial, advance and reversed payments for a customer account"
     >
+      {loadError && <Notice>{loadError}</Notice>}
       <Card className="mb-5 overflow-hidden shadow-md shadow-slate-200/50">
         <Field label="Customer account">
           <SearchableSelect
             className={historyInput}
             value={accountId}
+            disabled={loading && !accounts.length}
             onChange={(e) => setAccountId(e.target.value)}
           >
             {accounts.map((a) => (
@@ -2545,7 +2561,13 @@ export function PaymentHistory() {
       </Card>
       <div className="mb-5 grid gap-3 sm:grid-cols-3"><div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-slate-500">Customer</div><div className="mt-1 truncate text-lg font-extrabold text-slate-900">{selectedAccount?.customerName ?? "No account selected"}</div></div><div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-emerald-700">Posted payments</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{rows.filter((payment) => payment.paymentStatus === "POSTED").length}</div></div><div className="rounded-2xl border border-sky-100 bg-sky-50 p-4 shadow-sm"><div className="text-xs font-bold uppercase tracking-wider text-sky-700">Total received</div><div className="mt-1 text-2xl font-extrabold text-slate-900">{money(historyTotal)}</div></div></div>
       <Card title="Payment activity" className="overflow-hidden shadow-md shadow-slate-200/50">
-        <PaymentTable rows={rows} />
+        {loading ? (
+          <div className="py-16 text-center text-sm font-semibold text-slate-500">
+            Loading payment history...
+          </div>
+        ) : (
+          <PaymentTable rows={rows} />
+        )}
       </Card>
     </Page>
   );

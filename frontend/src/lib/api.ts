@@ -736,10 +736,11 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(data),
     }),
-  listPaymentAccounts: (q = "", includeAll = false) => {
+  listPaymentAccounts: (q = "", includeAll = false, preferPaymentHistory = false) => {
     const query = new URLSearchParams();
     if (q) query.set("q", q);
     if (includeAll) query.set("includeAll", "true");
+    if (preferPaymentHistory) query.set("preferPaymentHistory", "true");
     const suffix = query.toString();
     return request(`/payments/accounts${suffix ? `?${suffix}` : ""}`);
   },

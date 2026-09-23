@@ -1027,6 +1027,8 @@ paymentsRouter.get("/accounts", async (req, res, next) => {
   try {
     const q = String(req.query.q ?? "").trim();
     const includeAll = String(req.query.includeAll ?? "").toLowerCase() === "true";
+    const preferPaymentHistory =
+      String(req.query.preferPaymentHistory ?? "").toLowerCase() === "true";
     const rows = await prisma.customerAccount.findMany({
       where: {
         ...(includeAll ? {} : { accountStatus: "ACTIVE" as const }),
@@ -1058,7 +1060,28 @@ paymentsRouter.get("/accounts", async (req, res, next) => {
       // accounts. Other payment workflows remain restricted to active accounts.
       ...(q ? { take: 100 } : includeAll ? {} : { take: 20_000 }),
     });
-    res.json(rows.map((a: any) => ({ ...a, customerName: name(a.customer) })));
+    let orderedRows = rows;
+    if (preferPaymentHistory && !q) {
+      const latestPayment = await prisma.payment.findFirst({
+        where: {
+          accountId: { not: null },
+          account: { accountStatus: "ACTIVE" },
+        },
+        orderBy: [{ paymentDate: "desc" }, { paymentId: "desc" }],
+        select: { accountId: true },
+      });
+      if (latestPayment?.accountId) {
+        const preferredId = latestPayment.accountId.toString();
+        orderedRows = [...rows].sort((left, right) => {
+          const leftPreferred = left.accountId.toString() === preferredId;
+          const rightPreferred = right.accountId.toString() === preferredId;
+          return Number(rightPreferred) - Number(leftPreferred);
+        });
+      }
+    }
+    res.json(
+      orderedRows.map((a: any) => ({ ...a, customerName: name(a.customer) })),
+    );
   } catch (e) {
     next(e);
   }
@@ -1290,26 +1313,53 @@ paymentsRouter.get("/", async (req, res, next) => {
     const paginated = req.query.page !== undefined;
     const page = Math.max(1, Number(req.query.page) || 1);
     const pageSize = Math.min(200, Math.max(10, Number(req.query.pageSize) || 50));
+    let accountScope: Prisma.PaymentWhereInput | undefined;
+    if (accountId) {
+      const account = await prisma.customerAccount.findUnique({
+        where: { accountId },
+        select: { accountNumber: true },
+      });
+      const accountReferences = account
+        ? Array.from(
+            new Set([
+              account.accountNumber,
+              account.accountNumber.replace(/^ACC-/i, ""),
+            ]),
+          )
+        : [];
+      accountScope = {
+        OR: [
+          { accountId },
+          { receipt: { is: { accountId } } },
+          { allocations: { some: { bill: { accountId } } } },
+          ...accountReferences.map((reference) => ({
+            customerReference: { equals: reference, mode: "insensitive" as const },
+          })),
+        ],
+      };
+    }
+    const searchScope: Prisma.PaymentWhereInput | undefined = q
+      ? {
+          OR: [
+            { transactionReference: { contains: q, mode: "insensitive" } },
+            { payerName: { contains: q, mode: "insensitive" } },
+            { payerPhone: { contains: q } },
+            { customerReference: { contains: q, mode: "insensitive" } },
+            { account: { accountNumber: { contains: q, mode: "insensitive" } } },
+            { account: { customer: { firstName: { contains: q, mode: "insensitive" } } } },
+            { account: { customer: { middleName: { contains: q, mode: "insensitive" } } } },
+            { account: { customer: { lastName: { contains: q, mode: "insensitive" } } } },
+            { account: { customer: { organizationName: { contains: q, mode: "insensitive" } } } },
+          ],
+        }
+      : undefined;
     const where: Prisma.PaymentWhereInput = {
       ...(status ? { paymentStatus: status } : {}),
       ...(channelId ? { channelId } : {}),
-      ...(accountId ? { accountId } : {}),
       ...(zoneId ? { account: { property: { zoneId } } } : {}),
       ...(valueDate ? { valueDate } : {}),
-      ...(q
-        ? {
-            OR: [
-              { transactionReference: { contains: q, mode: "insensitive" } },
-              { payerName: { contains: q, mode: "insensitive" } },
-              { payerPhone: { contains: q } },
-              { customerReference: { contains: q, mode: "insensitive" } },
-              { account: { accountNumber: { contains: q, mode: "insensitive" } } },
-              { account: { customer: { firstName: { contains: q, mode: "insensitive" } } } },
-              { account: { customer: { middleName: { contains: q, mode: "insensitive" } } } },
-              { account: { customer: { lastName: { contains: q, mode: "insensitive" } } } },
-              { account: { customer: { organizationName: { contains: q, mode: "insensitive" } } } },
-            ],
-          }
+      ...((accountScope || searchScope)
+        ? { AND: [accountScope, searchScope].filter(Boolean) as Prisma.PaymentWhereInput[] }
         : {}),
     };
     const orderBy: Prisma.PaymentOrderByWithRelationInput[] = [
