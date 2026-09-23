@@ -340,8 +340,8 @@ readingsRouter.post("/cycles", requireRole("SYSTEM_ADMIN", "SUPERVISOR", "METER_
   try {
     const group = await prisma.billingPeriodGroup.findUnique({ where: { billingPeriodGroupId: data.billingPeriodGroupId } });
     if (!group) return res.status(404).json({ error: "Period group not found" });
-    if (data.status === "OPEN" && group.periodEnd < businessToday()) {
-      return res.status(409).json({ error: `${group.groupName} has ended and cannot accept an open reading cycle` });
+    if (group.periodEnd < businessToday()) {
+      return res.status(409).json({ error: `${group.groupName} has ended and cannot accept new reading cycles` });
     }
     const startDate = asDate(data.startDate);
     const endDate = asDate(data.endDate);

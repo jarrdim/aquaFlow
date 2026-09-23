@@ -1098,6 +1098,9 @@ export function ReadingCycles() {
   const selectedGroupEnd = selectedPeriodGroup
     ? String(selectedPeriodGroup.periodEnd).slice(0, 10)
     : undefined;
+  const selectedPeriodGroupExpired = Boolean(
+    selectedGroupEnd && selectedGroupEnd < todayIso,
+  );
   const visiblePeriodGroups = useMemo(() => {
     const query = groupSearch.trim().toLocaleLowerCase();
     if (!query) return periodGroups;
@@ -1155,6 +1158,10 @@ export function ReadingCycles() {
   );
   async function submit(e: FormEvent) {
     e.preventDefault();
+    if (!editingId && selectedPeriodGroupExpired) {
+      setError("This period group has ended. Select the current period group before creating a reading cycle.");
+      return;
+    }
     setSaving(true);
     setError("");
     setMessage("");
@@ -1371,12 +1378,14 @@ export function ReadingCycles() {
                   const groupStart = String(group.periodStart).slice(0, 10);
                   const groupEnd = String(group.periodEnd).slice(0, 10);
                   const isCurrent = todayIso >= groupStart && todayIso <= groupEnd;
+                  const isExpired = groupEnd < todayIso;
                   return (
                     <button key={group.billingPeriodGroupId} type="button" onClick={() => selectPeriodGroup(String(group.billingPeriodGroupId))} className={`group w-[330px] flex-none snap-start rounded-xl border px-3 py-2 text-left transition ${selected ? "border-violet-400 bg-violet-50 shadow-sm ring-2 ring-violet-100" : "border-slate-200 bg-white hover:border-violet-200 hover:bg-slate-50"}`}>
                       <div className="flex min-w-0 items-center gap-2">
                         <span className={`shrink-0 rounded-md px-2 py-1 font-mono text-[10px] font-extrabold ${selected ? "bg-violet-600 text-white" : "bg-slate-100 text-violet-700"}`}>{group.groupCode}</span>
                         <span title={group.groupName} className="min-w-0 flex-1 truncate text-sm font-extrabold text-slate-900">{group.groupName}</span>
                         {isCurrent && <span className="shrink-0 rounded-full bg-emerald-100 px-2 py-0.5 text-[9px] font-extrabold uppercase text-emerald-700">Current</span>}
+                        {isExpired && <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[9px] font-extrabold uppercase text-amber-800">Expired</span>}
                         <span className="shrink-0 text-[11px] font-bold text-slate-500">{cycleCount} cycle{cycleCount === 1 ? "" : "s"}</span>
                       </div>
                       <div className="mt-1.5 flex items-center justify-between gap-3 text-[11px]"><span className="text-slate-500">{formatDmyDate(group.periodStart)} – {formatDmyDate(group.periodEnd)}</span><span className={`font-bold ${selected ? "text-violet-700" : "text-slate-400 group-hover:text-violet-600"}`}>{selected ? "Selected" : "Select"}</span></div>
@@ -1402,18 +1411,22 @@ export function ReadingCycles() {
               <Field label="Billing period group" required>
                 <SearchableSelect required className={INPUT} value={form.billingPeriodGroupId} onChange={(e) => selectPeriodGroup(e.target.value)}>
                   <option value="">Set dates to match a billing period</option>
-                  {periodGroups.map((group) => <option key={group.billingPeriodGroupId} value={group.billingPeriodGroupId}>{group.groupCode} — {group.groupName}</option>)}
+                  {periodGroups.map((group) => <option key={group.billingPeriodGroupId} value={group.billingPeriodGroupId}>{group.groupCode} — {group.groupName}{String(group.periodEnd).slice(0, 10) < todayIso ? " — Expired" : ""}</option>)}
                 </SearchableSelect>
                 <span className="mt-1 block text-[11px] text-slate-400">Automatically matched from the cycle dates. Selecting a group sets its allowed date range.</span>
               </Field>
             </div>
             {selectedPeriodGroup && (
-              <div className={`col-span-2 flex items-center justify-between gap-3 rounded-lg border px-3 py-2 ${Number(selectedPeriodGroup._count?.readingCycles ?? 0) > 0 ? "border-emerald-200 bg-emerald-50" : "border-sky-200 bg-sky-50"}`}>
+              <div className={`col-span-2 flex items-center justify-between gap-3 rounded-lg border px-3 py-2 ${selectedPeriodGroupExpired ? "border-amber-300 bg-amber-50" : Number(selectedPeriodGroup._count?.readingCycles ?? 0) > 0 ? "border-emerald-200 bg-emerald-50" : "border-sky-200 bg-sky-50"}`}>
                 <p className="text-xs leading-5 text-slate-600">
-                  <strong className="text-slate-800">{Number(selectedPeriodGroup._count?.readingCycles ?? 0) > 0 ? "Follow-up cycle: " : "First cycle: "}</strong>
-                  {Number(selectedPeriodGroup._count?.readingCycles ?? 0) > 0
-                    ? "the worklist will contain only accounts still unread in this group."
-                    : "the worklist will begin with all eligible meters."}
+                  <strong className={selectedPeriodGroupExpired ? "text-amber-900" : "text-slate-800"}>
+                    {selectedPeriodGroupExpired ? "Expired period group: " : Number(selectedPeriodGroup._count?.readingCycles ?? 0) > 0 ? "Follow-up cycle: " : "First cycle: "}
+                  </strong>
+                  {selectedPeriodGroupExpired
+                    ? `this group ended on ${formatDmyDate(selectedPeriodGroup.periodEnd)}. Select the current period group to create a cycle.`
+                    : Number(selectedPeriodGroup._count?.readingCycles ?? 0) > 0
+                      ? "the worklist will contain only accounts still unread in this group."
+                      : "the worklist will begin with all eligible meters."}
                 </p>
                 <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-slate-600 ring-1 ring-inset ring-slate-200">{selectedPeriodGroup._count?.readingCycles ?? 0} existing</span>
               </div>
@@ -1485,7 +1498,7 @@ export function ReadingCycles() {
             </Field>
             <div className="col-span-2 flex gap-2 pt-1">
               {editingId && <Button type="button" tone="slate" className="flex-1" onClick={() => setEditingId("")}>Cancel edit</Button>}
-              <Button disabled={saving} className="flex-1">{saving ? "Saving..." : editingId ? "Save changes" : "Create cycle"}</Button>
+              <Button disabled={saving || (!editingId && selectedPeriodGroupExpired)} className="flex-1">{saving ? "Saving..." : editingId ? "Save changes" : selectedPeriodGroupExpired ? "Expired group" : "Create cycle"}</Button>
             </div>
           </form>
         </Card>
