@@ -971,7 +971,7 @@ export function ReadingCycles() {
   const todayIso = localIso(now);
   const groupFormForStart = (startDate: Date) => ({
     groupCode: `BPG-${startDate.getFullYear()}-${String(startDate.getMonth() + 1).padStart(2, "0")}`,
-    groupName: `${startDate.toLocaleString(undefined, { month: "long", year: "numeric" })} Billing`,
+    groupName: startDate.toLocaleString(undefined, { month: "long", year: "numeric" }),
     periodStart: localIso(startDate),
     periodEnd: localIso(new Date(startDate.getFullYear(), startDate.getMonth() + 1, 0)),
   });

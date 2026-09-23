@@ -1186,7 +1186,7 @@ export function BillingPeriods() {
   const groupEnd = new Date(start.getFullYear(), start.getMonth() + 1, 0);
   const [groupForm, setGroupForm] = useState<Row>({
     groupCode: `BPG-${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}`,
-    groupName: `${start.toLocaleString(undefined, { month: "long", year: "numeric" })} Billing`,
+    groupName: start.toLocaleString(undefined, { month: "long", year: "numeric" }),
     periodStart: iso(groupStart),
     periodEnd: iso(groupEnd),
   });
@@ -1412,7 +1412,7 @@ export function BillingPeriods() {
     const lastDay = new Date(base.getFullYear(), base.getMonth() + 1, 0);
     setGroupForm({
       groupCode: `BPG-${base.getFullYear()}-${String(base.getMonth() + 1).padStart(2, "0")}`,
-      groupName: `${base.toLocaleString(undefined, { month: "long", year: "numeric" })} Billing`,
+      groupName: base.toLocaleString(undefined, { month: "long", year: "numeric" }),
       periodStart: iso(firstDay),
       periodEnd: iso(lastDay),
     });
@@ -1808,7 +1808,7 @@ export function BillingPeriodGroups() {
   const today = localIso(now);
   const groupFormForStart = (startDate: Date): Row => ({
     groupCode: `BPG-${startDate.getFullYear()}-${String(startDate.getMonth() + 1).padStart(2, "0")}`,
-    groupName: `${startDate.toLocaleString(undefined, { month: "long", year: "numeric" })} Billing`,
+    groupName: startDate.toLocaleString(undefined, { month: "long", year: "numeric" }),
     periodStart: localIso(startDate),
     periodEnd: localIso(new Date(startDate.getFullYear(), startDate.getMonth() + 1, 0)),
   });
