@@ -2855,6 +2855,20 @@ export function ReadingWorklist() {
   const selectedCycle = cycles.find(
     (cycle) => String(cycle.readingCycleId) === cycleId,
   );
+  const now = new Date();
+  const todayIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  const selectedPeriodGroup = periodGroups.find(
+    (group) => String(group.billingPeriodGroupId) === periodGroupId,
+  );
+  const currentPeriodGroup = periodGroups.find((group) => {
+    const groupStart = String(group.periodStart ?? "").slice(0, 10);
+    const groupEnd = String(group.periodEnd ?? "").slice(0, 10);
+    return groupStart <= todayIso && todayIso <= groupEnd;
+  });
+  const selectedPeriodGroupExpired = Boolean(
+    selectedPeriodGroup &&
+      String(selectedPeriodGroup.periodEnd ?? "").slice(0, 10) < todayIso,
+  );
   const selectedCycles = cycles.filter((cycle) => cycleIds.includes(String(cycle.readingCycleId)));
   const groupCycles = periodGroupId
     ? cycles.filter((cycle) => String(cycle.billingPeriodGroupId ?? "") === periodGroupId)
@@ -3854,6 +3868,39 @@ export function ReadingWorklist() {
     >
       {error && <Notice>{error}</Notice>}
       {inlineMessage && <Notice tone="green">{inlineMessage}</Notice>}
+      {selectedPeriodGroupExpired && (
+        <section
+          role="alert"
+          className="mb-4 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-amber-300 bg-amber-50 px-5 py-4 text-amber-950 shadow-sm"
+        >
+          <div>
+            <div className="font-extrabold">
+              Period group ended on {formatDmyDate(selectedPeriodGroup?.periodEnd)}
+            </div>
+            <p className="mt-1 text-sm text-amber-800">
+              <strong>{selectedPeriodGroup?.groupName}</strong> covered {formatDmyDate(selectedPeriodGroup?.periodStart)} – {formatDmyDate(selectedPeriodGroup?.periodEnd)}. {currentPeriodGroup
+                ? `${currentPeriodGroup.groupName} now covers today's work.`
+                : "No period group covers today. Create the next group before opening a new reading cycle."}
+            </p>
+          </div>
+          {currentPeriodGroup ? (
+            <button
+              type="button"
+              onClick={() => updatePeriodGroup(String(currentPeriodGroup.billingPeriodGroupId))}
+              className="inline-flex flex-none items-center rounded-xl bg-amber-700 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-amber-600"
+            >
+              View current group
+            </button>
+          ) : (
+            <Link
+              to="/period-groups"
+              className="inline-flex flex-none items-center rounded-xl bg-amber-700 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-amber-600"
+            >
+              Create new period group
+            </Link>
+          )}
+        </section>
+      )}
       {canCaptureReadings && filteredItems.some((item) => !item.cycleReading) && (
         <div className="fixed bottom-6 right-6 z-50 flex max-w-[calc(100vw-3rem)] items-center gap-4 rounded-2xl border border-emerald-200 bg-white p-3 shadow-[0_20px_60px_-18px_rgba(15,118,110,0.55)]">
           <div className="min-w-0 pl-1">
