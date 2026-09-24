@@ -240,10 +240,26 @@ adminRouter.get("/roles", async (req, res) => {
     orderBy: { roleName: "asc" },
     include: {
       rolePermissions: { include: { permission: true } },
+      userRoles: {
+        where: { status: "ACTIVE", user: { status: { not: "DELETED" } } },
+        orderBy: { assignedAt: "desc" },
+        select: {
+          assignedAt: true,
+          user: {
+            select: {
+              userId: true, username: true, firstName: true, lastName: true,
+              emailAddress: true, status: true, lastLoginAt: true,
+            },
+          },
+        },
+      },
       _count: { select: { userRoles: { where: { status: "ACTIVE" } } } },
     },
   });
-  res.json(roles);
+  res.json(roles.map(({ userRoles, ...role }) => ({
+    ...role,
+    assignedUsers: userRoles.map(({ user, assignedAt }) => ({ ...user, assignedAt })),
+  })));
 });
 
 adminRouter.post("/roles", async (req, res) => {

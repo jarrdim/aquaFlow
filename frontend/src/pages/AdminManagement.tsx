@@ -13,6 +13,17 @@ type Role = {
   status: string;
   rolePermissions?: { permission: Permission }[];
   _count?: { userRoles: number };
+  assignedUsers?: AssignedUser[];
+};
+type AssignedUser = {
+  userId: string;
+  username: string;
+  firstName: string;
+  lastName: string;
+  emailAddress: string;
+  status: string;
+  lastLoginAt?: string;
+  assignedAt: string;
 };
 type Permission = {
   permissionId: string;
@@ -105,6 +116,10 @@ function NoAccess() {
   );
 }
 const isAdmin = () => Boolean(getSessionUser()?.roles.includes("SYSTEM_ADMIN"));
+
+function userInitials(user: Pick<AssignedUser, "firstName" | "lastName">) {
+  return `${user.firstName?.[0] ?? ""}${user.lastName?.[0] ?? ""}`.toUpperCase() || "U";
+}
 
 export function AdminDashboard() {
   const [data, setData] = useState<any>(null);
@@ -782,9 +797,9 @@ export function RoleAdministration() {
                 <button
                   key={r.roleId}
                   onClick={() => edit(r)}
-                  className={`flex w-full items-center justify-between px-2 py-4 text-left ${selected?.roleId === r.roleId ? "bg-sky-50" : ""}`}
+                  className={`group flex w-full items-center justify-between gap-4 rounded-xl px-3 py-4 text-left transition ${selected?.roleId === r.roleId ? "bg-sky-50 ring-1 ring-inset ring-sky-200" : "hover:bg-slate-50"}`}
                 >
-                  <div>
+                  <div className="min-w-0">
                     <div className="font-semibold text-slate-900">
                       {r.roleName}
                     </div>
@@ -793,9 +808,24 @@ export function RoleAdministration() {
                       permissions
                     </div>
                   </div>
-                  <span className="text-sm text-slate-500">
-                    {r._count?.userRoles || 0} users →
-                  </span>
+                  <div className="flex shrink-0 items-center gap-3">
+                    {!!r.assignedUsers?.length && (
+                      <div className="flex -space-x-2" aria-label={`${r.assignedUsers.length} assigned users`}>
+                        {r.assignedUsers.slice(0, 3).map((user, index) => (
+                          <span
+                            key={user.userId}
+                            title={`${user.firstName} ${user.lastName}`}
+                            className={`grid h-8 w-8 place-items-center rounded-full border-2 border-white text-[10px] font-extrabold text-white shadow-sm ${["bg-sky-600", "bg-violet-600", "bg-emerald-600"][index % 3]}`}
+                          >
+                            {userInitials(user)}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    <span className="whitespace-nowrap text-sm font-semibold text-slate-500 transition group-hover:text-sky-700">
+                      {r.assignedUsers?.length ?? r._count?.userRoles ?? 0} {Number(r.assignedUsers?.length ?? r._count?.userRoles ?? 0) === 1 ? "user" : "users"} →
+                    </span>
+                  </div>
                 </button>
               ))}
             </div>
@@ -855,6 +885,47 @@ export function RoleAdministration() {
                     }
                   />
                 </label>
+                {!creating && selected && (
+                  <section className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50/70">
+                    <div className="flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3">
+                      <div>
+                        <h3 className="text-sm font-bold text-slate-900">Assigned users</h3>
+                        <p className="mt-0.5 text-xs text-slate-500">People currently receiving this role</p>
+                      </div>
+                      <span className="rounded-full bg-sky-100 px-2.5 py-1 text-xs font-extrabold text-sky-700">
+                        {selected.assignedUsers?.length ?? 0}
+                      </span>
+                    </div>
+                    {selected.assignedUsers?.length ? (
+                      <div className="max-h-64 space-y-2 overflow-y-auto p-3">
+                        {selected.assignedUsers.map((user, index) => (
+                          <div key={user.userId} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+                            <span className={`grid h-10 w-10 shrink-0 place-items-center rounded-full text-xs font-extrabold text-white ${["bg-sky-600", "bg-violet-600", "bg-emerald-600", "bg-amber-600"][index % 4]}`}>
+                              {userInitials(user)}
+                            </span>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <p className="truncate text-sm font-bold text-slate-900">{user.firstName} {user.lastName}</p>
+                                <span className={`rounded-full px-2 py-0.5 text-[10px] font-extrabold uppercase ${user.status === "ACTIVE" ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>{user.status}</span>
+                              </div>
+                              <p className="mt-0.5 truncate text-xs text-slate-500">@{user.username} · {user.emailAddress}</p>
+                            </div>
+                            <div className="hidden shrink-0 text-right text-[11px] text-slate-400 sm:block">
+                              <div>Last login</div>
+                              <div className="mt-0.5 font-semibold text-slate-600">{user.lastLoginAt ? new Date(user.lastLoginAt).toLocaleDateString() : "Never"}</div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="px-4 py-7 text-center">
+                        <div className="mx-auto grid h-10 w-10 place-items-center rounded-full bg-slate-200 text-xs font-extrabold text-slate-500">0</div>
+                        <p className="mt-2 text-sm font-semibold text-slate-700">No users assigned</p>
+                        <p className="mt-1 text-xs text-slate-500">Assign this role from User administration.</p>
+                      </div>
+                    )}
+                  </section>
+                )}
                 <label className="block">
                   <span className="mb-1 block text-sm font-medium">
                     Permission grants
