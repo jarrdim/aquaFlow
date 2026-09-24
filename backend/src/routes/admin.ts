@@ -35,7 +35,7 @@ adminRouter.get("/dashboard", async (_req, res) => {
   const [users, activeUsers, roles, permissions] = await Promise.all([
     prisma.user.count(),
     prisma.user.count({ where: { status: "ACTIVE" } }),
-    prisma.role.count(),
+    prisma.role.count({ where: { status: "ACTIVE" } }),
     prisma.permission.count(),
   ]);
   res.json({ users, activeUsers, roles, permissions });
@@ -68,7 +68,7 @@ adminRouter.get("/users", async (req, res) => {
         userId: true, username: true, firstName: true, lastName: true,
         emailAddress: true, phoneNumber: true, userType: true, status: true,
         twoFactorEnabled: true, lastLoginAt: true, createdAt: true,
-        userRoles: { where: { status: "ACTIVE" }, select: { role: true } },
+        userRoles: { where: { status: "ACTIVE", role: { status: "ACTIVE" } }, select: { role: true } },
       },
     }),
   ]);
@@ -93,9 +93,16 @@ adminRouter.post("/users", async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message });
   const { roleIds, password, ...data } = parsed.data;
   try {
+    const uniqueRoleIds = [...new Set(roleIds.map(String))].map(BigInt);
+    const activeRoleCount = await prisma.role.count({
+      where: { roleId: { in: uniqueRoleIds }, status: "ACTIVE" },
+    });
+    if (activeRoleCount !== uniqueRoleIds.length) {
+      return res.status(400).json({ error: "Every selected role must be active" });
+    }
     const user = await prisma.$transaction(async (tx) => {
       const created = await tx.user.create({ data: { ...data, phoneNumber: data.phoneNumber || null, passwordHash: await bcrypt.hash(password, 10) } });
-      await tx.userRole.createMany({ data: roleIds.map((roleId) => ({ userId: created.userId, roleId, assignedBy: BigInt(req.user!.userId) })) });
+      await tx.userRole.createMany({ data: uniqueRoleIds.map((roleId) => ({ userId: created.userId, roleId, assignedBy: BigInt(req.user!.userId) })) });
       return created;
     });
     res.status(201).json(user);
@@ -125,19 +132,28 @@ adminRouter.put("/users/:id/roles", async (req, res) => {
   const userId = id.safeParse(req.params.id);
   const parsed = z.object({ roleIds: z.array(id).min(1) }).safeParse(req.body);
   if (!userId.success || !parsed.success) return res.status(400).json({ error: "At least one valid role is required" });
+  const uniqueRoleIds = [...new Set(parsed.data.roleIds.map(String))].map(BigInt);
+  const activeRoleCount = await prisma.role.count({
+    where: { roleId: { in: uniqueRoleIds }, status: "ACTIVE" },
+  });
+  if (activeRoleCount !== uniqueRoleIds.length) {
+    return res.status(400).json({ error: "Every selected role must be active" });
+  }
   if (userId.data === BigInt(req.user!.userId)) {
     const adminRole = await prisma.role.findUnique({ where: { roleCode: "SYSTEM_ADMIN" } });
-    if (adminRole && !parsed.data.roleIds.includes(adminRole.roleId)) return res.status(400).json({ error: "You cannot remove your own system administrator role" });
+    if (adminRole && !uniqueRoleIds.includes(adminRole.roleId)) return res.status(400).json({ error: "You cannot remove your own system administrator role" });
   }
   await prisma.$transaction(async (tx) => {
     await tx.userRole.deleteMany({ where: { userId: userId.data } });
-    await tx.userRole.createMany({ data: parsed.data.roleIds.map((roleId) => ({ userId: userId.data, roleId, assignedBy: BigInt(req.user!.userId) })) });
+    await tx.userRole.createMany({ data: uniqueRoleIds.map((roleId) => ({ userId: userId.data, roleId, assignedBy: BigInt(req.user!.userId) })) });
   });
   res.json({ message: "User roles updated" });
 });
 
-adminRouter.get("/roles", async (_req, res) => {
+adminRouter.get("/roles", async (req, res) => {
+  const includeInactive = req.query.includeInactive === "true";
   const roles = await prisma.role.findMany({
+    where: includeInactive ? undefined : { status: "ACTIVE" },
     orderBy: { roleName: "asc" },
     include: {
       rolePermissions: { include: { permission: true } },

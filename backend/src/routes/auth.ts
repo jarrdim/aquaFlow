@@ -50,7 +50,7 @@ type SessionUser = {
 };
 
 const activeUserRoles = {
-  where: { status: "ACTIVE" },
+  where: { status: "ACTIVE", role: { status: "ACTIVE" } },
   include: {
     role: {
       include: {
@@ -270,6 +270,10 @@ authRouter.post("/login", loginLimiter, async (req, res) => {
     return res.status(401).json({ error: "Invalid credentials" });
   }
 
+  if (user.userType !== "CUSTOMER" && user.userRoles.length === 0) {
+    return res.status(403).json({ error: "No active role is assigned to this account" });
+  }
+
   await prisma.user.update({
     where: { userId: user.userId },
     data: { lastLoginAt: new Date() },
@@ -484,6 +488,9 @@ authRouter.post("/refresh", async (req, res) => {
     });
     if (!user || user.status !== "ACTIVE") {
       return res.status(401).json({ error: "Account is not active" });
+    }
+    if (user.userRoles.length === 0) {
+      return res.status(403).json({ error: "No active role is assigned to this account" });
     }
     res.json(issueTokens(user));
   } catch {

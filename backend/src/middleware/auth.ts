@@ -59,10 +59,24 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     const credentialOwnerId = BigInt(payload.authUserId ?? payload.userId);
     const activeUser = await prisma.user.findUnique({
       where: { userId: credentialOwnerId },
-      select: { status: true },
+      select: {
+        status: true,
+        userType: true,
+        userRoles: {
+          where: { status: "ACTIVE", role: { status: "ACTIVE" } },
+          select: { role: { select: { roleCode: true } } },
+        },
+      },
     });
     if (!activeUser || activeUser.status !== "ACTIVE") {
       return res.status(401).json({ error: "Account is not active" });
+    }
+    if (activeUser.userType !== "CUSTOMER") {
+      const liveRoles = activeUser.userRoles.map(({ role }) => role.roleCode);
+      if (!liveRoles.length) {
+        return res.status(403).json({ error: "No active role is assigned to this account" });
+      }
+      payload.roles = liveRoles;
     }
     req.user = payload;
     next();

@@ -7,6 +7,19 @@ const seedDemoGeography = process.env.SEED_DEMO_GEOGRAPHY === "true";
 const fieldOfficerZoneCode =
   process.env.SEED_FIELD_OFFICER_ZONE_CODE?.trim() || null;
 
+const retiredRoleCodes = new Set([
+  "ACCOUNTANT",
+  "AUDITOR",
+  "BILLING_OFFICER",
+  "BILLING_SUPERVISOR",
+  "CASHIER",
+  "CREDIT_CONTROL_OFFICER",
+  "CREDIT_CONTROL_SUPERVISOR",
+  "CUSTOMER_CARE_OFFICER",
+  "FINANCE_MANAGER",
+  "METER_SUPERVISOR",
+]);
+
 const roleDefinitions = [
   ["SYSTEM_ADMIN", "System Administrator", "Full system administration"],
   [
@@ -172,10 +185,11 @@ async function ensureRole(
   roleName: string,
   description: string,
 ) {
+  const status = retiredRoleCodes.has(roleCode) ? "INACTIVE" : "ACTIVE";
   return prisma.role.upsert({
     where: { roleCode },
-    update: { roleName, description, status: "ACTIVE" },
-    create: { roleCode, roleName, description, status: "ACTIVE" },
+    update: { roleName, description, status },
+    create: { roleCode, roleName, description, status },
   });
 }
 
@@ -346,7 +360,9 @@ async function main() {
   for (const definition of staffDefinitions) {
     const user = await ensureUser(definition, passwordHash);
     users.set(definition.username, user);
-    await ensureUserRole(user.userId, roles.get(definition.roleCode)!.roleId);
+    if (!retiredRoleCodes.has(definition.roleCode)) {
+      await ensureUserRole(user.userId, roles.get(definition.roleCode)!.roleId);
+    }
   }
 
   const category = await ensureCategory("RESIDENTIAL", "Residential");
