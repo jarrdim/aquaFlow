@@ -78,7 +78,7 @@ function Card({
   title,
   children,
 }: {
-  title: string;
+  title: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
@@ -206,6 +206,8 @@ export function UserAdministration() {
   const [roles, setRoles] = useState<Role[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [total, setTotal] = useState(0);
+  const [assignedTotal, setAssignedTotal] = useState(0);
+  const [unassignedTotal, setUnassignedTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [pages, setPages] = useState(1);
   const [q, setQ] = useState("");
@@ -248,6 +250,8 @@ export function UserAdministration() {
       setRoles(r);
       setUsers(u.data);
       setTotal(u.total);
+      setAssignedTotal(u.assigned ?? 0);
+      setUnassignedTotal(u.unassigned ?? 0);
       setPages(u.pages);
     } catch (e: any) {
       setError(e.message);
@@ -255,6 +259,13 @@ export function UserAdministration() {
       setLoading(false);
     }
   }, [q, filterStatus, filterRole, page]);
+  const orderedUsers = useMemo(
+    () =>
+      [...users].sort(
+        (a, b) => Number(b.userRoles.length > 0) - Number(a.userRoles.length > 0),
+      ),
+    [users],
+  );
   useEffect(() => {
     if (isAdmin()) load();
   }, [load]);
@@ -363,64 +374,128 @@ export function UserAdministration() {
       subtitle="Create accounts, manage status and assign one or more roles"
       action={
         <button
-          className="rounded-lg bg-aqua-700 px-4 py-2.5 text-sm font-semibold text-white"
+          className="inline-flex items-center gap-2 rounded-xl bg-aqua-700 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-aqua-800 focus:outline-none focus:ring-2 focus:ring-aqua-500 focus:ring-offset-2"
           onClick={() => {
             setCreating(true);
             setSelected(null);
             setForm(empty);
           }}
         >
-          + Add user
+          <span className="grid h-5 w-5 place-items-center rounded-full bg-white/15 text-base leading-none">+</span>
+          Add user
         </button>
       }
     >
       <Notice error={error} success={success} />
-      <Card title={`${total.toLocaleString()} user account(s)`}>
-        <div className="mb-4 grid gap-3 md:grid-cols-[1fr_220px_260px]">
-          <input
-            className={input}
-            placeholder="Search name, username or email"
-            value={q}
-            onChange={(e) => {
-              setQ(e.target.value);
-              setPage(1);
-            }}
-          />
-          <SearchableSelect
-            className={input}
-            value={filterStatus}
-            onChange={(e) => {
-              setFilterStatus(e.target.value);
-              setPage(1);
-            }}
-          >
-            <option value="">All statuses</option>
-            {["ACTIVE", "INACTIVE", "SUSPENDED", "PENDING", "DELETED"].map((x) => (
-              <option key={x}>{x}</option>
-            ))}
-          </SearchableSelect>
-          <SearchableSelect
-            className={input}
-            value={filterRole}
-            onChange={(e) => {
-              setFilterRole(e.target.value);
-              setPage(1);
-            }}
-          >
-            <option value="">All roles</option>
-            {roles.map((r) => (
-              <option key={r.roleId} value={r.roleId}>
-                {r.roleName}
-              </option>
-            ))}
-          </SearchableSelect>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Total users</p>
+          <p className="mt-1 text-2xl font-bold tracking-tight text-slate-900">{total.toLocaleString()}</p>
+        </div>
+        <div className="rounded-2xl border border-emerald-100 bg-emerald-50/60 p-4 shadow-sm">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Roles assigned</p>
+              <p className="mt-1 text-2xl font-bold tracking-tight text-emerald-950">{assignedTotal.toLocaleString()}</p>
+            </div>
+            <span className="grid h-10 w-10 place-items-center rounded-xl bg-emerald-100 text-lg font-bold text-emerald-700">✓</span>
+          </div>
+        </div>
+        <div className="rounded-2xl border border-amber-100 bg-amber-50/60 p-4 shadow-sm">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">Needs a role</p>
+              <p className="mt-1 text-2xl font-bold tracking-tight text-amber-950">{unassignedTotal.toLocaleString()}</p>
+            </div>
+            <span className="grid h-10 w-10 place-items-center rounded-xl bg-amber-100 text-lg font-bold text-amber-700">!</span>
+          </div>
+        </div>
+      </div>
+      <Card
+        title={
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="text-base font-bold text-slate-900">User directory</p>
+              <p className="mt-0.5 text-xs font-normal text-slate-500">Users with assigned roles are shown first.</p>
+            </div>
+            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+              {total.toLocaleString()} {total === 1 ? "account" : "accounts"}
+            </span>
+          </div>
+        }
+      >
+        <div className="mb-5 rounded-xl border border-slate-200 bg-slate-50/80 p-3">
+          <div className="grid gap-3 md:grid-cols-[minmax(260px,1fr)_210px_250px_auto]">
+            <label className="relative block">
+              <span className="sr-only">Search users</span>
+              <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-slate-400">⌕</span>
+              <input
+                className={`${input} pl-9`}
+                placeholder="Search by name, username or email"
+                value={q}
+                onChange={(e) => {
+                  setQ(e.target.value);
+                  setPage(1);
+                }}
+              />
+            </label>
+            <SearchableSelect
+              aria-label="Filter by status"
+              className={input}
+              value={filterStatus}
+              onChange={(e) => {
+                setFilterStatus(e.target.value);
+                setPage(1);
+              }}
+            >
+              <option value="">All statuses</option>
+              {["ACTIVE", "INACTIVE", "SUSPENDED", "PENDING", "DELETED"].map((x) => (
+                <option key={x}>{x}</option>
+              ))}
+            </SearchableSelect>
+            <SearchableSelect
+              aria-label="Filter by role"
+              className={input}
+              value={filterRole}
+              onChange={(e) => {
+                setFilterRole(e.target.value);
+                setPage(1);
+              }}
+            >
+              <option value="">All roles</option>
+              {roles.map((r) => (
+                <option key={r.roleId} value={r.roleId}>
+                  {r.roleName}
+                </option>
+              ))}
+            </SearchableSelect>
+            {(q || filterStatus || filterRole) && (
+              <button
+                type="button"
+                className="rounded-lg px-3 py-2 text-sm font-semibold text-slate-600 transition hover:bg-white hover:text-slate-900"
+                onClick={() => {
+                  setQ("");
+                  setFilterStatus("");
+                  setFilterRole("");
+                  setPage(1);
+                }}
+              >
+                Clear
+              </button>
+            )}
+          </div>
         </div>
         {loading ? (
           <Loader />
+        ) : orderedUsers.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-slate-300 px-6 py-12 text-center">
+            <p className="font-semibold text-slate-800">No users found</p>
+            <p className="mt-1 text-sm text-slate-500">Try changing the search or filters.</p>
+          </div>
         ) : (
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto rounded-xl border border-slate-200">
             <table className="w-full text-left text-sm">
-              <thead className="bg-slate-50 text-xs uppercase text-slate-500">
+              <thead className="bg-slate-50/90 text-[11px] uppercase tracking-wider text-slate-500">
                 <tr>
                   {[
                     "User",
@@ -430,58 +505,71 @@ export function UserAdministration() {
                     "Status",
                     "Action",
                   ].map((h) => (
-                    <th key={h} className="px-4 py-3">
+                    <th key={h} className="whitespace-nowrap px-4 py-3.5 font-semibold">
                       {h}
                     </th>
                   ))}
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
-                {users.map((user) => (
-                  <tr key={user.userId}>
+              <tbody className="divide-y divide-slate-100 bg-white">
+                {orderedUsers.map((user) => (
+                  <tr key={user.userId} className="transition hover:bg-aqua-50/40">
                     <td className="px-4 py-3">
-                      <div className="font-semibold text-slate-900">
-                        {user.firstName} {user.lastName}
-                      </div>
-                      <div className="text-xs text-slate-500">
-                        @{user.username}
+                      <div className="flex min-w-48 items-center gap-3">
+                        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-aqua-100 text-xs font-bold text-aqua-700">
+                          {userInitials(user)}
+                        </span>
+                        <div>
+                          <div className="font-semibold text-slate-900">
+                            {user.firstName} {user.lastName}
+                          </div>
+                          <div className="mt-0.5 text-xs text-slate-500">
+                            @{user.username}
+                          </div>
+                        </div>
                       </div>
                     </td>
                     <td className="px-4 py-3">
-                      <div>{user.emailAddress}</div>
-                      <div className="text-xs text-slate-500">
+                      <div className="max-w-64 truncate font-medium text-slate-700" title={user.emailAddress}>{user.emailAddress}</div>
+                      <div className="mt-0.5 text-xs text-slate-500">
                         {user.phoneNumber || "No phone"}
                       </div>
                     </td>
                     <td className="px-4 py-3">
-                      <div className="flex max-w-xs flex-wrap gap-1">
-                        {user.userRoles.map((x) => (
+                      <div className="flex min-w-52 max-w-sm flex-wrap gap-1.5">
+                        {user.userRoles.length ? user.userRoles.map((x) => (
                           <span
                             key={x.role.roleId}
-                            className="rounded-full bg-violet-50 px-2 py-1 text-xs text-violet-700"
+                            className="rounded-full border border-violet-100 bg-violet-50 px-2.5 py-1 text-xs font-medium text-violet-700"
                           >
                             {x.role.roleName}
                           </span>
-                        ))}
+                        )) : (
+                          <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700">
+                            <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+                            No role assigned
+                          </span>
+                        )}
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-slate-500">
+                    <td className="whitespace-nowrap px-4 py-3 text-slate-500">
                       {user.lastLoginAt
                         ? new Date(user.lastLoginAt).toLocaleString()
                         : "Never"}
                     </td>
                     <td className="px-4 py-3">
                       <span
-                        className={`rounded-full px-2 py-1 text-xs font-semibold ${user.status === "ACTIVE" ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}`}
+                        className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-bold tracking-wide ${user.status === "ACTIVE" ? "bg-emerald-50 text-emerald-700" : user.status === "SUSPENDED" ? "bg-red-50 text-red-700" : user.status === "PENDING" ? "bg-amber-50 text-amber-700" : "bg-slate-100 text-slate-600"}`}
                       >
+                        <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" />
                         {user.status}
                       </span>
                     </td>
                     <td className="px-4 py-3">
-                      <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-2 whitespace-nowrap">
                         {user.status !== "DELETED" && (
                           <button
-                            className="font-semibold text-aqua-700"
+                            className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-aqua-700 transition hover:border-aqua-200 hover:bg-aqua-50"
                             onClick={() => edit(user)}
                           >
                             Edit
@@ -489,7 +577,7 @@ export function UserAdministration() {
                         )}
                         {user.status !== "DELETED" && user.userId !== getSessionUser()?.userId && (
                           <button
-                            className="font-semibold text-red-600 disabled:opacity-50"
+                            className="rounded-lg px-2.5 py-1.5 text-xs font-semibold text-red-600 transition hover:bg-red-50 disabled:opacity-50"
                             disabled={Boolean(deletingUserId)}
                             onClick={() => void remove(user)}
                           >
@@ -498,7 +586,7 @@ export function UserAdministration() {
                         )}
                         {user.status === "DELETED" && (
                           <button
-                            className="font-semibold text-red-700 disabled:opacity-50"
+                            className="rounded-lg px-2.5 py-1.5 text-xs font-semibold text-red-700 transition hover:bg-red-50 disabled:opacity-50"
                             disabled={Boolean(deletingUserId)}
                             onClick={() => void purge(user)}
                           >
@@ -513,20 +601,20 @@ export function UserAdministration() {
             </table>
           </div>
         )}
-        <div className="mt-4 flex items-center justify-between text-sm text-slate-500">
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm text-slate-500">
           <span>
-            Page {page} of {pages}
+            Page <strong className="font-semibold text-slate-700">{page}</strong> of {pages}
           </span>
           <div className="flex gap-2">
             <button
-              className="rounded border px-3 py-1.5 disabled:opacity-40"
+              className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
               disabled={page <= 1}
               onClick={() => setPage((p) => p - 1)}
             >
               Previous
             </button>
             <button
-              className="rounded border px-3 py-1.5 disabled:opacity-40"
+              className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
               disabled={page >= pages}
               onClick={() => setPage((p) => p + 1)}
             >

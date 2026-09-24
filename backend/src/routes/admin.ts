@@ -58,22 +58,56 @@ adminRouter.get("/users", async (req, res) => {
     ...(userStatus ? { status: userStatus } : { status: { not: "DELETED" } }),
     ...(roleId ? { userRoles: { some: { roleId: BigInt(roleId), status: "ACTIVE" } } } : {}),
   };
-  const [total, users] = await Promise.all([
+  const activeRoleAssignment: Prisma.UserRoleWhereInput = {
+    status: "ACTIVE",
+    role: { status: "ACTIVE" },
+  };
+  const assignedWhere: Prisma.UserWhereInput = {
+    AND: [where, { userRoles: { some: activeRoleAssignment } }],
+  };
+  const unassignedWhere: Prisma.UserWhereInput = {
+    AND: [where, { userRoles: { none: activeRoleAssignment } }],
+  };
+  const [total, assigned] = await Promise.all([
     prisma.user.count({ where }),
-    prisma.user.findMany({
-      where,
-      orderBy: [{ firstName: "asc" }, { lastName: "asc" }],
-      skip: (page - 1) * take,
-      take,
-      select: {
-        userId: true, username: true, firstName: true, lastName: true,
-        emailAddress: true, phoneNumber: true, userType: true, status: true,
-        twoFactorEnabled: true, lastLoginAt: true, createdAt: true,
-        userRoles: { where: { status: "ACTIVE", role: { status: "ACTIVE" } }, select: { role: true } },
-      },
-    }),
+    prisma.user.count({ where: assignedWhere }),
   ]);
-  res.json({ data: users, total, page, take, pages: Math.max(1, Math.ceil(total / take)) });
+  const pageOffset = (page - 1) * take;
+  const assignedTake = Math.min(take, Math.max(0, assigned - pageOffset));
+  const unassignedTake = take - assignedTake;
+  const assignedSkip = Math.min(pageOffset, assigned);
+  const unassignedSkip = Math.max(0, pageOffset - assigned);
+  const userSelect: Prisma.UserSelect = {
+    userId: true, username: true, firstName: true, lastName: true,
+    emailAddress: true, phoneNumber: true, userType: true, status: true,
+    twoFactorEnabled: true, lastLoginAt: true, createdAt: true,
+    userRoles: { where: activeRoleAssignment, select: { role: true } },
+  };
+  const [assignedUsers, unassignedUsers] = await Promise.all([
+    assignedTake ? prisma.user.findMany({
+      where: assignedWhere,
+      orderBy: [{ firstName: "asc" }, { lastName: "asc" }],
+      skip: assignedSkip,
+      take: assignedTake,
+      select: userSelect,
+    }) : Promise.resolve([]),
+    unassignedTake ? prisma.user.findMany({
+      where: unassignedWhere,
+      orderBy: [{ firstName: "asc" }, { lastName: "asc" }],
+      skip: unassignedSkip,
+      take: unassignedTake,
+      select: userSelect,
+    }) : Promise.resolve([]),
+  ]);
+  res.json({
+    data: [...assignedUsers, ...unassignedUsers],
+    total,
+    assigned,
+    unassigned: total - assigned,
+    page,
+    take,
+    pages: Math.max(1, Math.ceil(total / take)),
+  });
 });
 
 const userCreate = z.object({
