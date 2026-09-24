@@ -522,20 +522,24 @@ export function UserAdministration() {
       </Card>
       {(creating || selected) && (
         <div
-          className="fixed inset-0 z-50 flex justify-end bg-slate-950/30"
-          onMouseDown={() => {
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-[2px]"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target !== event.currentTarget) return;
             setCreating(false);
             setSelected(null);
           }}
         >
           <form
             onSubmit={save}
-            onMouseDown={(e) => e.stopPropagation()}
-            className="h-full w-full max-w-xl overflow-y-auto bg-white p-6 shadow-2xl"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="user-editor-title"
+            className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl"
           >
-            <div className="flex justify-between">
+            <div className="flex items-start justify-between gap-4 border-b border-slate-100 pb-4">
               <div>
-                <h2 className="text-xl font-bold">
+                <h2 id="user-editor-title" className="text-xl font-bold">
                   {creating ? "Create user" : "Edit user"}
                 </h2>
                 <p className="text-sm text-slate-500">
@@ -544,6 +548,8 @@ export function UserAdministration() {
               </div>
               <button
                 type="button"
+                aria-label="Close user form"
+                className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-slate-200 text-xl text-slate-500 transition hover:bg-slate-50 hover:text-slate-900"
                 onClick={() => {
                   setCreating(false);
                   setSelected(null);
