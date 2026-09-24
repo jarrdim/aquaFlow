@@ -200,6 +200,7 @@ export function UserAdministration() {
   const [creating, setCreating] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [deletingUserId, setDeletingUserId] = useState("");
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const empty = {
@@ -293,6 +294,28 @@ export function UserAdministration() {
       setSaving(false);
     }
   };
+  const remove = async (user: User) => {
+    const name = `${user.firstName} ${user.lastName}`.trim() || user.username;
+    if (
+      !window.confirm(
+        `Delete ${name}? They will no longer be able to sign in. Their identity will be anonymized, while audit and transaction history will remain.`,
+      )
+    ) return;
+
+    setDeletingUserId(user.userId);
+    setError("");
+    setSuccess("");
+    try {
+      await api.deleteAdminUser(user.userId);
+      if (selected?.userId === user.userId) setSelected(null);
+      setSuccess(`${name} was deleted.`);
+      await load();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setDeletingUserId("");
+    }
+  };
   if (!isAdmin())
     return (
       <Shell title="User administration" subtitle="Manage staff access">
@@ -337,7 +360,7 @@ export function UserAdministration() {
             }}
           >
             <option value="">All statuses</option>
-            {["ACTIVE", "INACTIVE", "SUSPENDED", "PENDING"].map((x) => (
+            {["ACTIVE", "INACTIVE", "SUSPENDED", "PENDING", "DELETED"].map((x) => (
               <option key={x}>{x}</option>
             ))}
           </SearchableSelect>
@@ -420,12 +443,25 @@ export function UserAdministration() {
                       </span>
                     </td>
                     <td className="px-4 py-3">
-                      <button
-                        className="font-semibold text-aqua-700"
-                        onClick={() => edit(user)}
-                      >
-                        Edit
-                      </button>
+                      <div className="flex items-center gap-3">
+                        {user.status !== "DELETED" && (
+                          <button
+                            className="font-semibold text-aqua-700"
+                            onClick={() => edit(user)}
+                          >
+                            Edit
+                          </button>
+                        )}
+                        {user.status !== "DELETED" && user.userId !== getSessionUser()?.userId && (
+                          <button
+                            className="font-semibold text-red-600 disabled:opacity-50"
+                            disabled={Boolean(deletingUserId)}
+                            onClick={() => void remove(user)}
+                          >
+                            {deletingUserId === user.userId ? "Deleting…" : "Delete"}
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}

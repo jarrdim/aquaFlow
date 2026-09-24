@@ -1,5 +1,6 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
+import { randomUUID } from "crypto";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
@@ -33,7 +34,7 @@ const handlePrismaError = (error: unknown, res: any) => {
 
 adminRouter.get("/dashboard", async (_req, res) => {
   const [users, activeUsers, roles, permissions] = await Promise.all([
-    prisma.user.count(),
+    prisma.user.count({ where: { status: { not: "DELETED" } } }),
     prisma.user.count({ where: { status: "ACTIVE" } }),
     prisma.role.count({ where: { status: "ACTIVE" } }),
     prisma.permission.count(),
@@ -54,7 +55,7 @@ adminRouter.get("/users", async (req, res) => {
       { lastName: { contains: q, mode: "insensitive" } },
       { emailAddress: { contains: q, mode: "insensitive" } },
     ] } : {}),
-    ...(userStatus ? { status: userStatus } : {}),
+    ...(userStatus ? { status: userStatus } : { status: { not: "DELETED" } }),
     ...(roleId ? { userRoles: { some: { roleId: BigInt(roleId), status: "ACTIVE" } } } : {}),
   };
   const [total, users] = await Promise.all([
@@ -126,6 +127,55 @@ adminRouter.patch("/users/:id", async (req, res) => {
   } catch (error) {
     if (!handlePrismaError(error, res)) throw error;
   }
+});
+
+adminRouter.delete("/users/:id", async (req, res) => {
+  const userId = id.safeParse(req.params.id);
+  if (!userId.success) return res.status(400).json({ error: "Invalid user" });
+  if (userId.data === BigInt(req.user!.userId)) {
+    return res.status(400).json({ error: "You cannot delete your own account" });
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { userId: userId.data },
+    select: { userId: true, status: true },
+  });
+  if (!user) return res.status(404).json({ error: "User not found" });
+  if (user.status === "DELETED") {
+    return res.status(409).json({ error: "This user has already been deleted" });
+  }
+
+  const deletedIdentity = `deleted-${user.userId.toString()}`;
+  const deletedAt = new Date();
+  const unusablePasswordHash = await bcrypt.hash(randomUUID(), 12);
+  await prisma.$transaction(async (tx) => {
+    await tx.customerAccountAccess.deleteMany({ where: { userId: user.userId } });
+    await tx.userRole.updateMany({
+      where: { userId: user.userId, status: "ACTIVE" },
+      data: { status: "INACTIVE", effectiveTo: deletedAt },
+    });
+    await tx.fieldOfficer.updateMany({
+      where: { userId: user.userId },
+      data: { status: "INACTIVE", availabilityStatus: "UNAVAILABLE", updatedAt: deletedAt },
+    });
+    await tx.user.update({
+      where: { userId: user.userId },
+      data: {
+        username: deletedIdentity,
+        firstName: "Deleted",
+        lastName: "Account",
+        emailAddress: `${deletedIdentity}@deleted.samdamte.invalid`,
+        phoneNumber: null,
+        passwordHash: unusablePasswordHash,
+        customerId: null,
+        twoFactorEnabled: false,
+        status: "DELETED",
+        updatedAt: deletedAt,
+      },
+    });
+  });
+
+  res.json({ message: "User deleted successfully" });
 });
 
 adminRouter.put("/users/:id/roles", async (req, res) => {
