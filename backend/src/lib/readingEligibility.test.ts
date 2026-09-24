@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildReadingWorklistPage,
+  DISCONNECTED_METER_WARNING,
   LEGACY_METER_WARNING,
   filterReadingAssignmentsBySearch,
   isReadableAccountStatus,
@@ -38,11 +39,17 @@ function assignment(overrides: Record<string, any> = {}) {
   };
 }
 
-test("ACTIVE and SUSPENDED accounts are readable, while CLOSED and DISCONNECTED accounts are not", () => {
+test("ACTIVE, SUSPENDED and DISCONNECTED accounts are readable, while CLOSED accounts are not", () => {
   assert.equal(isReadableAccountStatus("ACTIVE"), true);
   assert.equal(isReadableAccountStatus("SUSPENDED"), true);
   assert.equal(isReadableAccountStatus("CLOSED"), false);
-  assert.equal(isReadableAccountStatus("DISCONNECTED"), false);
+  assert.equal(isReadableAccountStatus("DISCONNECTED"), true);
+});
+
+test("a disconnected meter remains visible for reading capture", () => {
+  const disconnected = assignment({ meterStatus: "DISCONNECTED" });
+  assert.deepEqual(resolveReadableAssignments([disconnected]), [disconnected]);
+  assert.equal(readingEligibilityWarning(disconnected.meter), DISCONNECTED_METER_WARNING);
 });
 
 test("an active meter remains the current readable assignment", () => {

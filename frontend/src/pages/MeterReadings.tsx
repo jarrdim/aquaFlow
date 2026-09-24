@@ -4865,8 +4865,11 @@ export function CaptureReading() {
       {item.account?.accountStatus === "SUSPENDED" && (
         <Notice>This customer account is suspended. Meter-reading capture remains permitted.</Notice>
       )}
+      {item.account?.accountStatus === "DISCONNECTED" && (
+        <Notice>This customer account is disconnected. It remains visible so its meter reading can be captured.</Notice>
+      )}
       {item.eligibilityWarning && (
-        <Notice>{item.eligibilityWarning}. No valid current replacement meter is recorded.</Notice>
+        <Notice>{item.eligibilityWarning}{item.meter?.status === "DISCONNECTED" ? ". Reading capture remains permitted." : ". No valid current replacement meter is recorded."}</Notice>
       )}
       <form onSubmit={submit}>
         <div className="grid gap-4 xl:grid-cols-[1fr_1.6fr]">

@@ -1,6 +1,7 @@
-export const READING_ACCOUNT_STATUSES = ["ACTIVE", "SUSPENDED"] as const;
+export const READING_ACCOUNT_STATUSES = ["ACTIVE", "SUSPENDED", "DISCONNECTED"] as const;
 export const LEGACY_READABLE_METER_STATUSES = ["INACTIVE", "REMOVED"] as const;
 export const LEGACY_METER_WARNING = "Meter marked inactive/removed";
+export const DISCONNECTED_METER_WARNING = "Disconnected meter";
 
 export type ReadingEligibilityAssignment = {
   assignmentId: bigint;
@@ -44,6 +45,10 @@ export function isLegacyReadableMeter(meter: ReadingEligibilityAssignment["meter
   );
 }
 
+export function isDisconnectedReadableMeter(meter: ReadingEligibilityAssignment["meter"]) {
+  return meter.status === "DISCONNECTED";
+}
+
 function newestAssignment<T extends ReadingEligibilityAssignment>(left: T, right: T) {
   const byDate = right.assignmentDate.getTime() - left.assignmentDate.getTime();
   if (byDate) return byDate;
@@ -66,16 +71,21 @@ export function resolveReadableAssignments<T extends ReadingEligibilityAssignmen
 
   return Array.from(byAccount.values()).flatMap((accountAssignments) => {
     const routine = accountAssignments.filter((assignment) => isRoutineReadableMeter(assignment.meter));
+    const disconnected = accountAssignments.filter((assignment) => isDisconnectedReadableMeter(assignment.meter));
     const candidates = routine.length
       ? routine
-      : accountAssignments.filter((assignment) => isLegacyReadableMeter(assignment.meter));
+      : disconnected.length
+        ? disconnected
+        : accountAssignments.filter((assignment) => isLegacyReadableMeter(assignment.meter));
     const selected = candidates.sort(newestAssignment)[0];
     return selected ? [selected] : [];
   });
 }
 
 export function readingEligibilityWarning(meter: ReadingEligibilityAssignment["meter"]) {
-  return isRoutineReadableMeter(meter) ? null : LEGACY_METER_WARNING;
+  if (isRoutineReadableMeter(meter)) return null;
+  if (isDisconnectedReadableMeter(meter)) return DISCONNECTED_METER_WARNING;
+  return LEGACY_METER_WARNING;
 }
 
 export function filterReadingAssignmentsBySearch<T extends SearchableReadingAssignment>(assignments: T[], search: string) {

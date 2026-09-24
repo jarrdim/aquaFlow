@@ -177,6 +177,7 @@ async function getEligibleAssignments(
     meter: {
       OR: [
         { status: "ACTIVE" },
+        { status: "DISCONNECTED" },
         { status: { in: [...LEGACY_READABLE_METER_STATUSES] } },
       ],
     },
@@ -1187,7 +1188,7 @@ async function capture(input: any, req: any) {
   const assignment = eligibleAssignments[0];
   if (!assignment?.accountId) {
     throw Object.assign(
-      new Error("Meter is not the readable current assignment for an active or suspended customer account"),
+      new Error("Meter is not the readable current assignment for an active, suspended or disconnected customer account"),
       { status: 409 },
     );
   }
