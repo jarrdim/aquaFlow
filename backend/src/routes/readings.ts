@@ -133,7 +133,6 @@ function worklistSearch(search: string, exact: boolean): Prisma.MeterAssignmentW
       { account: { customer: { middleName: text } } },
       { account: { customer: { lastName: text } } },
       { account: { customer: { organizationName: text } } },
-      { account: { customer: { phoneNumber: text } } },
     ],
   };
 }

@@ -4322,7 +4322,7 @@ export function ReadingWorklist() {
                       </button>
                     ))}
                     {!loading && !searchSuggestions.length && (
-                      <div className="px-4 py-8 text-center"><p className="text-sm font-semibold text-slate-700">No matching meter or account</p><p className="mt-1 text-xs text-slate-400">Try a meter number, account number, customer name, customer number, or phone.</p></div>
+                      <div className="px-4 py-8 text-center"><p className="text-sm font-semibold text-slate-700">No matching meter or account</p><p className="mt-1 text-xs text-slate-400">Try a meter number, account number, customer name, or customer number.</p></div>
                     )}
                   </div>
                 </div>
