@@ -4293,7 +4293,7 @@ export function ReadingWorklist() {
                 )}
               </div>
               {searchMenuOpen && search.trim() && (
-                <div id="reading-worklist-search-results" role="listbox" className="absolute left-0 right-0 top-full z-50 mt-1 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl">
+                <div id="reading-worklist-search-results" role="listbox" className="absolute right-0 top-full z-50 mt-1 w-[min(36rem,calc(100vw-3rem))] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl">
                   <div className="border-b border-slate-100 bg-slate-50 px-3 py-2 text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
                     {loading ? "Searching…" : `${searchSuggestions.length} matching result${searchSuggestions.length === 1 ? "" : "s"}`}
                   </div>
@@ -4312,7 +4312,11 @@ export function ReadingWorklist() {
                         <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-aqua-700 text-xs font-extrabold text-white">{String(item.customerName ?? "C").split(/\s+/).filter(Boolean).slice(0, 2).map((part: string) => part[0]).join("").toUpperCase()}</span>
                         <span className="min-w-0 flex-1">
                           <span className="block truncate text-sm font-bold text-slate-900">{item.customerName || "Unnamed customer"}</span>
-                          <span className="mt-0.5 block truncate text-xs text-slate-500">{item.account?.accountNumber ?? "No account"} · {item.meter?.meterNumber ?? "No meter"} · {item.account?.customer?.phoneNumber ?? "No phone"}</span>
+                          <span className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-600">
+                            <span className="whitespace-nowrap"><span className="font-semibold text-slate-400">Account</span> {item.account?.accountNumber ?? "Not assigned"}</span>
+                            <span className="whitespace-nowrap"><span className="font-semibold text-slate-400">Meter</span> <span className="font-bold text-slate-700">{item.meter?.meterNumber ?? "Not assigned"}</span></span>
+                            <span className="whitespace-nowrap"><span className="font-semibold text-slate-400">Phone</span> {item.account?.customer?.phoneNumber ?? "Not recorded"}</span>
+                          </span>
                         </span>
                         <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-extrabold uppercase ${item.account?.accountStatus === "ACTIVE" ? "bg-emerald-50 text-emerald-700" : item.account?.accountStatus === "DISCONNECTED" ? "bg-red-50 text-red-700" : "bg-amber-50 text-amber-700"}`}>{pretty(item.account?.accountStatus ?? "Unknown")}</span>
                       </button>
