@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client";
 import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
-import { isSystemAdmin, requireAuth, requireRole } from "../middleware/auth";
+import { isSystemAdmin, requireAuth, requireRole, requireScopedPermission, SCOPED_STAFF_ROLES } from "../middleware/auth";
 import { createPaymentLinkToken, publicAppUrl } from "../lib/paymentLink";
 import { readingRequiresBill } from "../lib/readingBilling";
 import {
@@ -19,6 +19,12 @@ import {
 
 export const billingRouter = Router();
 billingRouter.use(requireAuth);
+billingRouter.use((req, res, next) => {
+  const isScoped = req.user?.roles.some((role) => SCOPED_STAFF_ROLES.includes(role));
+  const statementSupport = req.method === "GET" && (req.path.startsWith("/statements/") || req.path === "/bills");
+  if (!isScoped || statementSupport) return next();
+  return res.status(403).json({ error: "Insufficient permissions" });
+});
 
 const id = z.coerce.bigint().positive();
 const optionalId = z.preprocess(
@@ -1475,7 +1481,7 @@ billingRouter.post("/notifications", requireRole("SYSTEM_ADMIN", "BILLING_OFFICE
   } catch (error) { next(error); }
 });
 
-billingRouter.get("/statements/:accountId", async (req, res, next) => {
+billingRouter.get("/statements/:accountId", requireScopedPermission(SCOPED_STAFF_ROLES, ["CUSTOMER_STATEMENT_VIEW"]), async (req, res, next) => {
   const accountId = parse(id, req.params.accountId, res); if (!accountId) return;
   try {
     const account = await prisma.customerAccount.findUnique({

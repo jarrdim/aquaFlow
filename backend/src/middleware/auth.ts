@@ -3,6 +3,12 @@ import jwt from "jsonwebtoken";
 import { prisma } from "../lib/prisma";
 
 export const WEB_SESSION_COOKIE = "aquaflow_session";
+export const SCOPED_STAFF_ROLES = [
+  "REVENUE_FIELD_OPERATIONS",
+  "CUSTOMER_METER_SERVICES",
+  "GENERAL_STAFF_VIEWER",
+  "PAYMENT_RECONCILIATION",
+];
 
 function cookieValue(req: Request, name: string) {
   const header = req.headers.cookie ?? "";
@@ -111,6 +117,76 @@ export function requirePermission(...permissionCodes: string[]) {
       if (!matchingGrant) {
         return res.status(403).json({ error: "Insufficient permissions" });
       }
+      next();
+    } catch (error) {
+      next(error);
+    }
+  };
+}
+
+/**
+ * Keeps established job roles working while allowing newer, narrowly-scoped
+ * roles to enter through explicit permission grants.
+ */
+export function requireRoleOrPermission(
+  allowedRoles: string[],
+  permissionCodes: string[],
+) {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    if (!req.user) return res.status(401).json({ error: "Not authenticated" });
+    if (
+      isSystemAdmin(req) ||
+      req.user.roles.some((role) => allowedRoles.includes(role))
+    ) {
+      return next();
+    }
+
+    try {
+      const matchingGrant = await prisma.rolePermission.count({
+        where: {
+          permission: { permissionCode: { in: permissionCodes } },
+          role: {
+            status: "ACTIVE",
+            userRoles: {
+              some: {
+                userId: BigInt(req.user.userId),
+                status: "ACTIVE",
+              },
+            },
+          },
+        },
+      });
+      if (!matchingGrant) {
+        return res.status(403).json({ error: "Insufficient permissions" });
+      }
+      next();
+    } catch (error) {
+      next(error);
+    }
+  };
+}
+
+/** Restricts only the supplied scoped roles; all established roles retain their existing behavior. */
+export function requireScopedPermission(
+  scopedRoles: string[],
+  permissionCodes: string[],
+) {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    if (!req.user) return res.status(401).json({ error: "Not authenticated" });
+    if (isSystemAdmin(req) || !req.user.roles.some((role) => scopedRoles.includes(role))) {
+      return next();
+    }
+    try {
+      const matchingGrant = await prisma.rolePermission.count({
+        where: {
+          permission: { permissionCode: { in: permissionCodes } },
+          role: {
+            status: "ACTIVE",
+            userRoles: { some: { userId: BigInt(req.user.userId), status: "ACTIVE" } },
+          },
+        },
+      });
+      if (!matchingGrant) return res.status(403).json({ error: "Insufficient permissions" });
       next();
     } catch (error) {
       next(error);

@@ -1,7 +1,7 @@
 import { Prisma, PrismaClient } from "@prisma/client";
 import { Router } from "express";
 import { z } from "zod";
-import { requireAuth, requireRole } from "../middleware/auth";
+import { requireAuth, requireRole, requireRoleOrPermission, requireScopedPermission, SCOPED_STAFF_ROLES } from "../middleware/auth";
 import {
   buildReadingWorklistPage,
   LEGACY_READABLE_METER_STATUSES,
@@ -16,6 +16,19 @@ import { SYSTEM_GENERATED_REPLACEMENT_CYCLE_PREFIXES } from "../lib/readingBilli
 const prisma = new PrismaClient();
 export const readingsRouter = Router();
 readingsRouter.use(requireAuth);
+readingsRouter.use((req, res, next) => {
+  const isScoped = req.user?.roles.some((role) => SCOPED_STAFF_ROLES.includes(role));
+  const worklistSupport = req.method === "GET" && ["/cycles", "/period-groups"].includes(req.path);
+  if (!isScoped || req.path.startsWith("/worklist") || worklistSupport || (req.method === "POST" && ["/", "/sync"].includes(req.path))) {
+    return next();
+  }
+  return res.status(403).json({ error: "Insufficient permissions" });
+});
+const worklistViewAccess = requireScopedPermission(SCOPED_STAFF_ROLES, ["READING_WORKLIST_VIEW"]);
+const worklistManageAccess = requireRoleOrPermission(
+  ["SYSTEM_ADMIN", "METER_READER", "METER_SUPERVISOR", "SUPERVISOR"],
+  ["READING_WORKLIST_MANAGE"],
+);
 
 const id = z.coerce.bigint().positive();
 const dateText = z.string().min(1);
@@ -689,7 +702,7 @@ readingsRouter.delete(
   },
 );
 
-readingsRouter.get("/worklist/captured-count", async (req, res, next) => {
+readingsRouter.get("/worklist/captured-count", worklistViewAccess, async (req, res, next) => {
   try {
     const cycleId = req.query.cycleId ? BigInt(String(req.query.cycleId)) : undefined;
     if (!cycleId) return res.status(400).json({ error: "cycleId is required" });
@@ -752,7 +765,7 @@ readingsRouter.get("/worklist/captured-count", async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
-readingsRouter.get("/worklist", async (req, res, next) => {
+readingsRouter.get("/worklist", worklistViewAccess, async (req, res, next) => {
   try {
     const rawCycleIds = String(req.query.cycleIds ?? req.query.cycleId ?? "")
       .split(",")
@@ -1255,7 +1268,7 @@ async function capture(input: any, req: any) {
 
 readingsRouter.post(
   "/",
-  requireRole("SYSTEM_ADMIN", "METER_READER", "METER_SUPERVISOR", "SUPERVISOR"),
+  worklistManageAccess,
   async (req, res, next) => {
   const data = parse(captureSchema, req.body, res);
   if (!data) return;
@@ -1272,7 +1285,7 @@ readingsRouter.post(
 
 readingsRouter.post(
   "/sync",
-  requireRole("SYSTEM_ADMIN", "METER_READER", "METER_SUPERVISOR", "SUPERVISOR"),
+  worklistManageAccess,
   async (req, res, next) => {
   const body = parse(z.object({ readings: z.array(captureSchema).min(1).max(100) }), req.body, res);
   if (!body) return;

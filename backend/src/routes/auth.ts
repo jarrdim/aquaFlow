@@ -41,11 +41,30 @@ type SessionUser = {
   firstName: string;
   lastName: string;
   userType: string;
-  userRoles: Array<{ role: { roleCode: string } }>;
+  userRoles: Array<{
+    role: {
+      roleCode: string;
+      rolePermissions?: Array<{ permission: { permissionCode: string } }>;
+    };
+  }>;
 };
+
+const activeUserRoles = {
+  where: { status: "ACTIVE" },
+  include: {
+    role: {
+      include: {
+        rolePermissions: { include: { permission: true } },
+      },
+    },
+  },
+} as const;
 
 function issueTokens(user: SessionUser) {
   const roles = user.userRoles.map((ur) => ur.role.roleCode);
+  const permissions = [...new Set(user.userRoles.flatMap((ur) =>
+    ur.role.rolePermissions?.map((grant) => grant.permission.permissionCode) ?? [],
+  ))].sort();
   const identity = {
     userId: user.userId.toString(),
     username: user.username,
@@ -64,6 +83,7 @@ function issueTokens(user: SessionUser) {
       lastName: user.lastName,
       userType: user.userType,
       roles,
+      permissions,
     },
   };
 }
@@ -238,7 +258,7 @@ authRouter.post("/login", loginLimiter, async (req, res) => {
 
   const user = await prisma.user.findUnique({
     where: { username },
-    include: { userRoles: { include: { role: true }, where: { status: "ACTIVE" } } },
+    include: { userRoles: activeUserRoles },
   });
 
   if (!user || user.status !== "ACTIVE") {
@@ -305,7 +325,7 @@ authRouter.post("/shared/login", loginLimiter, async (req, res) => {
         include: { account: { include: { customer: true } } },
       },
       fieldOfficer: true,
-      userRoles: { include: { role: true }, where: { status: "ACTIVE" } },
+      userRoles: activeUserRoles,
     },
   });
 
@@ -320,7 +340,7 @@ authRouter.post("/shared/login", loginLimiter, async (req, res) => {
           include: { account: { include: { customer: true } } },
         },
         fieldOfficer: true,
-        userRoles: { include: { role: true }, where: { status: "ACTIVE" } },
+        userRoles: activeUserRoles,
       },
     });
     const requestedPhone = normalizedPhone(identifier);
@@ -389,7 +409,7 @@ authRouter.post("/field/login", loginLimiter, async (req, res) => {
     },
     include: {
       fieldOfficer: true,
-      userRoles: { include: { role: true }, where: { status: "ACTIVE" } },
+      userRoles: activeUserRoles,
     },
   });
 
@@ -444,7 +464,7 @@ authRouter.post("/refresh", async (req, res) => {
             orderBy: [{ isDefault: "desc" }, { account: { accountNumber: "asc" } }],
             include: { account: { include: { customer: true } } },
           },
-          userRoles: { include: { role: true }, where: { status: "ACTIVE" } },
+          userRoles: activeUserRoles,
         },
       });
       const customer = user?.customer?.status === "ACTIVE"
@@ -459,7 +479,7 @@ authRouter.post("/refresh", async (req, res) => {
     const user = await prisma.user.findUnique({
       where: { userId: BigInt(payload.userId) },
       include: {
-        userRoles: { include: { role: true }, where: { status: "ACTIVE" } },
+        userRoles: activeUserRoles,
       },
     });
     if (!user || user.status !== "ACTIVE") {

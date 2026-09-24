@@ -8,6 +8,7 @@ import {
 import { api } from "../lib/api";
 import { SearchableSelect } from "../components/SearchableSelect";
 import { SweetAlertToast } from "../components/SweetAlertToast";
+import { hasPermission, isRestrictedStaff } from "../lib/access";
 
 type Target = {
   accountId: string;
@@ -116,6 +117,11 @@ function Card({
 }
 
 export function ServiceRequestDashboard() {
+  const scopedAccess = isRestrictedStaff();
+  const mayCreate = !scopedAccess || hasPermission("SERVICE_REQUEST_CREATE");
+  const mayAssign = !scopedAccess || hasPermission("SERVICE_REQUEST_ASSIGN");
+  const mayResolve = !scopedAccess || hasPermission("SERVICE_REQUEST_RESOLVE");
+  const mayCreateWorkOrder = !scopedAccess || hasPermission("WORK_ORDER_CREATE");
   const [searchParams, setSearchParams] = useSearchParams();
   const location = useLocation();
   const defaultType = location.pathname.endsWith("/complaints")
@@ -238,12 +244,12 @@ export function ServiceRequestDashboard() {
             service deadlines
           </p>
         </div>
-        <Link
+        {mayCreate && <Link
           to="/service-requests/new"
           className="rounded-lg bg-aqua-700 px-4 py-2.5 text-sm font-semibold text-white"
         >
           + Register request
-        </Link>
+        </Link>}
       </div>
       <SweetAlertToast message={error} type="error" />
       <SweetAlertToast message={success} type="success" />
@@ -464,7 +470,7 @@ export function ServiceRequestDashboard() {
                   </div>
                 )}
               </div>
-              {!["RESOLVED", "CLOSED", "CANCELLED"].includes(selected.status) && (
+              {mayCreateWorkOrder && !["RESOLVED", "CLOSED", "CANCELLED"].includes(selected.status) && (
                 <Link
                   to={`/work-orders/new?serviceRequestId=${selected.serviceRequestId}`}
                   className="block w-full rounded-lg bg-aqua-700 px-4 py-2.5 text-center text-sm font-bold text-white"
@@ -472,7 +478,7 @@ export function ServiceRequestDashboard() {
                   Create linked work order
                 </Link>
               )}
-              <label className="block">
+              {(mayAssign || mayResolve) && <><label className="block">
                 <span className="mb-1 block text-sm font-medium">
                   Assigned officer
                 </span>
@@ -541,6 +547,7 @@ export function ServiceRequestDashboard() {
               >
                 Update request
               </button>
+              </>}
               <div>
                 <h3 className="mb-2 text-sm font-bold">Activity history</h3>
                 <div className="max-h-56 space-y-2 overflow-y-auto">
@@ -618,6 +625,7 @@ export function ServiceRequestDashboard() {
 }
 
 export function RegisterServiceRequest() {
+  const mayAssignOnCreate = !isRestrictedStaff() || hasPermission("SERVICE_REQUEST_ASSIGN");
   const navigate = useNavigate();
   const [targets, setTargets] = useState<Target[]>([]);
   const [officers, setOfficers] = useState<Officer[]>([]);
@@ -757,7 +765,7 @@ export function RegisterServiceRequest() {
                   }
                 />
               </label>
-              <label className="md:col-span-2">
+              {mayAssignOnCreate && <label className="md:col-span-2">
                 <span className="mb-1 block text-sm font-medium">
                   Assign now (optional)
                 </span>
@@ -775,7 +783,7 @@ export function RegisterServiceRequest() {
                     </option>
                   ))}
                 </SearchableSelect>
-              </label>
+              </label>}
             </div>
           </Card>
           <Card title="Customer summary">

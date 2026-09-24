@@ -5,11 +5,36 @@ import { prisma } from "../lib/prisma";
 import { isAccountLedgerReconnectionSettlement } from "../lib/directReconnection";
 import { queryStkPush } from "../lib/mpesa";
 import { initiateMpesaStk } from "../lib/mpesaStk";
-import { requireAuth, requireRole } from "../middleware/auth";
+import { requireAuth, requireRole, requireRoleOrPermission, requireScopedPermission, SCOPED_STAFF_ROLES } from "../middleware/auth";
 import { processOne } from "./notifications";
 
 export const metersRouter = Router();
 metersRouter.use(requireAuth);
+metersRouter.use((req, res, next) => {
+  const path = req.path;
+  let permissions: string[];
+  if (path.startsWith("/service-actions/direct")) {
+    permissions = ["METER_DIRECT_DISCONNECT", "METER_DIRECT_RECONNECT"];
+  } else if (path.startsWith("/replacements/direct")) {
+    permissions = ["METER_DIRECT_REPLACE"];
+  } else if (
+    path.startsWith("/assign") ||
+    path === "/accounts" ||
+    path === "/boreholes" ||
+    (path === "/" && req.method === "GET")
+  ) {
+    permissions = ["METER_ASSIGN_CUSTOMER"];
+  } else {
+    permissions = ["METER_ACCESS_NOT_GRANTED"];
+  }
+  return requireScopedPermission(SCOPED_STAFF_ROLES, permissions)(req, res, next);
+});
+
+const meterAssignmentAccess = requireScopedPermission(SCOPED_STAFF_ROLES, ["METER_ASSIGN_CUSTOMER"]);
+const directReplacementAccess = requireRoleOrPermission(
+  ["ADMIN", "SYSTEM_ADMIN", "METER_MANAGER", "METER_SUPERVISOR", "SUPERVISOR"],
+  ["METER_DIRECT_REPLACE"],
+);
 
 const meterTypes = ["CUSTOMER", "BULK", "ZONE", "BOREHOLE"] as const;
 const technologies = ["MANUAL", "PREPAID", "SMART"] as const;
@@ -476,7 +501,7 @@ metersRouter.get("/replacements", async (req, res) => {
   })));
 });
 
-metersRouter.get("/replacements/direct/options", requireRole("ADMIN", "SYSTEM_ADMIN", "METER_MANAGER", "METER_SUPERVISOR", "SUPERVISOR"), async (req, res) => {
+metersRouter.get("/replacements/direct/options", directReplacementAccess, async (req, res) => {
   const installedSearch = String(req.query.installedSearch ?? "").trim();
   const installed = await prisma.meter.findMany({
       where: {
@@ -766,7 +791,7 @@ metersRouter.post("/bulk-assign", async (req, res) => {
   res.status(201).json({ imported: result.count, skipped: rows.length - newRows.length });
 });
 
-metersRouter.post("/assign", async (req, res) => {
+metersRouter.post("/assign", meterAssignmentAccess, async (req, res) => {
   const parsed = z.object({
     meterId: z.string().min(1), accountId: optText, zoneId: optText, boreholeId: optText, assignmentDate: z.string(),
     openingReading: z.coerce.number().min(0), gpsLatitude: optNumber, gpsLongitude: optNumber, sealNumber: optText,
@@ -857,8 +882,17 @@ const directReconnectionSchema = z.object({
   confirmed: z.literal(true),
 });
 
-const directServiceRoles = requireRole(
-  "ADMIN", "SYSTEM_ADMIN", "METER_MANAGER", "METER_SUPERVISOR", "SUPERVISOR",
+const directServiceRoles = requireRoleOrPermission(
+  ["ADMIN", "SYSTEM_ADMIN", "METER_MANAGER", "METER_SUPERVISOR", "SUPERVISOR"],
+  ["METER_DIRECT_DISCONNECT", "METER_DIRECT_RECONNECT"],
+);
+const directDisconnectAccess = requireRoleOrPermission(
+  ["ADMIN", "SYSTEM_ADMIN", "METER_MANAGER", "METER_SUPERVISOR", "SUPERVISOR"],
+  ["METER_DIRECT_DISCONNECT"],
+);
+const directReconnectAccess = requireRoleOrPermission(
+  ["ADMIN", "SYSTEM_ADMIN", "METER_MANAGER", "METER_SUPERVISOR", "SUPERVISOR"],
+  ["METER_DIRECT_RECONNECT"],
 );
 
 async function directServiceContext(
@@ -1174,7 +1208,7 @@ metersRouter.post("/replacements", async (req, res, next) => {
   catch (error: any) { if (error.status) return res.status(error.status).json({ error: error.message }); next(error); }
 });
 
-metersRouter.post("/replacements/direct/preview", requireRole("ADMIN", "SYSTEM_ADMIN", "METER_MANAGER", "METER_SUPERVISOR", "SUPERVISOR"), async (req, res, next) => {
+metersRouter.post("/replacements/direct/preview", directReplacementAccess, async (req, res, next) => {
   const parsed = directReplacementPreviewSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   try {
@@ -1232,7 +1266,7 @@ metersRouter.post("/replacements/direct/preview", requireRole("ADMIN", "SYSTEM_A
   }
 });
 
-metersRouter.post("/replacements/direct", requireRole("ADMIN", "SYSTEM_ADMIN", "METER_MANAGER", "METER_SUPERVISOR", "SUPERVISOR"), async (req, res, next) => {
+metersRouter.post("/replacements/direct", directReplacementAccess, async (req, res, next) => {
   const parsed = directReplacementInputSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   try {
@@ -1581,7 +1615,7 @@ metersRouter.get("/service-actions/direct/history", directServiceRoles, async (r
   } catch (error) { next(error); }
 });
 
-metersRouter.post("/service-actions/direct/disconnection/preview", directServiceRoles, async (req, res, next) => {
+metersRouter.post("/service-actions/direct/disconnection/preview", directDisconnectAccess, async (req, res, next) => {
   const parsed = directDisconnectionPreviewSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   try {
@@ -1642,7 +1676,7 @@ metersRouter.post("/service-actions/direct/disconnection/preview", directService
   }
 });
 
-metersRouter.post("/service-actions/direct/disconnect", directServiceRoles, async (req, res, next) => {
+metersRouter.post("/service-actions/direct/disconnect", directDisconnectAccess, async (req, res, next) => {
   const parsed = directDisconnectionSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   try {
@@ -1826,7 +1860,7 @@ metersRouter.post("/service-actions/direct/disconnect", directServiceRoles, asyn
   }
 });
 
-metersRouter.post("/service-actions/direct/reconnection/request", directServiceRoles, async (req, res, next) => {
+metersRouter.post("/service-actions/direct/reconnection/request", directReconnectAccess, async (req, res, next) => {
   const parsed = z.object({
     accountId: z.string().regex(/^\d+$/), meterId: z.string().regex(/^\d+$/),
     reason: z.string().trim().min(3).max(1000).default("Direct meter reconnection"),
@@ -1850,7 +1884,7 @@ metersRouter.post("/service-actions/direct/reconnection/request", directServiceR
   }
 });
 
-metersRouter.post("/service-actions/direct/reconnection/payment/stk", directServiceRoles, async (req, res, next) => {
+metersRouter.post("/service-actions/direct/reconnection/payment/stk", directReconnectAccess, async (req, res, next) => {
   const parsed = z.object({
     accountId: z.string().regex(/^\d+$/), meterId: z.string().regex(/^\d+$/),
     phoneNumber: z.string().trim().min(7).max(40), reason: z.string().trim().min(3).max(1000).optional(),
@@ -1885,7 +1919,7 @@ metersRouter.post("/service-actions/direct/reconnection/payment/stk", directServ
   }
 });
 
-metersRouter.post("/service-actions/direct/reconnection/payment/status", directServiceRoles, async (req, res, next) => {
+metersRouter.post("/service-actions/direct/reconnection/payment/status", directReconnectAccess, async (req, res, next) => {
   const parsed = z.object({ accountId: z.string().regex(/^\d+$/) }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   try {
@@ -1929,7 +1963,7 @@ metersRouter.post("/service-actions/direct/reconnection/payment/status", directS
   }
 });
 
-metersRouter.post("/service-actions/direct/reconnection/payment/reset", directServiceRoles, async (req, res, next) => {
+metersRouter.post("/service-actions/direct/reconnection/payment/reset", directReconnectAccess, async (req, res, next) => {
   const parsed = z.object({
     accountId: z.string().regex(/^\d+$/),
     meterId: z.string().regex(/^\d+$/),
@@ -1998,7 +2032,7 @@ metersRouter.post("/service-actions/direct/reconnection/payment/reset", directSe
   }
 });
 
-metersRouter.post("/service-actions/direct/reconnection/payment/credit", directServiceRoles, async (req, res, next) => {
+metersRouter.post("/service-actions/direct/reconnection/payment/credit", directReconnectAccess, async (req, res, next) => {
   const parsed = z.object({
     accountId: z.string().regex(/^\d+$/), meterId: z.string().regex(/^\d+$/),
     reason: z.string().trim().min(3).max(1000).default("Reconnection fee settled from account credit"),
@@ -2045,7 +2079,7 @@ metersRouter.post("/service-actions/direct/reconnection/payment/credit", directS
   }
 });
 
-metersRouter.post("/service-actions/direct/reconnect", directServiceRoles, async (req, res, next) => {
+metersRouter.post("/service-actions/direct/reconnect", directReconnectAccess, async (req, res, next) => {
   const parsed = directReconnectionSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   try {

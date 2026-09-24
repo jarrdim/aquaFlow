@@ -3,10 +3,12 @@ import { Prisma } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
-import { requireAuth, requireRole } from "../middleware/auth";
+import { requireAuth, requireRoleOrPermission, requireScopedPermission, SCOPED_STAFF_ROLES } from "../middleware/auth";
 
 export const customersRouter = Router();
 customersRouter.use(requireAuth);
+const customerViewAccess = requireScopedPermission(SCOPED_STAFF_ROLES, ["CUSTOMER_VIEW"]);
+const customerManageAccess = requireScopedPermission(SCOPED_STAFF_ROLES, ["CUSTOMER_MANAGE"]);
 
 function normalizeKenyanPhone(value: unknown) {
   if (typeof value !== "string") return value;
@@ -52,7 +54,7 @@ const createCustomerSchema = z
     { message: "INDIVIDUAL customers need first/last name; ORGANIZATION customers need organizationName" }
   );
 
-customersRouter.get("/", async (req, res) => {
+customersRouter.get("/", customerViewAccess, async (req, res) => {
   const search = (req.query.search as string) ?? "";
   const status = (req.query.status as string) ?? "";
   const meterAssignment = (req.query.meterAssignment as string) ?? "";
@@ -144,7 +146,7 @@ customersRouter.get("/", async (req, res) => {
   });
 });
 
-customersRouter.get("/:id", async (req, res) => {
+customersRouter.get("/:id", customerViewAccess, async (req, res) => {
   const customer = await prisma.customer.findUnique({
     where: { customerId: BigInt(req.params.id) },
     include: {
@@ -176,7 +178,7 @@ customersRouter.get("/:id", async (req, res) => {
   });
 });
 
-customersRouter.get("/:id/activity", async (req, res) => {
+customersRouter.get("/:id/activity", customerViewAccess, async (req, res) => {
   if (!/^\d+$/.test(req.params.id)) return res.status(400).json({ error: "Invalid customer id" });
   const customerId = BigInt(req.params.id);
   const exists = await prisma.customer.findUnique({
@@ -324,7 +326,7 @@ customersRouter.get("/:id/activity", async (req, res) => {
   res.json(activities);
 });
 
-customersRouter.get("/:id/documents/:documentId/content", async (req, res, next) => {
+customersRouter.get("/:id/documents/:documentId/content", customerViewAccess, async (req, res, next) => {
   try {
     if (!/^\d+$/.test(req.params.id) || !/^\d+$/.test(req.params.documentId)) {
       return res.status(400).json({ error: "Invalid customer document reference" });
@@ -364,7 +366,7 @@ const customerPortalAccessSchema = z.object({
 
 customersRouter.post(
   "/:id/portal-access",
-  requireRole("CUSTOMER_CARE_OFFICER"),
+  requireRoleOrPermission(["CUSTOMER_CARE_OFFICER"], ["CUSTOMER_MANAGE"]),
   async (req, res, next) => {
     const customerId = z.string().regex(/^\d+$/).safeParse(req.params.id);
     const parsed = customerPortalAccessSchema.safeParse(req.body);
@@ -526,7 +528,7 @@ const bulkCustomerImportSchema = z.object({
   customers: z.array(bulkCustomerRowSchema).min(1).max(1000),
 });
 
-customersRouter.post("/bulk-import", async (req, res, next) => {
+customersRouter.post("/bulk-import", customerManageAccess, async (req, res, next) => {
   try {
   const parsed = bulkCustomerImportSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -638,7 +640,7 @@ customersRouter.post("/bulk-import", async (req, res, next) => {
   }
 });
 
-customersRouter.patch("/bulk-status", async (req, res) => {
+customersRouter.patch("/bulk-status", customerManageAccess, async (req, res) => {
   const parsed = bulkCustomerStatusSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: parsed.error.flatten() });
@@ -656,7 +658,7 @@ customersRouter.patch("/bulk-status", async (req, res) => {
   res.json({ updated: result.count, status: parsed.data.status });
 });
 
-customersRouter.patch("/:id", async (req, res) => {
+customersRouter.patch("/:id", customerManageAccess, async (req, res) => {
   const parsed = updateCustomerSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: parsed.error.flatten() });
@@ -677,7 +679,7 @@ customersRouter.patch("/:id", async (req, res) => {
   }
 });
 
-customersRouter.post("/", async (req, res) => {
+customersRouter.post("/", customerManageAccess, async (req, res) => {
   const parsed = createCustomerSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: parsed.error.flatten() });

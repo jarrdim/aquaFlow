@@ -4,6 +4,7 @@ import { api } from "../lib/api";
 import { setSessionUser } from "../lib/api";
 import { SweetAlertToast } from "../components/SweetAlertToast";
 import { usePrivacyMode } from "../lib/privacyMode";
+import { canAccessPath, defaultAuthorizedPath } from "../lib/access";
 
 export default function Login() {
   const { enabled: privacyMode } = usePrivacyMode();
@@ -21,11 +22,12 @@ export default function Login() {
     setLoading(true);
     try {
       const { user } = await api.login(username, password);
-      setSessionUser({ ...user, userId: String(user.userId) });
+      const sessionUser = { ...user, userId: String(user.userId) };
+      setSessionUser(sessionUser);
       const requestedPath = searchParams.get("next");
-      const next = requestedPath?.startsWith("/") && !requestedPath.startsWith("//")
+      const next = requestedPath?.startsWith("/") && !requestedPath.startsWith("//") && canAccessPath(requestedPath, sessionUser)
         ? requestedPath
-        : "/dashboard";
+        : defaultAuthorizedPath(sessionUser);
       navigate(next, { replace: true });
     } catch (err: any) {
       setError(err.message ?? "Login failed");

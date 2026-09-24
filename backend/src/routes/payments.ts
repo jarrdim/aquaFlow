@@ -3,7 +3,7 @@ import { createHash } from "crypto";
 import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
-import { isSystemAdmin, requireAuth, requireRole } from "../middleware/auth";
+import { isSystemAdmin, requireAuth, requireRole, requireRoleOrPermission, requireScopedPermission, SCOPED_STAFF_ROLES } from "../middleware/auth";
 import {
   getMpesaC2bConfig,
   getMpesaConfig,
@@ -667,15 +667,46 @@ paymentsRouter.get("/public-link/:token/stk/:id", async (req, res, next) => {
 });
 
 paymentsRouter.use(requireAuth);
+paymentsRouter.use((req, res, next) => {
+  const path = req.path;
+  let permissions: string[];
+  if (path.startsWith("/unmatched") || /^\/\d+\/allocate$/.test(path)) {
+    permissions = [req.method === "GET" ? "PAYMENT_UNMATCHED_VIEW" : "PAYMENT_UNMATCHED_MANAGE"];
+  } else if (path.startsWith("/dashboard/")) {
+    permissions = ["PAYMENT_DASHBOARD_VIEW"];
+  } else if (path.startsWith("/mpesa/c2b")) {
+    permissions = ["PAYMENT_C2B_MANAGE"];
+  } else if (path.startsWith("/channels") && req.method !== "GET") {
+    permissions = ["PAYMENT_CHANNEL_MANAGE"];
+  } else if (path.startsWith("/accounts") || (path === "/channels" && req.method === "GET")) {
+    permissions = ["PAYMENT_OPERATIONS", "PAYMENT_UNMATCHED_VIEW"];
+  } else {
+    permissions = ["PAYMENT_OPERATIONS"];
+  }
+  return requireScopedPermission(SCOPED_STAFF_ROLES, permissions)(req, res, next);
+});
 const id = z.coerce.bigint().positive();
 const amount = z.coerce.number().positive().max(999_999_999);
-const staff = requireRole(
-  "SYSTEM_ADMIN",
-  "FINANCE_MANAGER",
-  "CASHIER",
-  "ACCOUNTANT",
+const staff = requireRoleOrPermission(
+  ["SYSTEM_ADMIN", "FINANCE_MANAGER", "CASHIER", "ACCOUNTANT"],
+  ["PAYMENT_OPERATIONS"],
 );
-const checker = requireRole("SYSTEM_ADMIN", "FINANCE_MANAGER", "ACCOUNTANT");
+const checker = requireRoleOrPermission(
+  ["SYSTEM_ADMIN", "FINANCE_MANAGER", "ACCOUNTANT"],
+  ["PAYMENT_OPERATIONS"],
+);
+const unmatchedManager = requireRoleOrPermission(
+  ["SYSTEM_ADMIN", "FINANCE_MANAGER", "ACCOUNTANT"],
+  ["PAYMENT_UNMATCHED_MANAGE"],
+);
+const unmatchedViewer = requireRoleOrPermission(
+  ["SYSTEM_ADMIN", "FINANCE_MANAGER", "ACCOUNTANT"],
+  ["PAYMENT_UNMATCHED_VIEW"],
+);
+const revenueDashboardViewer = requireRoleOrPermission(
+  ["SYSTEM_ADMIN", "FINANCE_MANAGER", "CASHIER", "ACCOUNTANT", "AUDITOR"],
+  ["PAYMENT_DASHBOARD_VIEW"],
+);
 const uid = (req: any) => (req.user?.userId ? BigInt(req.user.userId) : null);
 const day = (value: string) => new Date(`${value}T00:00:00.000Z`);
 const name = (customer: any) =>
@@ -707,7 +738,7 @@ function parse<T>(
   return result.data;
 }
 
-paymentsRouter.post("/historical-receipts/import", requireRole("SYSTEM_ADMIN", "FINANCE_MANAGER"), async (req, res, next) => {
+paymentsRouter.post("/historical-receipts/import", requireRoleOrPermission(["SYSTEM_ADMIN", "FINANCE_MANAGER"], ["PAYMENT_OPERATIONS"]), async (req, res, next) => {
   const parsed = historicalReceiptSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const rows = parsed.data.receipts;
@@ -908,7 +939,7 @@ paymentsRouter.get("/channels", async (_req, res, next) => {
   }
 });
 
-paymentsRouter.get("/unmatched/count", async (_req, res, next) => {
+paymentsRouter.get("/unmatched/count", unmatchedViewer, async (_req, res, next) => {
   try {
     const count = await prisma.payment.count({
       where: {
@@ -926,7 +957,7 @@ paymentsRouter.get("/unmatched/count", async (_req, res, next) => {
 // The allocation screen only needs unresolved receipts. Do not make it load the
 // complete payment register (with allocations, reversals and audit events) and
 // then filter thousands of records in the browser.
-paymentsRouter.get("/unmatched", async (_req, res, next) => {
+paymentsRouter.get("/unmatched", unmatchedViewer, async (_req, res, next) => {
   try {
     const rows = await prisma.payment.findMany({
       where: {
@@ -1634,7 +1665,7 @@ paymentsRouter.post(
   },
 );
 
-paymentsRouter.patch("/:id/allocate", checker, async (req, res, next) => {
+paymentsRouter.patch("/:id/allocate", unmatchedManager, async (req, res, next) => {
   const paymentId = parse(id, req.params.id, res);
   const data = parse(
     z.union([
@@ -2131,7 +2162,7 @@ paymentsRouter.post(
   },
 );
 
-paymentsRouter.get("/dashboard/summary", async (req, res, next) => {
+paymentsRouter.get("/dashboard/summary", revenueDashboardViewer, async (req, res, next) => {
   try {
     const now = new Date();
     const from = req.query.from

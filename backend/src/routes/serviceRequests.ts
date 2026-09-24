@@ -49,7 +49,7 @@ serviceRequestsRouter.get("/targets", canCreate, async (req, res) => {
 
 serviceRequestsRouter.get("/officers", canView, async (_req, res) => {
   res.json(await prisma.user.findMany({
-    where: { status: "ACTIVE", userType: { in: ["STAFF", "SYSTEM"] }, userRoles: { some: { status: "ACTIVE", role: { roleCode: { in: ["CUSTOMER_CARE_OFFICER", "SYSTEM_ADMIN"] } } } } },
+    where: { status: "ACTIVE", userType: { in: ["STAFF", "SYSTEM"] } },
     orderBy: [{ firstName: "asc" }, { lastName: "asc" }],
     select: { userId: true, firstName: true, lastName: true, username: true },
   }));
@@ -105,10 +105,13 @@ serviceRequestsRouter.post("/", canCreate, async (req, res) => {
   if (!account) return res.status(404).json({ error: "Customer account not found" });
   const hours = { URGENT: 4, HIGH: 24, MEDIUM: 72, LOW: 120 }[parsed.data.priority];
   const dueAt = new Date(Date.now() + hours * 60 * 60 * 1000);
+  const assignedTo = req.user!.roles.includes("CUSTOMER_METER_SERVICES")
+    ? null
+    : parsed.data.assignedTo ?? null;
   const created = await prisma.$transaction(async (tx) => {
     const record = await tx.serviceRequest.create({ data: {
-      ...parsed.data, customerId: account.customerId, assignedTo: parsed.data.assignedTo ?? null,
-      status: parsed.data.assignedTo ? "ASSIGNED" : "OPEN", dueAt,
+      ...parsed.data, customerId: account.customerId, assignedTo,
+      status: assignedTo ? "ASSIGNED" : "OPEN", dueAt,
       requestNumber: `SR-${Date.now()}-${account.accountNumber}`.slice(0, 60), createdBy: BigInt(req.user!.userId),
     } });
     await tx.serviceRequestEvent.create({ data: { serviceRequestId: record.serviceRequestId, eventType: "CREATED", newStatus: record.status, comments: parsed.data.description, performedBy: BigInt(req.user!.userId) } });

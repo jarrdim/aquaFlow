@@ -1,6 +1,7 @@
 import { Fragment, FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, getSessionUser } from "../lib/api";
+import { hasPermission, isRestrictedStaff } from "../lib/access";
 import {
   exportExcel,
   exportMeterReadingZoneWorkbook,
@@ -2887,6 +2888,7 @@ export function ReadingWorklist() {
     ? cycles.filter((cycle) => String(cycle.billingPeriodGroupId ?? "") === periodGroupId)
     : cycles;
   const canCaptureReadings =
+    (!isRestrictedStaff() || hasPermission("READING_WORKLIST_MANAGE")) &&
     cycleScope !== "group" &&
     selectedCycles.length === 1 &&
     selectedCycle?.status === "OPEN" &&

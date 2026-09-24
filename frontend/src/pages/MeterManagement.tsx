@@ -19,6 +19,7 @@ import {
   parseMeterWorkbook,
 } from "../lib/meterFiles";
 import { DateInput, formatDmyDate } from "../components/DateInput";
+import { hasPermission, isRestrictedStaff } from "../lib/access";
 
 type AnyRecord = Record<string, any>;
 
@@ -3290,6 +3291,9 @@ type StatementPaymentMethod =
   | "MPESA_STK";
 
 export function DirectMeterService() {
+  const scopedAccess = isRestrictedStaff();
+  const mayDisconnect = !scopedAccess || hasPermission("METER_DIRECT_DISCONNECT");
+  const mayReconnect = !scopedAccess || hasPermission("METER_DIRECT_RECONNECT");
   const [serviceParams] = useSearchParams();
   const linkedAccountId = serviceParams.get("accountId") ?? "";
   const linkedAccountNumber = serviceParams.get("accountNumber") ?? "";
@@ -3559,8 +3563,8 @@ export function DirectMeterService() {
   }
 
   const disconnected = selected?.accountStatus === "DISCONNECTED" || selected?.meterStatus === "DISCONNECTED";
-  const canDisconnect = selected && ["ACTIVE", "SUSPENDED"].includes(selected.accountStatus) && selected.meterStatus !== "DISCONNECTED";
-  const canReconnect = selected && selected.accountStatus === "DISCONNECTED" && selected.meterStatus === "DISCONNECTED";
+  const canDisconnect = mayDisconnect && selected && ["ACTIVE", "SUSPENDED"].includes(selected.accountStatus) && selected.meterStatus !== "DISCONNECTED";
+  const canReconnect = mayReconnect && selected && selected.accountStatus === "DISCONNECTED" && selected.meterStatus === "DISCONNECTED";
   const paymentConfirmed = Boolean(selected?.reconnectionPaymentConfirmed);
   const paymentPending = selected?.reconnectionFeePaymentStatus === "PENDING";
   const reconnectionFeePostedToLedger = Boolean(selected?.reconnectionFeePostedToLedger);
@@ -3738,8 +3742,8 @@ export function DirectMeterService() {
             </div>
           )}
           <div className="mt-4 grid gap-2">
-            <Button tone="red" disabled={!canDisconnect} onClick={() => openAction("DISCONNECT")}>Disconnect meter</Button>
-            <Button tone="green" disabled={!canReconnect || !paymentConfirmed || Boolean(selected.workOrderId)} onClick={() => openAction("RECONNECT")}>Reconnect meter</Button>
+            {mayDisconnect && <Button tone="red" disabled={!canDisconnect} onClick={() => openAction("DISCONNECT")}>Disconnect meter</Button>}
+            {mayReconnect && <Button tone="green" disabled={!canReconnect || !paymentConfirmed || Boolean(selected.workOrderId)} onClick={() => openAction("RECONNECT")}>Reconnect meter</Button>}
           </div>
           <p className="mt-3 text-xs leading-5 text-slate-400">These controls record work already completed on site. Reconnection verifies the charges posted during disconnection are settled and does not add another fee.</p>
         </>}

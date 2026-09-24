@@ -11,6 +11,7 @@ import { CheckboxMultiSelect } from "../components/CheckboxMultiSelect";
 import { SweetAlertToast } from "../components/SweetAlertToast";
 import { DateInput } from "../components/DateInput";
 import { DeliveryQueueLink } from "../components/DeliveryQueueLink";
+import { hasPermission, isRestrictedStaff } from "../lib/access";
 
 type Row = Record<string, any>;
 const INPUT =
@@ -2547,7 +2548,11 @@ async function exportDisconnectionListExcel(list: Row) {
 }
 
 export function DisconnectionLists({ view = "builder" }: { view?: "builder" | "register" }) {
-  const isRegister = view === "register";
+  const scopedAccess = isRestrictedStaff();
+  const canManageLists = !scopedAccess || hasPermission("DISCONNECTION_LIST_MANAGE");
+  const canApproveLists = !scopedAccess;
+  const canRecordDisconnection = !scopedAccess || hasPermission("METER_DIRECT_DISCONNECT");
+  const isRegister = view === "register" || !canManageLists;
   const [eligible, setEligible] = useState<Row[]>([]);
   const [eligibility, setEligibility] = useState<Row>({
     thresholdMatches: 0,
@@ -2798,9 +2803,9 @@ export function DisconnectionLists({ view = "builder" }: { view?: "builder" | "r
     <Page
       compact
       title={isRegister ? "Disconnection list register" : "Disconnection control"}
-      subtitle={isRegister ? "Review submitted lists and record approval decisions" : `${selectedZoneName ?? "All zones"} · Controlled escalation after formal recovery notices`}
+      subtitle={isRegister ? (canApproveLists ? "Review submitted lists and record approval decisions" : "View submitted disconnection lists") : `${selectedZoneName ?? "All zones"} · Controlled escalation after formal recovery notices`}
       actions={isRegister
-        ? <><Button tone="slate" disabled={!review?.items?.length} onClick={() => review && void exportDisconnectionListExcel(review)}>Export selected list</Button><LinkButton to="/arrears/disconnections">Build disconnection list</LinkButton></>
+        ? <><Button tone="slate" disabled={!review?.items?.length} onClick={() => review && void exportDisconnectionListExcel(review)}>Export selected list</Button>{canManageLists && <LinkButton to="/arrears/disconnections">Build disconnection list</LinkButton>}</>
         : <><Button tone="slate" disabled={loading || !visibleEligible.length || Boolean(exportingEligible)} onClick={() => void exportEligible("excel")}>{exportingEligible === "excel" ? "Exporting…" : "Export Excel"}</Button><Button tone="slate" disabled={loading || !visibleEligible.length || Boolean(exportingEligible)} onClick={() => void exportEligible("csv")}>{exportingEligible === "csv" ? "Exporting…" : "Export CSV"}</Button><Button tone="slate" disabled={loading || !visibleEligible.length || Boolean(exportingEligible)} onClick={printEligible}>Print</Button><LinkButton to="/arrears/disconnections/register" tone="slate">Open list register</LinkButton></>}
     >
       {error && <Alert>{error}</Alert>}
@@ -2921,7 +2926,7 @@ export function DisconnectionLists({ view = "builder" }: { view?: "builder" | "r
             <thead className="bg-slate-50">
               <tr>
                 <th className={compactTH}>
-                  <input
+                  {canManageLists && <input
                     type="checkbox"
                     disabled={loading}
                     checked={
@@ -2934,7 +2939,7 @@ export function DisconnectionLists({ view = "builder" }: { view?: "builder" | "r
                           : selected.filter((value) => !visibleEligible.some((row) => String(row.accountId) === value)),
                       )
                     }
-                  />
+                  />}
                 </th>
                 <th className={compactTH}>Account / Customer</th>
                 <th className={compactTH}>Zone</th>
@@ -3073,7 +3078,7 @@ export function DisconnectionLists({ view = "builder" }: { view?: "builder" | "r
             <div className="min-w-[680px] overflow-hidden rounded-xl border border-slate-200">
               <div className="grid grid-cols-[44px_minmax(190px,1fr)_90px_130px_120px] items-center bg-slate-50 px-2 text-[11px] font-bold uppercase tracking-wide text-slate-500">
                 <div className="px-2 py-3">
-                  <input
+                  {canApproveLists && <input
                     type="checkbox"
                     aria-label="Select all pending lists shown"
                     disabled={!pendingVisibleListIds.length}
@@ -3081,7 +3086,7 @@ export function DisconnectionLists({ view = "builder" }: { view?: "builder" | "r
                     onChange={(event) => setSelectedListIds((values) => event.target.checked
                       ? Array.from(new Set([...values, ...pendingVisibleListIds]))
                       : values.filter((id) => !pendingVisibleListIds.includes(id)))}
-                  />
+                  />}
                 </div>
                 <div className="px-2 py-3">Reference</div>
                 <div className="px-2 py-3 text-center">Accounts</div>
@@ -3104,7 +3109,7 @@ export function DisconnectionLists({ view = "builder" }: { view?: "builder" | "r
                     className={`grid grid-cols-[44px_minmax(190px,1fr)_90px_130px_120px] items-center border-t px-2 text-sm transition first:border-t-0 ${review?.disconnectionListId === row.disconnectionListId ? "bg-cyan-50" : "bg-white hover:bg-slate-50"}`}
                   >
                     <div className="px-2 py-3">
-                      {row.status === "PENDING_APPROVAL" ? (
+                      {canApproveLists && row.status === "PENDING_APPROVAL" ? (
                         <input
                           type="checkbox"
                           aria-label={`Select ${row.listReference}`}
@@ -3172,7 +3177,7 @@ export function DisconnectionLists({ view = "builder" }: { view?: "builder" | "r
                       {customerName(item.account?.customer)}
                     </span>
                     <div className="text-right"><strong>{money(item.accountBalance ?? item.outstandingAmount)}</strong><div className="text-xs text-slate-400">Previous: {item.previousReading == null ? "—" : Number(item.previousReading).toLocaleString("en-KE", { maximumFractionDigits: 3 })}</div></div>
-                    {review.status === "APPROVED" && item.status === "APPROVED" ? (
+                    {canRecordDisconnection && review.status === "APPROVED" && item.status === "APPROVED" ? (
                       <Link
                         to={`/meters/direct-service?accountId=${encodeURIComponent(String(item.accountId))}&accountNumber=${encodeURIComponent(String(item.account?.accountNumber ?? ""))}&listItemId=${encodeURIComponent(String(item.disconnectionItemId))}&listReference=${encodeURIComponent(String(review.listReference))}`}
                         className="whitespace-nowrap rounded-lg bg-red-600 px-3 py-2 text-xs font-bold text-white transition hover:bg-red-700"
@@ -3185,7 +3190,7 @@ export function DisconnectionLists({ view = "builder" }: { view?: "builder" | "r
                   </div>
                 ))}
               </div>
-              {review.status === "PENDING_APPROVAL" ? (
+              {canApproveLists && review.status === "PENDING_APPROVAL" ? (
                 <>
                   <Field label="Decision comments *">
                     <textarea

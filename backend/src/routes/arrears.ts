@@ -2,12 +2,19 @@ import { Prisma } from "@prisma/client";
 import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
-import { isSystemAdmin, requireAuth, requireRole } from "../middleware/auth";
+import { isSystemAdmin, requireAuth, requireRole, requireRoleOrPermission, requireScopedPermission, SCOPED_STAFF_ROLES } from "../middleware/auth";
 import { processOne } from "./notifications";
 import { createPaymentLinkToken, publicAppUrl } from "../lib/paymentLink";
 
 export const arrearsRouter = Router();
 arrearsRouter.use(requireAuth);
+arrearsRouter.use((req, res, next) => {
+  const isScoped = req.user?.roles.some((role) => SCOPED_STAFF_ROLES.includes(role));
+  if (!isScoped || req.path.startsWith("/disconnections") || req.path.startsWith("/promises")) {
+    return next();
+  }
+  return res.status(403).json({ error: "Insufficient permissions" });
+});
 
 const id = z.coerce.bigint().positive();
 const amount = z.coerce.number().positive().max(999_999_999);
@@ -29,6 +36,16 @@ const customerStaff = requireRole(
   "CREDIT_CONTROL_SUPERVISOR",
   "CREDIT_CONTROL_OFFICER",
   "CUSTOMER_CARE_OFFICER",
+);
+const promiseViewAccess = requireScopedPermission(SCOPED_STAFF_ROLES, ["PROMISE_TO_PAY_VIEW"]);
+const promiseManageAccess = requireRoleOrPermission(
+  ["SYSTEM_ADMIN", "FINANCE_MANAGER", "CREDIT_CONTROL_SUPERVISOR", "CREDIT_CONTROL_OFFICER", "CUSTOMER_CARE_OFFICER"],
+  ["PROMISE_TO_PAY_MANAGE"],
+);
+const disconnectionViewAccess = requireScopedPermission(SCOPED_STAFF_ROLES, ["DISCONNECTION_LIST_VIEW"]);
+const disconnectionManageAccess = requireRoleOrPermission(
+  ["SYSTEM_ADMIN", "FINANCE_MANAGER", "CREDIT_CONTROL_SUPERVISOR", "CREDIT_CONTROL_OFFICER"],
+  ["DISCONNECTION_LIST_MANAGE"],
 );
 const uid = (req: any) => BigInt(req.user.userId);
 const day = (value: string) => new Date(`${value}T00:00:00.000Z`);
@@ -1239,7 +1256,7 @@ arrearsRouter.patch("/plans/:id/cancel", supervisor, async (req, res, next) => {
   }
 });
 
-arrearsRouter.get("/promises", async (req, res, next) => {
+arrearsRouter.get("/promises", promiseViewAccess, async (req, res, next) => {
   try {
     await refreshStatuses();
     const status = String(req.query.status ?? "");
@@ -1263,7 +1280,7 @@ arrearsRouter.get("/promises", async (req, res, next) => {
   }
 });
 
-arrearsRouter.post("/promises", customerStaff, async (req, res, next) => {
+arrearsRouter.post("/promises", promiseManageAccess, async (req, res, next) => {
   const data = parse(
     z.object({
       accountId: id,
@@ -1310,7 +1327,7 @@ arrearsRouter.post("/promises", customerStaff, async (req, res, next) => {
   }
 });
 
-arrearsRouter.patch("/promises/:id/status", customerStaff, async (req, res, next) => {
+arrearsRouter.patch("/promises/:id/status", promiseManageAccess, async (req, res, next) => {
   const promiseId = parse(id, req.params.id, res);
   const data = parse(
     z.object({ status: z.enum(["KEPT", "BROKEN", "CANCELLED"]) }),
@@ -1337,7 +1354,7 @@ arrearsRouter.patch("/promises/:id/status", customerStaff, async (req, res, next
   }
 });
 
-arrearsRouter.get("/disconnections/eligible", async (req, res, next) => {
+arrearsRouter.get("/disconnections/eligible", disconnectionViewAccess, async (req, res, next) => {
   try {
     const asOf = req.query.asOf ? day(String(req.query.asOf)) : today();
     const requireFinalDemandNotice = String(req.query.requireFinalDemandNotice ?? "true") !== "false";
@@ -1404,7 +1421,7 @@ arrearsRouter.get("/disconnections/eligible", async (req, res, next) => {
   }
 });
 
-arrearsRouter.get("/disconnections", async (req, res, next) => {
+arrearsRouter.get("/disconnections", disconnectionViewAccess, async (req, res, next) => {
   try {
     const zoneIdText = String(req.query.zoneId ?? "").trim();
     if (zoneIdText && !/^\d+$/.test(zoneIdText))
@@ -1435,7 +1452,7 @@ arrearsRouter.get("/disconnections", async (req, res, next) => {
   }
 });
 
-arrearsRouter.post("/disconnections", officer, async (req, res, next) => {
+arrearsRouter.post("/disconnections", disconnectionManageAccess, async (req, res, next) => {
   const data = parse(
     z.object({
       accountIds: z.array(id).min(1).max(1000),

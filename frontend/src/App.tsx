@@ -135,6 +135,7 @@ import {
   RoleAdministration,
   UserAdministration,
 } from "./pages/AdminManagement";
+import { canAccessPath, defaultAuthorizedPath, isRestrictedStaff } from "./lib/access";
 import {
   RegisterServiceRequest,
   ServiceRequestDashboard,
@@ -197,7 +198,11 @@ class PageErrorBoundary extends Component<
 }
 
 function Protected({ children }: { children: React.ReactNode }) {
+  const location = useLocation();
   if (!hasSession()) return <Navigate to="/login" replace />;
+  if (!canAccessPath(location.pathname)) {
+    return <Navigate to={defaultAuthorizedPath()} replace />;
+  }
   return <>{children}</>;
 }
 
@@ -208,7 +213,7 @@ function SystemAdminOnly({ children }: { children: React.ReactNode }) {
 }
 
 function GuestOnly({ children }: { children: React.ReactNode }) {
-  if (hasSession()) return <Navigate to="/dashboard" replace />;
+  if (hasSession()) return <Navigate to={defaultAuthorizedPath()} replace />;
   return <>{children}</>;
 }
 
@@ -738,6 +743,16 @@ function Shell({ children }: { children: React.ReactNode }) {
   const profileRef = useRef<HTMLDivElement>(null);
   const sidebarFlyoutTimer = useRef<number | null>(null);
   const sessionUser = getSessionUser();
+  const restrictedStaff = isRestrictedStaff(sessionUser);
+  const visibleMenu = (menu: readonly (readonly [string, string])[]) =>
+    menu.filter(([, itemPath]) => {
+      if (
+        restrictedStaff &&
+        itemPath === "/arrears/disconnections" &&
+        !sessionUser?.permissions?.includes("DISCONNECTION_LIST_MANAGE")
+      ) return false;
+      return canAccessPath(itemPath, sessionUser);
+    });
   const canReviewDirectReconnections = (sessionUser?.roles ?? []).some((role) =>
     ["ADMIN", "SYSTEM_ADMIN", "METER_MANAGER", "METER_SUPERVISOR", "SUPERVISOR"].includes(role),
   );
@@ -1037,11 +1052,14 @@ function Shell({ children }: { children: React.ReactNode }) {
   }
 
   const flyoutMenu = sidebarFlyout
-    ? SIDEBAR_CHILD_MENUS[sidebarFlyout]
+    ? visibleMenu(SIDEBAR_CHILD_MENUS[sidebarFlyout] ?? [])
     : undefined;
   const flyoutModule = sidebarFlyout
     ? NAV_ITEMS.find((item) => item.label === sidebarFlyout)
     : undefined;
+  const flyoutPath = flyoutModule?.path && canAccessPath(flyoutModule.path, sessionUser)
+    ? flyoutModule.path
+    : flyoutMenu?.[0]?.[1];
 
   return (
     <div className="app-shell flex h-screen overflow-hidden bg-slate-50">
@@ -1080,9 +1098,9 @@ function Shell({ children }: { children: React.ReactNode }) {
         {/* Utility logo */}
         <div className={`sidebar-brand-row flex items-center border-b border-white/10 px-3 py-3 ${sidebarCollapsed ? "justify-center" : ""}`}>
           <Link
-            to="/dashboard"
-            aria-label="Go to dashboard"
-            title="Dashboard"
+            to={defaultAuthorizedPath(sessionUser)}
+            aria-label="Go to home page"
+            title="Home"
             className={`overflow-hidden rounded-xl shadow-sm ${privacyMode ? "bg-white ring-1 ring-amber-300/70" : ""} ${
               sidebarCollapsed ? "h-11 w-11" : privacyMode ? "h-16 w-full" : "h-16 w-full"
             }`}
@@ -1108,7 +1126,11 @@ function Shell({ children }: { children: React.ReactNode }) {
 
         {/* Nav */}
         <nav className="flex-1 space-y-0.5 overflow-y-auto px-2 py-3 text-sm">
-          {NAV_ITEMS.map(({ label, Icon: NavIcon, path, iconClass }) => {
+          {NAV_ITEMS.filter(({ label, path }) => {
+            if (!restrictedStaff) return true;
+            if (path && canAccessPath(path, sessionUser)) return true;
+            return Boolean(SIDEBAR_CHILD_MENUS[label]?.some(([, itemPath]) => canAccessPath(itemPath, sessionUser)));
+          }).map(({ label, Icon: NavIcon, path, iconClass }) => {
             const active = path !== null && (
               location.pathname.startsWith(path) ||
               (label === "Meter Readings" && location.pathname === "/period-groups")
@@ -1151,7 +1173,7 @@ function Shell({ children }: { children: React.ReactNode }) {
                 )}
                 {!sidebarCollapsed && label === "Customers" && expanded && (
                   <div className="ml-7 mt-1 space-y-0.5 border-l border-white/10 pl-2">
-                    {CUSTOMER_MENU.map(([itemLabel, itemPath]) => {
+                    {visibleMenu(CUSTOMER_MENU).map(([itemLabel, itemPath]) => {
                       const itemActive =
                         itemPath === "/customers"
                           ? location.pathname === itemPath
@@ -1174,7 +1196,7 @@ function Shell({ children }: { children: React.ReactNode }) {
                 )}
                 {!sidebarCollapsed && label === "New Connections" && expanded && (
                   <div className="ml-7 mt-1 space-y-0.5 border-l border-white/10 pl-2">
-                    {CONNECTION_MENU.map(([itemLabel, itemPath]) => {
+                    {visibleMenu(CONNECTION_MENU).map(([itemLabel, itemPath]) => {
                       const itemActive = itemPath === "/connections"
                         ? location.pathname === itemPath
                         : location.pathname.startsWith(itemPath);
@@ -1188,7 +1210,7 @@ function Shell({ children }: { children: React.ReactNode }) {
                 )}
                 {!sidebarCollapsed && label === "Billing" && expanded && (
                   <div className="ml-7 mt-1 space-y-0.5 border-l border-white/10 pl-2">
-                    {BILLING_MENU.filter(([, itemPath]) =>
+                    {visibleMenu(BILLING_MENU).filter(([, itemPath]) =>
                       itemPath !== "/billing/reading-corrections" || sessionUser?.roles?.includes("SYSTEM_ADMIN"),
                     ).map(([itemLabel, itemPath]) => {
                       const itemActive =
@@ -1223,7 +1245,7 @@ function Shell({ children }: { children: React.ReactNode }) {
                 )}
                 {!sidebarCollapsed && label === "Payments & Revenue" && expanded && (
                   <div className="ml-7 mt-1 space-y-0.5 border-l border-white/10 pl-2">
-                    {PAYMENT_MENU.map(([itemLabel, itemPath]) => {
+                    {visibleMenu(PAYMENT_MENU).map(([itemLabel, itemPath]) => {
                       const itemActive =
                         itemPath === "/payments"
                           ? location.pathname === itemPath
@@ -1271,7 +1293,7 @@ function Shell({ children }: { children: React.ReactNode }) {
                 )}
                 {!sidebarCollapsed && label === "Arrears & Debt" && expanded && (
                   <div className="ml-7 mt-1 space-y-0.5 border-l border-white/10 pl-2">
-                    {ARREARS_MENU.map(([itemLabel, itemPath]) => {
+                    {visibleMenu(ARREARS_MENU).map(([itemLabel, itemPath]) => {
                       const itemActive =
                         itemPath === "/arrears"
                           ? location.pathname === itemPath
@@ -1294,7 +1316,7 @@ function Shell({ children }: { children: React.ReactNode }) {
                 )}
                 {!sidebarCollapsed && label === "Meter Management" && expanded && (
                   <div className="ml-7 mt-1 space-y-0.5 border-l border-white/10 pl-2">
-                    {METER_MENU.map(([itemLabel, itemPath]) => {
+                    {visibleMenu(METER_MENU).map(([itemLabel, itemPath]) => {
                       const itemActive =
                         itemPath === "/meters"
                           ? location.pathname === itemPath
@@ -1322,7 +1344,7 @@ function Shell({ children }: { children: React.ReactNode }) {
                 )}
                 {!sidebarCollapsed && label === "Meter Readings" && expanded && (
                   <div className="ml-7 mt-1 space-y-0.5 border-l border-white/10 pl-2">
-                    {READING_MENU.map(([itemLabel, itemPath]) => {
+                    {visibleMenu(READING_MENU).map(([itemLabel, itemPath]) => {
                       const itemActive =
                         itemPath === "/readings"
                           ? location.pathname === itemPath
@@ -1381,7 +1403,7 @@ function Shell({ children }: { children: React.ReactNode }) {
                 )}
                 {!sidebarCollapsed && label === "Service Requests" && expanded && (
                   <div className="ml-7 mt-1 space-y-0.5 border-l border-white/10 pl-2">
-                    {SERVICE_REQUEST_MENU.map(([itemLabel, itemPath]) => {
+                    {visibleMenu(SERVICE_REQUEST_MENU).map(([itemLabel, itemPath]) => {
                       const itemActive =
                         itemPath === "/service-requests"
                           ? location.pathname === itemPath
@@ -1485,7 +1507,7 @@ function Shell({ children }: { children: React.ReactNode }) {
         </div>
       </aside>
 
-      {sidebarCollapsed && !mobileSidebarOpen && sidebarFlyout && flyoutModule?.path && (
+      {sidebarCollapsed && !mobileSidebarOpen && sidebarFlyout && flyoutPath && (
         <div
           role="menu"
           aria-label={`${sidebarFlyout} navigation`}
@@ -1495,7 +1517,7 @@ function Shell({ children }: { children: React.ReactNode }) {
           onMouseLeave={scheduleSidebarFlyoutClose}
         >
           <Link
-            to={flyoutModule.path}
+            to={flyoutPath}
             role="menuitem"
             className="flex items-center justify-between border-b border-slate-100 bg-slate-50 px-4 py-3 font-bold text-slate-900 hover:bg-sky-50 hover:text-aqua-700"
             onClick={() => setSidebarFlyout(null)}
@@ -1507,7 +1529,7 @@ function Shell({ children }: { children: React.ReactNode }) {
             <div className="max-h-[390px] overflow-y-auto p-2">
               {flyoutMenu.map(([itemLabel, itemPath]) => {
                 const itemActive =
-                  itemPath === flyoutModule.path
+                   itemPath === flyoutPath
                     ? location.pathname === itemPath
                     : location.pathname.startsWith(itemPath);
                 return (

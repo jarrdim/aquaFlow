@@ -8,6 +8,7 @@ export type SessionUser = {
   firstName?: string;
   lastName?: string;
   roles: string[];
+  permissions?: string[];
 };
 
 export function setSessionUser(user: SessionUser) {
