@@ -3189,15 +3189,19 @@ export function DirectMeterReplacement() {
               onChange={(event) => chooseOldMeter(event.target.value)} disabled={loading} required>
               <option value="">{loading ? "Loading installed meters..." : "Select installed meter"}</option>
               {installed.map((meter) => <option key={meter.meterId} value={meter.meterId}>
-                {meter.assignment?.account?.accountNumber} - {meter.assignedTo || "Customer"} - {meter.meterNumber}
+                {meter.assignment?.account?.accountNumber} - {meter.assignedTo || "Customer"} - {meter.meterNumber}{meter.assignment?.account?.accountStatus === "DISCONNECTED" || meter.status === "DISCONNECTED" ? " - DISCONNECTED" : ""}
               </option>)}
             </SearchableSelect>
           </Field>
+          {oldMeter && (account?.accountStatus === "DISCONNECTED" || oldMeter.status === "DISCONNECTED") && <div className="mt-3 flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+            <span className="mt-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-full bg-red-600 text-xs font-extrabold text-white">!</span>
+            <div><p className="font-bold">Disconnected service</p><p className="mt-0.5 text-xs leading-5 text-red-700">This meter can be replaced, but the account and replacement meter will remain disconnected until the normal reconnection process is completed.</p></div>
+          </div>}
           {oldMeter && <div className="mt-3 grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2 lg:grid-cols-5">
-            <div><p className="text-xs font-semibold uppercase text-slate-400">Account</p><p className="mt-1 font-bold text-slate-800">{account?.accountNumber}</p></div>
+            <div><p className="text-xs font-semibold uppercase text-slate-400">Account</p><p className="mt-1 font-bold text-slate-800">{account?.accountNumber}</p><span className={`mt-1 inline-flex rounded-full px-2 py-0.5 text-[10px] font-extrabold uppercase ${account?.accountStatus === "ACTIVE" ? "bg-emerald-100 text-emerald-700" : account?.accountStatus === "DISCONNECTED" ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-700"}`}>{pretty(account?.accountStatus ?? "Unknown")}</span></div>
             <div><p className="text-xs font-semibold uppercase text-slate-400">Customer</p><p className="mt-1 font-bold text-slate-800">{oldMeter.assignedTo || "-"}</p></div>
             <div><p className="text-xs font-semibold uppercase text-slate-400">Category</p><p className="mt-1 font-bold text-slate-800">{previewLoading ? <span className="inline-flex items-center gap-1.5 text-slate-500"><span className="h-3 w-3 animate-spin rounded-full border-2 border-aqua-600 border-t-transparent" />Checking</span> : billPreview?.categoryName || "-"}</p></div>
-            <div><p className="text-xs font-semibold uppercase text-slate-400">Current meter</p><p className="mt-1 font-bold text-slate-800">{oldMeter.meterNumber}</p></div>
+            <div><p className="text-xs font-semibold uppercase text-slate-400">Current meter</p><p className="mt-1 font-bold text-slate-800">{oldMeter.meterNumber}</p><span className={`mt-1 inline-flex rounded-full px-2 py-0.5 text-[10px] font-extrabold uppercase ${oldMeter.status === "ACTIVE" ? "bg-emerald-100 text-emerald-700" : oldMeter.status === "DISCONNECTED" ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-700"}`}>{pretty(oldMeter.status)}</span></div>
             <div><p className="text-xs font-semibold uppercase text-slate-400">Latest approved reading</p><p className="mt-1 font-bold text-slate-800">{previousReading.toLocaleString()}</p></div>
           </div>}
         </Card>

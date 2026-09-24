@@ -2830,6 +2830,8 @@ export function ReadingWorklist() {
   const [capturedInCycle, setCapturedInCycle] = useState(0);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [searchMenuOpen, setSearchMenuOpen] = useState(false);
+  const [highlightedSearchResult, setHighlightedSearchResult] = useState(0);
   const [evidenceReading, setEvidenceReading] = useState<Row | null>(null);
   const [showBulkUpload, setShowBulkUpload] = useState(false);
   const [bulkFileName, setBulkFileName] = useState("");
@@ -3087,6 +3089,15 @@ export function ReadingWorklist() {
         ? selectedRoutes.map((route) => route.routeName).join(", ")
         : `${selectedRoutes.length.toLocaleString()} routes`;
   const filteredItems = items;
+  const searchSuggestions = useMemo(() => {
+    const seen = new Set<string>();
+    return items.flatMap((item) => {
+      const key = String(item.account?.accountId ?? item.accountId ?? item.meterId ?? "");
+      if (!key || seen.has(key)) return [];
+      seen.add(key);
+      return [item];
+    }).slice(0, 12);
+  }, [items]);
 
   async function exportWorklist(format: "excel" | "pdf") {
     if (!worklistTotal || operation) return;
@@ -3711,6 +3722,20 @@ export function ReadingWorklist() {
     setParams(next);
   };
 
+  const updateWorklistSearch = (value: string) => {
+    const next = new URLSearchParams(params);
+    value ? next.set("search", value) : next.delete("search");
+    next.delete("page");
+    setParams(next, { replace: true });
+  };
+
+  const selectSearchResult = (item: Row) => {
+    const exactValue = String(item.account?.accountNumber ?? item.meter?.meterNumber ?? "");
+    updateWorklistSearch(exactValue);
+    setSearchMenuOpen(false);
+    setHighlightedSearchResult(0);
+  };
+
   const updateReadingStatus = (value: string) => {
     const next = new URLSearchParams(params);
     value ? next.set("status", value) : next.delete("status");
@@ -4157,7 +4182,7 @@ export function ReadingWorklist() {
       )}
       <section
         id="reading-worklist-filters"
-        className="mb-4 scroll-mt-3 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_16px_42px_-30px_rgba(15,32,56,0.45)]"
+        className="mb-4 scroll-mt-3 overflow-visible rounded-2xl border border-slate-200 bg-white shadow-[0_16px_42px_-30px_rgba(15,32,56,0.45)]"
       >
         <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-6">
           <Field label="Period group">
@@ -4228,12 +4253,77 @@ export function ReadingWorklist() {
             />
           </Field>
           <Field label="Search">
-            <input
-              className={INPUT}
-              value={search}
-              onChange={(e) => update("search", e.target.value)}
-              placeholder="Exact meter/account, customer no., name or phone"
-            />
+            <div className="relative">
+              <div className="relative">
+                <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></svg>
+                <input
+                  type="search"
+                  role="combobox"
+                  aria-autocomplete="list"
+                  aria-expanded={searchMenuOpen && Boolean(search.trim())}
+                  aria-controls="reading-worklist-search-results"
+                  className={`${INPUT} pl-10 pr-10`}
+                  value={search}
+                  onFocus={() => setSearchMenuOpen(true)}
+                  onBlur={() => window.setTimeout(() => setSearchMenuOpen(false), 150)}
+                  onChange={(e) => {
+                    updateWorklistSearch(e.target.value);
+                    setSearchMenuOpen(true);
+                    setHighlightedSearchResult(0);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "ArrowDown" && searchSuggestions.length) {
+                      event.preventDefault();
+                      setSearchMenuOpen(true);
+                      setHighlightedSearchResult((current) => Math.min(current + 1, searchSuggestions.length - 1));
+                    } else if (event.key === "ArrowUp" && searchSuggestions.length) {
+                      event.preventDefault();
+                      setHighlightedSearchResult((current) => Math.max(current - 1, 0));
+                    } else if (event.key === "Enter" && searchMenuOpen && searchSuggestions[highlightedSearchResult]) {
+                      event.preventDefault();
+                      selectSearchResult(searchSuggestions[highlightedSearchResult]);
+                    } else if (event.key === "Escape") {
+                      setSearchMenuOpen(false);
+                    }
+                  }}
+                  placeholder="Meter, account, customer or phone"
+                />
+                {search && (
+                  <button type="button" aria-label="Clear worklist search" onMouseDown={(event) => event.preventDefault()} onClick={() => { updateWorklistSearch(""); setSearchMenuOpen(false); }} className="absolute right-2.5 top-1/2 grid h-6 w-6 -translate-y-1/2 place-items-center rounded-full text-slate-400 transition hover:bg-slate-100 hover:text-slate-700">×</button>
+                )}
+              </div>
+              {searchMenuOpen && search.trim() && (
+                <div id="reading-worklist-search-results" role="listbox" className="absolute left-0 right-0 top-full z-50 mt-1 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl">
+                  <div className="border-b border-slate-100 bg-slate-50 px-3 py-2 text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
+                    {loading ? "Searching…" : `${searchSuggestions.length} matching result${searchSuggestions.length === 1 ? "" : "s"}`}
+                  </div>
+                  <div className="max-h-80 overflow-y-auto p-1.5">
+                    {searchSuggestions.map((item, index) => (
+                      <button
+                        key={String(item.assignmentId ?? item.meterId ?? index)}
+                        type="button"
+                        role="option"
+                        aria-selected={index === highlightedSearchResult}
+                        onMouseDown={(event) => event.preventDefault()}
+                        onMouseEnter={() => setHighlightedSearchResult(index)}
+                        onClick={() => selectSearchResult(item)}
+                        className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition ${index === highlightedSearchResult ? "bg-sky-50 ring-1 ring-inset ring-sky-100" : "hover:bg-slate-50"}`}
+                      >
+                        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-aqua-700 text-xs font-extrabold text-white">{String(item.customerName ?? "C").split(/\s+/).filter(Boolean).slice(0, 2).map((part: string) => part[0]).join("").toUpperCase()}</span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-bold text-slate-900">{item.customerName || "Unnamed customer"}</span>
+                          <span className="mt-0.5 block truncate text-xs text-slate-500">{item.account?.accountNumber ?? "No account"} · {item.meter?.meterNumber ?? "No meter"} · {item.account?.customer?.phoneNumber ?? "No phone"}</span>
+                        </span>
+                        <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-extrabold uppercase ${item.account?.accountStatus === "ACTIVE" ? "bg-emerald-50 text-emerald-700" : item.account?.accountStatus === "DISCONNECTED" ? "bg-red-50 text-red-700" : "bg-amber-50 text-amber-700"}`}>{pretty(item.account?.accountStatus ?? "Unknown")}</span>
+                      </button>
+                    ))}
+                    {!loading && !searchSuggestions.length && (
+                      <div className="px-4 py-8 text-center"><p className="text-sm font-semibold text-slate-700">No matching meter or account</p><p className="mt-1 text-xs text-slate-400">Try a meter number, account number, customer name, customer number, or phone.</p></div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
           </Field>
         </div>
         <div className="grid border-t border-slate-100 bg-slate-50/70 sm:grid-cols-3 sm:divide-x sm:divide-slate-200">

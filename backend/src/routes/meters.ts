@@ -505,7 +505,7 @@ metersRouter.get("/replacements/direct/options", directReplacementAccess, async 
   const installedSearch = String(req.query.installedSearch ?? "").trim();
   const installed = await prisma.meter.findMany({
       where: {
-        status: { in: ["ACTIVE", "FAULTY", "TAMPERED", "INACTIVE"] },
+        status: { in: ["ACTIVE", "FAULTY", "TAMPERED", "INACTIVE", "DISCONNECTED"] },
         assignments: { some: { assignmentStatus: "ACTIVE", removalDate: null, accountId: { not: null } } },
         ...(installedSearch ? { OR: [
           { meterNumber: { contains: installedSearch, mode: "insensitive" as const } },
@@ -1065,7 +1065,7 @@ async function validateDirectReplacementMeter(
   const accountId = BigInt(data.accountId);
   const meterId = BigInt(data.oldMeterId);
   const assignments = await tx.$queryRaw<any[]>`
-    SELECT ma.assignment_id,m.status,m.opening_reading,m.serial_number,
+    SELECT ma.assignment_id,m.status,m.opening_reading,m.serial_number,ca.account_status,
       COALESCE((SELECT mr.current_reading FROM aquaflow.meter_readings mr
         WHERE mr.meter_id=m.meter_id AND mr.approval_status='APPROVED'
         ORDER BY mr.reading_date DESC,mr.reading_id DESC LIMIT 1),m.opening_reading) AS previous_reading,
@@ -1074,6 +1074,7 @@ async function validateDirectReplacementMeter(
         ORDER BY mr.reading_date DESC,mr.reading_id DESC LIMIT 1) AS latest_reading_date
     FROM aquaflow.meter_assignments ma
     JOIN aquaflow.meters m ON m.meter_id=ma.meter_id
+    JOIN aquaflow.customer_accounts ca ON ca.account_id=ma.account_id
     WHERE ma.account_id=${accountId} AND ma.meter_id=${meterId}
       AND ma.assignment_status='ACTIVE' AND ma.removal_date IS NULL
     FOR UPDATE OF ma,m`;
@@ -1127,6 +1128,7 @@ async function validateDirectReplacementMeter(
     previousReading,
     assignmentId: BigInt(assignments[0].assignment_id),
     oldMeterStatus: String(assignments[0].status),
+    accountStatus: String(assignments[0].account_status),
     oldSerialNumber,
   };
 }
@@ -1273,6 +1275,7 @@ metersRouter.post("/replacements/direct", directReplacementAccess, async (req, r
     const result = await prisma.$transaction(async (tx) => {
       const data = parsed.data;
       const ids = await validateDirectReplacementMeter(tx, data);
+      const replacementMeterStatus = ids.accountStatus === "DISCONNECTED" ? "DISCONNECTED" : "ACTIVE";
       const replacementDate = new Date(`${data.replacementDate}T00:00:00.000Z`);
       const replacement = await tx.meterReplacement.create({ data: {
         accountId: ids.accountId, oldMeterId: ids.oldMeterId, newMeterId: ids.newMeterId,
@@ -1312,19 +1315,19 @@ metersRouter.post("/replacements/direct", directReplacementAccess, async (req, r
         syncId: `METER_REPLACEMENT_BASELINE:${replacement.replacementId}`,
       } });
       await tx.meter.update({ where: { meterId: ids.oldMeterId }, data: {
-        status: "ACTIVE", installationStatus: "INSTALLED", installationDate: replacementDate,
+        status: replacementMeterStatus, installationStatus: "INSTALLED", installationDate: replacementDate,
         openingReading: data.newOpeningReading, gpsLatitude: data.gpsLatitude, gpsLongitude: data.gpsLongitude,
         serialNumber: data.newSerialNumber,
       } });
       await tx.meterEvent.createMany({ data: [
         { meterId: ids.oldMeterId, assignmentId: ids.assignmentId, replacementId: replacement.replacementId,
-          eventType: "REPLACEMENT_APPROVED", previousStatus: ids.oldMeterStatus, newStatus: "ACTIVE",
+          eventType: "REPLACEMENT_APPROVED", previousStatus: ids.oldMeterStatus, newStatus: replacementMeterStatus,
           reading: data.oldFinalReading, reason: data.replacementReason, remarks: data.remarks,
           gpsLatitude: data.gpsLatitude, gpsLongitude: data.gpsLongitude, performedBy: userId(req),
           metadata: { retainedMeterNumber: true, oldSerialNumber: ids.oldSerialNumber,
             newSerialNumber: data.newSerialNumber, openingBaselineReadingId: openingBaseline.readingId.toString(), direct: true } },
         { meterId: ids.oldMeterId, assignmentId: ids.assignmentId, replacementId: replacement.replacementId,
-          eventType: "INSTALLATION_UPDATED", previousStatus: ids.oldMeterStatus, newStatus: "ACTIVE",
+          eventType: "INSTALLATION_UPDATED", previousStatus: ids.oldMeterStatus, newStatus: replacementMeterStatus,
           reading: data.newOpeningReading, reason: data.replacementReason, remarks: data.remarks,
           gpsLatitude: data.gpsLatitude, gpsLongitude: data.gpsLongitude, performedBy: userId(req),
           metadata: { retainedMeterNumber: true, oldSerialNumber: ids.oldSerialNumber,
