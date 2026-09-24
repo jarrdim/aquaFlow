@@ -1307,11 +1307,17 @@ export function BillingPeriods() {
       return next;
     });
   }
+  const activeRegisterGroupId = selectedGroupId || String(form.billingPeriodGroupId || "");
+  const registerPeriodGroup = periodGroups.find(
+    (group) => String(group.billingPeriodGroupId) === activeRegisterGroupId,
+  );
   const visibleCycles = useMemo(
-    () => selectedGroupId
-      ? cycles.filter((cycle) => String(cycle.billingPeriodGroupId) === selectedGroupId)
-      : cycles,
-    [cycles, selectedGroupId],
+    () => activeRegisterGroupId
+      ? cycles.filter((cycle) => String(cycle.billingPeriodGroupId) === activeRegisterGroupId)
+      : periodGroups.length
+        ? []
+        : cycles,
+    [cycles, activeRegisterGroupId, periodGroups.length],
   );
   const registerRows = useMemo(() => {
     const rows: Row[] = [];
@@ -1629,7 +1635,7 @@ export function BillingPeriods() {
           </form>
         </Card>}
         <Card
-          title="Billing period register"
+          title={`Billing period register${registerPeriodGroup ? ` · ${registerPeriodGroup.groupName}` : ""}`}
           className="min-w-0 shadow-md shadow-slate-200/50"
         >
           <div className="overflow-x-auto rounded-xl border border-slate-200">
@@ -1728,7 +1734,7 @@ export function BillingPeriods() {
                 {!registerRows.length && (
                   <tr>
                     <td colSpan={7} className="p-14 text-center text-slate-400">
-                      <div className="font-semibold text-slate-600">No billing periods created</div><div className="mt-1 text-sm">New billing periods will appear here.</div>
+                      <div className="font-semibold text-slate-600">{registerPeriodGroup ? `No billing periods in ${registerPeriodGroup.groupName}` : "No billing periods created"}</div><div className="mt-1 text-sm">{registerPeriodGroup ? "Select another period group to view its billing periods." : "New billing periods will appear here."}</div>
                     </td>
                   </tr>
                 )}
@@ -1749,8 +1755,8 @@ export function BillingPeriods() {
                         aria-label={`View all ${registerTotals.bills.toLocaleString()} displayed bills`}
                         title="View all displayed bills"
                         className="inline-flex rounded-full bg-sky-100 px-2.5 py-1 text-xs font-extrabold text-sky-800 ring-1 ring-sky-200 transition hover:bg-sky-700 hover:text-white focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2"
-                        to={selectedGroupId
-                          ? `/billing/period-records?billingPeriodGroupId=${selectedGroupId}`
+                        to={activeRegisterGroupId
+                          ? `/billing/period-records?billingPeriodGroupId=${activeRegisterGroupId}`
                           : "/billing/period-records"}
                       >
                         {registerTotals.bills.toLocaleString()}

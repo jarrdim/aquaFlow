@@ -1039,9 +1039,17 @@ export function ReadingCycles() {
       ...(currentGroup ? { startDate: groupStart, endDate: groupEnd } : {}),
     }));
   }, [periodGroups, form.billingPeriodGroupId, form.startDate, form.endDate, todayIso]);
+  const groupScopedCycles = useMemo(
+    () => form.billingPeriodGroupId
+      ? cycles.filter((cycle) => String(cycle.billingPeriodGroupId ?? "") === form.billingPeriodGroupId)
+      : periodGroups.length
+        ? []
+        : cycles,
+    [cycles, form.billingPeriodGroupId, periodGroups.length],
+  );
   const filteredCycles = useMemo(() => {
     const query = cycleSearch.trim().toLowerCase();
-    return cycles
+    return groupScopedCycles
       .filter(
         (cycle) =>
           !query ||
@@ -1069,7 +1077,7 @@ export function ReadingCycles() {
           { numeric: true },
         );
       });
-  }, [cycles, cycleSearch]);
+  }, [groupScopedCycles, cycleSearch]);
   const cyclePages = Math.max(
     1,
     Math.ceil(filteredCycles.length / cyclePageSize),
@@ -1086,10 +1094,10 @@ export function ReadingCycles() {
     safeCyclePage * cyclePageSize,
     filteredCycles.length,
   );
-  const openCycles = cycles.filter((cycle) => cycle.status === "OPEN").length;
-  const plannedCycles = cycles.filter((cycle) => cycle.status === "PLANNED").length;
-  const totalReadings = cycles.reduce((sum, cycle) => sum + Number(cycle._count?.readings ?? 0), 0);
-  const totalAssignments = cycles.reduce((sum, cycle) => sum + Number(cycle._count?.routeAssignments ?? 0), 0);
+  const openCycles = groupScopedCycles.filter((cycle) => cycle.status === "OPEN").length;
+  const plannedCycles = groupScopedCycles.filter((cycle) => cycle.status === "PLANNED").length;
+  const totalReadings = groupScopedCycles.reduce((sum, cycle) => sum + Number(cycle._count?.readings ?? 0), 0);
+  const totalAssignments = groupScopedCycles.reduce((sum, cycle) => sum + Number(cycle._count?.routeAssignments ?? 0), 0);
   const selectedPeriodGroup = periodGroups.find(
     (group) => String(group.billingPeriodGroupId) === form.billingPeriodGroupId,
   );
@@ -1112,7 +1120,7 @@ export function ReadingCycles() {
   }, [periodGroups, groupSearch]);
   useEffect(() => {
     setCyclePage(1);
-  }, [cycleSearch, cyclePageSize]);
+  }, [cycleSearch, cyclePageSize, form.billingPeriodGroupId]);
   useEffect(() => {
     if (cyclePage > cyclePages) setCyclePage(cyclePages);
   }, [cyclePage, cyclePages]);
@@ -1503,7 +1511,7 @@ export function ReadingCycles() {
             </div>
           </form>
         </Card>
-        <Card title="Cycle register" className="min-w-0 overflow-hidden shadow-md shadow-slate-200/50">
+        <Card title={`Cycle register${selectedPeriodGroup ? ` · ${selectedPeriodGroup.groupName}` : ""}`} className="min-w-0 overflow-hidden shadow-md shadow-slate-200/50">
           <div className="mb-4 grid gap-3 sm:grid-cols-[1fr_150px]">
             <Field label="Search cycle register">
               <div className="relative"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></svg><input
@@ -1654,7 +1662,7 @@ export function ReadingCycles() {
                       colSpan={7}
                       className="px-4 py-16 text-center text-sm text-slate-400"
                     >
-                      <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-slate-100"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-7 w-7"><rect x="4" y="5" width="16" height="15" rx="2" /></svg></div><div className="mt-4 font-bold text-slate-700">{cycles.length ? "No cycles match your search" : "No reading cycles yet"}</div><div className="mt-1 text-slate-400">{cycles.length ? "Try a different code, name, status or date." : "Create the first collection period using the form."}</div>
+                      <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-slate-100"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-7 w-7"><rect x="4" y="5" width="16" height="15" rx="2" /></svg></div><div className="mt-4 font-bold text-slate-700">{groupScopedCycles.length ? "No cycles match your search" : selectedPeriodGroup ? `No cycles in ${selectedPeriodGroup.groupName}` : "No reading cycles yet"}</div><div className="mt-1 text-slate-400">{groupScopedCycles.length ? "Try a different code, name, status or date." : selectedPeriodGroup ? "Select another period group to view its cycles." : "Create the first collection period using the form."}</div>
                     </td>
                   </tr>
                 )}

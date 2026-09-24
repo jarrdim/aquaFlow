@@ -629,7 +629,9 @@ export function UserAdministration() {
                 </SearchableSelect>
               </label>
               <label className="md:col-span-2">
-                <span className="mb-1 block text-sm font-medium">Roles *</span>
+                <span className="mb-1 block text-sm font-medium">
+                  Roles{creating ? " *" : ""}
+                </span>
                 <CheckboxMultiSelect
                   className={input}
                   placement="top"
@@ -654,7 +656,7 @@ export function UserAdministration() {
                 Cancel
               </button>
               <button
-                disabled={saving || !form.roleIds.length}
+                disabled={saving || (creating && !form.roleIds.length)}
                 className="rounded-lg bg-aqua-700 px-4 py-2 font-semibold text-white disabled:opacity-50"
               >
                 {saving ? "Saving…" : "Save user"}

@@ -211,8 +211,8 @@ adminRouter.delete("/users/:id/permanent", async (req, res) => {
 
 adminRouter.put("/users/:id/roles", async (req, res) => {
   const userId = id.safeParse(req.params.id);
-  const parsed = z.object({ roleIds: z.array(id).min(1) }).safeParse(req.body);
-  if (!userId.success || !parsed.success) return res.status(400).json({ error: "At least one valid role is required" });
+  const parsed = z.object({ roleIds: z.array(id) }).safeParse(req.body);
+  if (!userId.success || !parsed.success) return res.status(400).json({ error: "Invalid role selection" });
   const uniqueRoleIds = [...new Set(parsed.data.roleIds.map(String))].map(BigInt);
   const activeRoleCount = await prisma.role.count({
     where: { roleId: { in: uniqueRoleIds }, status: "ACTIVE" },
@@ -226,7 +226,9 @@ adminRouter.put("/users/:id/roles", async (req, res) => {
   }
   await prisma.$transaction(async (tx) => {
     await tx.userRole.deleteMany({ where: { userId: userId.data } });
-    await tx.userRole.createMany({ data: uniqueRoleIds.map((roleId) => ({ userId: userId.data, roleId, assignedBy: BigInt(req.user!.userId) })) });
+    if (uniqueRoleIds.length) {
+      await tx.userRole.createMany({ data: uniqueRoleIds.map((roleId) => ({ userId: userId.data, roleId, assignedBy: BigInt(req.user!.userId) })) });
+    }
   });
   res.json({ message: "User roles updated" });
 });
