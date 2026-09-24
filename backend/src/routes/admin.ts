@@ -156,7 +156,7 @@ adminRouter.delete("/users/:id", async (req, res) => {
     });
     await tx.fieldOfficer.updateMany({
       where: { userId: user.userId },
-      data: { status: "INACTIVE", availabilityStatus: "UNAVAILABLE", updatedAt: deletedAt },
+      data: { status: "INACTIVE", updatedAt: deletedAt },
     });
     await tx.user.update({
       where: { userId: user.userId },
