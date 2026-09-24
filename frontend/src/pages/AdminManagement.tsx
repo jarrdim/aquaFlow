@@ -316,6 +316,26 @@ export function UserAdministration() {
       setDeletingUserId("");
     }
   };
+  const purge = async (user: User) => {
+    if (
+      !window.confirm(
+        "Permanently delete this account? This cannot be undone. The operation will be refused if protected transaction or audit history references this user.",
+      )
+    ) return;
+
+    setDeletingUserId(user.userId);
+    setError("");
+    setSuccess("");
+    try {
+      await api.purgeAdminUser(user.userId);
+      setSuccess("Deleted user was permanently removed.");
+      await load();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setDeletingUserId("");
+    }
+  };
   if (!isAdmin())
     return (
       <Shell title="User administration" subtitle="Manage staff access">
@@ -459,6 +479,15 @@ export function UserAdministration() {
                             onClick={() => void remove(user)}
                           >
                             {deletingUserId === user.userId ? "Deleting…" : "Delete"}
+                          </button>
+                        )}
+                        {user.status === "DELETED" && (
+                          <button
+                            className="font-semibold text-red-700 disabled:opacity-50"
+                            disabled={Boolean(deletingUserId)}
+                            onClick={() => void purge(user)}
+                          >
+                            {deletingUserId === user.userId ? "Removing…" : "Delete permanently"}
                           </button>
                         )}
                       </div>

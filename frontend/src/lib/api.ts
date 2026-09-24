@@ -1073,6 +1073,7 @@ export const api = {
   createAdminUser: (data: Record<string, unknown>) => request("/admin/users", { method: "POST", body: JSON.stringify(data) }),
   updateAdminUser: (id: string, data: Record<string, unknown>) => request(`/admin/users/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   deleteAdminUser: (id: string) => request(`/admin/users/${id}`, { method: "DELETE" }),
+  purgeAdminUser: (id: string) => request(`/admin/users/${id}/permanent`, { method: "DELETE" }),
   updateAdminUserRoles: (id: string, roleIds: string[]) => request(`/admin/users/${id}/roles`, { method: "PUT", body: JSON.stringify({ roleIds }) }),
   listAdminRoles: () => request("/admin/roles"),
   createAdminRole: (data: Record<string, unknown>) => request("/admin/roles", { method: "POST", body: JSON.stringify(data) }),

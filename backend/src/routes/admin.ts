@@ -178,6 +178,37 @@ adminRouter.delete("/users/:id", async (req, res) => {
   res.json({ message: "User deleted successfully" });
 });
 
+adminRouter.delete("/users/:id/permanent", async (req, res) => {
+  const userId = id.safeParse(req.params.id);
+  if (!userId.success) return res.status(400).json({ error: "Invalid user" });
+
+  const user = await prisma.user.findUnique({
+    where: { userId: userId.data },
+    select: { userId: true, status: true },
+  });
+  if (!user) return res.status(404).json({ error: "User not found" });
+  if (user.status !== "DELETED") {
+    return res.status(400).json({ error: "Only users already marked as deleted can be permanently removed" });
+  }
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      await tx.customerAccountAccess.deleteMany({ where: { userId: user.userId } });
+      await tx.userRole.deleteMany({ where: { userId: user.userId } });
+      await tx.fieldOfficer.deleteMany({ where: { userId: user.userId } });
+      await tx.user.delete({ where: { userId: user.userId } });
+    });
+    return res.json({ message: "Deleted user permanently removed" });
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2003") {
+      return res.status(409).json({
+        error: "This user cannot be permanently removed because protected transaction or audit history still references the account",
+      });
+    }
+    throw error;
+  }
+});
+
 adminRouter.put("/users/:id/roles", async (req, res) => {
   const userId = id.safeParse(req.params.id);
   const parsed = z.object({ roleIds: z.array(id).min(1) }).safeParse(req.body);
