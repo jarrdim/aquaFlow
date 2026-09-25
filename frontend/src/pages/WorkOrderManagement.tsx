@@ -689,38 +689,43 @@ export default function WorkOrderManagement() {
         );
         const creatingOrder = busyAction === "create";
         return (
-          <div className="fixed inset-x-0 bottom-0 top-14 z-[90]">
+          <div className="fixed inset-0 z-[90] flex items-center justify-center p-3 sm:p-6">
             <button
               type="button"
               aria-label="Close create work order"
               onClick={closeCreate}
-              className="absolute inset-0 cursor-default bg-slate-950/40 backdrop-blur-[1px]"
+              className="absolute inset-0 cursor-default bg-slate-950/50 backdrop-blur-[2px]"
             />
             <aside
               role="dialog"
               aria-modal="true"
               aria-labelledby="create-work-order-title"
-              className="absolute inset-y-0 right-0 flex w-full max-w-2xl flex-col bg-slate-50 shadow-2xl"
+              className="relative z-10 flex max-h-[calc(100vh-1.5rem)] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-slate-50 shadow-2xl ring-1 ring-black/5 sm:max-h-[calc(100vh-3rem)]"
             >
-              <header className="flex items-start justify-between gap-4 border-b border-slate-200 bg-white px-5 py-3">
-                <div>
-                  <h2
-                    id="create-work-order-title"
-                    className="text-lg font-bold text-slate-900"
-                  >
-                    Create work order
-                  </h2>
-                  <p className="mt-0.5 text-xs text-slate-500">
-                    Create, schedule and optionally assign field work.
-                  </p>
+              <header className="flex items-center justify-between gap-4 border-b border-slate-200 bg-white px-5 py-4 sm:px-6">
+                <div className="flex items-center gap-3">
+                  <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-aqua-50 text-aqua-700 ring-1 ring-aqua-100">
+                    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5"><path d="M9 5h6M9 3h6v4H9z" /><path d="M7 5H5v16h14V5h-2M8 12h8M8 16h5" /></svg>
+                  </div>
+                  <div>
+                    <h2
+                      id="create-work-order-title"
+                      className="text-lg font-bold text-slate-900"
+                    >
+                      Create work order
+                    </h2>
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      Create, schedule and optionally assign field work.
+                    </p>
+                  </div>
                 </div>
                 <button
                   type="button"
                   onClick={closeCreate}
                   aria-label="Close"
-                  className="rounded-lg p-2 text-2xl leading-none text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+                  className="grid h-9 w-9 place-items-center rounded-full text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
                 >
-                  ×
+                  <svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5"><path d="m5 5 10 10m0-10L5 15" /></svg>
                 </button>
               </header>
               <form
