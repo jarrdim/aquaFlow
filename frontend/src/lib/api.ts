@@ -359,8 +359,11 @@ export const api = {
     request(`/meters/service-actions/direct/options${search ? `?search=${encodeURIComponent(search)}` : ""}`),
   getEligibleDirectReconnections: () =>
     request("/meters/service-actions/direct/reconnection/eligible"),
-  getDirectMeterServiceHistory: (page = 1, pageSize = 10) =>
-    request(`/meters/service-actions/direct/history?page=${page}&pageSize=${pageSize}`),
+  getDirectMeterServiceHistory: (page = 1, pageSize = 10, search = "") => {
+    const query = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+    if (search.trim()) query.set("search", search.trim());
+    return request(`/meters/service-actions/direct/history?${query.toString()}`);
+  },
   previewDirectMeterDisconnection: (data: Record<string, unknown>) =>
     request("/meters/service-actions/direct/disconnection/preview", { method: "POST", body: JSON.stringify(data) }),
   createDirectMeterDisconnection: (data: Record<string, unknown>) =>

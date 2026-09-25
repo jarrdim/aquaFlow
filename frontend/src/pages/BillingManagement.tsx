@@ -490,6 +490,18 @@ function BillingPeriodGroupSelect({
   );
 }
 
+function billingCycleFitsPeriodGroup(cycle: Row, group: Row | undefined) {
+  if (!group || String(cycle.billingPeriodGroupId) !== String(group.billingPeriodGroupId)) {
+    return false;
+  }
+  const cycleStart = new Date(cycle.periodStart).getTime();
+  const cycleEnd = new Date(cycle.periodEnd).getTime();
+  const groupStart = new Date(group.periodStart).getTime();
+  const groupEnd = new Date(group.periodEnd).getTime();
+  return [cycleStart, cycleEnd, groupStart, groupEnd].every(Number.isFinite) &&
+    cycleStart >= groupStart && cycleEnd <= groupEnd;
+}
+
 export function BillingDashboard() {
   const [groups, setGroups] = useState<Row[]>([]);
   const [groupId, setGroupId] = useState("");
@@ -2321,15 +2333,25 @@ export function BillGeneration() {
         const initialGroupId = requestedGroupExists
           ? requestedGroupId
           : String(requested?.billingPeriodGroupId ?? "");
+        const initialGroup = groups.find(
+          (group: Row) => String(group.billingPeriodGroupId) === initialGroupId,
+        );
         const groupCycles = c.filter(
           (cycle: Row) =>
-            (!initialGroupId || String(cycle.billingPeriodGroupId) === initialGroupId) &&
+            (!initialGroupId
+              ? groups.some((group: Row) => billingCycleFitsPeriodGroup(cycle, group))
+              : billingCycleFitsPeriodGroup(cycle, initialGroup)) &&
             ["DRAFT", "OPEN", "PROCESSING", "RETURNED", "POSTED"].includes(cycle.status),
         );
         const open = groupCycles.find((x: Row) =>
           ["DRAFT", "OPEN", "PROCESSING", "RETURNED"].includes(x.status),
         );
-        const target = requested && (!initialGroupId || String(requested.billingPeriodGroupId) === initialGroupId)
+        const requestedFitsGroup = requested && groups.some(
+          (group: Row) =>
+            (!initialGroupId || String(group.billingPeriodGroupId) === initialGroupId) &&
+            billingCycleFitsPeriodGroup(requested, group),
+        );
+        const target = requestedFitsGroup
           ? requested
           : open ?? groupCycles[0];
         setGroupId(initialGroupId || String(target?.billingPeriodGroupId ?? ""));
@@ -2381,11 +2403,16 @@ export function BillGeneration() {
   const canGenerate =
     Boolean(preview?.summary.eligible) && previewForm === JSON.stringify(form);
   const selectedCycle = cycles.find((cycle) => String(cycle.billingCycleId) === String(form.billingCycleId));
-  const availableCycles = cycles.filter((cycle) =>
-    ["DRAFT", "OPEN", "PROCESSING", "RETURNED", "POSTED"].includes(cycle.status),
+  const availableCycles = cycles.filter(
+    (cycle) =>
+      ["DRAFT", "OPEN", "PROCESSING", "RETURNED", "POSTED"].includes(cycle.status) &&
+      periodGroups.some((group) => billingCycleFitsPeriodGroup(cycle, group)),
+  );
+  const selectedGroup = periodGroups.find(
+    (group) => String(group.billingPeriodGroupId) === groupId,
   );
   const filteredCycles = availableCycles.filter(
-    (cycle) => !groupId || String(cycle.billingPeriodGroupId) === groupId,
+    (cycle) => !groupId || billingCycleFitsPeriodGroup(cycle, selectedGroup),
   );
   return (
     <Page
@@ -2416,10 +2443,15 @@ export function BillGeneration() {
               onChange={(event) => {
                 const nextGroupId = event.target.value;
                 setGroupId(nextGroupId);
+                const nextGroup = periodGroups.find(
+                  (group) => String(group.billingPeriodGroupId) === nextGroupId,
+                );
                 const selectedCycleBelongsToGroup = cycles.some(
                   (cycle) =>
                     String(cycle.billingCycleId) === String(form.billingCycleId) &&
-                    (!nextGroupId || String(cycle.billingPeriodGroupId) === nextGroupId),
+                    (!nextGroupId
+                      ? periodGroups.some((group) => billingCycleFitsPeriodGroup(cycle, group))
+                      : billingCycleFitsPeriodGroup(cycle, nextGroup)),
                 );
                 if (!selectedCycleBelongsToGroup) {
                   setForm({ ...form, billingCycleId: "" });

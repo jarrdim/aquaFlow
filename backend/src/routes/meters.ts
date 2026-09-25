@@ -1580,12 +1580,30 @@ metersRouter.get("/service-actions/direct/history", directServiceRoles, async (r
   try {
     const page = Math.max(1, Number(req.query.page) || 1);
     const pageSize = Math.min(100, Math.max(10, Number(req.query.pageSize) || 10));
+    const search = String(req.query.search ?? "").trim();
+    const pattern = `%${search}%`;
     const offset = (page - 1) * pageSize;
-    const totals = await prisma.$queryRaw<any[]>`
+    const searchCondition = search
+      ? Prisma.sql`AND (
+          ca.account_number ILIKE ${pattern}
+          OR c.customer_number ILIKE ${pattern}
+          OR COALESCE(c.phone_number,'') ILIKE ${pattern}
+          OR CONCAT_WS(' ',c.first_name,c.middle_name,c.last_name,c.organization_name) ILIKE ${pattern}
+          OR COALESCE(aa.metadata->>'meterNumber','') ILIKE ${pattern}
+          OR aa.action_type ILIKE ${pattern}
+          OR COALESCE(aa.details,'') ILIKE ${pattern}
+          OR COALESCE(NULLIF(TRIM(CONCAT_WS(' ',u.first_name,u.last_name)),''),u.username,'') ILIKE ${pattern}
+        )`
+      : Prisma.empty;
+    const totals = await prisma.$queryRaw<any[]>(Prisma.sql`
       SELECT COUNT(*)::int AS total
-      FROM aquaflow.arrears_actions
-      WHERE action_type IN ('DIRECT_METER_DISCONNECTION','DIRECT_METER_RECONNECTION')`;
-    const rows = await prisma.$queryRaw<any[]>`
+      FROM aquaflow.arrears_actions aa
+      JOIN aquaflow.customer_accounts ca ON ca.account_id=aa.account_id
+      JOIN aquaflow.customers c ON c.customer_id=ca.customer_id
+      LEFT JOIN aquaflow.users u ON u.user_id=aa.performed_by
+      WHERE aa.action_type IN ('DIRECT_METER_DISCONNECTION','DIRECT_METER_RECONNECTION')
+      ${searchCondition}`);
+    const rows = await prisma.$queryRaw<any[]>(Prisma.sql`
       SELECT aa.arrears_action_id AS "actionId",aa.action_type AS "actionType",aa.details,
         aa.metadata,aa.created_at AS "createdAt",ca.account_id AS "accountId",ca.account_number AS "accountNumber",
         GREATEST(0,-ca.current_balance) AS "accountCreditAvailable",
@@ -1611,8 +1629,9 @@ metersRouter.get("/service-actions/direct/history", directServiceRoles, async (r
       ) rr ON TRUE
       LEFT JOIN aquaflow.payments pay ON pay.payment_id=rr.fee_payment_id
       WHERE aa.action_type IN ('DIRECT_METER_DISCONNECTION','DIRECT_METER_RECONNECTION')
+      ${searchCondition}
       ORDER BY aa.created_at DESC,aa.arrears_action_id DESC
-      OFFSET ${offset} LIMIT ${pageSize}`;
+      OFFSET ${offset} LIMIT ${pageSize}`);
     const total = Number(totals[0]?.total ?? 0);
     res.json({ items: rows, total, page, pageSize, totalPages: Math.max(1, Math.ceil(total / pageSize)) });
   } catch (error) { next(error); }

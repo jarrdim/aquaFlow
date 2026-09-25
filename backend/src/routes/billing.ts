@@ -307,9 +307,21 @@ function isSkippableBillRowError(error: any) {
 async function cycleCandidates(cycleId: bigint, filters: any = {}) {
   const cycle = await prisma.billingCycle.findUnique({
     where: { billingCycleId: cycleId },
-    include: { readingCycles: true },
+    include: { billingPeriodGroup: true, readingCycles: true },
   });
   if (!cycle) throw Object.assign(new Error("Billing period not found"), { status: 404 });
+  if (!cycle.billingPeriodGroup) {
+    throw Object.assign(new Error("Link this billing period to a billing period group before generating bills"), { status: 409 });
+  }
+  if (
+    cycle.periodStart < cycle.billingPeriodGroup.periodStart ||
+    cycle.periodEnd > cycle.billingPeriodGroup.periodEnd
+  ) {
+    throw Object.assign(
+      new Error("The billing period dates must fall within its billing period group date range"),
+      { status: 409 },
+    );
+  }
   const readingCycle = cycle.readingCycles[0];
   if (!readingCycle) throw Object.assign(new Error("Link a reading cycle to this billing period before generating bills"), { status: 409 });
   if (readingCycle.status !== "CLOSED") throw Object.assign(new Error("The linked reading cycle must be closed before bill generation"), { status: 409 });

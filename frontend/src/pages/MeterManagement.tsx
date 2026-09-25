@@ -3313,6 +3313,8 @@ export function DirectMeterService() {
   const [historyPageSize, setHistoryPageSize] = useState(10);
   const [historyTotal, setHistoryTotal] = useState(0);
   const [historyLoading, setHistoryLoading] = useState(true);
+  const [historySearch, setHistorySearch] = useState("");
+  const [historyActionId, setHistoryActionId] = useState("");
   const [search, setSearch] = useState(linkedAccountNumber);
   const [selected, setSelected] = useState<AnyRecord | null>(null);
   const [mode, setMode] = useState<DirectServiceMode | null>(null);
@@ -3348,10 +3350,15 @@ export function DirectMeterService() {
     } catch (err: any) { setError(err.message); }
     finally { if (!background) setLoading(false); }
   }
-  async function loadHistory(pageValue = historyPage, pageSizeValue = historyPageSize, background = false) {
+  async function loadHistory(
+    pageValue = historyPage,
+    pageSizeValue = historyPageSize,
+    background = false,
+    searchValue = historySearch,
+  ) {
     if (!background) setHistoryLoading(true);
     try {
-      const result = await api.getDirectMeterServiceHistory(pageValue, pageSizeValue);
+      const result = await api.getDirectMeterServiceHistory(pageValue, pageSizeValue, searchValue);
       setHistoryItems(result.items ?? []);
       setHistoryTotal(Number(result.total ?? 0));
       const totalPages = Math.max(1, Number(result.totalPages ?? 1));
@@ -3385,7 +3392,13 @@ export function DirectMeterService() {
     const timer = window.setTimeout(() => void load(search, true), 300);
     return () => window.clearTimeout(timer);
   }, [search]);
-  useEffect(() => { void loadHistory(historyPage, historyPageSize); }, [historyPage, historyPageSize]);
+  useEffect(() => {
+    const timer = window.setTimeout(
+      () => void loadHistory(historyPage, historyPageSize, false, historySearch),
+      250,
+    );
+    return () => window.clearTimeout(timer);
+  }, [historyPage, historyPageSize, historySearch]);
   useEffect(() => {
     setPaymentPhone(String(selected?.customerPhone ?? ""));
     setPaymentMessage("");
@@ -3595,23 +3608,45 @@ export function DirectMeterService() {
             <input className={`${INPUT} pl-10`} value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search account, meter, serial, customer or phone…" />
             <svg className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" /><path d="m13 13 4 4" /></svg>
           </div>
-          {loading ? <Spinner /> : <div className="mt-3 max-h-[430px] space-y-2 overflow-y-auto pr-1">
+          {loading ? <Spinner /> : <div className="mt-2 max-h-[245px] space-y-1.5 overflow-y-auto pr-1">
             {items.map((row) => {
               const active = String(selected?.meterId) === String(row.meterId);
               return <button type="button" key={`${row.accountId}-${row.meterId}`} onClick={() => setSelected(row)}
-                className={`w-full rounded-xl border p-3 text-left transition ${active ? "border-aqua-500 bg-aqua-50 ring-2 ring-aqua-500/10" : "border-slate-200 hover:border-slate-300 hover:bg-slate-50"}`}>
+                className={`w-full rounded-lg border px-3 py-2 text-left transition ${active ? "border-aqua-500 bg-aqua-50 ring-2 ring-aqua-500/10" : "border-slate-200 hover:border-slate-300 hover:bg-slate-50"}`}>
                 <div className="flex flex-wrap items-start justify-between gap-2">
-                  <div><p className="font-extrabold text-slate-900">{row.accountNumber} · {row.meterNumber}</p><p className="mt-0.5 text-sm text-slate-500">{row.customerName || "Unnamed customer"}{row.serialNumber ? ` · S/N ${row.serialNumber}` : ""}</p></div>
+                  <div><p className="text-sm font-extrabold text-slate-900">{row.accountNumber} · {row.meterNumber}</p><p className="text-xs text-slate-500">{row.customerName || "Unnamed customer"}{row.serialNumber ? ` · S/N ${row.serialNumber}` : ""}</p></div>
                   <div className="flex gap-1.5"><Status value={row.accountStatus} /><Status value={row.meterStatus} /></div>
                 </div>
-                <div className="mt-2 flex flex-wrap gap-x-6 gap-y-1 text-xs text-slate-500"><span>Reading <strong className="text-slate-700">{Number(row.latestReading ?? 0).toLocaleString()}</strong></span><span>Balance <strong className="text-slate-700">KSh {money(row.currentBalance)}</strong></span>{row.reconnectionRequestNumber && <span>Request <strong className="text-slate-700">{row.reconnectionRequestNumber}</strong></span>}</div>
+                <div className="mt-1 flex flex-wrap gap-x-5 gap-y-1 text-[11px] text-slate-500"><span>Reading <strong className="text-slate-700">{Number(row.latestReading ?? 0).toLocaleString()}</strong></span><span>Balance <strong className="text-slate-700">KSh {money(row.currentBalance)}</strong></span>{row.reconnectionRequestNumber && <span>Request <strong className="text-slate-700">{row.reconnectionRequestNumber}</strong></span>}</div>
               </button>;
             })}
-            {!items.length && <div className="py-12 text-center text-sm text-slate-400">No current customer meter matches your search.</div>}
+            {!items.length && <div className="py-8 text-center text-sm text-slate-400">No current customer meter matches your search.</div>}
           </div>}
         </Card>
         <Card title="Recent direct actions">
-          <div className="mb-3 flex justify-end">
+          <div className="mb-3 grid gap-2 sm:grid-cols-[minmax(260px,1fr)_auto]">
+            <SearchableSelect
+              className={INPUT}
+              value={historyActionId}
+              onSearchQuery={(query) => {
+                setHistorySearch(query);
+                setHistoryActionId("");
+                setHistoryPage(1);
+              }}
+              onChange={(event) => {
+                const actionId = event.target.value;
+                setHistoryActionId(actionId);
+                const action = historyItems.find((row) => String(row.actionId) === actionId);
+                if (action) void selectHistoryAccount(action);
+              }}
+            >
+              <option value="">Search account, customer, meter or staff</option>
+              {historyItems.map((row) => (
+                <option key={row.actionId} value={row.actionId}>
+                  {row.accountNumber} · {row.customerName} · {row.metadata?.meterNumber ?? "No meter"} · {pretty(row.actionType)} · {row.performedByName ?? "System"}
+                </option>
+              ))}
+            </SearchableSelect>
             <select className={`${INPUT} w-auto py-1.5`} value={historyPageSize} onChange={(event) => { setHistoryPageSize(Number(event.target.value)); setHistoryPage(1); }} aria-label="Direct actions per page">
               <option value="10">10 per page</option><option value="25">25 per page</option><option value="50">50 per page</option><option value="100">100 per page</option>
             </select>
