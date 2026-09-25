@@ -274,11 +274,12 @@ export default function WorkOrderManagement() {
     }
   }, [filters]);
 
-  // The register and creation routes share this mounted component. Reload when
-  // the route mode changes so a newly created order appears immediately.
+  // Register data depends on filters, not on whether the create modal is open.
+  // Reloading on modal visibility also refreshes lookups and can restart the
+  // modal's target request, making the form appear to reload repeatedly.
   useEffect(() => {
     void load();
-  }, [creating, load]);
+  }, [load]);
 
   useEffect(() => {
     if (!creating) return;
@@ -618,6 +619,7 @@ export default function WorkOrderManagement() {
           : "/work-orders",
         { replace: true },
       );
+      await load();
       setForm({
         workOrderTypeId: "",
         accountId: "",
