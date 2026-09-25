@@ -452,16 +452,25 @@ function CycleSelect({
   return (
     <SearchableSelect
       className={INPUT}
+      menuMinWidth={600}
+      wrapOptions
       value={value}
       disabled={disabled}
       onChange={(e) => onChange(e.target.value)}
     >
       {includeBlank && <option value="">{blankLabel}</option>}
-      {cycles.map((cycle) => (
-        <option key={cycle.billingCycleId} value={cycle.billingCycleId}>
-          {billingCycleLabel(cycle)} · {pretty(cycle.completionStatus ?? cycle.status)}
-        </option>
-      ))}
+      {cycles.map((cycle) => {
+        const operationalStatus = cycle.operationalStatus ?? cycle.status;
+        const completionStatus = cycle.completionStatus;
+        return (
+          <option key={cycle.billingCycleId} value={cycle.billingCycleId}>
+            {billingCycleLabel(cycle)} · Period: {pretty(operationalStatus)}
+            {completionStatus && completionStatus !== operationalStatus
+              ? ` · Bills: ${pretty(completionStatus)}`
+              : ""}
+          </option>
+        );
+      })}
     </SearchableSelect>
   );
 }

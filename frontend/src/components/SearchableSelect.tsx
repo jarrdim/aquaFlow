@@ -15,6 +15,8 @@ import { createPortal } from "react-dom";
 
 type SearchableSelectProps = Omit<SelectHTMLAttributes<HTMLSelectElement>, "multiple" | "size"> & {
   onSearchQuery?: (query: string) => void;
+  menuMinWidth?: number;
+  wrapOptions?: boolean;
 };
 
 type SelectOption = {
@@ -68,6 +70,8 @@ export function SearchableSelect({
   onChange,
   onFocus,
   onSearchQuery,
+  menuMinWidth,
+  wrapOptions = false,
   required,
   style,
   value,
@@ -114,7 +118,10 @@ export function SearchableSelect({
 
       const margin = 8;
       const gap = 4;
-      const width = Math.min(Math.max(rect.width, 224), window.innerWidth - margin * 2);
+      const width = Math.min(
+        Math.max(rect.width, menuMinWidth ?? 224),
+        window.innerWidth - margin * 2,
+      );
       const left = Math.min(Math.max(rect.left, margin), window.innerWidth - width - margin);
       const spaceBelow = window.innerHeight - rect.bottom - margin - gap;
       const spaceAbove = rect.top - margin - gap;
@@ -133,7 +140,7 @@ export function SearchableSelect({
       window.removeEventListener("resize", positionMenu);
       window.removeEventListener("scroll", positionMenu, true);
     };
-  }, [open]);
+  }, [open, menuMinWidth]);
 
   useEffect(() => {
     if (open) requestAnimationFrame(() => searchRef.current?.focus());
@@ -240,7 +247,7 @@ export function SearchableSelect({
                     : "text-slate-700 hover:bg-slate-50"
                 }`}
               >
-                <span className="truncate">{option.label}</span>
+                <span className={wrapOptions ? "whitespace-normal break-words" : "truncate"}>{option.label}</span>
                 {option.value === selectedValue && <span className="ml-3 text-aqua-700">✓</span>}
               </button>
             ))}
