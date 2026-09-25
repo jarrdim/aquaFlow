@@ -2162,11 +2162,22 @@ export function ReadingCorrections() {
   const [sendCorrectedBill, setSendCorrectedBill] = useState(true);
   const [preview, setPreview] = useState<Row | null>(null);
   const [history, setHistory] = useState<Row[]>([]);
+  const [historySearch, setHistorySearch] = useState("");
+  const [historyPage, setHistoryPage] = useState(1);
+  const [historyPageSize, setHistoryPageSize] = useState(5);
+  const [historyLoading, setHistoryLoading] = useState(true);
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
-  const loadHistory = () => api.listReadingCorrections().then(setHistory);
+  const loadHistory = async () => {
+    setHistoryLoading(true);
+    try {
+      setHistory(await api.listReadingCorrections());
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
   useEffect(() => {
     let active = true;
     const timer = window.setTimeout(() => {
@@ -2179,6 +2190,34 @@ export function ReadingCorrections() {
     return () => { active = false; window.clearTimeout(timer); };
   }, [search]);
   useEffect(() => { loadHistory().catch((e) => setError(e.message)); }, []);
+  const filteredHistory = useMemo(() => {
+    const query = historySearch.trim().toLocaleLowerCase();
+    if (!query) return history;
+    return history.filter((item) =>
+      [
+        item.bill?.billNumber,
+        item.bill?.account?.accountNumber,
+        item.bill?.account?.customer?.customerNumber,
+        item.bill?.account?.customer?.firstName,
+        item.bill?.account?.customer?.middleName,
+        item.bill?.account?.customer?.lastName,
+        item.bill?.account?.customer?.organizationName,
+        item.reading?.meter?.meterNumber,
+        item.reason,
+        person(item.corrector),
+        dateTime(item.correctedAt),
+      ].some((value) => String(value ?? "").toLocaleLowerCase().includes(query)),
+    );
+  }, [history, historySearch]);
+  const historyTotalPages = Math.max(1, Math.ceil(filteredHistory.length / historyPageSize));
+  const pagedHistory = filteredHistory.slice(
+    (historyPage - 1) * historyPageSize,
+    historyPage * historyPageSize,
+  );
+  useEffect(() => setHistoryPage(1), [historySearch, historyPageSize]);
+  useEffect(() => {
+    if (historyPage > historyTotalPages) setHistoryPage(historyTotalPages);
+  }, [historyPage, historyTotalPages]);
   function chooseBill(bill: Row) {
     setSelected(bill);
     setCorrectedPreviousReading(String(Number(bill.reading?.previousReading ?? 0)));
@@ -2250,31 +2289,33 @@ export function ReadingCorrections() {
           <Field label="Search bill, account, customer or meter">
             <input className={INPUT} value={search} placeholder="Start typing to filter" onChange={(event) => setSearch(event.target.value)} />
           </Field>
-          <div className="mt-4 max-h-[520px] overflow-y-auto rounded-xl border border-slate-200">
+          <div className="mt-3 max-h-[245px] overflow-y-auto rounded-xl border border-slate-200">
             {loading ? <Spinner /> : candidates.map((bill) => (
-              <button key={bill.billId} type="button" onClick={() => chooseBill(bill)} className={`block w-full border-b border-slate-100 px-4 py-3 text-left transition hover:bg-sky-50 ${selected?.billId === bill.billId ? "bg-sky-50 ring-1 ring-inset ring-sky-300" : ""}`}>
-                <div className="flex items-center justify-between gap-3"><strong className="text-slate-800">{bill.billNumber}</strong><Badge value={bill.status} /></div>
-                <div className="mt-1 text-sm text-slate-600">{bill.customerName} · {bill.account?.accountNumber}</div>
-                <div className="mt-1 text-xs text-slate-400">Meter {bill.reading?.meter?.meterNumber} · {Number(bill.reading?.previousReading).toLocaleString()} → {Number(bill.reading?.currentReading).toLocaleString()}</div>
+              <button key={bill.billId} type="button" onClick={() => chooseBill(bill)} className={`block w-full border-b border-slate-100 px-3 py-2 text-left transition hover:bg-sky-50 ${selected?.billId === bill.billId ? "bg-sky-50 ring-1 ring-inset ring-sky-300" : ""}`}>
+                <div className="flex items-center justify-between gap-3"><strong className="text-sm text-slate-800">{bill.billNumber}</strong><Badge value={bill.status} /></div>
+                <div className="text-xs text-slate-600">{bill.customerName} · {bill.account?.accountNumber}</div>
+                <div className="text-[11px] text-slate-400">Meter {bill.reading?.meter?.meterNumber} · {Number(bill.reading?.previousReading).toLocaleString()} → {Number(bill.reading?.currentReading).toLocaleString()}</div>
               </button>
             ))}
-            {!loading && !candidates.length && <div className="p-8 text-center text-sm text-slate-400">No correctable billed readings found.</div>}
+            {!loading && !candidates.length && <div className="p-6 text-center text-sm text-slate-400">No correctable billed readings found.</div>}
           </div>
         </Card>
         <Card title="Correct reading">
-          {!selected ? <div className="grid min-h-[300px] place-items-center text-slate-400">Select a billed reading to continue.</div> : <div className="space-y-4">
-            <div className="grid gap-3 sm:grid-cols-3">
-              <div className="rounded-xl bg-slate-50 p-4"><div className="text-xs font-bold uppercase text-slate-400">Previous</div><div className="mt-1 text-xl font-extrabold text-slate-900">{Number(selected.reading.previousReading).toLocaleString()}</div></div>
-              <div className="rounded-xl bg-red-50 p-4"><div className="text-xs font-bold uppercase text-red-500">Original current</div><div className="mt-1 text-xl font-extrabold text-red-700">{Number(selected.reading.currentReading).toLocaleString()}</div></div>
-              <div className="rounded-xl bg-sky-50 p-4"><div className="text-xs font-bold uppercase text-sky-600">Original charge</div><div className="mt-1 text-xl font-extrabold text-sky-800">{money(selected.totalCurrentCharges)}</div></div>
+          {!selected ? <div className="grid min-h-[210px] place-items-center text-sm text-slate-400">Select a billed reading to continue.</div> : <div className="space-y-3">
+            <div className="grid gap-2 sm:grid-cols-3">
+              <div className="rounded-xl bg-slate-50 px-3 py-2.5"><div className="text-[11px] font-bold uppercase text-slate-400">Previous</div><div className="text-lg font-extrabold text-slate-900">{Number(selected.reading.previousReading).toLocaleString()}</div></div>
+              <div className="rounded-xl bg-red-50 px-3 py-2.5"><div className="text-[11px] font-bold uppercase text-red-500">Original current</div><div className="text-lg font-extrabold text-red-700">{Number(selected.reading.currentReading).toLocaleString()}</div></div>
+              <div className="rounded-xl bg-sky-50 px-3 py-2.5"><div className="text-[11px] font-bold uppercase text-sky-600">Original charge</div><div className="text-lg font-extrabold text-sky-800">{money(selected.totalCurrentCharges)}</div></div>
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
               <Field label="Corrected previous reading" required><input type="number" min="0" step="0.001" className={INPUT} value={correctedPreviousReading} onChange={(event) => { setCorrectedPreviousReading(event.target.value); setPreview(null); }} /></Field>
               <Field label="Corrected current reading" required><input type="number" min="0" step="0.001" className={INPUT} value={correctedCurrentReading} onChange={(event) => { setCorrectedCurrentReading(event.target.value); setPreview(null); }} /></Field>
             </div>
-            <Field label="Correction reason" required><textarea rows={3} className={INPUT} value={reason} placeholder="Why was the original reading incorrect?" onChange={(event) => setReason(event.target.value)} /></Field>
-            <label className="flex items-center gap-2 text-sm font-semibold text-slate-700"><input type="checkbox" checked={sendCorrectedBill} onChange={(event) => setSendCorrectedBill(event.target.checked)} /> Queue corrected bill SMS after saving</label>
-            <Button tone="slate" disabled={working || correctedPreviousReading === "" || correctedCurrentReading === ""} onClick={previewCorrection}>{working ? "Calculating…" : "Preview correction"}</Button>
+            <Field label="Correction reason" required><textarea rows={2} className={INPUT} value={reason} placeholder="Why was the original reading incorrect?" onChange={(event) => setReason(event.target.value)} /></Field>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <label className="flex items-center gap-2 text-sm font-semibold text-slate-700"><input type="checkbox" checked={sendCorrectedBill} onChange={(event) => setSendCorrectedBill(event.target.checked)} /> Queue corrected bill SMS after saving</label>
+              <Button tone="slate" disabled={working || correctedPreviousReading === "" || correctedCurrentReading === ""} onClick={previewCorrection}>{working ? "Calculating…" : "Preview correction"}</Button>
+            </div>
             {preview && <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
               <div className="font-bold text-amber-900">Correction impact</div>
               <div className="mt-3 grid gap-3 sm:grid-cols-3"><div><div className="text-xs text-amber-700">Corrected readings</div><strong>{Number(preview.correctedPreviousReading).toLocaleString()} → {Number(preview.correctedCurrentReading).toLocaleString()}</strong></div><div><div className="text-xs text-amber-700">Account difference</div><strong>{money(preview.adjustmentAmount)}</strong></div><div><div className="text-xs text-amber-700">Bills affected</div><strong>{preview.impactedBills?.length ?? 1}</strong></div></div>
@@ -2286,10 +2327,46 @@ export function ReadingCorrections() {
         </Card>
       </div>
       <Card title="Correction history" className="mt-4">
-        <div className="overflow-x-auto"><table className="w-full min-w-[800px]"><thead><tr><th className={TH}>Date</th><th className={TH}>Bill / account</th><th className={TH}>Meter</th><th className={TH}>Reading change</th><th className={TH}>Adjustment</th><th className={TH}>Reason</th><th className={TH}>Admin</th></tr></thead><tbody>
-          {history.map((item) => <tr key={item.correctionId} className="border-t"><td className={TD}>{dateTime(item.correctedAt)}</td><td className={TD}><strong>{item.bill?.billNumber}</strong><div className="text-xs">{item.bill?.account?.accountNumber}</div></td><td className={TD}>{item.reading?.meter?.meterNumber}</td><td className={TD}><div>{Number(item.originalPreviousReading ?? item.reading?.previousReading).toLocaleString()} → {Number(item.originalCurrentReading).toLocaleString()}</div><div className="text-xs font-semibold text-emerald-700">{Number(item.correctedPreviousReading ?? item.reading?.previousReading).toLocaleString()} → {Number(item.correctedCurrentReading).toLocaleString()}</div></td><td className={`${TD} font-bold`}>{money(item.adjustmentAmount)}</td><td className={TD}>{item.reason}</td><td className={TD}>{person(item.corrector)}</td></tr>)}
-          {!history.length && <tr><td colSpan={7} className="p-10 text-center text-slate-400">No reading corrections have been recorded.</td></tr>}
-        </tbody></table></div>
+        <div className="mb-3 grid gap-2 sm:grid-cols-[minmax(280px,1fr)_auto]">
+          <div className="relative">
+            <svg className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" /><path d="m12.5 12.5 4 4" /></svg>
+            <input
+              className={`${INPUT} pl-9`}
+              type="search"
+              value={historySearch}
+              onChange={(event) => setHistorySearch(event.target.value)}
+              placeholder="Search bill, account, meter, reason or admin"
+              aria-label="Search correction history"
+            />
+          </div>
+          <select
+            className={`${INPUT} w-auto min-w-36`}
+            value={historyPageSize}
+            onChange={(event) => setHistoryPageSize(Number(event.target.value))}
+            aria-label="Corrections per page"
+          >
+            <option value="5">5 per page</option>
+            <option value="10">10 per page</option>
+            <option value="25">25 per page</option>
+            <option value="50">50 per page</option>
+          </select>
+        </div>
+        <div className="overflow-hidden rounded-xl border border-slate-200">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[900px]">
+              <thead className="bg-slate-50/90"><tr><th className={TH}>Date</th><th className={TH}>Bill / account</th><th className={TH}>Meter</th><th className={TH}>Reading change</th><th className={TH}>Adjustment</th><th className={TH}>Reason</th><th className={TH}>Admin</th></tr></thead>
+              <tbody>
+                {historyLoading ? <tr><td colSpan={7}><Spinner /></td></tr> : pagedHistory.map((item) => <tr key={item.correctionId} className="border-t border-slate-100 transition hover:bg-sky-50/50"><td className={`${TD} whitespace-nowrap`}>{dateTime(item.correctedAt)}</td><td className={TD}><strong className="text-slate-800">{item.bill?.billNumber}</strong><div className="text-xs text-slate-400">{item.bill?.account?.accountNumber}</div></td><td className={TD}>{item.reading?.meter?.meterNumber}</td><td className={TD}><div className="text-xs text-slate-500">Original: {Number(item.originalPreviousReading ?? item.reading?.previousReading).toLocaleString()} → {Number(item.originalCurrentReading).toLocaleString()}</div><div className="text-xs font-semibold text-emerald-700">Corrected: {Number(item.correctedPreviousReading ?? item.reading?.previousReading).toLocaleString()} → {Number(item.correctedCurrentReading).toLocaleString()}</div></td><td className={`${TD} whitespace-nowrap font-bold text-slate-800`}>{money(item.adjustmentAmount)}</td><td className={`${TD} max-w-[300px]`}>{item.reason}</td><td className={`${TD} whitespace-nowrap`}>{person(item.corrector)}</td></tr>)}
+                {!historyLoading && !pagedHistory.length && <tr><td colSpan={7} className="p-10 text-center text-slate-400">{historySearch ? "No corrections match your search." : "No reading corrections have been recorded."}</td></tr>}
+              </tbody>
+            </table>
+          </div>
+          {!historyLoading && filteredHistory.length > 0 && (
+            <div className="bg-white px-4 pb-3">
+              <Pagination page={historyPage} totalPages={historyTotalPages} total={filteredHistory.length} pageSize={historyPageSize} onPageChange={setHistoryPage} label="corrections" />
+            </div>
+          )}
+        </div>
       </Card>
     </Page>
   );
