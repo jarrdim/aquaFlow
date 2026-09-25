@@ -71,19 +71,21 @@ function Card({
   title,
   children,
   className = "",
+  compact = false,
 }: {
   title: string;
   children: React.ReactNode;
   className?: string;
+  compact?: boolean;
 }) {
   return (
     <section
       className={`overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm ${className}`}
     >
-      <header className="border-b border-slate-100 px-4 py-3 font-bold text-slate-800">
+      <header className={`border-b border-slate-100 px-4 font-bold text-slate-800 ${compact ? "py-2" : "py-3"}`}>
         {title}
       </header>
-      <div className="p-4">{children}</div>
+      <div className={compact ? "p-3" : "p-4"}>{children}</div>
     </section>
   );
 }
@@ -1066,7 +1068,7 @@ export default function WorkOrderManagement() {
   );
 
   return (
-    <main className="mx-auto w-full max-w-[1600px] space-y-4 p-4 lg:px-8 lg:py-5">
+    <main className="mx-auto w-full max-w-[1600px] space-y-3 p-3 lg:px-8 lg:py-2">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-slate-500">
           Create, dispatch, execute and verify field work in one auditable
@@ -1093,7 +1095,7 @@ export default function WorkOrderManagement() {
           </button>
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6">
         {[
           ["All orders", dashboard.total],
           ["Open", dashboard.open],
@@ -1104,12 +1106,12 @@ export default function WorkOrderManagement() {
         ].map(([title, count]) => (
           <div
             key={String(title)}
-            className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm"
+            className="rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm"
           >
-            <div className="text-xs font-semibold uppercase text-slate-500">
+            <div className="text-[11px] font-semibold uppercase leading-4 text-slate-500">
               {title}
             </div>
-            <div className="mt-1 text-2xl font-bold">
+            <div className="text-xl font-bold leading-7">
               {loading ? (
                 <span
                   className="inline-block h-7 w-14 animate-pulse rounded bg-slate-100"
@@ -1122,8 +1124,8 @@ export default function WorkOrderManagement() {
           </div>
         ))}
       </div>
-      <Card title="Search and filters">
-        <div className="grid gap-3 lg:grid-cols-[minmax(240px,1.4fr)_repeat(2,minmax(180px,1fr))_auto]">
+      <Card title="Search and filters" compact>
+        <div className="grid gap-2 lg:grid-cols-[minmax(240px,1.4fr)_repeat(2,minmax(180px,1fr))_auto]">
           <input
             className={input}
             value={filters.q}
