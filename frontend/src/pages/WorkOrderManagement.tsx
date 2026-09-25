@@ -206,6 +206,7 @@ export default function WorkOrderManagement() {
   const typeFieldRef = useRef<HTMLDivElement>(null);
   const targetFieldRef = useRef<HTMLDivElement>(null);
   const descriptionFieldRef = useRef<HTMLTextAreaElement>(null);
+  const detailPanelRef = useRef<HTMLDivElement>(null);
   const targetSearchTimerRef = useRef<number>();
   const [form, setForm] = useState({
     workOrderTypeId: "",
@@ -403,7 +404,14 @@ export default function WorkOrderManagement() {
     // A row click has enough summary data to render immediately. A selection
     // restored from the URL only has an ID, so keep the panel closed until the
     // complete work order arrives instead of showing an `undefined` shell.
-    if (persistSelection) setSelected(item);
+    if (persistSelection) {
+      setSelected(item);
+      if (!window.matchMedia("(min-width: 1280px)").matches) {
+        window.requestAnimationFrame(() =>
+          detailPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }),
+        );
+      }
+    }
     setCashPaymentOpen(false);
     setCashPayment({
       transactionReference: "",
@@ -1198,6 +1206,7 @@ export default function WorkOrderManagement() {
                 <table className="w-full min-w-[900px] text-left text-sm">
                   <thead className="bg-slate-50 text-xs uppercase text-slate-500">
                     <tr>
+                      <th className="w-14 px-3 py-3 text-center">#</th>
                       <th className="px-3 py-3">Work order</th>
                       <th className="px-3 py-3">Customer / zone</th>
                       <th className="px-3 py-3">Assignee</th>
@@ -1207,7 +1216,7 @@ export default function WorkOrderManagement() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {result.data.map((item) => (
+                    {result.data.map((item, index) => (
                       <tr
                         key={item.workOrderId}
                         className={
@@ -1218,6 +1227,9 @@ export default function WorkOrderManagement() {
                               : ""
                         }
                       >
+                        <td className="px-3 py-3 text-center font-semibold tabular-nums text-slate-400">
+                          {(result.page - 1) * result.take + index + 1}
+                        </td>
                         <td className={`px-3 py-3 ${item.parentWorkOrderId ? "border-l-4 border-aqua-300 pl-7" : ""}`}>
                           <div className="flex items-start gap-2">
                             {item.parentWorkOrderId && (
@@ -1336,13 +1348,17 @@ export default function WorkOrderManagement() {
             </>
           )}
         </Card>
-        <Card
-          title={
-            selected
-              ? `${selected.work_order_number || selected.workOrderNumber}`
-              : "Work order details"
-          }
+        <div
+          ref={detailPanelRef}
+          className="scroll-mt-24 self-start rounded-2xl xl:sticky xl:top-24 xl:max-h-[calc(100vh-7rem)] xl:overflow-y-auto"
         >
+          <Card
+            title={
+              selected
+                ? `${selected.work_order_number || selected.workOrderNumber}`
+                : "Work order details"
+            }
+          >
           {!selected ? (
             <p className="py-16 text-center text-sm text-slate-400">
               Select a work order to dispatch, track or verify it.
@@ -2163,7 +2179,8 @@ export default function WorkOrderManagement() {
               </details>
             </div>
           )}
-        </Card>
+          </Card>
+        </div>
       </div>
       {createPanel}
     </main>
