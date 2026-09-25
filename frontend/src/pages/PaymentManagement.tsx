@@ -996,6 +996,8 @@ export function RecordPayment() {
 }
 
 export function MpesaStkPush() {
+  const [searchParams] = useSearchParams();
+  const requestedAccountId = searchParams.get("accountId") ?? "";
   const [accounts, setAccounts] = useState<Row[]>([]);
   const [accountSearch, setAccountSearch] = useState("");
   const [config, setConfig] = useState<Row>();
@@ -1022,11 +1024,25 @@ export function MpesaStkPush() {
     ])
       .then(([accountRows, mpesaConfig, requests]) => {
         setAccounts(accountRows);
+        const requestedAccount = accountRows.find(
+          (row: Row) => String(row.accountId) === requestedAccountId,
+        );
+        if (requestedAccount) {
+          setForm({
+            accountId: String(requestedAccount.accountId),
+            phoneNumber: requestedAccount.customer?.phoneNumber ?? "",
+            amount:
+              Math.max(
+                0,
+                Math.ceil(Number(requestedAccount.currentBalance ?? 0)),
+              ) || "",
+          });
+        }
         setConfig(mpesaConfig);
         setHistory(requests);
       })
       .catch((e) => setError(e.message));
-  }, []);
+  }, [requestedAccountId]);
   useEffect(() => {
     const query = accountSearch.trim();
     if (!query) return;

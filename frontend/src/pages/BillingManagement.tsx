@@ -2277,6 +2277,9 @@ export function ReadingCorrections() {
 export function BillGeneration() {
   const [searchParams] = useSearchParams();
   const requestedCycleId = searchParams.get("billingCycleId") ?? "";
+  const requestedGroupId = searchParams.get("billingPeriodGroupId") ?? "";
+  const [periodGroups, setPeriodGroups] = useState<Row[]>([]);
+  const [groupId, setGroupId] = useState(requestedGroupId);
   const [cycles, setCycles] = useState<Row[]>([]);
   const [zones, setZones] = useState<Row[]>([]);
   const [routes, setRoutes] = useState<Row[]>([]);
@@ -2300,20 +2303,36 @@ export function BillGeneration() {
   useEffect(() => {
     Promise.all([
       api.listBillingCycles(),
+      api.listBillingPeriodGroups(),
       api.listZones(),
       api.listRoutes(),
       api.listCategories(),
     ])
-      .then(([c, z, r, cat]) => {
+      .then(([c, groups, z, r, cat]) => {
         setCycles(c);
+        setPeriodGroups(groups);
         setZones(z);
         setRoutes(r);
         setCategories(cat);
         const requested = c.find((x: Row) => String(x.billingCycleId) === requestedCycleId);
-        const open = c.find((x: Row) =>
+        const requestedGroupExists = groups.some(
+          (group: Row) => String(group.billingPeriodGroupId) === requestedGroupId,
+        );
+        const initialGroupId = requestedGroupExists
+          ? requestedGroupId
+          : String(requested?.billingPeriodGroupId ?? "");
+        const groupCycles = c.filter(
+          (cycle: Row) =>
+            (!initialGroupId || String(cycle.billingPeriodGroupId) === initialGroupId) &&
+            ["DRAFT", "OPEN", "PROCESSING", "RETURNED", "POSTED"].includes(cycle.status),
+        );
+        const open = groupCycles.find((x: Row) =>
           ["DRAFT", "OPEN", "PROCESSING", "RETURNED"].includes(x.status),
         );
-        const target = requested ?? open;
+        const target = requested && (!initialGroupId || String(requested.billingPeriodGroupId) === initialGroupId)
+          ? requested
+          : open ?? groupCycles[0];
+        setGroupId(initialGroupId || String(target?.billingPeriodGroupId ?? ""));
         if (target)
           setForm((f: Row) => ({
             ...f,
@@ -2322,7 +2341,7 @@ export function BillGeneration() {
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoadingOptions(false));
-  }, []);
+  }, [requestedCycleId, requestedGroupId]);
   async function runPreview() {
     if (!form.billingCycleId) return;
     setPreviewing(true);
@@ -2362,6 +2381,12 @@ export function BillGeneration() {
   const canGenerate =
     Boolean(preview?.summary.eligible) && previewForm === JSON.stringify(form);
   const selectedCycle = cycles.find((cycle) => String(cycle.billingCycleId) === String(form.billingCycleId));
+  const availableCycles = cycles.filter((cycle) =>
+    ["DRAFT", "OPEN", "PROCESSING", "RETURNED", "POSTED"].includes(cycle.status),
+  );
+  const filteredCycles = availableCycles.filter(
+    (cycle) => !groupId || String(cycle.billingPeriodGroupId) === groupId,
+  );
   return (
     <Page
       title="Generate customer bills"
@@ -2383,12 +2408,35 @@ export function BillGeneration() {
       {message && <Notice tone="green">{message}</Notice>}
       {selectedCycle?.status === "POSTED" && <Notice tone="blue">This period is already posted. Only accounts without an existing bill are eligible; generated backfill bills will be sent through approval and posting before notification.</Notice>}
       <Card title="Generation filters" className="mb-4">
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+          <Field label="Billing period group">
+            <SearchableSelect
+              className={INPUT}
+              value={groupId}
+              onChange={(event) => {
+                const nextGroupId = event.target.value;
+                setGroupId(nextGroupId);
+                const selectedCycleBelongsToGroup = cycles.some(
+                  (cycle) =>
+                    String(cycle.billingCycleId) === String(form.billingCycleId) &&
+                    (!nextGroupId || String(cycle.billingPeriodGroupId) === nextGroupId),
+                );
+                if (!selectedCycleBelongsToGroup) {
+                  setForm({ ...form, billingCycleId: "" });
+                }
+              }}
+            >
+              <option value="">All period groups</option>
+              {periodGroups.map((group) => (
+                <option key={group.billingPeriodGroupId} value={group.billingPeriodGroupId}>
+                  {group.groupCode} — {group.groupName}
+                </option>
+              ))}
+            </SearchableSelect>
+          </Field>
           <Field label="Billing period" required>
             <CycleSelect
-              cycles={cycles.filter((c) =>
-                ["DRAFT", "OPEN", "PROCESSING", "RETURNED", "POSTED"].includes(c.status),
-              )}
+              cycles={filteredCycles}
               value={form.billingCycleId}
               onChange={(value) => setForm({ ...form, billingCycleId: value })}
             />
@@ -4051,11 +4099,7 @@ export function CustomerStatements() {
   const [reconcilingBalance, setReconcilingBalance] = useState(false);
   const [error, setError] = useState("");
   const actor = getSessionUser();
-  const canCorrectReadings = Boolean(actor?.roles.includes("SYSTEM_ADMIN"));
-  const canRequestBillAdjustment = Boolean(
-    actor?.roles.some((role) => ["SYSTEM_ADMIN", "BILLING_OFFICER", "BILLING_SUPERVISOR"].includes(role)),
-  );
-  const canCorrectStatements = canCorrectReadings || canRequestBillAdjustment;
+  const canCorrectStatements = Boolean(actor?.roles.includes("SYSTEM_ADMIN"));
   const canReconcileBalance = Boolean(
     actor?.roles.some((role) => ["SYSTEM_ADMIN", "FINANCE_MANAGER"].includes(role)),
   );
@@ -4514,8 +4558,8 @@ export function CustomerStatements() {
                       </td>
                       {canCorrectStatements && <td className={`${TD} statement-correction-actions whitespace-nowrap text-right`}>
                         {entry.sourceType === "BILL" ? <div className="flex justify-end gap-1.5">
-                          {canCorrectReadings && entry.hasReading && <Link to={`/billing/reading-corrections?billId=${encodeURIComponent(String(entry.billId))}&billNumber=${encodeURIComponent(String(entry.reference ?? ""))}`} className="rounded-lg border border-sky-200 bg-sky-50 px-2.5 py-1.5 text-xs font-bold text-sky-700 transition hover:bg-sky-100">Correct reading</Link>}
-                          {canRequestBillAdjustment && <Link to={`/billing/adjustments?billId=${encodeURIComponent(String(entry.billId))}`} className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs font-bold text-amber-700 transition hover:bg-amber-100">Adjust / cancel</Link>}
+                          {entry.hasReading && <Link to={`/billing/reading-corrections?billId=${encodeURIComponent(String(entry.billId))}&billNumber=${encodeURIComponent(String(entry.reference ?? ""))}`} className="rounded-lg border border-sky-200 bg-sky-50 px-2.5 py-1.5 text-xs font-bold text-sky-700 transition hover:bg-sky-100">Correct reading</Link>}
+                          <Link to={`/billing/adjustments?billId=${encodeURIComponent(String(entry.billId))}`} className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs font-bold text-amber-700 transition hover:bg-amber-100">Adjust / cancel</Link>
                         </div> : <span className="text-slate-300">—</span>}
                       </td>}
                     </tr>
