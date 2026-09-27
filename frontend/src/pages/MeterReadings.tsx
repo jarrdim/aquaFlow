@@ -5164,6 +5164,7 @@ function ReadingTable({
   items,
   actions,
   loading = false,
+  rowNumberStart,
   selectedIds,
   onToggle,
   onToggleAll,
@@ -5172,16 +5173,19 @@ function ReadingTable({
   items: Row[];
   actions?: (row: Row) => ReactNode;
   loading?: boolean;
+  rowNumberStart?: number;
   selectedIds?: Set<string>;
   onToggle?: (row: Row, checked: boolean) => void;
   onToggleAll?: (checked: boolean) => void;
   onRowClick?: (row: Row) => void;
 }) {
   const selectable = Boolean(selectedIds && onToggle && onToggleAll);
+  const numbered = rowNumberStart !== undefined;
   const allSelected =
     Boolean(items.length) &&
     items.every((item) => selectedIds?.has(String(item.readingId)));
-  const columnCount = (actions ? 11 : 10) + (selectable ? 1 : 0);
+  const columnCount =
+    (actions ? 11 : 10) + (selectable ? 1 : 0) + (numbered ? 1 : 0);
   return (
     <div className="overflow-x-auto">
       <table className="w-full min-w-[1360px]">
@@ -5198,6 +5202,7 @@ function ReadingTable({
                 />
               </th>
             )}
+            {numbered && <th className={`${TH} w-14 text-center`}>#</th>}
             <th className={`${TH} pl-5`}>Reading date</th>
             <th className={TH}>Cycle</th>
             <th className={TH}>Customer / Account</th>
@@ -5224,7 +5229,7 @@ function ReadingTable({
                 </span>
               </td>
             </tr>
-          ) : items.map((r) => {
+          ) : items.map((r, index) => {
             const name = customerName(r);
             return (
             <tr
@@ -5251,6 +5256,11 @@ function ReadingTable({
                     onChange={(event) => onToggle?.(r, event.target.checked)}
                     className="h-4 w-4 rounded border-slate-300 text-aqua-700 focus:ring-aqua-500"
                   />
+                </td>
+              )}
+              {numbered && (
+                <td className="w-14 px-2 py-3.5 text-center text-xs font-bold tabular-nums text-slate-500">
+                  {rowNumberStart + index}
                 </td>
               )}
               <td className="px-5 py-3.5">
@@ -5884,6 +5894,7 @@ export function ReadingApprovals() {
           <ReadingTable
             items={items}
             loading={loading}
+            rowNumberStart={(page - 1) * pageSize + 1}
             selectedIds={selectedIds}
             onToggle={(row, checked) => {
               const next = new Set(selectedIds);
@@ -5917,7 +5928,7 @@ export function ReadingApprovals() {
           />
         </Card>
         <Card
-          className="min-w-0"
+          className="min-w-0 xl:sticky xl:top-24 xl:self-start"
           title={
             selectedIds.size > 1
               ? `Bulk approval decision · ${selectedIds.size.toLocaleString()} selected`
