@@ -5700,45 +5700,71 @@ export function ReadingApprovals() {
   const [selected, setSelected] = useState<Row | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(1000);
+  const [search, setSearch] = useState("");
+  const [searchSelection, setSearchSelection] = useState("");
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
-  const pageSize = 50;
   const [comments, setComments] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
-  const load = () => {
+  const approvalRequest = useRef(0);
+  const load = (
+    pageValue = page,
+    pageSizeValue = pageSize,
+    searchValue = search,
+  ) => {
+    const requestId = ++approvalRequest.current;
     setLoading(true);
     return api
       .listReadings({
         approvalStatus: "PENDING",
-        page: String(page),
-        pageSize: String(pageSize),
+        page: String(pageValue),
+        pageSize: String(pageSizeValue),
+        search: searchValue,
       })
       .then((result) => {
+        if (requestId !== approvalRequest.current) return;
         const rows = result.items;
         setItems(rows);
         setTotal(Number(result.total));
-        setSelected(
-          (old) =>
-            rows.find((r: Row) => r.readingId === old?.readingId) ??
-            rows[0] ??
-            null,
+        setSelected((old) =>
+          rows.find((r: Row) => String(r.readingId) === String(old?.readingId)) ?? null,
         );
       })
       .catch((e) => setError(e.message))
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (requestId === approvalRequest.current) setLoading(false);
+      });
   };
   useEffect(() => {
-    void load();
-  }, [page]);
+    const timer = window.setTimeout(
+      () => void load(page, pageSize, search),
+      search ? 250 : 0,
+    );
+    return () => window.clearTimeout(timer);
+  }, [page, pageSize, search]);
   const pages = Math.max(1, Math.ceil(total / pageSize));
+  const selectedRows = useMemo(
+    () => items.filter((item) => selectedIds.has(String(item.readingId))),
+    [items, selectedIds],
+  );
+  const batchSummary = useMemo(() => ({
+    actual: selectedRows.filter((item) => item.readingType === "ACTUAL").length,
+    estimated: selectedRows.filter((item) => item.readingType === "ESTIMATED").length,
+    exceptions: selectedRows.filter((item) => item.abnormalFlag || (item.exceptionType && item.exceptionType !== "NONE")).length,
+    consumption: selectedRows.reduce((sum, item) => sum + Number(item.consumption ?? 0), 0),
+    cycles: new Set(selectedRows.map((item) => String(item.readingCycleId ?? item.cycle?.readingCycleId ?? ""))).size,
+  }), [selectedRows]);
+  function applySelection(next: Set<string>) {
+    setSelectedIds(next);
+    const onlyId = next.size === 1 ? [...next][0] : "";
+    setSelected(onlyId ? items.find((item) => String(item.readingId) === onlyId) ?? null : null);
+    setSearchSelection(onlyId);
+  }
   async function decide(decision: "APPROVED" | "REJECTED") {
-    const readingIds = selectedIds.size
-      ? [...selectedIds]
-      : selected
-        ? [String(selected.readingId)]
-        : [];
+    const readingIds = [...selectedIds];
     if (!readingIds.length || comments.trim().length < 3)
       return setError("Enter approval comments before making a decision");
     setSaving(true);
@@ -5754,7 +5780,10 @@ export function ReadingApprovals() {
       );
       setComments("");
       setSelectedIds(new Set());
-      await load();
+      setSelected(null);
+      setSearchSelection("");
+      setPage(1);
+      await load(1, pageSize, search);
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -5773,52 +5802,83 @@ export function ReadingApprovals() {
           className="min-w-0"
           title={`${total.toLocaleString()} pending reading(s)`}
         >
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-            <div>
-              <div className="text-sm font-bold text-slate-800">
-                {selectedIds.size
-                  ? `${selectedIds.size} reading${selectedIds.size === 1 ? "" : "s"} selected`
-                  : "Select readings for a bulk decision"}
-              </div>
-              <p className="mt-0.5 text-xs text-slate-500">
-                Use the header checkbox to select every pending reading shown.
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-semibold text-slate-500">
-                Page {page} of {pages}
-              </span>
-              <button
-                type="button"
-                disabled={page <= 1}
-                onClick={() => {
+          <div className="mb-3 overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
+            <div className="grid gap-2 p-3 lg:grid-cols-[minmax(320px,1fr)_150px_auto]">
+              <SearchableSelect
+                className={INPUT}
+                menuMinWidth={560}
+                wrapOptions
+                value={searchSelection}
+                onSearchQuery={(query) => {
+                  setSearch(query);
+                  setSearchSelection("");
                   setSelectedIds(new Set());
-                  setPage((current) => Math.max(1, current - 1));
+                  setSelected(null);
+                  setPage(1);
                 }}
-                className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 shadow-sm hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+                onChange={(event) => {
+                  const readingId = event.target.value;
+                  setSearchSelection(readingId);
+                  const reading = items.find((item) => String(item.readingId) === readingId);
+                  setSelected(reading ?? null);
+                  setSelectedIds(readingId ? new Set([readingId]) : new Set());
+                }}
               >
-                Previous
-              </button>
-              <button
-                type="button"
-                disabled={page >= pages}
-                onClick={() => {
+                <option value="">Search customer, account or meter</option>
+                {items.map((item) => (
+                  <option key={item.readingId} value={item.readingId}>
+                    {item.meter?.meterNumber ?? "No meter"} · {customerName(item)} · {item.account?.accountNumber ?? "No account"} · {item.cycle?.cycleName ?? "No cycle"}
+                  </option>
+                ))}
+              </SearchableSelect>
+              <select
+                className={INPUT}
+                value={pageSize}
+                onChange={(event) => {
+                  setPageSize(Number(event.target.value));
+                  setPage(1);
                   setSelectedIds(new Set());
-                  setPage((current) => Math.min(pages, current + 1));
+                  setSelected(null);
                 }}
-                className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 shadow-sm hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+                aria-label="Approvals per page"
               >
-                Next
-              </button>
-              {selectedIds.size > 0 && (
+                {[50, 100, 200, 500, 1000].map((size) => (
+                  <option key={size} value={size}>{size} per page</option>
+                ))}
+              </select>
+              {search && (
                 <button
                   type="button"
-                  onClick={() => setSelectedIds(new Set())}
+                  onClick={() => {
+                    setSearch("");
+                    setSearchSelection("");
+                    setSelectedIds(new Set());
+                    setSelected(null);
+                    setPage(1);
+                  }}
                   className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 shadow-sm hover:bg-slate-100"
                 >
-                  Clear
+                  Clear search
                 </button>
               )}
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 px-4 py-3">
+              <div>
+                <div className="text-sm font-bold text-slate-800">
+                  {selectedIds.size
+                    ? `${selectedIds.size.toLocaleString()} reading${selectedIds.size === 1 ? "" : "s"} selected`
+                    : "Select readings for an approval decision"}
+                </div>
+                <p className="mt-0.5 text-xs text-slate-500">
+                  The header checkbox selects all {items.length.toLocaleString()} readings currently shown.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-slate-500">Page {page} of {pages}</span>
+                <button type="button" disabled={page <= 1} onClick={() => { setSelectedIds(new Set()); setSelected(null); setPage((current) => Math.max(1, current - 1)); }} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 shadow-sm hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40">Previous</button>
+                <button type="button" disabled={page >= pages} onClick={() => { setSelectedIds(new Set()); setSelected(null); setPage((current) => Math.min(pages, current + 1)); }} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 shadow-sm hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40">Next</button>
+                {selectedIds.size > 0 && <button type="button" onClick={() => { setSelectedIds(new Set()); setSelected(null); }} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 shadow-sm hover:bg-slate-100">Clear selection</button>}
+              </div>
             </div>
           </div>
           <ReadingTable
@@ -5826,41 +5886,29 @@ export function ReadingApprovals() {
             loading={loading}
             selectedIds={selectedIds}
             onToggle={(row, checked) => {
-              setSelectedIds((current) => {
-                const next = new Set(current);
-                checked
-                  ? next.add(String(row.readingId))
-                  : next.delete(String(row.readingId));
-                return next;
-              });
-              if (checked) setSelected(row);
+              const next = new Set(selectedIds);
+              checked ? next.add(String(row.readingId)) : next.delete(String(row.readingId));
+              applySelection(next);
             }}
             onToggleAll={(checked) => {
-              setSelectedIds(
+              applySelection(
                 checked
                   ? new Set(items.map((item) => String(item.readingId)))
                   : new Set(),
               );
-              if (checked && items[0]) setSelected(items[0]);
             }}
             onRowClick={(row) => {
               const id = String(row.readingId);
-              setSelected(row);
-              setSelectedIds((current) => {
-                const next = new Set(current);
-                next.has(id) ? next.delete(id) : next.add(id);
-                return next;
-              });
+              const next = new Set(selectedIds);
+              next.has(id) ? next.delete(id) : next.add(id);
+              applySelection(next);
             }}
             actions={(r) => (
               <button
                 className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-aqua-700 shadow-sm transition hover:border-sky-200 hover:bg-sky-50"
                 onClick={(event) => {
                   event.stopPropagation();
-                  setSelected(r);
-                  setSelectedIds((current) =>
-                    new Set(current).add(String(r.readingId)),
-                  );
+                  applySelection(new Set([String(r.readingId)]));
                 }}
               >
                 Review
@@ -5871,20 +5919,43 @@ export function ReadingApprovals() {
         <Card
           className="min-w-0"
           title={
-            selectedIds.size
-              ? `Bulk approval decision · ${selectedIds.size} selected`
-              : "Approval decision"
+            selectedIds.size > 1
+              ? `Bulk approval decision · ${selectedIds.size.toLocaleString()} selected`
+              : selectedIds.size === 1
+                ? "Approval decision · 1 selected"
+                : "Approval decision"
           }
         >
-          {selected ? (
+          {selectedIds.size ? (
             <div className="space-y-4">
-              {selectedIds.size > 1 && (
-                <Notice tone="blue">
-                  The comments and decision below will apply to all{" "}
-                  {selectedIds.size} selected readings. The batch is validated
-                  before any record is changed.
-                </Notice>
-              )}
+              {selectedIds.size > 1 ? (
+                <>
+                  <Notice tone="blue">
+                    One decision and comment will apply to all {selectedIds.size.toLocaleString()} selected readings. The full batch is validated before any record changes.
+                  </Notice>
+                  <div className="overflow-hidden rounded-xl border border-sky-100 bg-gradient-to-br from-sky-50 to-white">
+                    <div className="border-b border-sky-100 px-4 py-3">
+                      <div className="text-xs font-bold uppercase tracking-wide text-sky-600">Batch overview</div>
+                      <div className="mt-1 text-2xl font-black text-slate-900">{selectedIds.size.toLocaleString()} readings</div>
+                      <div className="mt-1 text-xs text-slate-500">Across {batchSummary.cycles.toLocaleString()} billing cycle{batchSummary.cycles === 1 ? "" : "s"}</div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-px bg-sky-100 sm:grid-cols-4 xl:grid-cols-2">
+                      {[
+                        ["Actual", batchSummary.actual.toLocaleString()],
+                        ["Estimated", batchSummary.estimated.toLocaleString()],
+                        ["Exceptions", batchSummary.exceptions.toLocaleString()],
+                        ["Consumption", number(batchSummary.consumption)],
+                      ].map(([label, value]) => (
+                        <div key={String(label)} className="bg-white px-3 py-3">
+                          <div className="text-[11px] font-semibold uppercase text-slate-400">{label}</div>
+                          <div className="mt-0.5 text-lg font-bold text-slate-800">{value}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              ) : selected ? (
+                <>
               <div className="rounded-xl bg-slate-50 p-4">
                 <div className="flex items-start justify-between">
                   <div>
@@ -5973,6 +6044,8 @@ export function ReadingApprovals() {
                   Estimation reason: {selected.estimationReason}
                 </Notice>
               )}
+                </>
+              ) : null}
               <Field label="Approval comments" required>
                 <textarea
                   rows={3}
@@ -5988,7 +6061,7 @@ export function ReadingApprovals() {
                   disabled={saving}
                   onClick={() => decide("REJECTED")}
                 >
-                  {selectedIds.size ? "Reject selected" : "Reject"}
+                  Reject selected
                 </Button>
                 <Button
                   tone="green"
@@ -5997,16 +6070,18 @@ export function ReadingApprovals() {
                 >
                   {saving
                     ? "Processing…"
-                    : selectedIds.size
-                      ? "Approve selected"
-                      : "Approve reading"}
+                    : "Approve selected"}
                 </Button>
               </div>
             </div>
           ) : (
-            <p className="py-12 text-center text-slate-400">
-              No readings await approval.
-            </p>
+            <div className="py-12 text-center text-slate-400">
+              <div className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-slate-100">
+                <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-6 w-6"><path d="M5 12.5 9 16l10-10" /><path d="M4 4h12M4 20h16" /></svg>
+              </div>
+              <p className="mt-3 font-semibold text-slate-600">Select one or more readings</p>
+              <p className="mt-1 text-xs">Choose a single record to review its details, or select many for a bulk decision.</p>
+            </div>
           )}
         </Card>
       </div>

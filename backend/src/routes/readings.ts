@@ -1487,7 +1487,7 @@ readingsRouter.get("/", async (req, res, next) => {
     const exportMode = String(req.query.export ?? "") === "true";
     const paginated = req.query.page !== undefined;
     const page = Math.max(1, Number(req.query.page) || 1);
-    const pageSize = Math.min(200, Math.max(10, Number(req.query.pageSize) || 50));
+    const pageSize = Math.min(1000, Math.max(10, Number(req.query.pageSize) || 50));
     const validFromDate = /^\d{4}-\d{2}-\d{2}$/.test(fromDate);
     const validToDate = /^\d{4}-\d{2}-\d{2}$/.test(toDate);
     const readingDateFilter: Prisma.DateTimeFilter = {
@@ -1575,7 +1575,7 @@ readingsRouter.get("/", async (req, res, next) => {
 
 readingsRouter.patch("/bulk-decision", requireRole("SYSTEM_ADMIN", "SUPERVISOR", "METER_SUPERVISOR", "BILLING_SUPERVISOR"), async (req, res, next) => {
   const data = parse(z.object({
-    readingIds: z.array(id).min(1).max(500),
+    readingIds: z.array(id).min(1).max(1000),
     decision: z.enum(["APPROVED", "REJECTED"]),
     comments: z.string().trim().min(3).max(2000),
   }), req.body, res);
