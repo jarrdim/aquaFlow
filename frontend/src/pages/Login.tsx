@@ -55,11 +55,14 @@ export default function Login() {
           type="warning"
         />
 
-        <label className="block text-sm font-medium mb-1">Username</label>
+        <label className="block text-sm font-medium mb-1">Username / Email</label>
         <input
+          type="text"
           className="w-full border border-slate-300 rounded-md px-3 py-2 mb-4 text-sm"
           value={username}
           onChange={(e) => setUsername(e.target.value)}
+          autoComplete="username"
+          placeholder="Enter your username or email"
           autoFocus
         />
 
@@ -69,6 +72,7 @@ export default function Login() {
           className="w-full border border-slate-300 rounded-md px-3 py-2 mb-4 text-sm"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
+          autoComplete="current-password"
         />
 
         <SweetAlertToast message={error} type="error" />

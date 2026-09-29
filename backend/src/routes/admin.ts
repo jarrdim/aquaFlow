@@ -146,7 +146,7 @@ adminRouter.post("/users", async (req, res) => {
   }
 });
 
-const userUpdate = userCreate.omit({ password: true, roleIds: true, username: true }).partial().extend({ password: z.string().min(8).max(200).optional() });
+const userUpdate = userCreate.omit({ password: true, roleIds: true }).partial().extend({ password: z.string().min(8).max(200).optional() });
 adminRouter.patch("/users/:id", async (req, res) => {
   const userId = id.safeParse(req.params.id);
   const parsed = userUpdate.safeParse(req.body);

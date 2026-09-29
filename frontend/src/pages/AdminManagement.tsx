@@ -298,6 +298,7 @@ export function UserAdministration() {
         });
       else if (selected) {
         await api.updateAdminUser(selected.userId, {
+          username: form.username,
           firstName: form.firstName,
           lastName: form.lastName,
           emailAddress: form.emailAddress,
@@ -665,7 +666,7 @@ export function UserAdministration() {
               {[
                 ["First name", "firstName"],
                 ["Last name", "lastName"],
-                ["Username", "username"],
+                ["Login username / email", "username"],
                 ["Email", "emailAddress"],
                 ["Phone", "phoneNumber"],
                 [
@@ -686,7 +687,6 @@ export function UserAdministration() {
                   </span>
                   <input
                     className={input}
-                    disabled={!creating && key === "username"}
                     required={
                       [
                         "firstName",

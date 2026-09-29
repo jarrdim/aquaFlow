@@ -11,7 +11,7 @@ import { requireAuth, WEB_SESSION_COOKIE } from "../middleware/auth";
 export const authRouter = Router();
 
 const loginSchema = z.object({
-  username: z.string().min(1),
+  username: z.string().trim().min(1).max(200),
   password: z.string().min(1),
 });
 
@@ -252,14 +252,20 @@ authRouter.post("/customer/register", customerRegistrationLimiter, async (req, r
 authRouter.post("/login", loginLimiter, async (req, res) => {
   const parsed = loginSchema.safeParse(req.body);
   if (!parsed.success) {
-    return res.status(400).json({ error: "username and password are required" });
+    return res.status(400).json({ error: "Username or email and password are required" });
   }
-  const { username, password } = parsed.data;
+  const { username: identifier, password } = parsed.data;
 
-  const user = await prisma.user.findUnique({
-    where: { username },
+  let user = await prisma.user.findUnique({
+    where: { username: identifier },
     include: { userRoles: activeUserRoles },
   });
+  if (!user) {
+    user = await prisma.user.findFirst({
+      where: { emailAddress: { equals: identifier, mode: "insensitive" } },
+      include: { userRoles: activeUserRoles },
+    });
+  }
 
   if (!user || user.status !== "ACTIVE") {
     return res.status(401).json({ error: "Invalid credentials" });
