@@ -18,7 +18,7 @@ export const readingsRouter = Router();
 readingsRouter.use(requireAuth);
 readingsRouter.use((req, res, next) => {
   const isScoped = req.user?.roles.some((role) => SCOPED_STAFF_ROLES.includes(role));
-  const worklistSupport = req.method === "GET" && ["/cycles", "/period-groups"].includes(req.path);
+  const worklistSupport = req.method === "GET" && ["/cycles", "/period-groups", "/assignments"].includes(req.path);
   if (!isScoped || req.path.startsWith("/worklist") || worklistSupport || (req.method === "POST" && ["/", "/sync"].includes(req.path))) {
     return next();
   }
@@ -26,7 +26,7 @@ readingsRouter.use((req, res, next) => {
 });
 const worklistViewAccess = requireScopedPermission(SCOPED_STAFF_ROLES, ["READING_WORKLIST_VIEW"]);
 const worklistManageAccess = requireRoleOrPermission(
-  ["SYSTEM_ADMIN", "METER_READER", "METER_SUPERVISOR", "SUPERVISOR"],
+  ["SYSTEM_ADMIN", "METER_READER", "METER_SUPERVISOR", "SUPERVISOR", "CUSTOMER_METER_SERVICES"],
   ["READING_WORKLIST_MANAGE"],
 );
 
@@ -513,7 +513,7 @@ readingsRouter.post("/officers", requireRole("SYSTEM_ADMIN", "SUPERVISOR", "METE
   }
 });
 
-readingsRouter.get("/assignments", async (req, res, next) => {
+readingsRouter.get("/assignments", worklistViewAccess, async (req, res, next) => {
   try {
     const cycleId = req.query.cycleId ? BigInt(String(req.query.cycleId)) : undefined;
     const assignments = await prisma.routeAssignment.findMany({

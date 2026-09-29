@@ -2897,8 +2897,12 @@ export function ReadingWorklist() {
   const groupCycles = periodGroupId
     ? cycles.filter((cycle) => String(cycle.billingPeriodGroupId ?? "") === periodGroupId)
     : cycles;
+  const canManageReadingWorklist =
+    getSessionUser()?.roles.includes("CUSTOMER_METER_SERVICES") ||
+    !isRestrictedStaff() ||
+    hasPermission("READING_WORKLIST_MANAGE");
   const canCaptureReadings =
-    (!isRestrictedStaff() || hasPermission("READING_WORKLIST_MANAGE")) &&
+    canManageReadingWorklist &&
     cycleScope !== "group" &&
     selectedCycles.length === 1 &&
     selectedCycle?.status === "OPEN" &&
