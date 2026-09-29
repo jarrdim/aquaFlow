@@ -24,6 +24,11 @@ function hasAnyPermission(codes: string[], user: SessionUser) {
 export function canAccessPath(pathname: string, user: SessionUser | null = getSessionUser()) {
   if (!user) return false;
   if (!user.roles.length) return false;
+  if (pathname.startsWith("/arrears/disconnections")) {
+    return user.userType
+      ? ["STAFF", "SYSTEM"].includes(user.userType)
+      : !user.roles.includes("CUSTOMER");
+  }
   if (user.roles.includes("SYSTEM_ADMIN") || !isRestrictedStaff(user)) return true;
 
   if (pathname === "/billing/statements") return hasPermission("CUSTOMER_STATEMENT_VIEW", user);
@@ -32,7 +37,6 @@ export function canAccessPath(pathname: string, user: SessionUser | null = getSe
     return hasPermission("SERVICE_REQUEST_VIEW", user);
   }
   if (pathname.startsWith("/readings/worklist")) return hasPermission("READING_WORKLIST_VIEW", user);
-  if (pathname.startsWith("/arrears/disconnections")) return hasPermission("DISCONNECTION_LIST_VIEW", user);
   if (pathname.startsWith("/arrears/promises")) return hasPermission("PROMISE_TO_PAY_VIEW", user);
   if (pathname.startsWith("/customers")) return hasPermission("CUSTOMER_VIEW", user);
   if (pathname.startsWith("/connections/new")) return hasPermission("CONNECTION_CREATE", user);

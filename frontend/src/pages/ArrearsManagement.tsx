@@ -1,6 +1,6 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api } from "../lib/api";
+import { api, getSessionUser } from "../lib/api";
 import { printDisconnection } from "../lib/printDisconnection";
 import {
   exportArrearsAgingWorkbook,
@@ -11,7 +11,7 @@ import { CheckboxMultiSelect } from "../components/CheckboxMultiSelect";
 import { SweetAlertToast } from "../components/SweetAlertToast";
 import { DateInput } from "../components/DateInput";
 import { DeliveryQueueLink } from "../components/DeliveryQueueLink";
-import { hasPermission, isRestrictedStaff } from "../lib/access";
+import { hasPermission } from "../lib/access";
 
 type Row = Record<string, any>;
 const INPUT =
@@ -2548,11 +2548,15 @@ async function exportDisconnectionListExcel(list: Row) {
 }
 
 export function DisconnectionLists({ view = "builder" }: { view?: "builder" | "register" }) {
-  const scopedAccess = isRestrictedStaff();
-  const canManageLists = !scopedAccess || hasPermission("DISCONNECTION_LIST_MANAGE");
-  const canApproveLists = !scopedAccess;
-  const canRecordDisconnection = !scopedAccess || hasPermission("METER_DIRECT_DISCONNECT");
-  const isRegister = view === "register" || !canManageLists;
+  const roles = getSessionUser()?.roles ?? [];
+  const canManageLists =
+    roles.some((role) => ["SYSTEM_ADMIN", "FINANCE_MANAGER", "CREDIT_CONTROL_SUPERVISOR", "CREDIT_CONTROL_OFFICER"].includes(role)) ||
+    hasPermission("DISCONNECTION_LIST_MANAGE");
+  const canApproveLists = roles.some((role) => ["SYSTEM_ADMIN", "FINANCE_MANAGER"].includes(role));
+  const canRecordDisconnection =
+    roles.some((role) => ["ADMIN", "SYSTEM_ADMIN", "METER_MANAGER", "METER_SUPERVISOR", "SUPERVISOR"].includes(role)) ||
+    hasPermission("METER_DIRECT_DISCONNECT");
+  const isRegister = view === "register";
   const [eligible, setEligible] = useState<Row[]>([]);
   const [eligibility, setEligibility] = useState<Row>({
     thresholdMatches: 0,
@@ -2810,6 +2814,11 @@ export function DisconnectionLists({ view = "builder" }: { view?: "builder" | "r
     >
       {error && <Alert>{error}</Alert>}
       {message && <Alert success>{message}</Alert>}
+      {!isRegister && !canManageLists && (
+        <div className="mb-3 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800">
+          <strong>View-only access.</strong> You can review and export eligible accounts and submitted lists. Creating a disconnection list requires the Disconnection List Manage permission.
+        </div>
+      )}
       {!isRegister && <div className="disconnection-eligible-screen">
       <section className="mb-2 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
         <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
@@ -2845,7 +2854,7 @@ export function DisconnectionLists({ view = "builder" }: { view?: "builder" | "r
               <div className="text-sm font-bold text-slate-800">Eligibility filters</div>
               <div className="text-xs text-slate-500">Current rule: {filterDescription}</div>
             </div>
-            <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600">{selected.length} selected</span>
+            <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600">{canManageLists ? `${selected.length} selected` : "View only"}</span>
           </div>
           <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-6">
           <Field label="Minimum arrears age (days)">
@@ -2902,7 +2911,7 @@ export function DisconnectionLists({ view = "builder" }: { view?: "builder" | "r
               Check final demand notice
             </label>
           </div>
-          <div className="flex items-end">
+          {canManageLists && <div className="flex items-end">
             <Button
               className="w-full"
               tone="blue"
@@ -2918,7 +2927,7 @@ export function DisconnectionLists({ view = "builder" }: { view?: "builder" | "r
                 `Submit ${selected.length} selected account(s)`
               )}
             </Button>
-          </div>
+          </div>}
           </div>
         </div>
         <div className="overflow-x-auto">
@@ -2926,7 +2935,7 @@ export function DisconnectionLists({ view = "builder" }: { view?: "builder" | "r
             <thead className="bg-slate-50">
               <tr>
                 <th className={compactTH}>
-                  {canManageLists && <input
+                  {canManageLists ? <input
                     type="checkbox"
                     disabled={loading}
                     checked={
@@ -2939,7 +2948,7 @@ export function DisconnectionLists({ view = "builder" }: { view?: "builder" | "r
                           : selected.filter((value) => !visibleEligible.some((row) => String(row.accountId) === value)),
                       )
                     }
-                  />}
+                  /> : "#"}
                 </th>
                 <th className={compactTH}>Account / Customer</th>
                 <th className={compactTH}>Zone</th>
@@ -2962,10 +2971,10 @@ export function DisconnectionLists({ view = "builder" }: { view?: "builder" | "r
                 </tr>
               ) : (
                 <>
-                  {visibleEligible.map((row) => (
+                  {visibleEligible.map((row, index) => (
                     <tr className="border-t border-slate-100 transition hover:bg-cyan-50/40" key={row.accountId}>
                       <td className={compactTD}>
-                        <input
+                        {canManageLists ? <input
                           type="checkbox"
                           checked={selected.includes(String(row.accountId))}
                           onChange={() =>
@@ -2977,7 +2986,7 @@ export function DisconnectionLists({ view = "builder" }: { view?: "builder" | "r
                                 : [...values, String(row.accountId)],
                             )
                           }
-                        />
+                        /> : index + 1}
                       </td>
                       <td className={compactTD}>
                         <strong>{row.accountNumber}</strong>

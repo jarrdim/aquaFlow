@@ -1,5 +1,5 @@
 import { Prisma } from "@prisma/client";
-import { Router } from "express";
+import { NextFunction, Request, Response, Router } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { isSystemAdmin, requireAuth, requireRole, requireRoleOrPermission, requireScopedPermission, SCOPED_STAFF_ROLES } from "../middleware/auth";
@@ -42,7 +42,12 @@ const promiseManageAccess = requireRoleOrPermission(
   ["SYSTEM_ADMIN", "FINANCE_MANAGER", "CREDIT_CONTROL_SUPERVISOR", "CREDIT_CONTROL_OFFICER", "CUSTOMER_CARE_OFFICER"],
   ["PROMISE_TO_PAY_MANAGE"],
 );
-const disconnectionViewAccess = requireScopedPermission(SCOPED_STAFF_ROLES, ["DISCONNECTION_LIST_VIEW"]);
+const staffDisconnectionViewAccess = (req: Request, res: Response, next: NextFunction) => {
+  if (!req.user || !["STAFF", "SYSTEM"].includes(req.user.userType)) {
+    return res.status(403).json({ error: "Disconnection lists are available to staff users only" });
+  }
+  return next();
+};
 const disconnectionManageAccess = requireRoleOrPermission(
   ["SYSTEM_ADMIN", "FINANCE_MANAGER", "CREDIT_CONTROL_SUPERVISOR", "CREDIT_CONTROL_OFFICER"],
   ["DISCONNECTION_LIST_MANAGE"],
@@ -1354,7 +1359,7 @@ arrearsRouter.patch("/promises/:id/status", promiseManageAccess, async (req, res
   }
 });
 
-arrearsRouter.get("/disconnections/eligible", disconnectionViewAccess, async (req, res, next) => {
+arrearsRouter.get("/disconnections/eligible", staffDisconnectionViewAccess, async (req, res, next) => {
   try {
     const asOf = req.query.asOf ? day(String(req.query.asOf)) : today();
     const requireFinalDemandNotice = String(req.query.requireFinalDemandNotice ?? "true") !== "false";
@@ -1421,7 +1426,7 @@ arrearsRouter.get("/disconnections/eligible", disconnectionViewAccess, async (re
   }
 });
 
-arrearsRouter.get("/disconnections", disconnectionViewAccess, async (req, res, next) => {
+arrearsRouter.get("/disconnections", staffDisconnectionViewAccess, async (req, res, next) => {
   try {
     const zoneIdText = String(req.query.zoneId ?? "").trim();
     if (zoneIdText && !/^\d+$/.test(zoneIdText))

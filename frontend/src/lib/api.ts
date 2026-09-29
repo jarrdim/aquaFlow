@@ -5,6 +5,7 @@ let redirectingToLogin = false;
 export type SessionUser = {
   userId: string;
   username: string;
+  userType?: string;
   firstName?: string;
   lastName?: string;
   roles: string[];

@@ -746,11 +746,6 @@ function Shell({ children }: { children: React.ReactNode }) {
   const restrictedStaff = isRestrictedStaff(sessionUser);
   const visibleMenu = (menu: readonly (readonly [string, string])[]) =>
     menu.filter(([, itemPath]) => {
-      if (
-        restrictedStaff &&
-        itemPath === "/arrears/disconnections" &&
-        !sessionUser?.permissions?.includes("DISCONNECTION_LIST_MANAGE")
-      ) return false;
       return canAccessPath(itemPath, sessionUser);
     });
   const canReviewDirectReconnections = (sessionUser?.roles ?? []).some((role) =>
