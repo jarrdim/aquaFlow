@@ -7,7 +7,7 @@ const button = "rounded-lg px-4 py-2.5 text-sm font-semibold text-white disabled
 const statuses = ["SUBMITTED", "APPROVED", "REJECTED", "WORK_ORDER_CREATED", "COMPLETED", "CANCELLED"];
 
 export default function ReconnectionManagement() {
-  const [filters, setFilters] = useState({ q: "", status: "", page: "1", take: "25" });
+  const [filters, setFilters] = useState({ q: "", status: "", feePaymentStatus: "", page: "1", take: "25" });
   const [result, setResult] = useState<any>({ rows: [] });
   const [selected, setSelected] = useState<any>(null);
   const [notes, setNotes] = useState("");
@@ -63,12 +63,18 @@ export default function ReconnectionManagement() {
         <h1 className="text-2xl font-bold text-slate-900">Reconnection Requests</h1>
         <p className="mt-1 text-sm text-slate-500">Review customer requests, apply the configured fee, and dispatch approved reconnections.</p>
       </header>
-      <section className="grid gap-3 rounded-2xl border bg-white p-4 shadow-sm md:grid-cols-3">
+      <section className="grid gap-3 rounded-2xl border bg-white p-4 shadow-sm md:grid-cols-2 xl:grid-cols-[1.2fr_1fr_1fr_auto]">
         <input className={input} placeholder="Request, account or phone" value={filters.q} onChange={(e) => setFilters({ ...filters, q: e.target.value, page: "1" })} />
         <select className={input} value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value, page: "1" })}>
           <option value="">All statuses</option>{statuses.map((status) => <option key={status}>{status}</option>)}
         </select>
-        <div className="flex items-center text-sm text-slate-500">{result.total ?? 0} request(s)</div>
+        <select className={input} value={filters.feePaymentStatus} onChange={(e) => setFilters({ ...filters, feePaymentStatus: e.target.value, page: "1" })}>
+          <option value="">All fee payments</option>
+          <option value="PAID">Paid</option>
+          <option value="UNPAID">Unpaid</option>
+          <option value="PENDING">Pending</option>
+        </select>
+        <div className="flex min-w-24 items-center justify-end text-sm text-slate-500">{result.total ?? 0} request(s)</div>
       </section>
       <div className="grid gap-4 xl:grid-cols-[1.25fr_.75fr]">
         <section className="overflow-hidden rounded-2xl border bg-white shadow-sm">

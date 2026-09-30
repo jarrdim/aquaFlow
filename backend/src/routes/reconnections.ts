@@ -16,6 +16,10 @@ reconnectionsRouter.get("/", canView, async (req, res, next) => {
     const page = Math.max(1, Number(req.query.page) || 1);
     const take = Math.min(100, Math.max(10, Number(req.query.take) || 25));
     const status = String(req.query.status ?? "").trim();
+    const requestedFeePaymentStatus = String(req.query.feePaymentStatus ?? "").trim().toUpperCase();
+    const feePaymentStatus = ["PAID", "UNPAID", "PENDING"].includes(requestedFeePaymentStatus)
+      ? requestedFeePaymentStatus
+      : "";
     const q = String(req.query.q ?? "").trim();
     const pattern = `%${q}%`;
     const offset = (page - 1) * take;
@@ -26,6 +30,7 @@ reconnectionsRouter.get("/", canView, async (req, res, next) => {
         JOIN aquaflow.customer_accounts a ON a.account_id = r.account_id
         JOIN aquaflow.customers c ON c.customer_id = r.customer_id
         WHERE (${status} = '' OR r.status = ${status})
+          AND (${feePaymentStatus} = '' OR r.fee_payment_status = ${feePaymentStatus})
           AND (${q} = '' OR r.request_number ILIKE ${pattern}
             OR a.account_number ILIKE ${pattern}
             OR c.phone_number ILIKE ${pattern})`,
@@ -41,6 +46,7 @@ reconnectionsRouter.get("/", canView, async (req, res, next) => {
         JOIN aquaflow.customer_accounts a ON a.account_id = r.account_id
         JOIN aquaflow.customers c ON c.customer_id = r.customer_id
         WHERE (${status} = '' OR r.status = ${status})
+          AND (${feePaymentStatus} = '' OR r.fee_payment_status = ${feePaymentStatus})
           AND (${q} = '' OR r.request_number ILIKE ${pattern}
             OR a.account_number ILIKE ${pattern}
             OR c.phone_number ILIKE ${pattern})
