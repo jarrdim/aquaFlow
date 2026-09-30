@@ -13,6 +13,16 @@ export default function ReconnectionManagement() {
   const [notes, setNotes] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState("");
+  const currentPage = Number(result.page || filters.page || 1);
+  const pageSize = Number(result.take || filters.take || 25);
+  const totalPages = Math.max(1, Number(result.pages || 1));
+  const totalRows = Number(result.total || 0);
+  const firstRow = totalRows ? (currentPage - 1) * pageSize + 1 : 0;
+  const lastRow = Math.min(currentPage * pageSize, totalRows);
+  const pageNumbers = Array.from(
+    { length: Math.min(5, totalPages) },
+    (_, index) => Math.max(1, Math.min(currentPage - 2, totalPages - 4)) + index,
+  );
   const load = useCallback(async () => {
     setLoading(true);
     try { setResult(await api.listReconnections(filters)); }
@@ -63,11 +73,12 @@ export default function ReconnectionManagement() {
       <div className="grid gap-4 xl:grid-cols-[1.25fr_.75fr]">
         <section className="overflow-hidden rounded-2xl border bg-white shadow-sm">
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>{["Request","Customer / account","Fee","Fee payment","Status",""].map((h) => <th key={h} className="px-4 py-3">{h}</th>)}</tr></thead>
+            <table className="w-full min-w-[800px] text-left text-sm">
+              <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>{["#","Request","Customer / account","Fee","Fee payment","Status",""].map((h, index) => <th key={`${h}-${index}`} className="px-4 py-3">{h}</th>)}</tr></thead>
               <tbody className="divide-y">
-                {loading ? <tr><td colSpan={6} className="p-10 text-center text-slate-500">Loading reconnection requests…</td></tr> :
-                  result.rows.map((row: any) => <tr key={row.reconnectionRequestId}>
+                {loading ? <tr><td colSpan={7} className="p-10 text-center text-slate-500">Loading reconnection requests…</td></tr> :
+                  result.rows.map((row: any, index: number) => <tr key={row.reconnectionRequestId} className="transition hover:bg-sky-50/40">
+                    <td className="w-14 px-4 py-3 font-semibold text-slate-400">{(currentPage - 1) * pageSize + index + 1}</td>
                     <td className="px-4 py-3"><strong>{row.requestNumber}</strong><div className="text-xs text-slate-500">{new Date(row.createdAt).toLocaleDateString()}</div></td>
                     <td className="px-4 py-3">{row.customerName}<div className="text-xs text-slate-500">{row.accountNumber}</div></td>
                     <td className="px-4 py-3">KSh {Number(row.reconnectionFee).toLocaleString()}</td>
@@ -75,8 +86,30 @@ export default function ReconnectionManagement() {
                     <td className="px-4 py-3"><span className="rounded-full bg-sky-50 px-2 py-1 text-xs font-semibold text-sky-700">{row.status}</span></td>
                     <td className="px-4 py-3"><button className="font-semibold text-aqua-700" onClick={() => void open(row.reconnectionRequestId)}>Review</button></td>
                   </tr>)}
+                {!loading && !result.rows.length && <tr><td colSpan={7} className="p-12 text-center text-sm text-slate-400">No reconnection requests match the current filters.</td></tr>}
               </tbody>
             </table>
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 bg-slate-50/70 px-4 py-3 text-sm">
+            <div className="flex flex-wrap items-center gap-3 text-slate-500">
+              <span>Showing <strong className="text-slate-700">{firstRow}–{lastRow}</strong> of <strong className="text-slate-700">{totalRows}</strong></span>
+              <label className="flex items-center gap-2">
+                <span>Rows</span>
+                <select className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm text-slate-700 outline-none focus:border-aqua-500" value={filters.take} onChange={(event) => setFilters({ ...filters, take: event.target.value, page: "1" })}>
+                  {[10, 25, 50, 100].map((size) => <option key={size} value={size}>{size}</option>)}
+                </select>
+              </label>
+            </div>
+            <div className="flex items-center gap-1">
+              <button type="button" aria-label="First page" disabled={currentPage <= 1 || loading} onClick={() => setFilters({ ...filters, page: "1" })} className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 font-semibold text-slate-600 hover:border-sky-300 hover:text-aqua-700 disabled:cursor-not-allowed disabled:opacity-40">«</button>
+              <button type="button" aria-label="Previous page" disabled={currentPage <= 1 || loading} onClick={() => setFilters({ ...filters, page: String(currentPage - 1) })} className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 font-semibold text-slate-600 hover:border-sky-300 hover:text-aqua-700 disabled:cursor-not-allowed disabled:opacity-40">Previous</button>
+              <div className="hidden items-center gap-1 sm:flex">
+                {pageNumbers.map((page) => <button type="button" key={page} aria-label={`Page ${page}`} aria-current={page === currentPage ? "page" : undefined} onClick={() => setFilters({ ...filters, page: String(page) })} className={`min-w-9 rounded-lg border px-2.5 py-1.5 font-semibold ${page === currentPage ? "border-aqua-700 bg-aqua-700 text-white" : "border-slate-200 bg-white text-slate-600 hover:border-sky-300 hover:text-aqua-700"}`}>{page}</button>)}
+              </div>
+              <span className="px-2 text-xs font-semibold text-slate-500 sm:hidden">{currentPage} / {totalPages}</span>
+              <button type="button" aria-label="Next page" disabled={currentPage >= totalPages || loading} onClick={() => setFilters({ ...filters, page: String(currentPage + 1) })} className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 font-semibold text-slate-600 hover:border-sky-300 hover:text-aqua-700 disabled:cursor-not-allowed disabled:opacity-40">Next</button>
+              <button type="button" aria-label="Last page" disabled={currentPage >= totalPages || loading} onClick={() => setFilters({ ...filters, page: String(totalPages) })} className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 font-semibold text-slate-600 hover:border-sky-300 hover:text-aqua-700 disabled:cursor-not-allowed disabled:opacity-40">»</button>
+            </div>
           </div>
         </section>
         <section className="rounded-2xl border bg-white p-5 shadow-sm">

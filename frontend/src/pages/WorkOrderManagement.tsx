@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { CheckboxMultiSelect } from "../components/CheckboxMultiSelect";
 import { SearchableSelect } from "../components/SearchableSelect";
@@ -296,12 +297,41 @@ export default function WorkOrderManagement() {
     ])
       .then(([accountTargets, request, connection]) => {
         if (!active) return;
-        setTargets(accountTargets);
+        let availableTargets = accountTargets;
         if (request) {
+          const requestAccountId = request.account?.accountId
+            ? String(request.account.accountId)
+            : "";
+          const requestCustomerId = request.customer?.customerId
+            ? String(request.customer.customerId)
+            : "";
+          const requestTargetExists = accountTargets.some((target: any) =>
+            requestAccountId
+              ? String(target.accountId) === requestAccountId
+              : String(target.customerId) === requestCustomerId,
+          );
+          if (requestCustomerId && !requestTargetExists) {
+            const customer = request.customer;
+            availableTargets = [
+              {
+                accountId: requestAccountId || null,
+                accountNumber: request.account?.accountNumber || null,
+                customerId: requestCustomerId,
+                customerNumber: customer.customerNumber,
+                customerName:
+                  customer.organizationName ||
+                  [customer.firstName, customer.lastName].filter(Boolean).join(" ") ||
+                  customer.customerNumber,
+                zoneId: null,
+                zoneName: null,
+              },
+              ...accountTargets,
+            ];
+          }
           setForm((current) => ({
             ...current,
-            accountId: request.account?.accountId || "",
-            customerId: request.customer?.customerId || "",
+            accountId: requestAccountId,
+            customerId: requestCustomerId,
             sourceType:
               request.requestType === "COMPLAINT"
                 ? "COMPLAINT"
@@ -316,8 +346,19 @@ export default function WorkOrderManagement() {
               0,
               5000,
             ),
+            fieldOfficerIds: (() => {
+              const matchingOfficer = lookups.officers.find(
+                (officer: any) =>
+                  request.assignee?.userId &&
+                  String(officer.userId) === String(request.assignee.userId),
+              );
+              return matchingOfficer
+                ? [String(matchingOfficer.fieldOfficerId)]
+                : current.fieldOfficerIds;
+            })(),
           }));
         }
+        setTargets(availableTargets);
         if (connection) {
           const linkedAccounts = accountTargets.filter(
             (target: any) =>
@@ -680,7 +721,7 @@ export default function WorkOrderManagement() {
   };
 
   const createPanel = creating
-    ? (() => {
+    ? createPortal((() => {
         const selectedTarget = targets.find(
           (target) => form.accountId
             ? String(target.accountId) === form.accountId
@@ -784,7 +825,7 @@ export default function WorkOrderManagement() {
                       </label>
                       <label className={form.accountId || form.customerId ? "md:col-span-2" : ""}>
                         <span className="mb-1 block text-sm font-medium">
-                          Customer / account
+                          Customer / account <span className="font-normal text-slate-400">(or choose a zone)</span>
                         </span>
                         <div ref={targetFieldRef}>
                           <SearchableSelect
@@ -810,7 +851,7 @@ export default function WorkOrderManagement() {
                             <option value="">
                               {targetsLoading
                                 ? "Loading latest customers…"
-                                : "Select customer or use zone only"}
+                                : "Search or select a customer account"}
                             </option>
                             {targets.map((item) => (
                               <option
@@ -967,16 +1008,22 @@ export default function WorkOrderManagement() {
                         </span>
                       </div>
                     </div>
+                    {!form.accountId && !form.customerId && !form.zoneId ? (
+                      <div className="mt-2 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
+                        <span aria-hidden="true" className="text-base">!</span>
+                        Select a customer account above, or choose a zone for non-customer field work.
+                      </div>
+                    ) : (
                     <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-4">
                       <p>
                         <span className="text-slate-500">Account:</span>{" "}
                         <strong>
-                          {selectedTarget?.accountNumber || "Zone-level"}
+                          {selectedTarget?.accountNumber || "Zone work"}
                         </strong>
                       </p>
                       <p>
                         <span className="text-slate-500">Customer:</span>{" "}
-                        <strong>{selectedTarget?.customerName || "N/A"}</strong>
+                        <strong>{selectedTarget?.customerName || "No customer"}</strong>
                       </p>
                       <p>
                         <span className="text-slate-500">Zone:</span>{" "}
@@ -1002,6 +1049,7 @@ export default function WorkOrderManagement() {
                         </strong>
                       </p>
                     </div>
+                    )}
                   </div>
                 </div>
                 <footer className="flex shrink-0 items-center justify-end gap-3 border-t border-slate-200 bg-white px-5 py-3">
@@ -1031,7 +1079,7 @@ export default function WorkOrderManagement() {
             </aside>
           </div>
         );
-      })()
+      })(), document.body)
     : null;
 
   const detailId = selected?.work_order_id || selected?.workOrderId;

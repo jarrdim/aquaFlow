@@ -137,8 +137,10 @@ import {
 } from "./pages/AdminManagement";
 import { canAccessPath, defaultAuthorizedPath, isRestrictedStaff } from "./lib/access";
 import {
+  ComplaintManagement,
   RegisterServiceRequest,
   ServiceRequestDashboard,
+  ServiceRequestReview,
 } from "./pages/ServiceRequestManagement";
 import SettingsManagement from "./pages/SettingsManagement";
 import ReconnectionManagement from "./pages/ReconnectionManagement";
@@ -452,11 +454,11 @@ const ARREARS_MENU = [
 ] as const;
 
 const SERVICE_REQUEST_MENU = [
-  ["Service dashboard", "/service-requests"],
-  ["Register request", "/service-requests/new"],
+  ["Overview", "/service-requests"],
+  ["New Request", "/service-requests/new"],
   ["Complaints", "/service-requests/complaints"],
-  ["Leak reports", "/service-requests/leaks"],
-  ["Reconnection requests", "/reconnections"],
+  ["Leak Reports", "/service-requests/leaks"],
+  ["Reconnection Requests", "/reconnections"],
 ] as const;
 
 const WORK_ORDER_MENU = [
@@ -491,6 +493,12 @@ const SIDEBAR_CHILD_MENUS: Record<
 
 function sidebarSectionForPath(pathname: string) {
   if (pathname === "/period-groups") return "Meter Readings";
+  const childOwner = Object.entries(SIDEBAR_CHILD_MENUS).find(([, menu]) =>
+    menu.some(([, itemPath]) =>
+      pathname === itemPath || pathname.startsWith(`${itemPath}/`),
+    ),
+  );
+  if (childOwner) return childOwner[0];
   return NAV_ITEMS.find((item) =>
     item.path && SIDEBAR_CHILD_MENUS[item.label]?.length && pathname.startsWith(item.path),
   )?.label ?? null;
@@ -1128,7 +1136,7 @@ function Shell({ children }: { children: React.ReactNode }) {
           }).map(({ label, Icon: NavIcon, path, iconClass }) => {
             const active = path !== null && (
               location.pathname.startsWith(path) ||
-              (label === "Meter Readings" && location.pathname === "/period-groups")
+              sidebarSectionForPath(location.pathname) === label
             );
             const hasChildren = Boolean(SIDEBAR_CHILD_MENUS[label]?.length);
             const expanded = expandedSidebarSection === label;
@@ -2974,7 +2982,7 @@ export default function App() {
         element={
           <Protected>
             <Shell>
-              <ServiceRequestDashboard />
+              <ComplaintManagement />
             </Shell>
           </Protected>
         }
@@ -2985,6 +2993,16 @@ export default function App() {
           <Protected>
             <Shell>
               <ServiceRequestDashboard />
+            </Shell>
+          </Protected>
+        }
+      />
+      <Route
+        path="/service-requests/:requestId"
+        element={
+          <Protected>
+            <Shell>
+              <ServiceRequestReview />
             </Shell>
           </Protected>
         }

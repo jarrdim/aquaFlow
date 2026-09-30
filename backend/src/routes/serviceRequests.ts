@@ -20,14 +20,15 @@ const requestInclude = {
 } satisfies Prisma.ServiceRequestInclude;
 
 serviceRequestsRouter.get("/dashboard", canView, async (_req, res) => {
-  const [total, open, overdue, complaints, resolved] = await Promise.all([
+  const [total, open, overdue, complaints, unassignedComplaints, resolved] = await Promise.all([
     prisma.serviceRequest.count(),
     prisma.serviceRequest.count({ where: { status: { in: ["OPEN", "ASSIGNED", "IN_PROGRESS", "PENDING_CUSTOMER"] } } }),
     prisma.serviceRequest.count({ where: { dueAt: { lt: new Date() }, status: { in: ["OPEN", "ASSIGNED", "IN_PROGRESS", "PENDING_CUSTOMER"] } } }),
     prisma.serviceRequest.count({ where: { requestType: "COMPLAINT" } }),
+    prisma.serviceRequest.count({ where: { requestType: "COMPLAINT", assignedTo: null, status: { notIn: ["RESOLVED", "CLOSED", "CANCELLED"] } } }),
     prisma.serviceRequest.count({ where: { status: { in: ["RESOLVED", "CLOSED"] } } }),
   ]);
-  res.json({ total, open, overdue, complaints, resolved });
+  res.json({ total, open, overdue, complaints, unassignedComplaints, resolved });
 });
 
 serviceRequestsRouter.get("/targets", canCreate, async (req, res) => {
@@ -51,14 +52,16 @@ serviceRequestsRouter.get("/officers", canView, async (_req, res) => {
   res.json(await prisma.user.findMany({
     where: { status: "ACTIVE", userType: { in: ["STAFF", "SYSTEM"] } },
     orderBy: [{ firstName: "asc" }, { lastName: "asc" }],
-    select: { userId: true, firstName: true, lastName: true, username: true },
+    select: { userId: true, firstName: true, lastName: true, username: true, emailAddress: true },
   }));
 });
 
 serviceRequestsRouter.get("/", canView, async (req, res) => {
   const page = Math.max(1, Number(req.query.page) || 1);
-  const take = Math.min(100, Math.max(10, Number(req.query.take) || 25));
+  const take = Math.min(500, Math.max(10, Number(req.query.take) || 25));
   const q = String(req.query.q ?? "").trim();
+  const scope = String(req.query.scope ?? "").toUpperCase();
+  const activeStatuses = ["OPEN", "ASSIGNED", "IN_PROGRESS", "PENDING_CUSTOMER"];
   const where: Prisma.ServiceRequestWhereInput = {
     ...(q ? { OR: [
       { requestNumber: { contains: q, mode: "insensitive" } },
@@ -69,8 +72,20 @@ serviceRequestsRouter.get("/", canView, async (req, res) => {
     ...(req.query.requestType ? { requestType: String(req.query.requestType) } : {}),
     ...(req.query.category ? { category: String(req.query.category) } : {}),
     ...(req.query.priority ? { priority: String(req.query.priority) } : {}),
-    ...(req.query.status ? { status: String(req.query.status) } : {}),
-    ...(req.query.assignedTo ? { assignedTo: BigInt(String(req.query.assignedTo)) } : {}),
+    ...(scope === "OPEN"
+      ? { status: { in: activeStatuses } }
+      : scope === "OVERDUE"
+        ? { status: { in: activeStatuses }, dueAt: { lt: new Date() } }
+        : scope === "RESOLVED"
+          ? { status: { in: ["RESOLVED", "CLOSED"] } }
+          : req.query.status
+            ? { status: String(req.query.status) }
+            : {}),
+    ...(req.query.assignedTo === "UNASSIGNED"
+      ? { assignedTo: null }
+      : req.query.assignedTo && /^\d+$/.test(String(req.query.assignedTo))
+        ? { assignedTo: BigInt(String(req.query.assignedTo)) }
+        : {}),
     ...(req.query.customerId ? { customerId: BigInt(String(req.query.customerId)) } : {}),
   };
   const [total, data] = await Promise.all([
@@ -80,12 +95,85 @@ serviceRequestsRouter.get("/", canView, async (req, res) => {
   res.json({ data, total, page, take, pages: Math.max(1, Math.ceil(total / take)) });
 });
 
+serviceRequestsRouter.patch("/bulk-assign", canAssign, async (req, res) => {
+  const parsed = z.object({
+    requestIds: z.array(id).min(1, "Select at least one task").max(500),
+    assigneeId: id,
+    comments: z.string().trim().max(1000).optional(),
+  }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message });
+
+  const uniqueIds = [...new Set(parsed.data.requestIds.map(String))].map(BigInt);
+  const [assignee, requests] = await Promise.all([
+    prisma.user.findFirst({
+      where: { userId: parsed.data.assigneeId, status: "ACTIVE", userType: { in: ["STAFF", "SYSTEM"] } },
+      select: { userId: true, firstName: true, lastName: true },
+    }),
+    prisma.serviceRequest.findMany({
+      where: { serviceRequestId: { in: uniqueIds } },
+      select: { serviceRequestId: true, status: true },
+    }),
+  ]);
+  if (!assignee) return res.status(400).json({ error: "Select an active staff user" });
+  if (requests.length !== uniqueIds.length) return res.status(404).json({ error: "One or more selected tasks no longer exist" });
+  if (requests.some((item) => !["OPEN", "ASSIGNED", "IN_PROGRESS", "PENDING_CUSTOMER"].includes(item.status))) {
+    return res.status(400).json({ error: "Resolved, closed or cancelled tasks cannot be assigned" });
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.serviceRequest.updateMany({
+      where: { serviceRequestId: { in: uniqueIds } },
+      data: { assignedTo: assignee.userId },
+    });
+    await tx.serviceRequest.updateMany({
+      where: { serviceRequestId: { in: uniqueIds }, status: "OPEN" },
+      data: { status: "ASSIGNED" },
+    });
+    await tx.serviceRequestEvent.createMany({
+      data: requests.map((item) => ({
+        serviceRequestId: item.serviceRequestId,
+        eventType: "ASSIGNED",
+        oldStatus: item.status,
+        newStatus: item.status === "OPEN" ? "ASSIGNED" : item.status,
+        comments: parsed.data.comments || `Bulk assigned to ${assignee.firstName} ${assignee.lastName}`,
+        performedBy: BigInt(req.user!.userId),
+      })),
+    });
+  });
+
+  res.json({ assigned: uniqueIds.length, assignee });
+});
+
 serviceRequestsRouter.get("/:id", canView, async (req, res) => {
   const parsed = id.safeParse(req.params.id);
   if (!parsed.success) return res.status(400).json({ error: "Invalid request id" });
-  const item = await prisma.serviceRequest.findUnique({ where: { serviceRequestId: parsed.data }, include: { ...requestInclude, events: { include: { performer: { select: { firstName: true, lastName: true, username: true } } }, orderBy: { createdAt: "desc" } } } });
+  const [item, linkedWorkOrders] = await Promise.all([
+    prisma.serviceRequest.findUnique({ where: { serviceRequestId: parsed.data }, include: { ...requestInclude, events: { include: { performer: { select: { firstName: true, lastName: true, username: true } } }, orderBy: { createdAt: "desc" } } } }),
+    prisma.$queryRaw<any[]>`
+      SELECT wo.work_order_id AS "workOrderId", wo.work_order_number AS "workOrderNumber",
+             wo.status, wo.priority, wo.description, wo.scheduled_date AS "scheduledDate",
+             wo.due_date AS "dueDate", wo.created_at AS "createdAt",
+             wt.work_order_type_id AS "workOrderTypeId", wt.type_name AS "typeName",
+             COALESCE(ARRAY(
+               SELECT a.field_officer_id::text
+               FROM aquaflow.work_order_assignments a
+               WHERE a.work_order_id = wo.work_order_id AND a.status IN ('ASSIGNED','ACCEPTED')
+               ORDER BY a.assigned_at
+             ), ARRAY[]::text[]) AS "fieldOfficerIds",
+             NULLIF((
+               SELECT STRING_AGG(TRIM(CONCAT_WS(' ', u.first_name, u.last_name)), ', ' ORDER BY a.assigned_at)
+               FROM aquaflow.work_order_assignments a
+               JOIN aquaflow.field_officers fo ON fo.field_officer_id = a.field_officer_id
+               JOIN aquaflow.users u ON u.user_id = fo.user_id
+               WHERE a.work_order_id = wo.work_order_id AND a.status IN ('ASSIGNED','ACCEPTED')
+             ), '') AS "officerNames"
+      FROM aquaflow.work_orders wo
+      JOIN aquaflow.work_order_types wt ON wt.work_order_type_id = wo.work_order_type_id
+      WHERE wo.service_request_id = ${parsed.data}
+      ORDER BY wo.created_at DESC, wo.work_order_id DESC`,
+  ]);
   if (!item) return res.status(404).json({ error: "Service request not found" });
-  res.json(item);
+  res.json({ ...item, linkedWorkOrders });
 });
 
 const createInput = z.object({
@@ -127,6 +215,13 @@ serviceRequestsRouter.patch("/:id/assign", canAssign, async (req, res) => {
   const current = await prisma.serviceRequest.findUnique({ where: { serviceRequestId: requestId.data } });
   if (!current) return res.status(404).json({ error: "Service request not found" });
   if (["CLOSED", "CANCELLED"].includes(current.status)) return res.status(400).json({ error: "Closed requests cannot be reassigned" });
+  if (parsed.data.assigneeId) {
+    const assignee = await prisma.user.findFirst({
+      where: { userId: parsed.data.assigneeId, status: "ACTIVE", userType: { in: ["STAFF", "SYSTEM"] } },
+      select: { userId: true },
+    });
+    if (!assignee) return res.status(400).json({ error: "Select an active staff user" });
+  }
   const nextStatus = parsed.data.assigneeId ? (current.status === "OPEN" ? "ASSIGNED" : current.status) : "OPEN";
   const updated = await prisma.$transaction(async (tx) => {
     const record = await tx.serviceRequest.update({ where: { serviceRequestId: requestId.data }, data: { assignedTo: parsed.data.assigneeId, status: nextStatus } });
