@@ -810,7 +810,7 @@ billingRouter.get("/bills/approval-queue", async (req, res, next) => {
     const search = String(req.query.search ?? "").trim();
     const pendingPage = Math.max(1, Number(req.query.pendingPage) || 1);
     const processedPage = Math.max(1, Number(req.query.processedPage) || 1);
-    const pageSize = Math.min(100, Math.max(10, Number(req.query.pageSize) || 50));
+    const pageSize = Math.min(1000, Math.max(10, Number(req.query.pageSize) || 1000));
     const scope: Prisma.BillWhereInput = cycleId
       ? { billingCycleId: cycleId }
       : { billingCycle: { billingPeriodGroupId: groupId } };
@@ -826,7 +826,10 @@ billingRouter.get("/bills/approval-queue", async (req, res, next) => {
       ],
     } : {};
     const pendingWhere: Prisma.BillWhereInput = { AND: [scope, searchFilter], status: "PENDING_APPROVAL" };
-    const processedWhere: Prisma.BillWhereInput = { AND: [scope, searchFilter], status: { not: "PENDING_APPROVAL" } };
+    const processedWhere: Prisma.BillWhereInput = {
+      AND: [scope, searchFilter],
+      status: { notIn: ["PENDING_APPROVAL", ...postedBillStatuses] },
+    };
     const customerSelect = {
       customerType: true,
       organizationName: true,
@@ -1211,7 +1214,7 @@ billingRouter.get("/reading-corrections", requireRole("SYSTEM_ADMIN"), async (_r
 });
 
 billingRouter.patch("/bills/decision", requireRole("BILLING_SUPERVISOR", "FINANCE_MANAGER", "SYSTEM_ADMIN"), async (req, res, next) => {
-  const data = parse(z.object({ billIds: z.array(id).min(1).max(10_000), decision: z.enum(["APPROVE", "REJECT", "RETURN"]), comments: z.string().trim().min(3).max(2000) }), req.body, res);
+  const data = parse(z.object({ billIds: z.array(id).min(1).max(10_000), decision: z.enum(["APPROVE", "REJECT", "RETURN"]), comments: z.string().trim().max(2000).optional().default("") }), req.body, res);
   if (!data) return;
   try {
     const bills = await prisma.bill.findMany({ where: { billId: { in: data.billIds } } });
@@ -1224,8 +1227,8 @@ billingRouter.patch("/bills/decision", requireRole("BILLING_SUPERVISOR", "FINANC
     const status = data.decision === "APPROVE" ? "APPROVED" : data.decision === "RETURN" ? "RETURNED" : "REJECTED";
     const decidedAt = new Date();
     await prisma.$transaction(async (tx) => {
-      await tx.bill.updateMany({ where: { billId: { in: data.billIds }, status: "PENDING_APPROVAL" }, data: { status, approvedBy: uid(req), approvedAt: decidedAt, approvalComments: data.comments, updatedAt: decidedAt } });
-      await tx.billingEvent.createMany({ data: bills.map((bill: any) => ({ billingCycleId: bill.billingCycleId, billId: bill.billId, eventType: `BILL_${status}`, previousStatus: bill.status, newStatus: status, details: data.comments, performedBy: uid(req), createdAt: decidedAt })) });
+      await tx.bill.updateMany({ where: { billId: { in: data.billIds }, status: "PENDING_APPROVAL" }, data: { status, approvedBy: uid(req), approvedAt: decidedAt, approvalComments: data.comments || null, updatedAt: decidedAt } });
+      await tx.billingEvent.createMany({ data: bills.map((bill: any) => ({ billingCycleId: bill.billingCycleId, billId: bill.billId, eventType: `BILL_${status}`, previousStatus: bill.status, newStatus: status, details: data.comments || null, performedBy: uid(req), createdAt: decidedAt })) });
     });
     res.json({ updated: bills.length, status });
   } catch (error) { next(error); }

@@ -2389,6 +2389,7 @@ export function BillGeneration() {
   const [loadingOptions, setLoadingOptions] = useState(true);
   const [previewing, setPreviewing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [backfillMode, setBackfillMode] = useState(false);
   const [form, setForm] = useState<Row>({
     billingCycleId: "",
     zoneId: "",
@@ -2427,12 +2428,14 @@ export function BillGeneration() {
             (!initialGroupId
               ? groups.some((group: Row) => billingCycleFitsPeriodGroup(cycle, group))
               : billingCycleFitsPeriodGroup(cycle, initialGroup)) &&
-            ["DRAFT", "OPEN", "PROCESSING", "RETURNED", "POSTED"].includes(cycle.status),
+            ["DRAFT", "OPEN", "PROCESSING", "RETURNED"].includes(cycle.status),
         );
         const open = groupCycles.find((x: Row) =>
           ["DRAFT", "OPEN", "PROCESSING", "RETURNED"].includes(x.status),
         );
-        const requestedFitsGroup = requested && groups.some(
+        const requestedFitsGroup = requested &&
+          ["DRAFT", "OPEN", "PROCESSING", "RETURNED"].includes(requested.status) &&
+          groups.some(
           (group: Row) =>
             (!initialGroupId || String(group.billingPeriodGroupId) === initialGroupId) &&
             billingCycleFitsPeriodGroup(requested, group),
@@ -2491,7 +2494,9 @@ export function BillGeneration() {
   const selectedCycle = cycles.find((cycle) => String(cycle.billingCycleId) === String(form.billingCycleId));
   const availableCycles = cycles.filter(
     (cycle) =>
-      ["DRAFT", "OPEN", "PROCESSING", "RETURNED", "POSTED"].includes(cycle.status) &&
+      (backfillMode
+        ? cycle.status === "POSTED"
+        : ["DRAFT", "OPEN", "PROCESSING", "RETURNED"].includes(cycle.status)) &&
       periodGroups.some((group) => billingCycleFitsPeriodGroup(cycle, group)),
   );
   const selectedGroup = periodGroups.find(
@@ -2519,7 +2524,7 @@ export function BillGeneration() {
     >
       {error && <Notice>{error}</Notice>}
       {message && <Notice tone="green">{message}</Notice>}
-      {selectedCycle?.status === "POSTED" && <Notice tone="blue">This period is already posted. Only accounts without an existing bill are eligible; generated backfill bills will be sent through approval and posting before notification.</Notice>}
+      {backfillMode && selectedCycle?.status === "POSTED" && <Notice tone="blue">This period is already posted. Only accounts without an existing bill are eligible; generated backfill bills will be sent through approval and posting before notification.</Notice>}
       <Card title="Generation filters" className="mb-4">
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
           <Field label="Billing period group">
@@ -2532,7 +2537,7 @@ export function BillGeneration() {
                 const nextGroup = periodGroups.find(
                   (group) => String(group.billingPeriodGroupId) === nextGroupId,
                 );
-                const selectedCycleBelongsToGroup = cycles.some(
+                const selectedCycleBelongsToGroup = availableCycles.some(
                   (cycle) =>
                     String(cycle.billingCycleId) === String(form.billingCycleId) &&
                     (!nextGroupId
@@ -2639,6 +2644,19 @@ export function BillGeneration() {
               {label}
             </label>
           ))}
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={backfillMode}
+              onChange={(event) => {
+                setBackfillMode(event.target.checked);
+                setForm({ ...form, billingCycleId: "" });
+                setPreview(null);
+                setPreviewForm("");
+              }}
+            />
+            Backfill missing bills in posted periods
+          </label>
         </div>
       </Card>
       {(loadingOptions || previewing) && (
@@ -2763,7 +2781,7 @@ export function BillApprovals() {
   const [postingInconsistencyCount, setPostingInconsistencyCount] = useState(0);
   const [pendingPage, setPendingPage] = useState(1);
   const [processedPage, setProcessedPage] = useState(1);
-  const pageSize = 50;
+  const [pageSize, setPageSize] = useState(1000);
   const [selected, setSelected] = useState<string[]>([]);
   const [focus, setFocus] = useState<Row | null>(null);
   const [comments, setComments] = useState("");
@@ -2790,7 +2808,9 @@ export function BillApprovals() {
       groupRows[0];
     const selectedGroupId = String(selectedGroup?.billingPeriodGroupId ?? "");
     const groupCycles = cycleRows.filter(
-      (cycle: Row) => !selectedGroupId || String(cycle.billingPeriodGroupId) === selectedGroupId,
+      (cycle: Row) =>
+        cycle.completionStatus !== "POSTED" &&
+        (!selectedGroupId || String(cycle.billingPeriodGroupId) === selectedGroupId),
     );
     const target = !preferredCycle && preferredGroup
       ? undefined
@@ -2851,10 +2871,10 @@ export function BillApprovals() {
   }, [search]);
   useEffect(() => {
     if (cycleId || groupId) load().catch((e) => setError(e.message));
-  }, [cycleId, groupId, appliedSearch, pendingPage, processedPage]);
+  }, [cycleId, groupId, appliedSearch, pendingPage, processedPage, pageSize]);
   async function decide(decision: "APPROVE" | "REJECT" | "RETURN") {
-    if (!selected.length || comments.trim().length < 3)
-      return setError("Select at least one bill and enter approval comments.");
+    if (!selected.length)
+      return setError("Select at least one bill before making a decision.");
     setActing(decision);
     setError("");
     try {
@@ -2929,17 +2949,15 @@ export function BillApprovals() {
     (sum, bill) => sum + Number(bill.totalAmountDue ?? 0),
     0,
   );
-  const decisionDisabled =
-    Boolean(acting) || comments.trim().length < 3 || !selectedBills.length;
+  const decisionDisabled = Boolean(acting) || !selectedBills.length;
   const commentEditor = (
     <>
       <Field
         label={
           selectedBills.length > 1
-            ? `Shared approval comment for ${selectedBills.length} bills`
-            : "Approval comments"
+            ? `Shared approval comment for ${selectedBills.length} bills (optional)`
+            : "Approval comments (optional)"
         }
-        required
       >
         <textarea
           rows={3}
@@ -2993,8 +3011,8 @@ export function BillApprovals() {
           {selectedBills.length} bills selected
         </h3>
         <p className="mt-1 text-sm text-slate-600">
-          Review the batch below, then enter one comment for the whole
-          selection.
+          Review the batch below, then optionally enter one comment for the
+          whole selection.
         </p>
         <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
           <div>
@@ -3009,7 +3027,7 @@ export function BillApprovals() {
           </div>
         </div>
       </div>
-      <div className="my-3 max-h-52 divide-y overflow-y-auto rounded-lg border">
+      <div className="my-3 divide-y rounded-lg border">
         {selectedBills.map((bill) => (
           <button
             type="button"
@@ -3131,7 +3149,7 @@ export function BillApprovals() {
         </Notice>
       )}
       <Card className="mb-4">
-        <div className="grid gap-4 md:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <Field label="Billing period group">
             <BillingPeriodGroupSelect
               groups={groups}
@@ -3147,7 +3165,9 @@ export function BillApprovals() {
           <Field label="Billing period">
             <CycleSelect
               cycles={cycles.filter(
-                (cycle: Row) => !groupId || String(cycle.billingPeriodGroupId) === groupId,
+                (cycle: Row) =>
+                  cycle.completionStatus !== "POSTED" &&
+                  (!groupId || String(cycle.billingPeriodGroupId) === groupId),
               )}
               value={cycleId}
               onChange={(nextCycleId) => {
@@ -3169,6 +3189,23 @@ export function BillApprovals() {
               placeholder="Bill number, account, or customer name"
               aria-label="Search bills"
             />
+          </Field>
+          <Field label="Page size">
+            <select
+              className={INPUT}
+              value={pageSize}
+              onChange={(event) => {
+                setPageSize(Number(event.target.value));
+                setPendingPage(1);
+                setProcessedPage(1);
+              }}
+              aria-label="Bills per page"
+            >
+              <option value={50}>50 per page</option>
+              <option value={100}>100 per page</option>
+              <option value={500}>500 per page</option>
+              <option value={1000}>1,000 per page</option>
+            </select>
           </Field>
         </div>
       </Card>
@@ -3193,6 +3230,7 @@ export function BillApprovals() {
                       }
                     />
                   </th>
+                  <th className={TH}>S/N</th>
                   <th className={TH}>Bill / Customer</th>
                   <th className={TH}>Units</th>
                   <th className={TH}>Amount</th>
@@ -3203,13 +3241,13 @@ export function BillApprovals() {
               <tbody>
                 {loading && (
                   <tr>
-                    <td colSpan={6} className="p-8">
+                    <td colSpan={7} className="p-8">
                       <Spinner />
                     </td>
                   </tr>
                 )}
                 {!loading &&
-                  bills.map((bill) => (
+                  bills.map((bill, index) => (
                     <tr key={bill.billId} className="border-t">
                       <td className={TD}>
                         <input
@@ -3225,6 +3263,9 @@ export function BillApprovals() {
                             )
                           }
                         />
+                      </td>
+                      <td className={`${TD} font-semibold text-slate-500`}>
+                        {(pendingPage - 1) * pageSize + index + 1}
                       </td>
                       <td className={TD}>
                         <strong>{bill.billNumber}</strong>
@@ -3255,7 +3296,7 @@ export function BillApprovals() {
                   ))}
                 {!loading && !bills.length && (
                   <tr>
-                    <td colSpan={6} className="p-8 text-center text-slate-400">
+                    <td colSpan={7} className="p-8 text-center text-slate-400">
                       No bills await approval.
                     </td>
                   </tr>
@@ -3281,6 +3322,7 @@ export function BillApprovals() {
           <table className="w-full min-w-[760px]">
             <thead>
               <tr>
+                <th className={TH}>S/N</th>
                 <th className={TH}>Bill / Customer</th>
                 <th className={TH}>Amount</th>
                 <th className={TH}>Approved by</th>
@@ -3290,8 +3332,11 @@ export function BillApprovals() {
               </tr>
             </thead>
             <tbody>
-              {processed.map((bill) => (
+              {processed.map((bill, index) => (
                 <tr key={bill.billId} className="border-t">
+                  <td className={`${TD} font-semibold text-slate-500`}>
+                    {(processedPage - 1) * pageSize + index + 1}
+                  </td>
                   <td className={TD}>
                     <strong>{bill.billNumber}</strong>
                     <div className="text-xs">
@@ -3320,7 +3365,7 @@ export function BillApprovals() {
               ))}
               {!processed.length && (
                 <tr>
-                  <td colSpan={6} className="p-8 text-center text-slate-400">
+                  <td colSpan={7} className="p-8 text-center text-slate-400">
                     Approved, returned, rejected and posted bills will remain
                     visible here.
                   </td>
