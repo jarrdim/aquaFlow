@@ -3293,7 +3293,12 @@ export function BillApprovals() {
             />
           )}
         </Card>
-        <Card title="Approval decision" className="self-start">{decisionContent}</Card>
+        <Card
+          title="Approval decision"
+          className="self-start xl:sticky xl:top-4"
+        >
+          {decisionContent}
+        </Card>
       </div>
       <Card title={`Approved and processed bills (${processedTotal.toLocaleString()})`} className="mt-4">
         <div className="overflow-x-auto">
