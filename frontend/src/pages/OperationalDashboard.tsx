@@ -1,4 +1,4 @@
-import { ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../lib/api";
 import { SweetAlertToast } from "../components/SweetAlertToast";
@@ -74,8 +74,8 @@ function Kpi({ label, value, detail, tone, icon }: {
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</div>
-          <div className="mt-2 truncate text-2xl font-bold text-slate-900">{value}</div>
-          <div className="mt-1 truncate text-xs text-slate-500">{detail}</div>
+          <div className="mt-2 whitespace-nowrap text-2xl font-bold leading-tight text-slate-900 2xl:text-lg">{value}</div>
+          <div className="mt-1 whitespace-nowrap text-xs text-slate-500 2xl:text-[11px]">{detail}</div>
         </div>
         <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${tone}`}>{icon}</span>
       </div>
@@ -169,6 +169,110 @@ function ColumnChart({ items }: { items: ChartItem[] }) {
       ))}
       {!items.length && <p className="m-auto text-sm text-slate-400">No collection channel data.</p>}
     </div>
+  );
+}
+
+function CollectionTrend({ rows }: { rows: Row[] }) {
+  const chartRef = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(1000);
+  const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const height = 280;
+  const left = width < 520 ? 52 : 70;
+  const right = 22;
+  const top = 22;
+  const bottom = 42;
+
+  useEffect(() => {
+    const element = chartRef.current;
+    if (!element) return;
+    const updateWidth = () => setWidth(Math.max(300, Math.floor(element.clientWidth)));
+    updateWidth();
+    const observer = new ResizeObserver(updateWidth);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  const maximumValue = Math.max(1, ...rows.map((row) => number(row.amount)));
+  const magnitude = 10 ** Math.floor(Math.log10(maximumValue));
+  const step = magnitude / (maximumValue / magnitude >= 5 ? 1 : 2);
+  const maximum = Math.ceil(maximumValue / step) * step;
+  const plotHeight = height - top - bottom;
+  const plotWidth = width - left - right;
+  const points: Array<Row & { x: number; y: number }> = rows.map((row, index) => ({
+    ...row,
+    x: rows.length === 1 ? left + plotWidth / 2 : left + (index / (rows.length - 1)) * plotWidth,
+    y: top + (1 - number(row.amount) / maximum) * plotHeight,
+  }));
+  const polyline = points.map((point) => `${point.x},${point.y}`).join(" ");
+  const area = points.length
+    ? `M ${points[0].x} ${height - bottom} L ${points.map((point) => `${point.x} ${point.y}`).join(" L ")} L ${points[points.length - 1].x} ${height - bottom} Z`
+    : "";
+  const total = rows.reduce((sum, row) => sum + number(row.amount), 0);
+  const payments = rows.reduce((sum, row) => sum + number(row.count), 0);
+  const labelStride = width < 600 ? Math.max(1, Math.ceil(rows.length / 7)) : width < 1000 ? 2 : 1;
+  const active = activeIndex === null ? null : points[activeIndex];
+  const compactMoney = (value: number) => new Intl.NumberFormat("en-KE", {
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(value);
+  const dayLabel = (value: unknown) => new Date(`${String(value)}T00:00:00Z`).toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    timeZone: "UTC",
+  });
+
+  return (
+    <Card
+      title="Collection trend"
+      subtitle="Posted collections for every calendar day in the current month"
+      action={<Link to="/payments/reports/daily" className="text-xs font-semibold text-aqua-700">Collection report →</Link>}
+    >
+      <div className="mb-4 flex flex-wrap items-center gap-x-8 gap-y-2">
+        <div><span className="text-xs text-slate-500">Month total</span><strong className="ml-2 text-lg text-slate-900">{money(total)}</strong></div>
+        <div><span className="text-xs text-slate-500">Posted payments</span><strong className="ml-2 text-lg text-slate-900">{payments.toLocaleString()}</strong></div>
+        {active && (
+          <div className="ml-auto rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+            <strong>{dayLabel(active.date)}</strong>: {money(active.amount)} · {number(active.count).toLocaleString()} payment{number(active.count) === 1 ? "" : "s"}
+          </div>
+        )}
+      </div>
+      <div ref={chartRef} className="w-full overflow-hidden rounded-xl border border-emerald-100 bg-gradient-to-b from-emerald-50/70 to-white">
+        {points.length ? (
+          <svg viewBox={`0 0 ${width} ${height}`} className="block h-[280px] w-full" role="img" aria-label="Daily collection trend for all days in the current month" onMouseLeave={() => setActiveIndex(null)}>
+            <defs>
+              <linearGradient id="dashboard-collection-area" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#10b981" stopOpacity="0.28" />
+                <stop offset="100%" stopColor="#10b981" stopOpacity="0.02" />
+              </linearGradient>
+            </defs>
+            {[1, 0.75, 0.5, 0.25, 0].map((ratio) => {
+              const y = top + (1 - ratio) * plotHeight;
+              return (
+                <g key={ratio}>
+                  <line x1={left} x2={width - right} y1={y} y2={y} stroke="#cbd5e1" strokeDasharray={ratio ? "4 6" : undefined} opacity="0.65" />
+                  <text x={left - 9} y={y + 4} textAnchor="end" className="fill-slate-400 text-[10px]">{ratio ? compactMoney(maximum * ratio) : "0"}</text>
+                </g>
+              );
+            })}
+            <path d={area} fill="url(#dashboard-collection-area)" />
+            {points.length > 1 && <polyline points={polyline} fill="none" stroke="#059669" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />}
+            {points.map((point, index) => {
+              const start = index === 0 ? left : (points[index - 1].x + point.x) / 2;
+              const end = index === points.length - 1 ? width - right : (point.x + points[index + 1].x) / 2;
+              return (
+                <g key={String(point.date)}>
+                  <rect x={start} y={top} width={Math.max(1, end - start)} height={plotHeight} fill="transparent" className="cursor-crosshair" onMouseEnter={() => setActiveIndex(index)} />
+                  <circle cx={point.x} cy={point.y} r={activeIndex === index ? 6 : 3.5} fill="white" stroke="#059669" strokeWidth={activeIndex === index ? 3 : 2} className="pointer-events-none" />
+                  {(index % labelStride === 0 || index === points.length - 1) && <text x={point.x} y={height - 15} textAnchor="middle" className="fill-slate-500 text-[10px]">{dayLabel(point.date)}</text>}
+                </g>
+              );
+            })}
+          </svg>
+        ) : (
+          <div className="grid h-[280px] place-items-center text-sm text-slate-400">No collection data is available.</div>
+        )}
+      </div>
+    </Card>
   );
 }
 
@@ -285,6 +389,10 @@ export default function OperationalDashboard() {
             <Kpi label="Current billing" value={money(data.billing?.totalBilling)} detail={`${compact(generated)} bills generated`} tone="bg-emerald-50 text-emerald-700" icon={<MiniIcon path="M6 2h9l4 4v16H6zM14 2v5h5M9 12h7m-7 4h7" />} />
             <Kpi label="Collections" value={money(data.payments?.total)} detail={`${compact(data.payments?.payments)} posted payments this month`} tone="bg-amber-50 text-amber-700" icon={<MiniIcon path="M3 6h18v13H3zM3 10h18m-5 5h2" />} />
             <Kpi label="Total arrears" value={money(data.arrears?.totalArrears)} detail={`${compact(data.arrears?.customersInArrears)} customer accounts`} tone="bg-red-50 text-red-700" icon={<MiniIcon path="M12 8v5m0 4h.01M10.3 3.7 2.2 18a2 2 0 0 0 1.8 3h16a2 2 0 0 0 1.8-3L13.7 3.7a2 2 0 0 0-3.4 0Z" />} />
+          </div>
+
+          <div className="mt-4">
+            <CollectionTrend rows={data.payments?.dailyCollections ?? []} />
           </div>
 
           <div className="mt-4 grid gap-4 xl:grid-cols-2">

@@ -2248,11 +2248,10 @@ paymentsRouter.get("/dashboard/summary", revenueDashboardViewer, async (req, res
       receipts,
       dailyCollections: (() => {
         const rows = [];
-        const firstCollectionDate = [...dailyMap.keys()].sort()[0];
-        const chartStart = firstCollectionDate
-          ? day(firstCollectionDate)
-          : from;
-        for (const cursor = new Date(chartStart); cursor <= finalDay; cursor.setUTCDate(cursor.getUTCDate() + 1)) {
+        // Keep every calendar day in the requested period. Zero-collection
+        // days are meaningful in a trend and must not disappear before the
+        // first payment or between active days.
+        for (const cursor = new Date(from); cursor <= finalDay; cursor.setUTCDate(cursor.getUTCDate() + 1)) {
           const date = cursor.toISOString().slice(0, 10);
           rows.push({ date, ...(dailyMap.get(date) ?? { amount: 0, count: 0 }) });
         }
