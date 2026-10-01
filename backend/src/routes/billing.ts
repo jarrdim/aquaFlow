@@ -70,6 +70,10 @@ function httpErrorBody(error: any) {
   };
 }
 async function ensureEarlierReadingsAreBilled(billingCycleId: bigint, accountIds: bigint[]) {
+  // A cancelled bill is an intentional terminal outcome. It must not be
+  // regenerated or sent back through approval, and it satisfies the older-
+  // period sequencing guard just like a posted bill.
+  const resolvedOlderBillStatuses = [...postedBillStatuses, "CANCELLED"];
   const currentPeriod = await prisma.billingCycle.findUnique({
     where: { billingCycleId },
     include: { readingCycles: { orderBy: { endDate: "desc" }, take: 1 } },
@@ -104,19 +108,19 @@ async function ensureEarlierReadingsAreBilled(billingCycleId: bigint, accountIds
   const linkedBillingCycleIds = Array.from(new Set(earlierReadings
     .map((reading) => reading.cycle?.billingCycleId)
     .filter((value): value is bigint => value != null)));
-  const postedBills = linkedBillingCycleIds.length ? await prisma.bill.findMany({
+  const resolvedBills = linkedBillingCycleIds.length ? await prisma.bill.findMany({
     where: {
       accountId: { in: accountIds },
       billingCycleId: { in: linkedBillingCycleIds },
-      status: { in: [...postedBillStatuses] },
+      status: { in: resolvedOlderBillStatuses },
     },
     select: { accountId: true, billingCycleId: true },
   }) : [];
-  const postedKeys = new Set(postedBills.map((bill) => `${bill.accountId}:${bill.billingCycleId}`));
+  const resolvedKeys = new Set(resolvedBills.map((bill) => `${bill.accountId}:${bill.billingCycleId}`));
   const blockers = earlierReadings.filter((reading) =>
     readingRequiresBill(reading) &&
-    !reading.bills.some((bill) => postedBillStatuses.includes(bill.status as any)) &&
-    (!reading.cycle?.billingCycleId || !postedKeys.has(`${reading.accountId}:${reading.cycle.billingCycleId}`)),
+    !reading.bills.some((bill) => resolvedOlderBillStatuses.includes(bill.status as any)) &&
+    (!reading.cycle?.billingCycleId || !resolvedKeys.has(`${reading.accountId}:${reading.cycle.billingCycleId}`)),
   );
   if (!blockers.length) return;
 
