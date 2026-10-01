@@ -271,6 +271,16 @@ function CollectionTrend({ rows }: { rows: Row[] }) {
                 <g key={String(point.date)}>
                   <rect x={start} y={top} width={Math.max(1, end - start)} height={plotHeight} fill="transparent" className="cursor-crosshair" onMouseEnter={() => setActiveIndex(index)} />
                   <circle cx={point.x} cy={point.y} r={activeIndex === index ? 6 : 3.5} fill="white" stroke="#059669" strokeWidth={activeIndex === index ? 3 : 2} className="pointer-events-none" />
+                  {(index % 2 === 0 || index === points.length - 1) && (
+                    <text
+                      x={point.x}
+                      y={Math.max(top + 10, point.y - 10)}
+                      textAnchor="middle"
+                      className="pointer-events-none fill-emerald-800 text-[9px] font-semibold"
+                    >
+                      {compactMoney(number(point.amount))}
+                    </text>
+                  )}
                   {(index % labelStride === 0 || index === points.length - 1) && <text x={point.x} y={height - 15} textAnchor="middle" className="fill-slate-500 text-[10px]">{dayLabel(point.date)}</text>}
                 </g>
               );
