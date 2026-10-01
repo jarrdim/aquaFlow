@@ -62,6 +62,13 @@ function batchesOf<T>(values: T[], size: number): T[][] {
   }
   return batches;
 }
+function httpErrorBody(error: any) {
+  return {
+    error: error.message,
+    ...(error.code ? { code: error.code } : {}),
+    ...(error.details ? { details: error.details } : {}),
+  };
+}
 async function ensureEarlierReadingsAreBilled(billingCycleId: bigint, accountIds: bigint[]) {
   const currentPeriod = await prisma.billingCycle.findUnique({
     where: { billingCycleId },
@@ -80,9 +87,18 @@ async function ensureEarlierReadingsAreBilled(billingCycleId: bigint, accountIds
       readingId: true,
       accountId: true,
       syncId: true,
-      cycle: { select: { readingCycleId: true, cycleCode: true, billingCycleId: true } },
+      cycle: {
+        select: {
+          readingCycleId: true,
+          billingPeriodGroupId: true,
+          cycleCode: true,
+          endDate: true,
+          billingCycleId: true,
+          billingCycle: { select: { status: true } },
+        },
+      },
       account: { select: { accountNumber: true } },
-      bills: { where: { status: { in: [...postedBillStatuses] } }, select: { billId: true } },
+      bills: { select: { billId: true, status: true } },
     },
   });
   const linkedBillingCycleIds = Array.from(new Set(earlierReadings
@@ -99,17 +115,40 @@ async function ensureEarlierReadingsAreBilled(billingCycleId: bigint, accountIds
   const postedKeys = new Set(postedBills.map((bill) => `${bill.accountId}:${bill.billingCycleId}`));
   const blockers = earlierReadings.filter((reading) =>
     readingRequiresBill(reading) &&
-    !reading.bills.length &&
+    !reading.bills.some((bill) => postedBillStatuses.includes(bill.status as any)) &&
     (!reading.cycle?.billingCycleId || !postedKeys.has(`${reading.accountId}:${reading.cycle.billingCycleId}`)),
   );
   if (!blockers.length) return;
+
+  blockers.sort((left, right) =>
+    (left.cycle?.endDate?.getTime() ?? 0) - (right.cycle?.endDate?.getTime() ?? 0),
+  );
+  const earliestCycleId = blockers[0].cycle?.readingCycleId;
+  const earliestCycleBlockers = blockers.filter(
+    (reading) => reading.cycle?.readingCycleId === earliestCycleId,
+  );
+  const targetCycle = earliestCycleBlockers[0].cycle;
+  const missingBillCount = earliestCycleBlockers.filter((reading) => !reading.bills.length).length;
 
   const examples = Array.from(new Set(blockers.map((reading) =>
     `${reading.account?.accountNumber ?? `account ${reading.accountId}`} (${reading.cycle?.cycleCode ?? "older cycle"})`,
   ))).slice(0, 5);
   throw Object.assign(new Error(
     `Posting blocked: older billable approved readings are still unbilled for ${examples.join(", ")}${blockers.length > examples.length ? " and others" : ""}. Post the older bills first.`,
-  ), { status: 409 });
+  ), {
+    status: 409,
+    code: "OLDER_UNBILLED_READINGS",
+    details: {
+      billingCycleId: targetCycle?.billingCycleId?.toString() ?? null,
+      billingPeriodGroupId: targetCycle?.billingPeriodGroupId?.toString() ?? null,
+      readingCycleId: targetCycle?.readingCycleId?.toString() ?? null,
+      cycleCode: targetCycle?.cycleCode ?? null,
+      billingCycleStatus: targetCycle?.billingCycle?.status ?? null,
+      resolution: missingBillCount ? "GENERATE" : "APPROVE_OR_POST",
+      blockerCount: blockers.length,
+      affectedPeriodCount: new Set(blockers.map((reading) => reading.cycle?.readingCycleId.toString())).size,
+    },
+  });
 }
 function smsDate(value: Date) {
   // Keep customer messages unambiguous across servers and SMS providers.
@@ -1291,7 +1330,7 @@ billingRouter.post("/cycles/:id/post", requireRole("FINANCE_MANAGER", "SYSTEM_AD
     }, { maxWait: 10_000, timeout: 120_000 });
     res.json({ posted: approved.length });
   } catch (error: any) {
-    if (error.status) return res.status(error.status).json({ error: error.message });
+    if (error.status) return res.status(error.status).json(httpErrorBody(error));
     next(error);
   }
 });
@@ -1365,7 +1404,7 @@ billingRouter.post("/bills/post", requireRole("FINANCE_MANAGER", "SYSTEM_ADMIN")
     }, { maxWait: 10_000, timeout: 30_000 });
     res.json({ posted: bills.length, billingCycleId: cycleId });
   } catch (error: any) {
-    if (error.status) return res.status(error.status).json({ error: error.message });
+    if (error.status) return res.status(error.status).json(httpErrorBody(error));
     next(error);
   }
 });

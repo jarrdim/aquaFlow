@@ -2376,6 +2376,7 @@ export function BillGeneration() {
   const [searchParams] = useSearchParams();
   const requestedCycleId = searchParams.get("billingCycleId") ?? "";
   const requestedGroupId = searchParams.get("billingPeriodGroupId") ?? "";
+  const requestedBackfill = searchParams.get("backfill") === "1";
   const [periodGroups, setPeriodGroups] = useState<Row[]>([]);
   const [groupId, setGroupId] = useState(requestedGroupId);
   const [cycles, setCycles] = useState<Row[]>([]);
@@ -2389,7 +2390,7 @@ export function BillGeneration() {
   const [loadingOptions, setLoadingOptions] = useState(true);
   const [previewing, setPreviewing] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [backfillMode, setBackfillMode] = useState(false);
+  const [backfillMode, setBackfillMode] = useState(requestedBackfill);
   const [form, setForm] = useState<Row>({
     billingCycleId: "",
     zoneId: "",
@@ -2423,18 +2424,21 @@ export function BillGeneration() {
         const initialGroup = groups.find(
           (group: Row) => String(group.billingPeriodGroupId) === initialGroupId,
         );
+        const allowedStatuses = requestedBackfill
+          ? ["POSTED"]
+          : ["DRAFT", "OPEN", "PROCESSING", "RETURNED"];
         const groupCycles = c.filter(
           (cycle: Row) =>
             (!initialGroupId
               ? groups.some((group: Row) => billingCycleFitsPeriodGroup(cycle, group))
               : billingCycleFitsPeriodGroup(cycle, initialGroup)) &&
-            ["DRAFT", "OPEN", "PROCESSING", "RETURNED"].includes(cycle.status),
+            allowedStatuses.includes(cycle.status),
         );
         const open = groupCycles.find((x: Row) =>
           ["DRAFT", "OPEN", "PROCESSING", "RETURNED"].includes(x.status),
         );
         const requestedFitsGroup = requested &&
-          ["DRAFT", "OPEN", "PROCESSING", "RETURNED"].includes(requested.status) &&
+          allowedStatuses.includes(requested.status) &&
           groups.some(
           (group: Row) =>
             (!initialGroupId || String(group.billingPeriodGroupId) === initialGroupId) &&
@@ -2452,7 +2456,7 @@ export function BillGeneration() {
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoadingOptions(false));
-  }, [requestedCycleId, requestedGroupId]);
+  }, [requestedCycleId, requestedGroupId, requestedBackfill]);
   async function runPreview() {
     if (!form.billingCycleId) return;
     setPreviewing(true);
@@ -2767,6 +2771,7 @@ export function BillGeneration() {
 
 export function BillApprovals() {
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   const [groups, setGroups] = useState<Row[]>([]);
   const [groupId, setGroupId] = useState(searchParams.get("billingPeriodGroupId") ?? "");
   const [cycles, setCycles] = useState<Row[]>([]);
@@ -2930,6 +2935,42 @@ export function BillApprovals() {
         refreshCycles(cycleId, groupId),
       ]);
     } catch (e: any) {
+      if (e.code === "OLDER_UNBILLED_READINGS" && e.details) {
+        const details = e.details as Row;
+        const billingCycleId = String(details.billingCycleId ?? "");
+        const billingPeriodGroupId = String(details.billingPeriodGroupId ?? "");
+        const shouldGenerate = details.resolution === "GENERATE";
+        const query = new URLSearchParams();
+        if (billingCycleId) query.set("billingCycleId", billingCycleId);
+        if (billingPeriodGroupId) query.set("billingPeriodGroupId", billingPeriodGroupId);
+        if (shouldGenerate && details.billingCycleStatus === "POSTED") query.set("backfill", "1");
+        const destination = billingCycleId
+          ? `${shouldGenerate ? "/billing/generate" : "/billing/approvals"}?${query.toString()}`
+          : `/billing/periods${billingPeriodGroupId ? `?billingPeriodGroupId=${encodeURIComponent(billingPeriodGroupId)}` : ""}`;
+        const periodCount = Number(details.affectedPeriodCount ?? 1);
+        const result = await Swal.fire({
+          icon: "error",
+          title: "Older billing must be completed first",
+          text: e.message,
+          showCancelButton: true,
+          confirmButtonText: shouldGenerate ? "Open older billing period" : "Open older bills",
+          cancelButtonText: "Stay here",
+          confirmButtonColor: "#0284c7",
+          footer: periodCount > 1
+            ? `${periodCount} older periods need attention. Start with ${details.cycleCode ?? "the earliest period"}.`
+            : undefined,
+        });
+        if (result.isConfirmed) {
+          // Navigating between two approval URLs keeps this component mounted,
+          // so update its filters as well as the address bar.
+          if (!shouldGenerate && billingCycleId) {
+            if (billingPeriodGroupId) setGroupId(billingPeriodGroupId);
+            setCycleId(billingCycleId);
+          }
+          navigate(destination);
+        }
+        return;
+      }
       setError(e.message);
     } finally {
       setPosting(false);

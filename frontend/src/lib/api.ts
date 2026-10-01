@@ -142,11 +142,15 @@ async function request(path: string, options: RequestOptions = {}) {
         err.fieldErrors = body.error.fieldErrors ?? {};
         throw err;
       }
-      throw new Error(
+      const err: any = new Error(
         typeof body.error === "string"
           ? body.error
           : JSON.stringify(body.error),
       );
+      err.status = res.status;
+      if (body.code) err.code = body.code;
+      if (body.details) err.details = body.details;
+      throw err;
     }
     const plainResponse = responseText
       .replace(/<script[\s\S]*?<\/script>/gi, " ")
