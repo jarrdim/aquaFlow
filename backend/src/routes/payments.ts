@@ -2173,14 +2173,21 @@ paymentsRouter.get("/dashboard/summary", revenueDashboardViewer, async (req, res
       : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
     const to = new Date(finalDay);
     to.setUTCHours(23, 59, 59, 999);
-    const paymentWhere = { paymentDate: { gte: from, lte: to } };
-    const [payments, pendingReversals, receipts, recentPayments] = await Promise.all([
+    const paymentWhere = { valueDate: { gte: from, lte: to } };
+    const customRange = Boolean(req.query.from || req.query.to);
+    const trendFrom = new Date(from);
+    const trendEnd = customRange
+      ? new Date(finalDay)
+      : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0));
+    const trendWhere = { valueDate: { gte: trendFrom, lte: to }, paymentStatus: "POSTED" };
+    const [payments, pendingReversals, receipts, recentPayments, trendPayments] = await Promise.all([
       prisma.payment.findMany({
         where: paymentWhere,
         select: {
           paymentId: true,
           amount: true,
           paymentDate: true,
+          valueDate: true,
           paymentStatus: true,
           matchingStatus: true,
           remarks: true,
@@ -2196,6 +2203,11 @@ paymentsRouter.get("/dashboard/summary", revenueDashboardViewer, async (req, res
         include: paymentInclude,
         orderBy: { paymentDate: "desc" },
         take: 10,
+      }),
+      prisma.payment.findMany({
+        where: trendWhere,
+        select: { amount: true, valueDate: true },
+        orderBy: { valueDate: "asc" },
       }),
     ]);
     const valid = payments.filter((p: any) => p.paymentStatus === "POSTED");
@@ -2225,8 +2237,8 @@ paymentsRouter.get("/dashboard/summary", revenueDashboardViewer, async (req, res
       },
     );
     const dailyMap = new Map<string, { amount: number; count: number }>();
-    valid.forEach((p: any) => {
-      const key = new Date(p.paymentDate).toISOString().slice(0, 10);
+    trendPayments.forEach((p: any) => {
+      const key = new Date(p.valueDate).toISOString().slice(0, 10);
       const current = dailyMap.get(key) ?? { amount: 0, count: 0 };
       dailyMap.set(key, {
         amount: round(current.amount + Number(p.amount)),
@@ -2251,7 +2263,7 @@ paymentsRouter.get("/dashboard/summary", revenueDashboardViewer, async (req, res
         // Keep every calendar day in the requested period. Zero-collection
         // days are meaningful in a trend and must not disappear before the
         // first payment or between active days.
-        for (const cursor = new Date(from); cursor <= finalDay; cursor.setUTCDate(cursor.getUTCDate() + 1)) {
+        for (const cursor = new Date(trendFrom); cursor <= trendEnd; cursor.setUTCDate(cursor.getUTCDate() + 1)) {
           const date = cursor.toISOString().slice(0, 10);
           rows.push({ date, ...(dailyMap.get(date) ?? { amount: 0, count: 0 }) });
         }

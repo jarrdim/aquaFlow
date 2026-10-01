@@ -224,7 +224,7 @@ function CollectionTrend({ rows }: { rows: Row[] }) {
   return (
     <Card
       title="Collection trend"
-      subtitle="Posted collections for every calendar day in the current month"
+      subtitle="All posted income by value date for every day of the current month"
       action={<Link to="/payments/reports/daily" className="text-xs font-semibold text-aqua-700">Collection report →</Link>}
     >
       <div className="mb-4 flex flex-wrap items-center gap-x-8 gap-y-2">
