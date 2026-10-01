@@ -3011,8 +3011,8 @@ export function BillApprovals() {
           {selectedBills.length} bills selected
         </h3>
         <p className="mt-1 text-sm text-slate-600">
-          Review the batch below, then optionally enter one comment for the
-          whole selection.
+          Review the totals, then optionally enter one comment for the whole
+          selection.
         </p>
         <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
           <div>
@@ -3026,28 +3026,6 @@ export function BillApprovals() {
             <strong className="block">{money(selectedAmount)}</strong>
           </div>
         </div>
-      </div>
-      <div className="my-3 divide-y rounded-lg border">
-        {selectedBills.map((bill) => (
-          <button
-            type="button"
-            key={bill.billId}
-            className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm hover:bg-slate-50"
-            onClick={() => setFocus(bill)}
-          >
-            <span>
-              <strong className="block text-slate-800">
-                {bill.billNumber}
-              </strong>
-              <span className="text-xs text-slate-500">
-                {bill.customerName} · {bill.account.accountNumber}
-              </span>
-            </span>
-            <strong className="whitespace-nowrap text-slate-700">
-              {money(bill.totalAmountDue)}
-            </strong>
-          </button>
-        ))}
       </div>
       {commentEditor}
       {decisionControls}
@@ -3315,7 +3293,7 @@ export function BillApprovals() {
             />
           )}
         </Card>
-        <Card title="Approval decision">{decisionContent}</Card>
+        <Card title="Approval decision" className="self-start">{decisionContent}</Card>
       </div>
       <Card title={`Approved and processed bills (${processedTotal.toLocaleString()})`} className="mt-4">
         <div className="overflow-x-auto">
