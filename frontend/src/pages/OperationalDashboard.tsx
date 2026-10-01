@@ -220,11 +220,14 @@ function CollectionTrend({ rows }: { rows: Row[] }) {
     month: "short",
     timeZone: "UTC",
   });
+  const periodLabel = rows.length
+    ? `${dayLabel(rows[0].date)}–${dayLabel(rows[rows.length - 1].date)}`
+    : "the selected period";
 
   return (
     <Card
       title="Collection trend"
-      subtitle="All posted income by value date for every day of the current month"
+      subtitle={`All posted income by value date for every day from ${periodLabel}`}
       action={<Link to="/payments/reports/daily" className="text-xs font-semibold text-aqua-700">Collection report →</Link>}
     >
       <div className="mb-4 flex flex-wrap items-center gap-x-8 gap-y-2">

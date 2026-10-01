@@ -2175,10 +2175,10 @@ paymentsRouter.get("/dashboard/summary", revenueDashboardViewer, async (req, res
     to.setUTCHours(23, 59, 59, 999);
     const paymentWhere = { valueDate: { gte: from, lte: to } };
     const customRange = Boolean(req.query.from || req.query.to);
-    const trendFrom = new Date(from);
-    const trendEnd = customRange
-      ? new Date(finalDay)
-      : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0));
+    const trendFrom = customRange
+      ? new Date(from)
+      : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
+    const trendEnd = new Date(finalDay);
     const trendWhere = { valueDate: { gte: trendFrom, lte: to }, paymentStatus: "POSTED" };
     const [payments, pendingReversals, receipts, recentPayments, trendPayments] = await Promise.all([
       prisma.payment.findMany({
