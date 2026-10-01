@@ -4,6 +4,12 @@ import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { requireAuth, requireRoleOrPermission, requireScopedPermission, SCOPED_STAFF_ROLES } from "../middleware/auth";
+import {
+  buildCustomerProfileChanges,
+  compareCustomerActivityNewestFirst,
+  customerActivityPagination,
+  normalizeCustomerActivity,
+} from "../lib/customerActivity";
 
 export const customersRouter = Router();
 customersRouter.use(requireAuth);
@@ -178,152 +184,226 @@ customersRouter.get("/:id", customerViewAccess, async (req, res) => {
   });
 });
 
-customersRouter.get("/:id/activity", customerViewAccess, async (req, res) => {
-  if (!/^\d+$/.test(req.params.id)) return res.status(400).json({ error: "Invalid customer id" });
-  const customerId = BigInt(req.params.id);
-  const exists = await prisma.customer.findUnique({
-    where: { customerId },
-    select: { customerId: true },
-  });
-  if (!exists) return res.status(404).json({ error: "Customer not found" });
+function customerActivityUnion(customerId: bigint) {
+  return Prisma.sql`
+    SELECT
+      'customer-' || c.customer_id::text AS id,
+      'CUSTOMER'::text AS "group",
+      'CUSTOMER_REGISTERED'::text AS "activityType",
+      c.customer_number::text AS reference,
+      c.status::text AS status,
+      'Customer profile registered'::text AS details,
+      NULL::text AS reason,
+      NULLIF(CONCAT_WS(' ', u.first_name, u.last_name), '')::text AS actor,
+      c.created_at AS "occurredAt",
+      NULL::jsonb AS data
+    FROM aquaflow.customers c
+    LEFT JOIN aquaflow.users u ON u.user_id = c.created_by
+    WHERE c.customer_id = ${customerId}
 
-  type ActivityRow = {
-    id: string;
-    group: string;
-    activityType: string;
-    reference: string | null;
-    status: string | null;
-    details: string | null;
-    reason: string | null;
-    actor: string | null;
-    occurredAt: Date;
-  };
+    UNION ALL
+    SELECT
+      'customer-change-' || cpc.customer_profile_change_id::text,
+      'CUSTOMER', cpc.action, c.customer_number, c.status,
+      'Customer profile updated', NULL,
+      NULLIF(CONCAT_WS(' ', u.first_name, u.last_name), ''), cpc.created_at,
+      jsonb_build_object('kind', 'PROFILE_CHANGE', 'source', cpc.source, 'changes', cpc.changes)
+    FROM aquaflow.customer_profile_changes cpc
+    JOIN aquaflow.customers c ON c.customer_id = cpc.customer_id
+    LEFT JOIN aquaflow.users u ON u.user_id = cpc.changed_by
+    WHERE cpc.customer_id = ${customerId}
 
-  const activities = await prisma.$queryRaw<ActivityRow[]>(Prisma.sql`
-    WITH customer_accounts AS (
-      SELECT account_id FROM aquaflow.customer_accounts WHERE customer_id = ${customerId}
+    UNION ALL
+    SELECT
+      'notification-' || n.notification_id::text,
+      'NOTIFICATION', n.notification_type, COALESCE(ca.account_number, n.notification_id::text),
+      n.delivery_status, NULL, NULL,
+      NULLIF(CONCAT_WS(' ', u.first_name, u.last_name), ''), n.created_at,
+      jsonb_build_object(
+        'kind', 'NOTIFICATION',
+        'notificationType', n.notification_type,
+        'channel', n.channel,
+        'recipient', n.recipient,
+        'deliveryStatus', n.delivery_status,
+        'createdAt', n.created_at,
+        'sentAt', n.sent_at,
+        'accountNumber', ca.account_number,
+        'messageBody', n.message_body,
+        'isResend', CASE WHEN lower(COALESCE(n.metadata->>'resend', 'false')) = 'true' THEN true ELSE false END,
+        'originalNotificationId', n.metadata->>'resentFromNotificationId'
+      )
+    FROM aquaflow.notifications n
+    LEFT JOIN aquaflow.customer_accounts ca ON ca.account_id = n.account_id
+    LEFT JOIN aquaflow.users u ON u.user_id = n.requested_by
+    WHERE n.customer_id = ${customerId}
+       OR n.account_id IN (SELECT account_id FROM customer_accounts)
+
+    UNION ALL
+    SELECT
+      'service-' || sre.service_request_event_id::text,
+      'SERVICE_REQUEST', sre.event_type, sr.request_number, COALESCE(sre.new_status, sr.status),
+      NULLIF(CONCAT_WS(E'\n', sre.comments, CASE WHEN sre.event_type = 'STATUS_CHANGED' THEN sr.resolution END), ''),
+      CASE WHEN sr.request_type = 'COMPLAINT' THEN sr.subject ELSE NULL END,
+      NULLIF(CONCAT_WS(' ', u.first_name, u.last_name), ''), sre.created_at,
+      NULL::jsonb
+    FROM aquaflow.service_request_events sre
+    JOIN aquaflow.service_requests sr ON sr.service_request_id = sre.service_request_id
+    LEFT JOIN aquaflow.users u ON u.user_id = sre.performed_by
+    WHERE sr.customer_id = ${customerId}
+
+    UNION ALL
+    SELECT
+      'meter-' || me.event_id::text,
+      'METER', me.event_type, m.meter_number, COALESCE(me.new_status, m.status),
+      me.remarks, me.reason,
+      NULLIF(CONCAT_WS(' ', u.first_name, u.last_name), ''), me.event_date,
+      NULL::jsonb
+    FROM aquaflow.meter_events me
+    JOIN aquaflow.meters m ON m.meter_id = me.meter_id
+    LEFT JOIN aquaflow.users u ON u.user_id = me.performed_by
+    WHERE EXISTS (
+      SELECT 1
+      FROM aquaflow.meter_assignments ma
+      JOIN customer_accounts ca ON ca.account_id = ma.account_id
+      WHERE (ma.assignment_id = me.assignment_id)
+         OR (me.assignment_id IS NULL
+             AND ma.meter_id = me.meter_id
+             AND me.event_date::date >= ma.assignment_date
+             AND (ma.removal_date IS NULL OR me.event_date::date <= ma.removal_date))
     )
-    SELECT * FROM (
-      SELECT
-        'customer-' || c.customer_id::text AS id,
-        'CUSTOMER'::text AS "group",
-        'CUSTOMER_REGISTERED'::text AS "activityType",
-        c.customer_number::text AS reference,
-        c.status::text AS status,
-        'Customer profile registered'::text AS details,
-        NULL::text AS reason,
-        NULLIF(CONCAT_WS(' ', u.first_name, u.last_name), '')::text AS actor,
-        c.created_at AS "occurredAt"
-      FROM aquaflow.customers c
-      LEFT JOIN aquaflow.users u ON u.user_id = c.created_by
-      WHERE c.customer_id = ${customerId}
 
-      UNION ALL
-      SELECT
-        'service-' || sre.service_request_event_id::text,
-        'SERVICE_REQUEST', sre.event_type, sr.request_number, COALESCE(sre.new_status, sr.status),
-        NULLIF(CONCAT_WS(E'\n', sre.comments, CASE WHEN sre.event_type = 'STATUS_CHANGED' THEN sr.resolution END), ''),
-        CASE WHEN sr.request_type = 'COMPLAINT' THEN sr.subject ELSE NULL END,
-        NULLIF(CONCAT_WS(' ', u.first_name, u.last_name), ''), sre.created_at
-      FROM aquaflow.service_request_events sre
-      JOIN aquaflow.service_requests sr ON sr.service_request_id = sre.service_request_id
-      LEFT JOIN aquaflow.users u ON u.user_id = sre.performed_by
-      WHERE sr.customer_id = ${customerId}
+    UNION ALL
+    SELECT
+      'payment-' || pe.payment_event_id::text,
+      'PAYMENT', pe.event_type, p.transaction_reference, COALESCE(pe.new_status, p.payment_status),
+      COALESCE(pe.details, p.remarks), NULL,
+      NULLIF(CONCAT_WS(' ', u.first_name, u.last_name), ''), pe.created_at,
+      NULL::jsonb
+    FROM aquaflow.payment_events pe
+    JOIN aquaflow.payments p ON p.payment_id = pe.payment_id
+    LEFT JOIN aquaflow.users u ON u.user_id = pe.performed_by
+    WHERE p.account_id IN (SELECT account_id FROM customer_accounts)
 
-      UNION ALL
-      SELECT
-        'meter-' || me.event_id::text,
-        'METER', me.event_type, m.meter_number, COALESCE(me.new_status, m.status),
-        me.remarks, me.reason,
-        NULLIF(CONCAT_WS(' ', u.first_name, u.last_name), ''), me.event_date
-      FROM aquaflow.meter_events me
-      JOIN aquaflow.meters m ON m.meter_id = me.meter_id
-      LEFT JOIN aquaflow.users u ON u.user_id = me.performed_by
-      WHERE EXISTS (
-        SELECT 1
-        FROM aquaflow.meter_assignments ma
-        JOIN customer_accounts ca ON ca.account_id = ma.account_id
-        WHERE (ma.assignment_id = me.assignment_id)
-           OR (me.assignment_id IS NULL
-               AND ma.meter_id = me.meter_id
-               AND me.event_date::date >= ma.assignment_date
-               AND (ma.removal_date IS NULL OR me.event_date::date <= ma.removal_date))
+    UNION ALL
+    SELECT
+      'payment-record-' || p.payment_id::text,
+      'PAYMENT', 'PAYMENT_RECORDED', p.transaction_reference, p.payment_status,
+      p.remarks, NULL,
+      NULLIF(CONCAT_WS(' ', u.first_name, u.last_name), ''), p.created_at,
+      NULL::jsonb
+    FROM aquaflow.payments p
+    LEFT JOIN aquaflow.users u ON u.user_id = p.received_by
+    WHERE p.account_id IN (SELECT account_id FROM customer_accounts)
+      AND NOT EXISTS (
+        SELECT 1 FROM aquaflow.payment_events pe WHERE pe.payment_id = p.payment_id
       )
 
-      UNION ALL
-      SELECT
-        'payment-' || pe.payment_event_id::text,
-        'PAYMENT', pe.event_type, p.transaction_reference, COALESCE(pe.new_status, p.payment_status),
-        COALESCE(pe.details, p.remarks), NULL::text,
-        NULLIF(CONCAT_WS(' ', u.first_name, u.last_name), ''), pe.created_at
-      FROM aquaflow.payment_events pe
-      JOIN aquaflow.payments p ON p.payment_id = pe.payment_id
-      LEFT JOIN aquaflow.users u ON u.user_id = pe.performed_by
-      WHERE p.account_id IN (SELECT account_id FROM customer_accounts)
+    UNION ALL
+    SELECT
+      'billing-' || be.billing_event_id::text,
+      'BILLING', be.event_type, b.bill_number, COALESCE(be.new_status, b.status),
+      be.details, NULL,
+      NULLIF(CONCAT_WS(' ', u.first_name, u.last_name), ''), be.created_at,
+      NULL::jsonb
+    FROM aquaflow.billing_events be
+    JOIN aquaflow.bills b ON b.bill_id = be.bill_id
+    LEFT JOIN aquaflow.users u ON u.user_id = be.performed_by
+    WHERE b.account_id IN (SELECT account_id FROM customer_accounts)
 
-      UNION ALL
-      SELECT
-        'payment-record-' || p.payment_id::text,
-        'PAYMENT', 'PAYMENT_RECORDED', p.transaction_reference, p.payment_status,
-        p.remarks, NULL::text,
-        NULLIF(CONCAT_WS(' ', u.first_name, u.last_name), ''), p.created_at
-      FROM aquaflow.payments p
-      LEFT JOIN aquaflow.users u ON u.user_id = p.received_by
-      WHERE p.account_id IN (SELECT account_id FROM customer_accounts)
-        AND NOT EXISTS (
-          SELECT 1 FROM aquaflow.payment_events pe WHERE pe.payment_id = p.payment_id
-        )
+    UNION ALL
+    SELECT
+      'arrears-' || aa.arrears_action_id::text,
+      'ACCOUNT', aa.action_type, ca.account_number, NULL,
+      aa.details, NULL,
+      NULLIF(CONCAT_WS(' ', u.first_name, u.last_name), ''), aa.created_at,
+      NULL::jsonb
+    FROM aquaflow.arrears_actions aa
+    JOIN aquaflow.customer_accounts ca ON ca.account_id = aa.account_id
+    LEFT JOIN aquaflow.users u ON u.user_id = aa.performed_by
+    WHERE ca.customer_id = ${customerId}
 
-      UNION ALL
-      SELECT
-        'billing-' || be.billing_event_id::text,
-        'BILLING', be.event_type, b.bill_number, COALESCE(be.new_status, b.status),
-        be.details, NULL::text,
-        NULLIF(CONCAT_WS(' ', u.first_name, u.last_name), ''), be.created_at
-      FROM aquaflow.billing_events be
-      JOIN aquaflow.bills b ON b.bill_id = be.bill_id
-      LEFT JOIN aquaflow.users u ON u.user_id = be.performed_by
-      WHERE b.account_id IN (SELECT account_id FROM customer_accounts)
+    UNION ALL
+    SELECT
+      'reconciliation-' || abr.reconciliation_id::text,
+      'ACCOUNT', 'BALANCE_RECONCILED', ca.account_number, NULL,
+      NULL, abr.reason,
+      NULLIF(CONCAT_WS(' ', u.first_name, u.last_name), ''), abr.created_at,
+      NULL::jsonb
+    FROM aquaflow.account_balance_reconciliations abr
+    JOIN aquaflow.customer_accounts ca ON ca.account_id = abr.account_id
+    LEFT JOIN aquaflow.users u ON u.user_id = abr.reconciled_by
+    WHERE ca.customer_id = ${customerId}
 
-      UNION ALL
-      SELECT
-        'arrears-' || aa.arrears_action_id::text,
-        'ACCOUNT', aa.action_type, ca.account_number, NULL::text,
-        aa.details, NULL::text,
-        NULLIF(CONCAT_WS(' ', u.first_name, u.last_name), ''), aa.created_at
-      FROM aquaflow.arrears_actions aa
-      JOIN aquaflow.customer_accounts ca ON ca.account_id = aa.account_id
-      LEFT JOIN aquaflow.users u ON u.user_id = aa.performed_by
-      WHERE ca.customer_id = ${customerId}
+    UNION ALL
+    SELECT
+      'connection-' || nca.connection_activity_id::text,
+      'CONNECTION', nca.activity_type, app.application_number, app.status,
+      nca.notes, NULL,
+      NULLIF(CONCAT_WS(' ', u.first_name, u.last_name), ''), nca.performed_at,
+      NULL::jsonb
+    FROM aquaflow.new_connection_activities nca
+    JOIN aquaflow.new_connection_applications app
+      ON app.connection_application_id = nca.connection_application_id
+    LEFT JOIN aquaflow.users u ON u.user_id = nca.performed_by
+    WHERE app.customer_id = ${customerId}
+  `;
+}
 
-      UNION ALL
-      SELECT
-        'reconciliation-' || abr.reconciliation_id::text,
-        'ACCOUNT', 'BALANCE_RECONCILED', ca.account_number, NULL::text,
-        NULL::text, abr.reason,
-        NULLIF(CONCAT_WS(' ', u.first_name, u.last_name), ''), abr.created_at
-      FROM aquaflow.account_balance_reconciliations abr
-      JOIN aquaflow.customer_accounts ca ON ca.account_id = abr.account_id
-      LEFT JOIN aquaflow.users u ON u.user_id = abr.reconciled_by
-      WHERE ca.customer_id = ${customerId}
+customersRouter.get("/:id/activity", customerViewAccess, async (req, res, next) => {
+  if (!/^\d+$/.test(req.params.id)) return res.status(400).json({ error: "Invalid customer id" });
+  const query = z.object({
+    page: z.coerce.number().int().min(1).default(1),
+    pageSize: z.coerce.number().int().min(10).max(100).default(25),
+    group: z.enum(["CUSTOMER", "SERVICE_REQUEST", "METER", "PAYMENT", "BILLING", "ACCOUNT", "CONNECTION", "NOTIFICATION"]).optional(),
+  }).safeParse(req.query);
+  if (!query.success) return res.status(400).json({ error: query.error.flatten() });
+  const customerId = BigInt(req.params.id);
+  try {
+    const exists = await prisma.customer.findUnique({
+      where: { customerId },
+      select: { customerId: true },
+    });
+    if (!exists) return res.status(404).json({ error: "Customer not found" });
 
-      UNION ALL
-      SELECT
-        'connection-' || nca.connection_activity_id::text,
-        'CONNECTION', nca.activity_type, app.application_number, app.status,
-        nca.notes, NULL::text,
-        NULLIF(CONCAT_WS(' ', u.first_name, u.last_name), ''), nca.performed_at
-      FROM aquaflow.new_connection_activities nca
-      JOIN aquaflow.new_connection_applications app
-        ON app.connection_application_id = nca.connection_application_id
-      LEFT JOIN aquaflow.users u ON u.user_id = nca.performed_by
-      WHERE app.customer_id = ${customerId}
-    ) activity
-    ORDER BY "occurredAt" DESC
-    LIMIT 300
-  `);
-
-  res.json(activities);
+    const base = customerActivityUnion(customerId);
+    const groupFilter = query.data.group
+      ? Prisma.sql`WHERE activity."group" = ${query.data.group}`
+      : Prisma.empty;
+    const offset = (query.data.page - 1) * query.data.pageSize;
+    type ActivityRow = Parameters<typeof normalizeCustomerActivity>[0];
+    const [activities, counts] = await Promise.all([
+      prisma.$queryRaw<ActivityRow[]>(Prisma.sql`
+        WITH customer_accounts AS (
+          SELECT account_id FROM aquaflow.customer_accounts WHERE customer_id = ${customerId}
+        ), activity AS (${base})
+        SELECT * FROM activity
+        ${groupFilter}
+        ORDER BY "occurredAt" DESC, id DESC
+        LIMIT ${query.data.pageSize} OFFSET ${offset}
+      `),
+      prisma.$queryRaw<Array<{ group: string; total: bigint }>>(Prisma.sql`
+        WITH customer_accounts AS (
+          SELECT account_id FROM aquaflow.customer_accounts WHERE customer_id = ${customerId}
+        ), activity AS (${base})
+        SELECT "group", COUNT(*)::bigint AS total
+        FROM activity
+        GROUP BY "group"
+      `),
+    ]);
+    const groupCounts = Object.fromEntries(counts.map((row) => [row.group, Number(row.total)]));
+    const total = query.data.group
+      ? Number(groupCounts[query.data.group] ?? 0)
+      : Object.values(groupCounts).reduce((sum, count) => sum + count, 0);
+    res.json({
+      items: activities
+        .map(normalizeCustomerActivity)
+        .sort(compareCustomerActivityNewestFirst),
+      groupCounts,
+      ...customerActivityPagination(total, query.data.page, query.data.pageSize),
+    });
+  } catch (error) {
+    next(error);
+  }
 });
 
 customersRouter.get("/:id/documents/:documentId/content", customerViewAccess, async (req, res, next) => {
@@ -640,25 +720,46 @@ customersRouter.post("/bulk-import", customerManageAccess, async (req, res, next
   }
 });
 
-customersRouter.patch("/bulk-status", customerManageAccess, async (req, res) => {
+customersRouter.patch("/bulk-status", customerManageAccess, async (req, res, next) => {
   const parsed = bulkCustomerStatusSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: parsed.error.flatten() });
   }
 
-  const result = await prisma.customer.updateMany({
-    where: {
-      customerId: {
-        in: parsed.data.customerIds.map((id) => BigInt(id)),
-      },
-    },
-    data: { status: parsed.data.status },
-  });
-
-  res.json({ updated: result.count, status: parsed.data.status });
+  try {
+    const customerIds = parsed.data.customerIds.map((id) => BigInt(id));
+    const previous = await prisma.customer.findMany({
+      where: { customerId: { in: customerIds }, status: { not: parsed.data.status } },
+      select: { customerId: true, status: true },
+    });
+    const now = new Date();
+    const result = await prisma.$transaction(async (tx) => {
+      const updated = await tx.customer.updateMany({
+        where: { customerId: { in: previous.map((customer) => customer.customerId) } },
+        data: { status: parsed.data.status, updatedAt: now },
+      });
+      if (previous.length) {
+        await tx.customerProfileChange.createMany({
+          data: previous.map((customer) => ({
+            customerId: customer.customerId,
+            action: "CUSTOMER_PROFILE_UPDATED",
+            source: "CUSTOMER_BULK_STATUS_API",
+            changes: [{ field: "status", previousValue: customer.status, newValue: parsed.data.status }],
+            changedBy: req.user ? BigInt(req.user.userId) : null,
+            createdAt: now,
+          })),
+        });
+      }
+      return updated;
+    });
+    res.json({ updated: result.count, status: parsed.data.status });
+  } catch (error) {
+    next(error);
+  }
 });
 
-customersRouter.patch("/:id", customerManageAccess, async (req, res) => {
+customersRouter.patch("/:id", customerManageAccess, async (req, res, next) => {
+  if (!/^\d+$/.test(req.params.id)) return res.status(400).json({ error: "Invalid customer id" });
   const parsed = updateCustomerSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: parsed.error.flatten() });
@@ -669,13 +770,33 @@ customersRouter.patch("/:id", customerManageAccess, async (req, res) => {
   );
 
   try {
-    const customer = await prisma.customer.update({
-      where: { customerId: BigInt(req.params.id) },
-      data,
+    const customerId = BigInt(req.params.id);
+    const customer = await prisma.$transaction(async (tx) => {
+      const previous = await tx.customer.findUnique({ where: { customerId } });
+      if (!previous) return null;
+      const changes = buildCustomerProfileChanges(previous, data);
+      if (!changes.length) return previous;
+      const now = new Date();
+      const updated = await tx.customer.update({
+        where: { customerId },
+        data: { ...data, updatedAt: now },
+      });
+      await tx.customerProfileChange.create({
+        data: {
+          customerId,
+          action: "CUSTOMER_PROFILE_UPDATED",
+          source: "CUSTOMER_PROFILE_API",
+          changes,
+          changedBy: req.user ? BigInt(req.user.userId) : null,
+          createdAt: now,
+        },
+      });
+      return updated;
     });
+    if (!customer) return res.status(404).json({ error: "Customer not found" });
     res.json(customer);
-  } catch {
-    res.status(404).json({ error: "Customer not found" });
+  } catch (error) {
+    next(error);
   }
 });
 

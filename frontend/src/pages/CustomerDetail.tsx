@@ -4,7 +4,8 @@ import { api, getSessionUser } from "../lib/api";
 import { decodeId, encodeId } from "../lib/hashids";
 import { SearchableSelect } from "../components/SearchableSelect";
 import { SweetAlertToast } from "../components/SweetAlertToast";
-import { maskAddress, maskEmail, maskName, maskPhone, usePrivacyMode } from "../lib/privacyMode";
+import { Pagination } from "../components/Pagination";
+import { maskAddress, maskEmail, maskIdentifier, maskName, maskPhone, usePrivacyMode } from "../lib/privacyMode";
 import { billingCycleLabel } from "../lib/billingPeriod";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -64,7 +65,7 @@ interface Property {
 }
 interface CustomerActivity {
   id: string;
-  group: "CUSTOMER" | "SERVICE_REQUEST" | "METER" | "PAYMENT" | "BILLING" | "ACCOUNT" | "CONNECTION";
+  group: "CUSTOMER" | "SERVICE_REQUEST" | "METER" | "PAYMENT" | "BILLING" | "ACCOUNT" | "CONNECTION" | "NOTIFICATION";
   activityType: string;
   reference?: string;
   status?: string;
@@ -72,6 +73,21 @@ interface CustomerActivity {
   reason?: string;
   actor?: string;
   occurredAt: string;
+  data?: {
+    kind?: "NOTIFICATION" | "PROFILE_CHANGE";
+    notificationType?: string;
+    channel?: string;
+    recipient?: string;
+    deliveryStatus?: string;
+    createdAt?: string;
+    sentAt?: string;
+    accountNumber?: string;
+    messageBody?: string;
+    isResend?: boolean;
+    originalNotificationId?: string;
+    source?: string;
+    changes?: Array<{ field: string; previousValue: string | null; newValue: string | null }>;
+  };
 }
 interface Lookup { [key: string]: any; }
 interface CustomerMeter {
@@ -134,7 +150,9 @@ const ACTIVITY_GROUPS: Record<string, { label: string; dot: string; badge: strin
   BILLING: { label: "Billing", dot: "bg-violet-500", badge: "bg-violet-50 text-violet-700" },
   ACCOUNT: { label: "Account", dot: "bg-blue-500", badge: "bg-blue-50 text-blue-700" },
   CONNECTION: { label: "Connection", dot: "bg-rose-500", badge: "bg-rose-50 text-rose-700" },
+  NOTIFICATION: { label: "Notifications", dot: "bg-fuchsia-500", badge: "bg-fuchsia-50 text-fuchsia-700" },
 };
+const ACTIVITY_PAGE_SIZE = 25;
 const ACCOUNT_STATUSES = ["PENDING", "ACTIVE", "SUSPENDED", "DISCONNECTED", "CLOSED"] as const;
 function StatusBadge({ status }: { status: string }) {
   const cls = STATUS_COLORS[status] ?? "bg-slate-100 text-slate-500";
@@ -152,12 +170,14 @@ const date = (value?: string) =>
   value ? new Date(value).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "—";
 const dateTime = (value: string) => new Date(value).toLocaleString("en-GB", {
   day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit",
+  timeZone: "Africa/Nairobi",
 });
 const activityLabel = (value: string) => value
   .toLowerCase()
   .split("_")
   .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
   .join(" ");
+const customerFieldLabel = (value: string) => activityLabel(value.replace(/([a-z])([A-Z])/g, "$1_$2"));
 const initials = (value?: string) =>
   (value ?? "Customer").split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("");
 function InfoRow({ label, value, valueClass }: { label: string; value: React.ReactNode; valueClass?: string }) {
@@ -197,6 +217,11 @@ export default function CustomerDetail() {
   const [payments, setPayments]     = useState<CustomerPayment[]>([]);
   const [activities, setActivities] = useState<CustomerActivity[]>([]);
   const [activityFilter, setActivityFilter] = useState("ALL");
+  const [activityPage, setActivityPage] = useState(1);
+  const [activityPages, setActivityPages] = useState(1);
+  const [activityTotal, setActivityTotal] = useState(0);
+  const [activityGroupCounts, setActivityGroupCounts] = useState<Record<string, number>>({});
+  const [activityLoading, setActivityLoading] = useState(true);
   const [historyLoading, setHistoryLoading] = useState(true);
   const [error, setError]         = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>("billing");
@@ -258,22 +283,35 @@ export default function CustomerDetail() {
     });
   }, [editPropertyForm.zoneId]);
 
+  async function loadActivity(pageValue = 1, groupValue = activityFilter) {
+    if (!rawId || rawId === "0") return;
+    setActivityLoading(true);
+    try {
+      const result = await api.getCustomerActivity(rawId, pageValue, ACTIVITY_PAGE_SIZE, groupValue);
+      setActivities(result.items ?? []);
+      setActivityPage(Number(result.page ?? pageValue));
+      setActivityPages(Number(result.pages ?? 1));
+      setActivityTotal(Number(result.total ?? 0));
+      setActivityGroupCounts(result.groupCounts ?? {});
+    } finally {
+      setActivityLoading(false);
+    }
+  }
+
   async function loadAll() {
     if (!rawId || rawId === "0") { setError("Invalid customer link."); return; }
-    const [c, props, z, cats, customerMeters, customerActivity] = await Promise.all([
+    const [c, props, z, cats, customerMeters] = await Promise.all([
       api.getCustomer(rawId),
       api.listProperties(rawId),
       api.listZones(),
       api.listCategories(),
       api.listMeters({ customerId: rawId }),
-      api.getCustomerActivity(rawId),
     ]);
     setCustomer(c);
     setProperties(props);
     setZones(z);
     setCategories(cats);
     setMeters(customerMeters);
-    setActivities(customerActivity);
     const accountIds = (c.accounts ?? []).map((account: Account) => String(account.accountId));
     setHistoryLoading(true);
     try {
@@ -310,6 +348,10 @@ export default function CustomerDetail() {
   }
 
   useEffect(() => { loadAll().catch((e) => setError(e.message)); }, [rawId]);
+  useEffect(() => {
+    setActivityPage(1);
+    loadActivity(1, activityFilter).catch((e) => setError(e.message));
+  }, [rawId, activityFilter]);
 
   useEffect(() => () => {
     if (documentPreview) URL.revokeObjectURL(documentPreview.url);
@@ -363,6 +405,7 @@ export default function CustomerDetail() {
         portalAccess: current?.portalAccess ?? null,
       }));
       setEditing(false);
+      await loadActivity(1, activityFilter);
     } catch (err: any) {
       if (err.fieldErrors && Object.keys(err.fieldErrors).length > 0) {
         setFieldErrors(err.fieldErrors);
@@ -557,7 +600,7 @@ export default function CustomerDetail() {
     { key: "meters",           label: "Meters" },
     { key: "properties",       label: "Properties & Accounts" },
     { key: "documents",        label: `Documents (${customer.documents?.length ?? 0})` },
-    { key: "activity",         label: `Activity (${activities.length})` },
+    { key: "activity",         label: `Activity (${Object.values(activityGroupCounts).reduce((sum, count) => sum + count, 0)})` },
   ];
 
   const primaryAccount  = customer.accounts?.[0];
@@ -566,15 +609,23 @@ export default function CustomerDetail() {
   const validPayments = payments.filter((payment) => payment.paymentStatus !== "REVERSED");
   const totalPaid = validPayments.reduce((sum, payment) => sum + Number(payment.amount), 0);
   const totalBilled = bills.reduce((sum, bill) => sum + Number(bill.totalAmountDue), 0);
-  const activityFilters = ["ALL", ...Object.keys(ACTIVITY_GROUPS).filter((group) => activities.some((item) => item.group === group))];
-  const filteredActivities = activityFilter === "ALL" ? activities : activities.filter((item) => item.group === activityFilter);
-  const activitiesByDay = filteredActivities.reduce<Array<{ day: string; items: CustomerActivity[] }>>((groups, item) => {
+  const activityFilters = ["ALL", ...Object.keys(ACTIVITY_GROUPS).filter((group) => Number(activityGroupCounts[group] ?? 0) > 0)];
+  const activitiesByDay = activities.reduce<Array<{ day: string; items: CustomerActivity[] }>>((groups, item) => {
     const day = date(item.occurredAt);
     const current = groups[groups.length - 1];
     if (current?.day === day) current.items.push(item);
     else groups.push({ day, items: [item] });
     return groups;
   }, []);
+  const protectedActivityValue = (field: string, value: string | null | undefined) => {
+    if (value === null || value === undefined || value === "") return "—";
+    if (!privacyMode) return value;
+    if (["firstName", "middleName", "lastName", "organizationName"].includes(field)) return maskName(value);
+    if (["phoneNumber", "alternativePhone"].includes(field)) return maskPhone(value);
+    if (field === "emailAddress") return maskEmail(value);
+    if (["nationalId", "registrationNumber"].includes(field)) return maskIdentifier(value);
+    return value;
+  };
 
   return (
     <div className="mx-auto w-full max-w-[1600px] px-5 py-5 lg:px-8">
@@ -1318,14 +1369,17 @@ export default function CustomerDetail() {
             <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
               <div>
                 <h2 className="font-semibold text-slate-900">Customer activity and remarks</h2>
-                <p className="mt-0.5 text-xs text-slate-500">A single history of actions, reasons, comments and resolutions across this customer&apos;s accounts</p>
+                <p className="mt-0.5 text-xs text-slate-500">A single history of actions, profile changes and exact notification records across this customer&apos;s accounts</p>
+                <p className="mt-1 text-xs font-semibold text-slate-600">Current profile: {privacyMode ? maskName(displayName) : displayName}</p>
               </div>
-              <span className="w-fit rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">Latest {activities.length} records</span>
+              <span className="w-fit rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">{activityTotal.toLocaleString()} record(s)</span>
             </div>
             <div className="mt-4 flex gap-2 overflow-x-auto pb-1" aria-label="Filter activity">
               {activityFilters.map((group) => {
                 const meta = group === "ALL" ? { label: "All activity" } : ACTIVITY_GROUPS[group];
-                const count = group === "ALL" ? activities.length : activities.filter((item) => item.group === group).length;
+                const count = group === "ALL"
+                  ? Object.values(activityGroupCounts).reduce((sum, value) => sum + value, 0)
+                  : Number(activityGroupCounts[group] ?? 0);
                 return (
                   <button key={group} type="button" onClick={() => setActivityFilter(group)} className={`whitespace-nowrap rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors ${activityFilter === group ? "border-aqua-700 bg-aqua-700 text-white" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}>
                     {meta.label} <span className={activityFilter === group ? "text-white/75" : "text-slate-400"}>{count}</span>
@@ -1335,7 +1389,12 @@ export default function CustomerDetail() {
             </div>
           </div>
 
-          {filteredActivities.length === 0 ? (
+          {activityLoading ? (
+            <div className="flex items-center justify-center gap-2 p-12 text-sm font-semibold text-slate-500">
+              <span className="h-5 w-5 animate-spin rounded-full border-2 border-sky-200 border-t-sky-700" />
+              Loading activity…
+            </div>
+          ) : activities.length === 0 ? (
             <div className="p-12 text-center">
               <p className="font-semibold text-slate-700">No activity in this group</p>
               <p className="mt-1 text-sm text-slate-500">Actions and staff remarks will appear here as work is recorded.</p>
@@ -1365,7 +1424,7 @@ export default function CustomerDetail() {
                             </div>
                             <time className="shrink-0 text-xs text-slate-400" dateTime={item.occurredAt}>{dateTime(item.occurredAt)}</time>
                           </div>
-                          {(item.reason || item.details) && (
+                           {(item.reason || item.details) && (
                             <div className="mt-3 grid gap-2 md:grid-cols-2">
                               {item.reason && (
                                 <div className="rounded-lg border border-amber-100 bg-amber-50 px-3 py-2">
@@ -1379,15 +1438,61 @@ export default function CustomerDetail() {
                                   <p className="mt-1 whitespace-pre-wrap text-sm text-slate-700">{item.details}</p>
                                 </div>
                               )}
-                            </div>
-                          )}
-                          <p className="mt-3 text-xs text-slate-400">{item.actor ? `Recorded by ${item.actor}` : "System recorded"}</p>
+                             </div>
+                           )}
+                           {item.data?.kind === "NOTIFICATION" && (
+                             <div className="mt-3 space-y-3">
+                               <dl className="grid gap-x-5 gap-y-2 rounded-lg border border-fuchsia-100 bg-fuchsia-50/60 p-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
+                                 <div><dt className="text-xs font-semibold text-slate-500">Notification type</dt><dd className="mt-0.5 font-medium text-slate-800">{activityLabel(item.data.notificationType ?? item.activityType)}</dd></div>
+                                 <div><dt className="text-xs font-semibold text-slate-500">Channel</dt><dd className="mt-0.5 font-medium text-slate-800">{item.data.channel ?? "—"}</dd></div>
+                                 <div><dt className="text-xs font-semibold text-slate-500">Delivery status</dt><dd className="mt-0.5 font-medium text-slate-800">{activityLabel(item.data.deliveryStatus ?? item.status ?? "unknown")}</dd></div>
+                                 <div><dt className="text-xs font-semibold text-slate-500">Recipient</dt><dd className="mt-0.5 font-medium text-slate-800">{privacyMode ? (String(item.data.recipient ?? "").includes("@") ? maskEmail(item.data.recipient) : maskPhone(item.data.recipient)) : item.data.recipient ?? "—"}</dd></div>
+                                 <div><dt className="text-xs font-semibold text-slate-500">Account</dt><dd className="mt-0.5 font-medium text-slate-800">{item.data.accountNumber ?? "—"}</dd></div>
+                                 <div><dt className="text-xs font-semibold text-slate-500">Created</dt><dd className="mt-0.5 font-medium text-slate-800">{item.data.createdAt ? dateTime(item.data.createdAt) : "—"}</dd></div>
+                                 <div><dt className="text-xs font-semibold text-slate-500">Sent</dt><dd className="mt-0.5 font-medium text-slate-800">{item.data.sentAt ? dateTime(item.data.sentAt) : "Not sent"}</dd></div>
+                                 <div><dt className="text-xs font-semibold text-slate-500">Resend</dt><dd className="mt-0.5 font-medium text-slate-800">{item.data.isResend ? "Yes" : "No"}</dd></div>
+                                 {item.data.originalNotificationId && <div className="sm:col-span-2"><dt className="text-xs font-semibold text-slate-500">Original notification ID</dt><dd className="mt-0.5 font-mono text-slate-800">{item.data.originalNotificationId}</dd></div>}
+                               </dl>
+                               <div className="rounded-lg border border-slate-200 bg-white px-3 py-3">
+                                 <p className="text-[11px] font-bold uppercase tracking-wide text-fuchsia-700">Historical message actually sent</p>
+                                 <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-slate-700">{privacyMode ? "Historical message hidden while Privacy mode is enabled." : item.data.messageBody || "—"}</p>
+                               </div>
+                             </div>
+                           )}
+                           {item.data?.kind === "PROFILE_CHANGE" && (
+                             <div className="mt-3 overflow-hidden rounded-lg border border-slate-200 bg-white">
+                               <div className="border-b border-slate-100 bg-slate-50 px-3 py-2 text-xs text-slate-500">Source: <span className="font-semibold text-slate-700">{activityLabel(item.data.source ?? "customer_profile")}</span></div>
+                               <div className="overflow-x-auto">
+                                 <table className="w-full min-w-[620px] text-sm">
+                                   <thead className="bg-slate-50/70 text-left text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-3 py-2">Field changed</th><th className="px-3 py-2">Previous value</th><th className="px-3 py-2">New value</th></tr></thead>
+                                   <tbody className="divide-y divide-slate-100">
+                                     {(item.data.changes ?? []).map((change) => (
+                                       <tr key={change.field}><td className="px-3 py-2 font-semibold text-slate-700">{customerFieldLabel(change.field)}</td><td className="px-3 py-2 text-slate-600">{protectedActivityValue(change.field, change.previousValue)}</td><td className="px-3 py-2 text-slate-800">{protectedActivityValue(change.field, change.newValue)}</td></tr>
+                                     ))}
+                                   </tbody>
+                                 </table>
+                               </div>
+                             </div>
+                           )}
+                           <p className="mt-3 text-xs text-slate-400">{item.actor ? `Recorded by ${item.actor}` : "System recorded"}</p>
                         </article>
                       );
                     })}
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+          {!activityLoading && activityTotal > 0 && (
+            <div className="border-t border-slate-100 px-5 py-4">
+              <Pagination
+                page={activityPage}
+                totalPages={activityPages}
+                total={activityTotal}
+                pageSize={ACTIVITY_PAGE_SIZE}
+                onPageChange={(nextPage) => void loadActivity(nextPage, activityFilter).catch((e) => setError(e.message))}
+                label="activity records"
+              />
             </div>
           )}
         </section>

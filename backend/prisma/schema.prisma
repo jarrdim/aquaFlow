@@ -119,8 +119,26 @@ model Customer {
   notifications   Notification[]
   serviceRequests ServiceRequest[]
   documents       CustomerDocument[]
+  profileChanges  CustomerProfileChange[]
 
   @@map("customers")
+  @@schema("aquaflow")
+}
+
+model CustomerProfileChange {
+  customerProfileChangeId BigInt   @id @default(autoincrement()) @map("customer_profile_change_id")
+  customerId              BigInt   @map("customer_id")
+  action                  String
+  source                  String
+  changes                 Json
+  changedBy               BigInt?  @map("changed_by")
+  createdAt               DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  customer Customer @relation(fields: [customerId], references: [customerId], onDelete: Cascade)
+  changer  User?    @relation("CustomerProfileChangeActor", fields: [changedBy], references: [userId], onDelete: SetNull)
+
+  @@index([customerId, createdAt(sort: Desc)])
+  @@map("customer_profile_changes")
   @@schema("aquaflow")
 }
 
@@ -295,6 +313,7 @@ model User {
   createdNotificationTemplates   NotificationTemplate[]         @relation("NotificationTemplateCreator")
   createdNotificationProviders   NotificationProvider[]         @relation("NotificationProviderCreator")
   requestedNotifications         Notification[]                 @relation("NotificationRequester")
+  customerProfileChanges         CustomerProfileChange[]        @relation("CustomerProfileChangeActor")
   createdPaymentPlans            PaymentPlan[]                  @relation("PaymentPlanCreator")
   approvedPaymentPlans           PaymentPlan[]                  @relation("PaymentPlanApprover")
   recordedPromises               PromiseToPay[]                 @relation("PromiseRecorder")

@@ -195,7 +195,11 @@ export const api = {
       `/customers?search=${encodeURIComponent(search)}&page=${page}${status ? `&status=${encodeURIComponent(status)}` : ""}${meterAssignment ? `&meterAssignment=${encodeURIComponent(meterAssignment)}` : ""}`,
     ),
   getCustomer: (id: string) => request(`/customers/${id}`),
-  getCustomerActivity: (id: string) => request(`/customers/${id}/activity`),
+  getCustomerActivity: (id: string, page = 1, pageSize = 25, group = "") => {
+    const query = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+    if (group && group !== "ALL") query.set("group", group);
+    return request(`/customers/${id}/activity?${query.toString()}`);
+  },
   createCustomer: (data: Record<string, unknown>) =>
     request("/customers", { method: "POST", body: JSON.stringify(data) }),
   updateCustomer: (id: string, data: Record<string, unknown>) =>
