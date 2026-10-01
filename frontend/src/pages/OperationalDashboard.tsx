@@ -211,6 +211,16 @@ function CollectionTrend({ rows }: { rows: Row[] }) {
   const payments = rows.reduce((sum, row) => sum + number(row.count), 0);
   const labelStride = width < 600 ? Math.max(1, Math.ceil(rows.length / 7)) : width < 1000 ? 2 : 1;
   const active = activeIndex === null ? null : points[activeIndex];
+  const tooltipWidth = 205;
+  const tooltipHeight = 66;
+  const tooltipX = active
+    ? Math.min(width - tooltipWidth - 8, Math.max(8, active.x - tooltipWidth / 2))
+    : 0;
+  const tooltipY = active
+    ? active.y - tooltipHeight - 14 < 6
+      ? Math.min(height - bottom - tooltipHeight - 6, active.y + 14)
+      : active.y - tooltipHeight - 14
+    : 0;
   const compactMoney = (value: number) => new Intl.NumberFormat("en-KE", {
     notation: "compact",
     maximumFractionDigits: 1,
@@ -233,11 +243,6 @@ function CollectionTrend({ rows }: { rows: Row[] }) {
       <div className="mb-4 flex flex-wrap items-center gap-x-8 gap-y-2">
         <div><span className="text-xs text-slate-500">Month total</span><strong className="ml-2 text-lg text-slate-900">{money(total)}</strong></div>
         <div><span className="text-xs text-slate-500">Posted payments</span><strong className="ml-2 text-lg text-slate-900">{payments.toLocaleString()}</strong></div>
-        {active && (
-          <div className="ml-auto rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-            <strong>{dayLabel(active.date)}</strong>: {money(active.amount)} · {number(active.count).toLocaleString()} payment{number(active.count) === 1 ? "" : "s"}
-          </div>
-        )}
       </div>
       <div ref={chartRef} className="w-full overflow-hidden rounded-xl border border-emerald-100 bg-gradient-to-b from-emerald-50/70 to-white">
         {points.length ? (
@@ -270,6 +275,16 @@ function CollectionTrend({ rows }: { rows: Row[] }) {
                 </g>
               );
             })}
+            {active && (
+              <g transform={`translate(${tooltipX} ${tooltipY})`} className="pointer-events-none" aria-hidden="true">
+                <rect width={tooltipWidth} height={tooltipHeight} rx="10" fill="#0f172a" opacity="0.96" />
+                <text x="12" y="21" fill="#cbd5e1" fontSize="11" fontWeight="600">{dayLabel(active.date)}</text>
+                <text x="12" y="43" fill="white" fontSize="15" fontWeight="700">{money(active.amount)}</text>
+                <text x="12" y="58" fill="#a7f3d0" fontSize="10" fontWeight="600">
+                  {number(active.count).toLocaleString()} payment{number(active.count) === 1 ? "" : "s"}
+                </text>
+              </g>
+            )}
           </svg>
         ) : (
           <div className="grid h-[280px] place-items-center text-sm text-slate-400">No collection data is available.</div>
