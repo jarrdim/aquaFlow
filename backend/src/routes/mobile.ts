@@ -1201,7 +1201,7 @@ async function loadCustomerStatement(
       where: {
         accountId: { in: accountIds },
         status: { in: ["POSTED", "PARTIALLY_PAID", "PAID"] },
-        issueDate: { gte: from, lte: to },
+        postedAt: { gte: from, lte: to },
       },
       include: {
         account: { select: { accountNumber: true } },
@@ -1209,7 +1209,7 @@ async function loadCustomerStatement(
         tariff: true,
         reading: true,
       },
-      orderBy: { issueDate: "asc" },
+      orderBy: { postedAt: "asc" },
     }),
     prisma.payment.findMany({
       where: {
@@ -1234,7 +1234,7 @@ async function loadCustomerStatement(
       where: {
         accountId: { in: accountIds },
         status: { in: ["POSTED", "PARTIALLY_PAID", "PAID"] },
-        issueDate: { lt: from },
+        postedAt: { lt: from },
       },
       _sum: { totalCurrentCharges: true },
     }),
@@ -1250,9 +1250,10 @@ async function loadCustomerStatement(
       where: {
         accountId: primaryAccount.accountId,
         status: { in: ["POSTED", "PARTIALLY_PAID", "PAID"] },
+        postedAt: { not: null },
       },
       include: { tariff: true },
-      orderBy: { issueDate: "desc" },
+      orderBy: { postedAt: "desc" },
     }),
     prisma.systemSetting.findFirst(),
   ]);
@@ -1268,7 +1269,7 @@ async function loadCustomerStatement(
   );
   const rawEntries = [
     ...bills.map((bill) => ({
-      date: bill.issueDate,
+      date: bill.postedAt!,
       particulars: "Water bill",
       reference: bill.billNumber,
       period: billingCycleLabel(bill.billingCycle),

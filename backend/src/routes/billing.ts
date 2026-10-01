@@ -1531,9 +1531,9 @@ billingRouter.get("/statements/:accountId", requireScopedPermission(SCOPED_STAFF
       disconnectionPostings, priorDisconnectionPostings, meterReplacements, accountAdjustments,
       priorAccountAdjustments, newConnectionApplications] = await Promise.all([
       prisma.bill.findMany({
-        where: { accountId, status: { in: ["POSTED", "PARTIALLY_PAID", "PAID"] }, issueDate: { gte: from, lte: to } },
+        where: { accountId, status: { in: ["POSTED", "PARTIALLY_PAID", "PAID"] }, postedAt: { gte: from, lte: to } },
         include: { billingCycle: true, tariff: true, reading: true },
-        orderBy: { issueDate: "asc" },
+        orderBy: { postedAt: "asc" },
       }),
       prisma.payment.findMany({
         where: {
@@ -1553,7 +1553,7 @@ billingRouter.get("/statements/:accountId", requireScopedPermission(SCOPED_STAFF
         include: { receipt: true },
         orderBy: { paymentDate: "asc" },
       }),
-      prisma.bill.aggregate({ where: { accountId, status: { in: ["POSTED", "PARTIALLY_PAID", "PAID"] }, issueDate: { lt: from } }, _sum: { totalCurrentCharges: true } }),
+      prisma.bill.aggregate({ where: { accountId, status: { in: ["POSTED", "PARTIALLY_PAID", "PAID"] }, postedAt: { lt: from } }, _sum: { totalCurrentCharges: true } }),
       prisma.payment.aggregate({
         where: {
           accountId, paymentStatus: "POSTED",
@@ -1563,9 +1563,9 @@ billingRouter.get("/statements/:accountId", requireScopedPermission(SCOPED_STAFF
         _sum: { amount: true },
       }),
       prisma.bill.findFirst({
-        where: { accountId, status: { in: ["POSTED", "PARTIALLY_PAID", "PAID"] } },
+        where: { accountId, status: { in: ["POSTED", "PARTIALLY_PAID", "PAID"] }, postedAt: { not: null } },
         include: { tariff: true },
-        orderBy: { issueDate: "desc" },
+        orderBy: { postedAt: "desc" },
       }),
       prisma.systemSetting.findFirst(),
       prisma.$queryRaw<any[]>`
@@ -1632,7 +1632,7 @@ billingRouter.get("/statements/:accountId", requireScopedPermission(SCOPED_STAFF
         sourceId: bill.billId,
         billId: bill.billId,
         hasReading: Boolean(bill.readingId),
-        date: bill.issueDate,
+        date: bill.postedAt!,
         particulars: "Water bill",
         reference: bill.billNumber,
         period: billingCycleLabel(bill.billingCycle),

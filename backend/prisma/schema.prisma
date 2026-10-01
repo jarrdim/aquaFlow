@@ -1229,6 +1229,7 @@ model Notification {
 
   @@index([deliveryStatus, scheduledAt])
   @@index([accountId, createdAt])
+  @@index([customerId, createdAt(sort: Desc)])
   @@index([customerId, readAt])
   @@index([billId])
   @@map("notifications")
