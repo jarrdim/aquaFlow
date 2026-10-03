@@ -3169,6 +3169,8 @@ export function ReadingWorklist() {
             assignment,
           ]),
       );
+      const exportedAt = new Date();
+      const currentReadingDate = `${exportedAt.getFullYear()}-${String(exportedAt.getMonth() + 1).padStart(2, "0")}-${String(exportedAt.getDate()).padStart(2, "0")}`;
       const groupedByZone = new Map<string, Row[]>();
       exportItems.forEach((item) => {
         const zoneName = String(
@@ -3200,22 +3202,17 @@ export function ReadingWorklist() {
           const readerNames = Array.from(
             new Set(assignments.map((assignment) => assignment.officerName).filter(Boolean)),
           ).map(String);
-          const assignedDates = Array.from(
-            new Set(
-              assignments
-                .map((assignment) => String(assignment.assignedDate ?? "").slice(0, 10))
-                .filter(Boolean),
-            ),
-          );
           return {
             zoneName,
             areaNames,
             readingCycle: String(
-              selectedCycle?.cycleName ?? selectedCycle?.cycleCode ?? "",
+              selectedPeriodGroup?.groupName ??
+                selectedPeriodGroup?.groupCode ??
+                selectedCycle?.cycleName ??
+                selectedCycle?.cycleCode ??
+                "",
             ),
-            readingDate:
-              assignedDates.join(", ") ||
-              String(selectedCycle?.endDate ?? new Date().toISOString()).slice(0, 10),
+            readingDate: currentReadingDate,
             readerNames,
             rows: zoneItems.map((item) => {
               return {
