@@ -84,7 +84,7 @@ async function enforceOfficerOwnership(req: Request, res: Response, workOrderId:
   // to the latest assignment that belongs to them.
   if (!officerId) {
     const fieldRole = req.user?.roles.some((role) =>
-      ["METER_READER", "FIELD_OFFICER"].includes(role),
+      ["FIELD_OPERATIONS_TECHNICIAN", "METER_READER", "FIELD_OFFICER"].includes(role),
     );
     if (fieldRole) {
       res.status(403).json({ error: "No active field officer profile is linked to this user" });
@@ -122,7 +122,10 @@ workOrdersRouter.get("/lookups", canView, async (_req, res) => {
     prisma.$queryRaw<any[]>`
       SELECT work_order_type_id AS "workOrderTypeId", type_code AS "typeCode",
              type_name AS "typeName", requires_photo AS "requiresPhoto",
-             requires_gps AS "requiresGps", requires_signature AS "requiresSignature"
+             requires_gps AS "requiresGps", requires_signature AS "requiresSignature",
+             default_priority AS "defaultPriority", standard_materials AS "standardMaterials",
+             completion_instructions AS "completionInstructions",
+             estimated_duration_minutes AS "estimatedDurationMinutes"
       FROM aquaflow.work_order_types WHERE status = 'ACTIVE' ORDER BY type_name`,
     prisma.$queryRaw<any[]>`
       SELECT zone_id AS "zoneId", zone_code AS "zoneCode", zone_name AS "zoneName"

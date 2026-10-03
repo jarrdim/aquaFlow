@@ -653,9 +653,14 @@ export function RegisterMeter() {
   const requestedAccountId = params.get("accountId") ?? "";
   const requestedAccountNumber = params.get("accountNumber") ?? "";
   const [form, setForm] = useState<AnyRecord>(emptyMeter);
+  const [catalogue, setCatalogue] = useState<AnyRecord[]>([]);
+  const [catalogueItemId, setCatalogueItemId] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const navigate = useNavigate();
+  useEffect(() => {
+    api.listMeterCatalogue().then(setCatalogue).catch(() => setCatalogue([]));
+  }, []);
   const update = (key: string, value: string) =>
     setForm((old: AnyRecord) => ({ ...old, [key]: value }));
   async function submit(event: FormEvent, another = false) {
@@ -693,6 +698,32 @@ export function RegisterMeter() {
               : "The meter number will be generated automatically when this meter is saved."}
           </div>
           <div className="grid gap-x-4 gap-y-3 md:grid-cols-2 xl:grid-cols-3">
+            <div className="md:col-span-2 xl:col-span-3">
+              <Field label="Catalogue configuration">
+                <SearchableSelect
+                  className={INPUT}
+                  value={catalogueItemId}
+                  onChange={(event) => {
+                    const selected = catalogue.find((item: AnyRecord) => String(item.meterCatalogueItemId) === event.target.value);
+                    setCatalogueItemId(event.target.value);
+                    if (selected) setForm((current: AnyRecord) => ({
+                      ...current,
+                      meterType: selected.meterType,
+                      technology: selected.technology,
+                      brand: selected.brand ?? "",
+                      model: selected.model ?? "",
+                      meterSizeMm: String(selected.meterSizeMm),
+                      installationStatus: selected.defaultInstallationStatus,
+                    }));
+                  }}
+                >
+                  <option value="">Custom configuration</option>
+                  {catalogue.map((item: AnyRecord) => <option key={item.meterCatalogueItemId} value={item.meterCatalogueItemId}>
+                    {item.catalogueName} ({item.catalogueCode})
+                  </option>)}
+                </SearchableSelect>
+              </Field>
+            </div>
             <Field label="Meter type" required>
               <SearchableSelect
                 className={INPUT}

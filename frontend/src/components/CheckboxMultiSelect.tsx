@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 export type CheckboxMultiSelectOption = {
+  group?: string;
   label: string;
   value: string;
   disabled?: boolean;
@@ -47,8 +48,13 @@ export function CheckboxMultiSelect({
   const [position, setPosition] = useState<Position | null>(null);
   const selected = options.filter((option) => value.includes(option.value));
   const filtered = options.filter((option) =>
-    `${option.label} ${option.value}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()),
+    `${option.group ?? ""} ${option.label} ${option.value}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()),
   );
+  const groupedFiltered = Array.from(filtered.reduce((groups, option) => {
+    const group = option.group ?? "";
+    groups.set(group, [...(groups.get(group) ?? []), option]);
+    return groups;
+  }, new Map<string, CheckboxMultiSelectOption[]>()));
   const selectableFiltered = filtered.filter((option) => !option.disabled);
   const allFilteredSelected = selectableFiltered.length > 0 && selectableFiltered.every((option) => value.includes(option.value));
   const selectionLimitReached = maxSelected !== undefined && value.length >= maxSelected;
@@ -142,11 +148,16 @@ export function CheckboxMultiSelect({
                 <span className="mt-3 text-sm font-semibold text-slate-600">Loading active and suspended accounts…</span>
                 <span className="mt-1 text-xs text-slate-400">Please wait while the account list is prepared</span>
               </div>
-            ) : filtered.map((option) => (
-              <label key={option.value} role="option" aria-selected={value.includes(option.value)} className={`flex cursor-pointer items-center gap-3 rounded-md px-3 py-2 text-sm hover:bg-slate-50 ${option.disabled || (selectionLimitReached && !value.includes(option.value)) ? "cursor-not-allowed opacity-40" : ""}`}>
-                <input className="h-5 w-5 shrink-0 cursor-pointer rounded-md border-slate-300 accent-emerald-600 outline-none transition duration-150 hover:ring-4 hover:ring-emerald-500/10 focus:ring-4 focus:ring-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40" type="checkbox" disabled={option.disabled || (selectionLimitReached && !value.includes(option.value))} checked={value.includes(option.value)} onChange={() => toggle(option.value)} />
-                <span className="min-w-0 flex-1 truncate">{option.label}</span>
-              </label>
+            ) : groupedFiltered.map(([group, groupOptions]) => (
+              <div key={group || "options"}>
+                {group && <div className="sticky top-0 z-[1] border-y border-slate-100 bg-slate-50/95 px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-[0.12em] text-slate-500 backdrop-blur-sm">{group}</div>}
+                {groupOptions.map((option) => (
+                  <label key={option.value} role="option" aria-selected={value.includes(option.value)} className={`flex cursor-pointer items-center gap-3 rounded-md px-3 py-2 text-sm hover:bg-slate-50 ${option.disabled || (selectionLimitReached && !value.includes(option.value)) ? "cursor-not-allowed opacity-40" : ""}`}>
+                    <input className="h-5 w-5 shrink-0 cursor-pointer rounded-md border-slate-300 accent-emerald-600 outline-none transition duration-150 hover:ring-4 hover:ring-emerald-500/10 focus:ring-4 focus:ring-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40" type="checkbox" disabled={option.disabled || (selectionLimitReached && !value.includes(option.value))} checked={value.includes(option.value)} onChange={() => toggle(option.value)} />
+                    <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                  </label>
+                ))}
+              </div>
             ))}
             {!loading && !filtered.length && <div className="px-3 py-6 text-center text-sm text-slate-400">{emptyMessage}</div>}
           </div>

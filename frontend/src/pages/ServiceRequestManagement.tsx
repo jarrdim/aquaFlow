@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   Link,
@@ -9,6 +9,7 @@ import {
 } from "react-router-dom";
 import { api } from "../lib/api";
 import { SearchableSelect } from "../components/SearchableSelect";
+import { CheckboxMultiSelect } from "../components/CheckboxMultiSelect";
 import { CreateLinkedWorkOrderModal } from "../components/CreateLinkedWorkOrderModal";
 import { SweetAlertToast } from "../components/SweetAlertToast";
 import { hasPermission, isRestrictedStaff } from "../lib/access";
@@ -33,6 +34,12 @@ type Officer = {
   lastName: string;
   username: string;
   emailAddress?: string;
+  fieldOfficer?: {
+    homeZone?: {
+      zoneName: string;
+      serviceAreas: { serviceAreaId: string; areaCode: string; areaName: string }[];
+    };
+  };
 };
 type Item = {
   serviceRequestId: string;
@@ -53,6 +60,13 @@ type Item = {
     accountId: string;
     accountNumber: string;
     currentBalance: string;
+    property?: {
+      serviceArea?: {
+        serviceAreaId: string;
+        areaCode: string;
+        areaName: string;
+      };
+    };
   };
   assignee?: Officer;
   creator: Officer;
@@ -91,7 +105,7 @@ const statuses = [
   "CLOSED",
   "CANCELLED",
 ];
-const categories = [
+const fallbackCategories = [
   "BILLING",
   "WATER_SUPPLY",
   "METER",
@@ -102,6 +116,15 @@ const categories = [
   "STAFF_CONDUCT",
   "OTHER",
 ];
+function useServiceRequestCategories() {
+  const [categories, setCategories] = useState(fallbackCategories);
+  useEffect(() => {
+    api.listServiceRequestTypes()
+      .then((items: any) => setCategories(items.map((item: any) => item.typeCode)))
+      .catch(() => undefined);
+  }, []);
+  return categories;
+}
 const activeRequestStatuses = new Set(["OPEN", "ASSIGNED", "IN_PROGRESS", "PENDING_CUSTOMER"]);
 const pretty = (value: string) =>
   value
@@ -160,6 +183,7 @@ function Card({
 }
 
 export function ServiceRequestDashboard() {
+  const categories = useServiceRequestCategories();
   const scopedAccess = isRestrictedStaff();
   const mayCreate = !scopedAccess || hasPermission("SERVICE_REQUEST_CREATE");
   const navigate = useNavigate();
@@ -776,11 +800,11 @@ function BulkAssignModal({
   onClose: () => void;
   onAssigned: (message: string) => void;
 }) {
-  const [assignee, setAssignee] = useState("");
+  const [assigneeIds, setAssigneeIds] = useState<string[]>([]);
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const selectedOfficer = officers.find((officer) => officer.userId === assignee);
+  const selectedOfficers = officers.filter((officer) => assigneeIds.includes(officer.userId));
 
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
@@ -794,16 +818,19 @@ function BulkAssignModal({
   }, [onClose]);
 
   const assign = async () => {
-    if (!assignee) return;
+    if (!assigneeIds.length) return;
     setSaving(true);
     setError("");
     try {
       const response = await api.bulkAssignServiceRequests({
         requestIds,
-        assigneeId: assignee,
+        assigneeIds,
         comments: note || undefined,
       });
-      onAssigned(`${Number(response.assigned || requestIds.length).toLocaleString()} tasks assigned to ${selectedOfficer?.firstName || "the selected staff user"}.`);
+      const distribution = Array.isArray(response.assignees)
+        ? response.assignees.filter((item: any) => Number(item.assigned) > 0).map((item: any) => `${item.firstName} ${item.lastName} (${item.assigned})`).join(", ")
+        : `${selectedOfficers.length} selected staff`;
+      onAssigned(`${Number(response.assigned || requestIds.length).toLocaleString()} tasks allocated: ${distribution}.`);
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -824,23 +851,28 @@ function BulkAssignModal({
         <div className="space-y-4 p-5">
           <SweetAlertToast message={error} type="error" />
           <div className="rounded-xl border border-violet-100 bg-violet-50 p-4 text-sm text-violet-900">
-            Every selected complaint will be allocated to the same staff member and recorded separately in each complaint’s activity history.
+            Selected complaints are distributed across the chosen staff. Service-area matches are prioritised, then remaining tasks are shared evenly.
           </div>
           <label className="block">
             <span className="mb-1 block text-sm font-semibold text-slate-700">Search and select staff *</span>
-            <SearchableSelect className={input} menuMinWidth={420} wrapOptions value={assignee} onChange={(event) => setAssignee(event.target.value)}>
-              <option value="">Search staff by name, username or email</option>
-              {officers.map((officer) => (
-                <option key={officer.userId} value={officer.userId}>
-                  {officer.firstName} {officer.lastName} · @{officer.username}{officer.emailAddress ? ` · ${officer.emailAddress}` : ""}
-                </option>
-              ))}
-            </SearchableSelect>
+            <CheckboxMultiSelect
+              className={input}
+              value={assigneeIds}
+              onChange={setAssigneeIds}
+              placeholder="Select one or more staff members"
+              searchPlaceholder="Search by name, username or service area..."
+              emptyMessage="No matching staff found"
+              options={officers.map((officer) => ({
+                value: officer.userId,
+                label: `${officer.firstName} ${officer.lastName} · @${officer.username}`,
+                group: officer.fieldOfficer?.homeZone?.serviceAreas?.map((area) => area.areaName).join(", ") || "No service area",
+              }))}
+            />
           </label>
-          {selectedOfficer && (
-            <div className="flex items-center gap-3 rounded-xl border border-violet-100 bg-white p-3 shadow-sm">
-              <div className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-violet-100 font-black text-violet-700">{selectedOfficer.firstName.charAt(0)}{selectedOfficer.lastName.charAt(0)}</div>
-              <div className="min-w-0"><div className="truncate font-bold text-slate-800">{selectedOfficer.firstName} {selectedOfficer.lastName}</div><div className="truncate text-xs text-slate-500">@{selectedOfficer.username}{selectedOfficer.emailAddress ? ` · ${selectedOfficer.emailAddress}` : ""}</div></div>
+          {selectedOfficers.length > 0 && (
+            <div className="rounded-xl border border-violet-100 bg-white p-3 shadow-sm">
+              <div className="mb-2 text-[11px] font-bold uppercase tracking-wide text-slate-400">{selectedOfficers.length} staff selected</div>
+              <div className="flex flex-wrap gap-2">{selectedOfficers.map((officer) => <span key={officer.userId} className="inline-flex items-center gap-2 rounded-full bg-violet-50 py-1.5 pl-2 pr-3 text-xs font-semibold text-violet-800"><span className="grid h-6 w-6 place-items-center rounded-full bg-violet-200 text-[10px] font-black">{officer.firstName.charAt(0)}{officer.lastName.charAt(0)}</span>{officer.firstName} {officer.lastName}</span>)}</div>
             </div>
           )}
           <label className="block">
@@ -850,7 +882,7 @@ function BulkAssignModal({
         </div>
         <div className="flex justify-end gap-3 border-t border-slate-200 bg-slate-50 px-5 py-4">
           <button type="button" onClick={onClose} className="rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700">Cancel</button>
-          <button type="button" disabled={!assignee || saving} onClick={assign} className="rounded-lg bg-violet-700 px-5 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-violet-600 disabled:opacity-40">{saving ? "Assigning tasks…" : `Assign ${requestIds.length} tasks`}</button>
+          <button type="button" disabled={!assigneeIds.length || saving} onClick={assign} className="rounded-lg bg-violet-700 px-5 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-violet-600 disabled:opacity-40">{saving ? "Assigning tasks…" : `Allocate ${requestIds.length} tasks`}</button>
         </div>
       </div>
     </div>,
@@ -859,6 +891,7 @@ function BulkAssignModal({
 }
 
 export function ComplaintManagement() {
+  const categories = useServiceRequestCategories();
   const [searchParams, setSearchParams] = useSearchParams();
   const scopedAccess = isRestrictedStaff();
   const mayCreate = !scopedAccess || hasPermission("SERVICE_REQUEST_CREATE");
@@ -918,6 +951,27 @@ export function ComplaintManagement() {
     .filter((item: Item) => activeRequestStatuses.has(item.status))
     .map((item: Item) => item.serviceRequestId);
   const allPageSelected = assignablePageIds.length > 0 && assignablePageIds.every((requestId: string) => selectedIds.has(requestId));
+  const complaintGroups = useMemo(() => {
+    const groups = new Map<string, {
+      key: string;
+      name: string;
+      code?: string;
+      items: { item: Item; index: number }[];
+    }>();
+    (result?.data || []).forEach((item: Item, index: number) => {
+      const serviceArea = item.account?.property?.serviceArea;
+      const key = serviceArea?.serviceAreaId || "UNASSIGNED";
+      const group = groups.get(key) || {
+        key,
+        name: serviceArea?.areaName || "Unassigned service area",
+        code: serviceArea?.areaCode,
+        items: [],
+      };
+      group.items.push({ item, index });
+      groups.set(key, group);
+    });
+    return [...groups.values()];
+  }, [result?.data]);
   const toggleSelection = (requestId: string) => {
     setSelectedIds((current) => {
       const next = new Set(current);
@@ -981,7 +1035,25 @@ export function ComplaintManagement() {
                   {["#", "Complaint", "Customer / account", "Issue", "Priority", "Due", "Status", "Assigned to", "Action"].map((heading) => <th key={heading} className="px-3 py-3">{heading}</th>)}
                 </tr></thead>
                 <tbody className="divide-y divide-slate-100">
-                  {result?.data?.map((item: Item, index: number) => (
+                  {complaintGroups.map((group) => (
+                    <Fragment key={group.key}>
+                      <tr className="border-y border-violet-100 bg-violet-50/70">
+                        <td colSpan={mayAssign ? 10 : 9} className="px-3 py-2.5">
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="flex min-w-0 items-center gap-2">
+                              <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-violet-100 text-xs font-black text-violet-700">SA</span>
+                              <div className="min-w-0">
+                                <div className="truncate text-sm font-bold text-slate-800">{group.name}</div>
+                                {group.code && <div className="text-[11px] font-medium uppercase tracking-wide text-slate-400">{group.code}</div>}
+                              </div>
+                            </div>
+                            <span className="shrink-0 rounded-full bg-white px-2.5 py-1 text-xs font-bold text-violet-700 shadow-sm ring-1 ring-violet-100">
+                              {group.items.length} complaint{group.items.length === 1 ? "" : "s"}
+                            </span>
+                          </div>
+                        </td>
+                      </tr>
+                      {group.items.map(({ item, index }) => (
                     <tr key={item.serviceRequestId} className={`transition hover:bg-violet-50/40 ${selectedIds.has(item.serviceRequestId) ? "bg-violet-50/60" : ""}`}>
                       {mayAssign && <td className="px-3 py-3"><input type="checkbox" checked={selectedIds.has(item.serviceRequestId)} disabled={!activeRequestStatuses.has(item.status)} onChange={() => toggleSelection(item.serviceRequestId)} aria-label={`Select ${item.requestNumber}`} className="h-4 w-4 rounded border-slate-300 text-violet-600 disabled:opacity-30" /></td>}
                       <td className="px-3 py-3 text-xs font-bold text-slate-400">{(Number(result.page || 1) - 1) * Number(result.take || 50) + index + 1}</td>
@@ -994,6 +1066,8 @@ export function ComplaintManagement() {
                       <td className="px-3 py-3">{item.assignee ? <><div className="font-medium">{item.assignee.firstName} {item.assignee.lastName}</div><div className="text-xs text-slate-400">Assigned</div></> : <span className="rounded-full bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-700">Unassigned</span>}</td>
                       <td className="px-3 py-3"><button type="button" onClick={() => setSelectedId(item.serviceRequestId)} className="rounded-lg border border-violet-200 bg-white px-3 py-1.5 text-xs font-bold text-violet-700 shadow-sm hover:bg-violet-50">Review</button></td>
                     </tr>
+                      ))}
+                    </Fragment>
                   ))}
                   {!result?.data?.length && <tr><td colSpan={mayAssign ? 10 : 9} className="px-5 py-16 text-center"><div className="font-semibold text-slate-700">No complaints found</div><p className="mt-1 text-sm text-slate-500">Adjust the filters or register the first complaint.</p></td></tr>}
                 </tbody>
@@ -1320,6 +1394,7 @@ export function ServiceRequestReview() {
 }
 
 export function RegisterServiceRequest() {
+  const categories = useServiceRequestCategories();
   const mayAssignOnCreate = !isRestrictedStaff() || hasPermission("SERVICE_REQUEST_ASSIGN");
   const navigate = useNavigate();
   const [registerParams] = useSearchParams();

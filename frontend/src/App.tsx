@@ -143,6 +143,8 @@ import {
   ServiceRequestReview,
 } from "./pages/ServiceRequestManagement";
 import SettingsManagement from "./pages/SettingsManagement";
+import SetupManagement from "./pages/SetupManagement";
+import SetupResourceManagement from "./pages/SetupResourceManagement";
 import ReconnectionManagement from "./pages/ReconnectionManagement";
 import { api, clearToken, getSessionUser, hasSession } from "./lib/api";
 import { encodeId } from "./lib/hashids";
@@ -327,7 +329,7 @@ const NAV_ITEMS = [
   { label: "Assets", Icon: IcoAssets, path: null, iconClass: "bg-teal-400/10 text-teal-300" },
   { label: "Reports", Icon: IcoReports, path: "/reports", iconClass: "bg-purple-400/10 text-purple-300" },
   { label: "Admin", Icon: IcoAdmin, path: "/admin", iconClass: "bg-red-400/10 text-red-300" },
-  { label: "Settings", Icon: IcoSettings, path: "/settings", iconClass: "bg-slate-400/10 text-slate-300" },
+  { label: "Setups", Icon: IcoSettings, path: "/setups", iconClass: "bg-slate-400/10 text-slate-300" },
 ];
 
 const CUSTOMER_MENU = [
@@ -473,6 +475,66 @@ const ADMIN_MENU = [
   ["Permissions", "/admin/permissions"],
 ] as const;
 
+const SETUP_MENU_GROUPS: ReadonlyArray<{
+  label: string;
+  items: readonly (readonly [string, string])[];
+}> = [
+  {
+    label: "General",
+    items: [
+      ["Setup overview", "/setups"],
+      ["System settings", "/settings"],
+    ],
+  },
+  {
+    label: "Territory & customers",
+    items: [
+      ["Zones", "/setups/zones"],
+      ["Service areas", "/setups/service-areas"],
+      ["Meter-reading routes", "/setups/routes"],
+      ["Customer categories", "/setups/customer-categories"],
+      ["Field officers", "/setups/field-officers"],
+    ],
+  },
+  {
+    label: "Reading & billing",
+    items: [
+      ["Period groups", "/period-groups"],
+      ["Reading cycles", "/readings/cycles"],
+      ["Reader assignments", "/readings/assignments"],
+      ["Billing periods", "/billing/periods"],
+      ["Meter catalogue", "/setups/meter-catalogue"],
+    ],
+  },
+  {
+    label: "Tariffs & revenue",
+    items: [
+      ["Tariffs and bands", "/tariffs/register"],
+      ["Category assignments", "/tariffs/assignments"],
+      ["Payment channels", "/payments/channels"],
+    ],
+  },
+  {
+    label: "Operations",
+    items: [
+      ["Notification templates", "/notifications/templates"],
+      ["Notification providers", "/notifications/providers"],
+      ["Service-request types", "/setups/service-request-types"],
+      ["Work-order types", "/setups/work-order-types"],
+    ],
+  },
+  {
+    label: "Users & security",
+    items: [
+      ["Users", "/admin/users"],
+      ["Roles", "/admin/roles"],
+      ["Permissions", "/admin/permissions"],
+    ],
+  },
+] as const;
+
+const SETUP_MENU = SETUP_MENU_GROUPS.flatMap((group) => group.items);
+
 const SIDEBAR_CHILD_MENUS: Record<
   string,
   readonly (readonly [string, string])[]
@@ -489,9 +551,11 @@ const SIDEBAR_CHILD_MENUS: Record<
   "Service Requests": SERVICE_REQUEST_MENU,
   "Work Orders": WORK_ORDER_MENU,
   Admin: ADMIN_MENU,
+  Setups: SETUP_MENU,
 };
 
-function sidebarSectionForPath(pathname: string) {
+function sidebarSectionForPath(pathname: string, search = "") {
+  if (new URLSearchParams(search).get("setup") === "1") return "Setups";
   if (pathname === "/period-groups") return "Meter Readings";
   const childOwner = Object.entries(SIDEBAR_CHILD_MENUS).find(([, menu]) =>
     menu.some(([, itemPath]) =>
@@ -518,6 +582,7 @@ const MODULE_LABELS: Record<string, string> = {
   "work-orders": "Work Orders",
   admin: "Administration",
   settings: "Settings",
+  setups: "Setups",
 };
 
 const ROUTE_LABELS = new Map<string, string>([
@@ -532,6 +597,7 @@ const ROUTE_LABELS = new Map<string, string>([
   ...SERVICE_REQUEST_MENU.map(([label, path]) => [path, label] as const),
   ...WORK_ORDER_MENU.map(([label, path]) => [path, label] as const),
   ...ADMIN_MENU.map(([label, path]) => [path, label] as const),
+  ...SETUP_MENU.map(([label, path]) => [path, label] as const),
   ["/customers", "Customers"],
   ["/customers/new", "New Customer"],
 ]);
@@ -548,6 +614,7 @@ const PAGE_HEADING_LABELS = new Map<string, string>([
   ["/admin/roles", "Role administration"],
   ["/admin/permissions", "Permission register"],
   ["/settings", "System settings"],
+  ["/setups", "Setups"],
   ["/connections", "New connection management"],
   ["/connections/new", "New connection application"],
 ]);
@@ -581,9 +648,10 @@ function AppBreadcrumbs() {
   const navigate = useNavigate();
   const pathname = location.pathname.replace(/\/+$/, "") || "/";
   const segments = pathname.split("/").filter(Boolean);
-  const moduleKey = segments[0];
+  const setupContext = new URLSearchParams(location.search).get("setup") === "1";
+  const moduleKey = setupContext ? "setups" : segments[0];
   const moduleLabel = MODULE_LABELS[moduleKey];
-  const modulePath = moduleKey ? `/${moduleKey}` : "/";
+  const modulePath = setupContext ? "/setups" : moduleKey ? `/${moduleKey}` : "/";
   const useWideReadingLayout = moduleKey === "readings";
 
   if (
@@ -722,7 +790,7 @@ function Shell({ children }: { children: React.ReactNode }) {
     () => localStorage.getItem("aquaflow_sidebar_collapsed") === "true",
   );
   const [expandedSidebarSection, setExpandedSidebarSection] = useState<string | null>(
-    () => sidebarSectionForPath(location.pathname),
+    () => sidebarSectionForPath(location.pathname, location.search),
   );
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<GlobalSearchResult[]>([]);
@@ -923,8 +991,8 @@ function Shell({ children }: { children: React.ReactNode }) {
     setProfileOpen(false);
     setSidebarFlyout(null);
     setMobileSidebarOpen(false);
-    setExpandedSidebarSection(sidebarSectionForPath(location.pathname));
-  }, [location.pathname]);
+    setExpandedSidebarSection(sidebarSectionForPath(location.pathname, location.search));
+  }, [location.pathname, location.search]);
 
   useEffect(() => {
     function closeMobileNavigation(event: KeyboardEvent) {
@@ -1063,6 +1131,7 @@ function Shell({ children }: { children: React.ReactNode }) {
   const flyoutPath = flyoutModule?.path && canAccessPath(flyoutModule.path, sessionUser)
     ? flyoutModule.path
     : flyoutMenu?.[0]?.[1];
+  const contextualSidebarSection = sidebarSectionForPath(location.pathname, location.search);
 
   return (
     <div className="app-shell flex h-screen overflow-hidden bg-slate-50">
@@ -1135,8 +1204,9 @@ function Shell({ children }: { children: React.ReactNode }) {
             return Boolean(SIDEBAR_CHILD_MENUS[label]?.some(([, itemPath]) => canAccessPath(itemPath, sessionUser)));
           }).map(({ label, Icon: NavIcon, path, iconClass }) => {
             const active = path !== null && (
-              location.pathname.startsWith(path) ||
-              sidebarSectionForPath(location.pathname) === label
+              contextualSidebarSection
+                ? contextualSidebarSection === label
+                : location.pathname.startsWith(path)
             );
             const hasChildren = Boolean(SIDEBAR_CHILD_MENUS[label]?.length);
             const expanded = expandedSidebarSection === label;
@@ -1464,6 +1534,41 @@ function Shell({ children }: { children: React.ReactNode }) {
                     })}
                   </div>
                 )}
+                {!sidebarCollapsed && label === "Setups" && expanded && (
+                  <div className="ml-7 mt-1 space-y-2 border-l border-white/10 pb-1 pl-2">
+                    {SETUP_MENU_GROUPS.map((group) => {
+                      const items = visibleMenu(group.items);
+                      if (!items.length) return null;
+                      return (
+                        <div key={group.label}>
+                          <div className="px-2 pb-1 pt-1.5 text-[10px] font-extrabold uppercase tracking-[0.12em] text-blue-200/40">
+                            {group.label}
+                          </div>
+                          <div className="space-y-0.5">
+                            {items.map(([itemLabel, itemPath]) => {
+                              const itemActive = itemPath === "/setups"
+                                ? location.pathname === itemPath
+                                : location.pathname === itemPath || location.pathname.startsWith(`${itemPath}/`);
+                              return (
+                                <Link
+                                  key={itemPath}
+                                  to={{ pathname: itemPath, search: "?setup=1" }}
+                                  className={`block rounded px-2 py-1.5 text-xs font-medium transition-colors ${
+                                    itemActive
+                                      ? "bg-white/10 text-white"
+                                      : "text-blue-100/50 hover:bg-white/5 hover:text-white"
+                                  }`}
+                                >
+                                  {itemLabel}
+                                </Link>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             ) : (
               <span
@@ -1538,7 +1643,7 @@ function Shell({ children }: { children: React.ReactNode }) {
                 return (
                   <Link
                     key={itemPath}
-                    to={itemPath}
+                    to={sidebarFlyout === "Setups" ? { pathname: itemPath, search: "?setup=1" } : itemPath}
                     role="menuitem"
                     title={itemPath === "/readings/import-current" ? "Migration/setup tool for approved legacy reading baselines" : undefined}
                     className={`block rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
@@ -3063,6 +3168,26 @@ export default function App() {
           <Protected>
             <Shell>
               <PermissionRegister />
+            </Shell>
+          </Protected>
+        }
+      />
+      <Route
+        path="/setups"
+        element={
+          <Protected>
+            <Shell>
+              <SetupManagement />
+            </Shell>
+          </Protected>
+        }
+      />
+      <Route
+        path="/setups/:resource"
+        element={
+          <Protected>
+            <Shell>
+              <SetupResourceManagement />
             </Shell>
           </Protected>
         }

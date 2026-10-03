@@ -1,6 +1,7 @@
 import { getSessionUser, type SessionUser } from "./api";
 
 export const RESTRICTED_STAFF_ROLES = new Set([
+  "FIELD_OPERATIONS_TECHNICIAN",
   "REVENUE_FIELD_OPERATIONS",
   "CUSTOMER_METER_SERVICES",
   "GENERAL_STAFF_VIEWER",
@@ -47,6 +48,7 @@ export function canAccessPath(pathname: string, user: SessionUser | null = getSe
   if (pathname.startsWith("/meters/direct-service")) {
     return hasAnyPermission(["METER_DIRECT_DISCONNECT", "METER_DIRECT_RECONNECT"], user);
   }
+  if (pathname.startsWith("/work-orders")) return hasPermission("WORK_ORDER_VIEW", user);
 
   if (pathname === "/payments") return hasPermission("PAYMENT_DASHBOARD_VIEW", user);
   if (pathname.startsWith("/payments/mpesa/c2b")) return hasPermission("PAYMENT_C2B_MANAGE", user);
@@ -69,6 +71,7 @@ export function defaultAuthorizedPath(user: SessionUser | null = getSessionUser(
     "/payments/unmatched",
     "/billing/statements",
     "/service-requests",
+    "/work-orders",
     "/arrears/disconnections",
     "/readings/worklist",
   ];

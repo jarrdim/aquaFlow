@@ -30,6 +30,7 @@ const customerRegistrationSchema = z.object({
 });
 
 const FIELD_OFFICER_ROLES = new Set([
+  "FIELD_OPERATIONS_TECHNICIAN",
   "METER_READER",
   "METER_SUPERVISOR",
   "SUPERVISOR",

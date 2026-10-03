@@ -36,3 +36,11 @@ lookupsRouter.get("/routes", async (req, res) => {
 lookupsRouter.get("/customer-categories", async (_req, res) => {
   res.json(await prisma.customerCategory.findMany({ where: { status: "ACTIVE" }, orderBy: { categoryName: "asc" } }));
 });
+
+lookupsRouter.get("/service-request-types", async (_req, res) => {
+  res.json(await prisma.serviceRequestType.findMany({ where: { status: "ACTIVE" }, orderBy: { typeName: "asc" } }));
+});
+
+lookupsRouter.get("/meter-catalogue", async (_req, res) => {
+  res.json(await prisma.meterCatalogueItem.findMany({ where: { status: "ACTIVE" }, orderBy: { catalogueName: "asc" } }));
+});

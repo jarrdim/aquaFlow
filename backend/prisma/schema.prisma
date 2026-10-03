@@ -93,6 +93,42 @@ model CustomerCategory {
   @@schema("aquaflow")
 }
 
+model ServiceRequestType {
+  serviceRequestTypeId  BigInt   @id @default(autoincrement()) @map("service_request_type_id")
+  typeCode              String   @unique @map("type_code")
+  typeName              String   @unique @map("type_name")
+  requestClass          String   @default("SERVICE_REQUEST") @map("request_class")
+  defaultPriority       String   @default("MEDIUM") @map("default_priority")
+  targetResolutionHours Int?     @map("target_resolution_hours")
+  description           String?
+  status                String   @default("ACTIVE")
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@map("service_request_types")
+  @@schema("aquaflow")
+}
+
+model MeterCatalogueItem {
+  meterCatalogueItemId      BigInt   @id @default(autoincrement()) @map("meter_catalogue_item_id")
+  catalogueCode             String   @unique @map("catalogue_code")
+  catalogueName             String   @map("catalogue_name")
+  meterType                 String   @map("meter_type")
+  technology                String
+  brand                     String?
+  model                     String?
+  meterSizeMm               Decimal  @map("meter_size_mm") @db.Decimal(10, 2)
+  defaultInstallationStatus String   @default("IN_STORE") @map("default_installation_status")
+  description               String?
+  status                    String   @default("ACTIVE")
+  createdAt                 DateTime @default(now()) @map("created_at")
+  updatedAt                 DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@unique([catalogueName, meterType, technology, meterSizeMm])
+  @@map("meter_catalogue")
+  @@schema("aquaflow")
+}
+
 model Customer {
   customerId         BigInt   @id @default(autoincrement()) @map("customer_id")
   customerNumber     String   @unique @map("customer_number")
@@ -190,20 +226,20 @@ model Property {
 }
 
 model CustomerAccount {
-  accountId      BigInt    @id @default(autoincrement()) @map("account_id")
-  accountNumber  String    @unique @map("account_number")
-  customerId     BigInt    @map("customer_id")
-  propertyId     BigInt    @map("property_id")
-  categoryId     BigInt    @map("category_id")
-  routeId        BigInt?   @map("route_id")
-  openingBalance Decimal   @default(0) @map("opening_balance") @db.Decimal(18, 2)
+  accountId          BigInt    @id @default(autoincrement()) @map("account_id")
+  accountNumber      String    @unique @map("account_number")
+  customerId         BigInt    @map("customer_id")
+  propertyId         BigInt    @map("property_id")
+  categoryId         BigInt    @map("category_id")
+  routeId            BigInt?   @map("route_id")
+  openingBalance     Decimal   @default(0) @map("opening_balance") @db.Decimal(18, 2)
   openingBalanceDate DateTime? @map("opening_balance_date") @db.Date
-  currentBalance Decimal   @default(0) @map("current_balance") @db.Decimal(18, 2)
-  connectionDate DateTime? @map("connection_date") @db.Date
-  accountStatus  String    @default("PENDING") @map("account_status")
-  closureDate    DateTime? @map("closure_date") @db.Date
-  createdAt      DateTime  @default(now()) @map("created_at")
-  updatedAt      DateTime  @default(now()) @map("updated_at")
+  currentBalance     Decimal   @default(0) @map("current_balance") @db.Decimal(18, 2)
+  connectionDate     DateTime? @map("connection_date") @db.Date
+  accountStatus      String    @default("PENDING") @map("account_status")
+  closureDate        DateTime? @map("closure_date") @db.Date
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @default(now()) @map("updated_at")
 
   customer               Customer                       @relation(fields: [customerId], references: [customerId])
   property               Property                       @relation(fields: [propertyId], references: [propertyId])
@@ -607,22 +643,22 @@ model FieldOfficer {
 }
 
 model ReadingCycle {
-  readingCycleId BigInt   @id @default(autoincrement()) @map("reading_cycle_id")
+  readingCycleId       BigInt   @id @default(autoincrement()) @map("reading_cycle_id")
   billingPeriodGroupId BigInt?  @map("billing_period_group_id")
-  cycleCode      String   @unique @map("cycle_code")
-  cycleName      String   @map("cycle_name")
-  startDate      DateTime @map("start_date") @db.Date
-  endDate        DateTime @map("end_date") @db.Date
-  billingCycleId BigInt?  @map("billing_cycle_id")
-  status         String   @default("PLANNED")
-  createdBy      BigInt?  @map("created_by")
-  remarks        String?
-  createdAt      DateTime @default(now()) @map("created_at")
-  updatedAt      DateTime @default(now()) @map("updated_at")
+  cycleCode            String   @unique @map("cycle_code")
+  cycleName            String   @map("cycle_name")
+  startDate            DateTime @map("start_date") @db.Date
+  endDate              DateTime @map("end_date") @db.Date
+  billingCycleId       BigInt?  @map("billing_cycle_id")
+  status               String   @default("PLANNED")
+  createdBy            BigInt?  @map("created_by")
+  remarks              String?
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @default(now()) @map("updated_at")
 
-  creator          User?             @relation("ReadingCycleCreator", fields: [createdBy], references: [userId])
-  routeAssignments RouteAssignment[]
-  readings         MeterReading[]
+  creator            User?               @relation("ReadingCycleCreator", fields: [createdBy], references: [userId])
+  routeAssignments   RouteAssignment[]
+  readings           MeterReading[]
   billingCycle       BillingCycle?       @relation(fields: [billingCycleId], references: [billingCycleId])
   billingPeriodGroup BillingPeriodGroup? @relation(fields: [billingPeriodGroupId], references: [billingPeriodGroupId])
 

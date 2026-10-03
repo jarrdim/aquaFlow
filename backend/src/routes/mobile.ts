@@ -1876,7 +1876,7 @@ mobileRouter.get(
   },
 );
 
-const fieldWorkOrderRoles = requireRole("METER_READER", "FIELD_OFFICER", "METER_SUPERVISOR", "SUPERVISOR");
+const fieldWorkOrderRoles = requireRole("FIELD_OPERATIONS_TECHNICIAN", "METER_READER", "FIELD_OFFICER", "METER_SUPERVISOR", "SUPERVISOR");
 const workOrderIdSchema = z.coerce.bigint().positive();
 const mobileWorkOrderStatuses = ["ASSIGNED", "ACCEPTED", "IN_PROGRESS", "COMPLETED", "ESCALATED"] as const;
 const activeWorkOrderAssignmentStatuses = ["ASSIGNED", "ACCEPTED", "COMPLETED"];

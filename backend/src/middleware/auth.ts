@@ -4,6 +4,7 @@ import { prisma } from "../lib/prisma";
 
 export const WEB_SESSION_COOKIE = "aquaflow_session";
 export const SCOPED_STAFF_ROLES = [
+  "FIELD_OPERATIONS_TECHNICIAN",
   "REVENUE_FIELD_OPERATIONS",
   "CUSTOMER_METER_SERVICES",
   "GENERAL_STAFF_VIEWER",

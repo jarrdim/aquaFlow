@@ -14,7 +14,20 @@ const id = z.coerce.bigint().positive();
 const requestStatuses = ["OPEN", "ASSIGNED", "IN_PROGRESS", "PENDING_CUSTOMER", "RESOLVED", "CLOSED", "CANCELLED"] as const;
 const requestInclude = {
   customer: { select: { customerId: true, customerNumber: true, firstName: true, lastName: true, organizationName: true, phoneNumber: true } },
-  account: { select: { accountId: true, accountNumber: true, currentBalance: true } },
+  account: {
+    select: {
+      accountId: true,
+      accountNumber: true,
+      currentBalance: true,
+      property: {
+        select: {
+          serviceArea: {
+            select: { serviceAreaId: true, areaCode: true, areaName: true },
+          },
+        },
+      },
+    },
+  },
   creator: { select: { userId: true, firstName: true, lastName: true, username: true } },
   assignee: { select: { userId: true, firstName: true, lastName: true, username: true } },
 } satisfies Prisma.ServiceRequestInclude;
@@ -52,7 +65,26 @@ serviceRequestsRouter.get("/officers", canView, async (_req, res) => {
   res.json(await prisma.user.findMany({
     where: { status: "ACTIVE", userType: { in: ["STAFF", "SYSTEM"] } },
     orderBy: [{ firstName: "asc" }, { lastName: "asc" }],
-    select: { userId: true, firstName: true, lastName: true, username: true, emailAddress: true },
+    select: {
+      userId: true,
+      firstName: true,
+      lastName: true,
+      username: true,
+      fieldOfficer: {
+        select: {
+          homeZone: {
+            select: {
+              zoneName: true,
+              serviceAreas: {
+                where: { status: "ACTIVE" },
+                orderBy: { areaName: "asc" },
+                select: { serviceAreaId: true, areaCode: true, areaName: true },
+              },
+            },
+          },
+        },
+      },
+    },
   }));
 });
 
@@ -90,7 +122,17 @@ serviceRequestsRouter.get("/", canView, async (req, res) => {
   };
   const [total, data] = await Promise.all([
     prisma.serviceRequest.count({ where }),
-    prisma.serviceRequest.findMany({ where, include: requestInclude, orderBy: [{ priority: "desc" }, { createdAt: "desc" }], skip: (page - 1) * take, take }),
+    prisma.serviceRequest.findMany({
+      where,
+      include: requestInclude,
+      orderBy: [
+        { account: { property: { serviceArea: { areaName: "asc" } } } },
+        { priority: "desc" },
+        { createdAt: "desc" },
+      ],
+      skip: (page - 1) * take,
+      take,
+    }),
   ]);
   res.json({ data, total, page, take, pages: Math.max(1, Math.ceil(total / take)) });
 });
@@ -98,50 +140,82 @@ serviceRequestsRouter.get("/", canView, async (req, res) => {
 serviceRequestsRouter.patch("/bulk-assign", canAssign, async (req, res) => {
   const parsed = z.object({
     requestIds: z.array(id).min(1, "Select at least one task").max(500),
-    assigneeId: id,
+    assigneeIds: z.array(id).min(1, "Select at least one staff member").max(50),
     comments: z.string().trim().max(1000).optional(),
   }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message });
 
   const uniqueIds = [...new Set(parsed.data.requestIds.map(String))].map(BigInt);
-  const [assignee, requests] = await Promise.all([
-    prisma.user.findFirst({
-      where: { userId: parsed.data.assigneeId, status: "ACTIVE", userType: { in: ["STAFF", "SYSTEM"] } },
-      select: { userId: true, firstName: true, lastName: true },
+  const uniqueAssigneeIds = [...new Set(parsed.data.assigneeIds.map(String))].map(BigInt);
+  const [assignees, requests] = await Promise.all([
+    prisma.user.findMany({
+      where: { userId: { in: uniqueAssigneeIds }, status: "ACTIVE", userType: { in: ["STAFF", "SYSTEM"] } },
+      select: {
+        userId: true,
+        firstName: true,
+        lastName: true,
+        fieldOfficer: { select: { homeZone: { select: { serviceAreas: { where: { status: "ACTIVE" }, select: { serviceAreaId: true } } } } } },
+      },
     }),
     prisma.serviceRequest.findMany({
       where: { serviceRequestId: { in: uniqueIds } },
-      select: { serviceRequestId: true, status: true },
+      select: {
+        serviceRequestId: true,
+        status: true,
+        account: { select: { property: { select: { serviceAreaId: true, serviceArea: { select: { areaName: true } } } } } },
+      },
     }),
   ]);
-  if (!assignee) return res.status(400).json({ error: "Select an active staff user" });
+  if (assignees.length !== uniqueAssigneeIds.length) return res.status(400).json({ error: "One or more selected staff users are no longer active" });
   if (requests.length !== uniqueIds.length) return res.status(404).json({ error: "One or more selected tasks no longer exist" });
   if (requests.some((item) => !["OPEN", "ASSIGNED", "IN_PROGRESS", "PENDING_CUSTOMER"].includes(item.status))) {
     return res.status(400).json({ error: "Resolved, closed or cancelled tasks cannot be assigned" });
   }
 
+  const areaPositions = new Map<string, number>();
+  const allocations = requests
+    .sort((left, right) => (left.account?.property.serviceArea?.areaName ?? "").localeCompare(right.account?.property.serviceArea?.areaName ?? ""))
+    .map((request) => {
+      const serviceAreaId = request.account?.property.serviceAreaId;
+      const matchingAssignees = serviceAreaId
+        ? assignees.filter((assignee) => assignee.fieldOfficer?.homeZone?.serviceAreas.some((area) => area.serviceAreaId === serviceAreaId))
+        : [];
+      const pool = matchingAssignees.length ? matchingAssignees : assignees;
+      const areaKey = String(serviceAreaId ?? "UNASSIGNED");
+      const position = areaPositions.get(areaKey) ?? 0;
+      areaPositions.set(areaKey, position + 1);
+      return { request, assignee: pool[position % pool.length] };
+    });
+
   await prisma.$transaction(async (tx) => {
-    await tx.serviceRequest.updateMany({
-      where: { serviceRequestId: { in: uniqueIds } },
-      data: { assignedTo: assignee.userId },
-    });
-    await tx.serviceRequest.updateMany({
-      where: { serviceRequestId: { in: uniqueIds }, status: "OPEN" },
-      data: { status: "ASSIGNED" },
-    });
+    for (const allocation of allocations) {
+      await tx.serviceRequest.update({
+        where: { serviceRequestId: allocation.request.serviceRequestId },
+        data: {
+          assignedTo: allocation.assignee.userId,
+          ...(allocation.request.status === "OPEN" ? { status: "ASSIGNED" } : {}),
+        },
+      });
+    }
     await tx.serviceRequestEvent.createMany({
-      data: requests.map((item) => ({
-        serviceRequestId: item.serviceRequestId,
+      data: allocations.map(({ request, assignee }) => ({
+        serviceRequestId: request.serviceRequestId,
         eventType: "ASSIGNED",
-        oldStatus: item.status,
-        newStatus: item.status === "OPEN" ? "ASSIGNED" : item.status,
+        oldStatus: request.status,
+        newStatus: request.status === "OPEN" ? "ASSIGNED" : request.status,
         comments: parsed.data.comments || `Bulk assigned to ${assignee.firstName} ${assignee.lastName}`,
         performedBy: BigInt(req.user!.userId),
       })),
     });
   });
 
-  res.json({ assigned: uniqueIds.length, assignee });
+  const distribution = assignees.map((assignee) => ({
+    userId: assignee.userId,
+    firstName: assignee.firstName,
+    lastName: assignee.lastName,
+    assigned: allocations.filter((allocation) => allocation.assignee.userId === assignee.userId).length,
+  }));
+  res.json({ assigned: uniqueIds.length, assignees: distribution });
 });
 
 serviceRequestsRouter.get("/:id", canView, async (req, res) => {
@@ -189,9 +263,13 @@ const createInput = z.object({
 serviceRequestsRouter.post("/", canCreate, async (req, res) => {
   const parsed = createInput.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message });
-  const account = await prisma.customerAccount.findUnique({ where: { accountId: parsed.data.accountId } });
+  const [account, configuredType] = await Promise.all([
+    prisma.customerAccount.findUnique({ where: { accountId: parsed.data.accountId } }),
+    prisma.serviceRequestType.findFirst({ where: { typeCode: parsed.data.category, status: "ACTIVE" } }),
+  ]);
   if (!account) return res.status(404).json({ error: "Customer account not found" });
-  const hours = { URGENT: 4, HIGH: 24, MEDIUM: 72, LOW: 120 }[parsed.data.priority];
+  if (!configuredType) return res.status(400).json({ error: "Select an active service-request type" });
+  const hours = configuredType.targetResolutionHours ?? { URGENT: 4, HIGH: 24, MEDIUM: 72, LOW: 120 }[parsed.data.priority];
   const dueAt = new Date(Date.now() + hours * 60 * 60 * 1000);
   const assignedTo = req.user!.roles.includes("CUSTOMER_METER_SERVICES")
     ? null

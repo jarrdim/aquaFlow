@@ -39,6 +39,11 @@ const roleDefinitions = [
   ],
   ["METER_READER", "Meter Reader", "Capture assigned route meter readings"],
   [
+    "FIELD_OPERATIONS_TECHNICIAN",
+    "Field Operations Technician",
+    "Performs assigned field repairs and maintenance, including leak repairs, pipeline work, service restoration and meter-related field work",
+  ],
+  [
     "METER_SUPERVISOR",
     "Meter Supervisor",
     "Approve readings and manage meter operations",
@@ -348,6 +353,7 @@ async function main() {
       }
       if (["WORK_ORDER_VIEW", "WORK_ORDER_EXECUTE"].includes(code)) {
         await ensureRolePermission(roles.get("METER_READER")!.roleId, permission.permissionId);
+        await ensureRolePermission(roles.get("FIELD_OPERATIONS_TECHNICIAN")!.roleId, permission.permissionId);
       }
       if (["WORK_ORDER_VIEW", "WORK_ORDER_CREATE"].includes(code)) {
         await ensureRolePermission(roles.get("CUSTOMER_CARE_OFFICER")!.roleId, permission.permissionId);

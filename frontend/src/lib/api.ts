@@ -233,6 +233,17 @@ export const api = {
   listRoutes: (zoneId?: string) =>
     request(`/lookups/routes${zoneId ? `?zoneId=${zoneId}` : ""}`),
   listCategories: () => request("/lookups/customer-categories"),
+  listServiceRequestTypes: () => request("/lookups/service-request-types"),
+  listMeterCatalogue: () => request("/lookups/meter-catalogue"),
+
+  listSetupRecords: (resource: string) => request(`/setups/${encodeURIComponent(resource)}`),
+  getSetupLookups: () => request("/setups/lookups"),
+  createSetupRecord: (resource: string, data: Record<string, unknown>) =>
+    request(`/setups/${encodeURIComponent(resource)}`, { method: "POST", body: JSON.stringify(data) }),
+  updateSetupRecord: (resource: string, id: string, data: Record<string, unknown>) =>
+    request(`/setups/${encodeURIComponent(resource)}/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(data) }),
+  deactivateSetupRecord: (resource: string, id: string) =>
+    request(`/setups/${encodeURIComponent(resource)}/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
   listProperties: (customerId?: string) =>
     request(`/properties${customerId ? `?customerId=${customerId}` : ""}`),

@@ -786,12 +786,14 @@ export default function WorkOrderManagement() {
                           <SearchableSelect
                             className={input}
                             value={form.workOrderTypeId}
-                            onChange={(e) =>
+                            onChange={(e) => {
+                              const selectedType = lookups.types.find((item) => String(item.workOrderTypeId) === e.target.value);
                               setForm({
                                 ...form,
                                 workOrderTypeId: e.target.value,
-                              })
-                            }
+                                priority: selectedType?.defaultPriority || form.priority,
+                              });
+                            }}
                           >
                             <option value="">Select type</option>
                             {lookups.types.map((item) => (
@@ -803,6 +805,16 @@ export default function WorkOrderManagement() {
                               </option>
                             ))}
                           </SearchableSelect>
+                          {form.workOrderTypeId && (() => {
+                            const selectedType = lookups.types.find((item) => String(item.workOrderTypeId) === form.workOrderTypeId);
+                            if (!selectedType) return null;
+                            const details = [
+                              selectedType.estimatedDurationMinutes ? `${selectedType.estimatedDurationMinutes} min estimated` : "",
+                              selectedType.standardMaterials ? `Materials: ${selectedType.standardMaterials}` : "",
+                              selectedType.completionInstructions ? `Completion: ${selectedType.completionInstructions}` : "",
+                            ].filter(Boolean);
+                            return details.length ? <p className="mt-1.5 text-xs leading-5 text-slate-500">{details.join(" · ")}</p> : null;
+                          })()}
                         </div>
                       </label>
                       <label>
