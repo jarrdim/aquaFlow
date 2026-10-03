@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   aggregateBillingGroupStatus,
+  allocatedBillingPeriodGroupLabel,
   billingCompletionStatus,
   billingCycleLabel,
   billingCycleType,
+  billingPeriodGroupLabel,
   billingPeriodGroupIdentity,
   ensureBillingPeriodGroup,
   hasPostingEvidence,
@@ -19,6 +21,20 @@ test("billing period labels concatenate cycle code and cycle name with safe fall
   assert.equal(billingCycleLabel({ cycleCode: "BC-2026-12", cycleName: "" }), "BC-2026-12");
   assert.equal(billingCycleLabel({ cycleCode: "", cycleName: "December billing" }), "December billing");
   assert.equal(billingCycleLabel(null), "-");
+});
+
+test("statement periods use billing group names for bills and allocated payments", () => {
+  const september = { billingPeriodGroup: { groupName: "September 2026 Billing" } };
+  const october = { billingPeriodGroup: { groupName: "October 2026 Billing" } };
+
+  assert.equal(billingPeriodGroupLabel(september), "September 2026 Billing");
+  assert.equal(billingPeriodGroupLabel(null), "-");
+  assert.equal(allocatedBillingPeriodGroupLabel([
+    { bill: { billingCycle: september } },
+    { bill: { billingCycle: september } },
+    { bill: { billingCycle: october } },
+  ]), "September 2026 Billing, October 2026 Billing");
+  assert.equal(allocatedBillingPeriodGroupLabel([]), "-");
 });
 
 test("billing periods are grouped by the month in which payment is due", () => {

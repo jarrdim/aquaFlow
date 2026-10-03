@@ -7,9 +7,11 @@ import { createPaymentLinkToken, publicAppUrl } from "../lib/paymentLink";
 import { readingRequiresBill } from "../lib/readingBilling";
 import {
   aggregateBillingGroupStatus,
+  allocatedBillingPeriodGroupLabel,
   billingCompletionStatus,
   billingCycleLabel,
   billingCycleType,
+  billingPeriodGroupLabel,
   ensureBillingPeriodGroup,
   hasPostingEvidence,
   isEligibleApprovedBill,
@@ -1575,7 +1577,7 @@ billingRouter.get("/statements/:accountId", requireScopedPermission(SCOPED_STAFF
       priorAccountAdjustments, newConnectionApplications] = await Promise.all([
       prisma.bill.findMany({
         where: { accountId, status: { in: ["POSTED", "PARTIALLY_PAID", "PAID"] }, postedAt: { gte: from, lte: to } },
-        include: { billingCycle: true, tariff: true, reading: true },
+        include: { billingCycle: { include: { billingPeriodGroup: true } }, tariff: true, reading: true },
         orderBy: { postedAt: "asc" },
       }),
       prisma.payment.findMany({
@@ -1584,7 +1586,19 @@ billingRouter.get("/statements/:accountId", requireScopedPermission(SCOPED_STAFF
           paymentType: { notIn: ["RECONNECTION_FEE", "NEW_CONNECTION_FEE"] },
           paymentDate: { gte: from, lte: to },
         },
-        include: { channel: true },
+        include: {
+          channel: true,
+          allocations: {
+            where: { status: "ACTIVE" },
+            include: {
+              bill: {
+                include: {
+                  billingCycle: { include: { billingPeriodGroup: true } },
+                },
+              },
+            },
+          },
+        },
         orderBy: { paymentDate: "asc" },
       }),
       prisma.payment.findMany({
@@ -1678,7 +1692,7 @@ billingRouter.get("/statements/:accountId", requireScopedPermission(SCOPED_STAFF
         date: bill.postedAt!,
         particulars: "Water bill",
         reference: bill.billNumber,
-        period: billingCycleLabel(bill.billingCycle),
+        period: billingPeriodGroupLabel(bill.billingCycle),
         details: bill.reading
           ? `Prev: ${Number(bill.reading.previousReading)} - Curr: ${Number(bill.reading.currentReading)} - Units billed: ${Number(bill.consumptionUnits)}${Number(bill.consumptionUnits) !== Number(bill.reading.consumption) ? " (includes meter replacement final consumption)" : ""} (${String(bill.reading.readingType).replace(/_/g, " ")}) - Due: ${(bill.billingCycle?.dueDate ?? bill.dueDate).toISOString().slice(0, 10)}`
           : `Units: ${Number(bill.consumptionUnits)} - Due: ${(bill.billingCycle?.dueDate ?? bill.dueDate).toISOString().slice(0, 10)}`,
@@ -1691,7 +1705,7 @@ billingRouter.get("/statements/:accountId", requireScopedPermission(SCOPED_STAFF
         date: payment.paymentDate,
         particulars: "Payment",
         reference: payment.transactionReference,
-        period: payment.paymentDate.toISOString().slice(0, 7),
+        period: allocatedBillingPeriodGroupLabel(payment.allocations),
         details: [payment.channel.channelName, payment.remarks].filter(Boolean).join(" - "),
         description: `Payment ${payment.transactionReference}`,
         debit: 0,
@@ -1706,7 +1720,7 @@ billingRouter.get("/statements/:accountId", requireScopedPermission(SCOPED_STAFF
           const amount = Number(payment.amount);
           const common = {
             date: payment.paymentDate,
-            period: payment.paymentDate.toISOString().slice(0, 7),
+            period: "-",
           };
           return [{
             ...common,
@@ -1737,7 +1751,7 @@ billingRouter.get("/statements/:accountId", requireScopedPermission(SCOPED_STAFF
           const paid = Number(application.amountPaid);
           const common = {
             date: application.createdAt,
-            period: application.createdAt.toISOString().slice(0, 7),
+            period: "-",
             reference: application.applicationNumber,
           };
           const rows = [{
@@ -1769,7 +1783,7 @@ billingRouter.get("/statements/:accountId", requireScopedPermission(SCOPED_STAFF
           date: posting.posted_at,
           particulars: "Disconnection reading charge",
           reference: posting.work_order_number,
-          period: new Date(posting.posted_at).toISOString().slice(0, 7),
+          period: "-",
           details: `${readingDetails}${posting.fee_overridden ? ` - Amount override: ${posting.fee_override_reason}` : ""}`,
           description: `Final disconnection reading charge ${posting.work_order_number}`,
           debit: Number(posting.disconnection_fee),
@@ -1780,7 +1794,7 @@ billingRouter.get("/statements/:accountId", requireScopedPermission(SCOPED_STAFF
           date: posting.posted_at,
           particulars: "Disconnection fine",
           reference: posting.work_order_number,
-          period: new Date(posting.posted_at).toISOString().slice(0, 7),
+          period: "-",
           details: posting.fine_reason || "Fine applied during disconnection",
           description: `Disconnection fine ${posting.work_order_number}`,
           debit: Number(posting.fine_amount),
@@ -1793,7 +1807,7 @@ billingRouter.get("/statements/:accountId", requireScopedPermission(SCOPED_STAFF
         date: replacement.replacement_date,
         particulars: "Meter replacement",
         reference: replacement.work_order_number ?? `REP-${replacement.replacement_id}`,
-        period: new Date(replacement.replacement_date).toISOString().slice(0, 7),
+        period: "-",
         details: `Old meter ${replacement.old_meter_number} - Prev: ${Number(replacement.previous_reading)} - Final: ${Number(replacement.old_final_reading)} → New meter ${replacement.new_meter_number} - Opening: ${Number(replacement.new_opening_reading)} - ${Number(replacement.final_consumption ?? 0)} units carried to the next bill`,
         description: `Meter replacement REP-${replacement.replacement_id}`,
         debit: 0,
@@ -1804,7 +1818,7 @@ billingRouter.get("/statements/:accountId", requireScopedPermission(SCOPED_STAFF
         date: adjustment.approvedAt,
         particulars: adjustment.adjustmentType === "DEBIT" ? "Account debit adjustment" : "Account credit adjustment",
         reference: adjustment.adjustmentNumber,
-        period: adjustment.approvedAt.toISOString().slice(0, 7),
+        period: "-",
         details: adjustment.reason,
         description: `${adjustment.adjustmentType === "DEBIT" ? "Debit" : "Credit"} adjustment ${adjustment.adjustmentNumber}`,
         debit: adjustment.adjustmentType === "DEBIT" ? Number(adjustment.amount) : 0,

@@ -11,6 +11,26 @@ export function billingCycleLabel(cycle?: { cycleCode?: string | null; cycleName
   return code || name || fallback;
 }
 
+type BillingGroupCycle = {
+  billingPeriodGroup?: { groupName?: string | null } | null;
+};
+
+export function billingPeriodGroupLabel(cycle?: BillingGroupCycle | null, fallback = "-") {
+  return String(cycle?.billingPeriodGroup?.groupName ?? "").trim() || fallback;
+}
+
+export function allocatedBillingPeriodGroupLabel(
+  allocations?: Array<{ bill?: { billingCycle?: BillingGroupCycle | null } | null }> | null,
+  fallback = "-",
+) {
+  const names = Array.from(new Set(
+    (allocations ?? [])
+      .map((allocation) => billingPeriodGroupLabel(allocation.bill?.billingCycle, ""))
+      .filter(Boolean),
+  ));
+  return names.join(", ") || fallback;
+}
+
 type BillWorkflowRecord = {
   status: string;
   postedAt?: Date | string | null;
