@@ -146,11 +146,18 @@ adminRouter.post("/users", async (req, res) => {
   }
 });
 
-const userUpdate = userCreate.omit({ password: true, roleIds: true }).partial().extend({ password: z.string().min(8).max(200).optional() });
+const userUpdate = userCreate.omit({ password: true, roleIds: true }).partial().extend({
+  password: z
+    .string()
+    .min(8, "Password must contain at least 8 characters")
+    .max(200, "Password must contain no more than 200 characters")
+    .optional(),
+});
 adminRouter.patch("/users/:id", async (req, res) => {
   const userId = id.safeParse(req.params.id);
   const parsed = userUpdate.safeParse(req.body);
-  if (!userId.success || !parsed.success) return res.status(400).json({ error: "Invalid user update" });
+  if (!userId.success) return res.status(400).json({ error: "Invalid user ID" });
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message });
   if (userId.data === BigInt(req.user!.userId) && parsed.data.status && parsed.data.status !== "ACTIVE") {
     return res.status(400).json({ error: "You cannot deactivate your own account" });
   }

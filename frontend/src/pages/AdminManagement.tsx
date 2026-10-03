@@ -703,11 +703,21 @@ export function UserAdministration() {
                           ? "email"
                           : "text"
                     }
+                    minLength={key === "password" ? 8 : undefined}
+                    maxLength={key === "password" ? 200 : undefined}
+                    autoComplete={key === "password" ? "new-password" : undefined}
                     value={(form as any)[key]}
                     onChange={(e) =>
                       setForm({ ...form, [key]: e.target.value })
                     }
                   />
+                  {key === "password" && (
+                    <span className="mt-1 block text-xs text-slate-500">
+                      {creating
+                        ? "Use between 8 and 200 characters."
+                        : "Leave blank to keep the current password, or enter 8 to 200 characters."}
+                    </span>
+                  )}
                 </label>
               ))}
               <label>
