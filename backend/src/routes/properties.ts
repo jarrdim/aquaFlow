@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { resolveCustomerReferences } from "../lib/customerReferences";
+import { linkedAccountRouteSync } from "../lib/propertyRouteSync";
 import { requireAuth } from "../middleware/auth";
 
 export const propertiesRouter = Router();
@@ -166,19 +167,38 @@ propertiesRouter.patch("/:id", async (req, res) => {
     return res.status(400).json({ error: "The selected route does not belong to the selected zone" });
   }
 
-  const property = await prisma.property.update({
-    where: { propertyId: propertyId.data },
-    data: {
-      zoneId,
-      serviceAreaId,
-      routeId,
-      plotNumber: data.plotNumber || null,
-      buildingName: data.buildingName || null,
-      physicalAddress: data.physicalAddress,
-      occupancyStatus: data.occupancyStatus,
-      updatedAt: new Date(),
-    },
-    include: { zone: true, serviceArea: true, route: true },
+  const routeSync = linkedAccountRouteSync(existing.routeId, routeId);
+  const now = new Date();
+  const property = await prisma.$transaction(async (tx) => {
+    const updated = await tx.property.update({
+      where: { propertyId: propertyId.data },
+      data: {
+        zoneId,
+        serviceAreaId,
+        routeId,
+        plotNumber: data.plotNumber || null,
+        buildingName: data.buildingName || null,
+        physicalAddress: data.physicalAddress,
+        occupancyStatus: data.occupancyStatus,
+        updatedAt: now,
+      },
+      include: { zone: true, serviceArea: true, route: true },
+    });
+
+    if (routeSync) {
+      await tx.customerAccount.updateMany({
+        where: {
+          propertyId: propertyId.data,
+          routeId: routeSync.previousRouteId,
+        },
+        data: {
+          routeId: routeSync.nextRouteId,
+          updatedAt: now,
+        },
+      });
+    }
+
+    return updated;
   });
   res.json(property);
 });
