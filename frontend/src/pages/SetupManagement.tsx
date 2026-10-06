@@ -23,6 +23,7 @@ const setupGroups: SetupGroup[] = [
       { name: "Meter-reading routes", description: "Reading routes and their sequence within each zone.", path: "/setups/routes" },
       { name: "Customer categories", description: "Domestic, commercial and other account classifications.", path: "/setups/customer-categories" },
       { name: "Field officers", description: "Meter readers and operational officers assigned to zones and routes.", path: "/setups/field-officers" },
+      { name: "Officer route coverage", description: "Assign meter readers and field technicians to their operational routes.", path: "/setups/route-coverages" },
     ],
   },
   {

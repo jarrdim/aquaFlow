@@ -57,6 +57,19 @@ const officerInput = z.object({
   availabilityStatus: z.enum(["AVAILABLE", "BUSY", "ON_LEAVE", "UNAVAILABLE"]),
   status: status.default("ACTIVE"),
 });
+const routeCoverageInput = z.object({
+  fieldOfficerId: id.optional(),
+  fieldOfficerIds: z.array(id).min(1).max(50).optional(),
+  routeId: id.optional(),
+  routeIds: z.array(id).min(1).max(100).optional(),
+  status: status.default("ACTIVE"),
+}).superRefine((value, context) => {
+  const officerCount = value.fieldOfficerIds?.length ?? (value.fieldOfficerId ? 1 : 0);
+  const routeCount = value.routeIds?.length ?? (value.routeId ? 1 : 0);
+  if (!officerCount) context.addIssue({ code: z.ZodIssueCode.custom, path: ["fieldOfficerIds"], message: "Select at least one field officer or reader" });
+  if (!routeCount) context.addIssue({ code: z.ZodIssueCode.custom, path: ["routeIds"], message: "Select at least one route" });
+  if (officerCount * routeCount > 500) context.addIssue({ code: z.ZodIssueCode.custom, message: "Create no more than 500 route assignments at once" });
+});
 const meterCatalogueInput = z.object({
   catalogueCode: code,
   catalogueName: z.string().trim().min(2).max(140),
@@ -98,6 +111,7 @@ const schemas = {
   routes: routeInput,
   "customer-categories": categoryInput,
   "field-officers": officerInput,
+  "route-coverages": routeCoverageInput,
   "meter-catalogue": meterCatalogueInput,
   "service-request-types": serviceRequestTypeInput,
   "work-order-types": workOrderTypeInput,
@@ -129,15 +143,30 @@ function databaseConflict(error: unknown, res: Response) {
 }
 
 setupsRouter.get("/lookups", asyncRoute(async (_req, res) => {
-  const [zones, users] = await Promise.all([
+  const [zones, users, routes, fieldOfficers] = await Promise.all([
     prisma.zone.findMany({ where: { status: "ACTIVE" }, orderBy: { zoneName: "asc" }, select: { zoneId: true, zoneCode: true, zoneName: true } }),
     prisma.user.findMany({
       where: { userType: { in: ["STAFF", "SYSTEM"] }, status: "ACTIVE" },
       orderBy: [{ firstName: "asc" }, { lastName: "asc" }],
       select: { userId: true, username: true, firstName: true, lastName: true, phoneNumber: true, fieldOfficer: { select: { fieldOfficerId: true } } },
     }),
+    prisma.route.findMany({
+      where: { status: "ACTIVE" },
+      orderBy: [{ zone: { zoneName: "asc" } }, { routeName: "asc" }],
+      select: { routeId: true, routeCode: true, routeName: true, zone: { select: { zoneName: true } } },
+    }),
+    prisma.fieldOfficer.findMany({
+      where: { status: "ACTIVE", user: { status: "ACTIVE" } },
+      orderBy: [{ user: { firstName: "asc" } }, { user: { lastName: "asc" } }],
+      select: {
+        fieldOfficerId: true,
+        employeeNumber: true,
+        officerType: true,
+        user: { select: { firstName: true, lastName: true, username: true } },
+      },
+    }),
   ]);
-  res.json({ zones, users });
+  res.json({ zones, users, routes, fieldOfficers });
 }));
 
 setupsRouter.get("/:resource", asyncRoute(async (req, res) => {
@@ -149,6 +178,20 @@ setupsRouter.get("/:resource", asyncRoute(async (req, res) => {
     case "routes": return res.json(await prisma.route.findMany({ include: { zone: { select: { zoneId: true, zoneName: true } }, _count: { select: { accounts: true, properties: true } } }, orderBy: [{ sequenceNumber: "asc" }, { routeName: "asc" }] }));
     case "customer-categories": return res.json(await prisma.customerCategory.findMany({ include: { _count: { select: { accounts: true, tariffs: true } } }, orderBy: { categoryName: "asc" } }));
     case "field-officers": return res.json(await prisma.fieldOfficer.findMany({ include: { user: { select: { userId: true, firstName: true, lastName: true, username: true, status: true } }, homeZone: { select: { zoneId: true, zoneName: true } }, _count: { select: { routeAssignments: true } } }, orderBy: { employeeNumber: "asc" } }));
+    case "route-coverages": return res.json(await prisma.$queryRaw<any[]>`
+      SELECT coverage.route_coverage_id AS "routeCoverageId",
+             coverage.field_officer_id AS "fieldOfficerId", coverage.route_id AS "routeId",
+             coverage.status, coverage.assigned_at AS "assignedAt",
+             fo.employee_number AS "employeeNumber", fo.officer_type AS "officerType",
+             CONCAT_WS(' ', u.first_name, u.last_name) AS "officerName", u.username,
+             r.route_code AS "routeCode", r.route_name AS "routeName",
+             z.zone_name AS "zoneName"
+      FROM aquaflow.field_officer_route_coverages coverage
+      JOIN aquaflow.field_officers fo ON fo.field_officer_id = coverage.field_officer_id
+      JOIN aquaflow.users u ON u.user_id = fo.user_id
+      JOIN aquaflow.routes r ON r.route_id = coverage.route_id
+      JOIN aquaflow.zones z ON z.zone_id = r.zone_id
+      ORDER BY z.zone_name, r.route_name, u.first_name, u.last_name`);
     case "meter-catalogue": return res.json(await prisma.meterCatalogueItem.findMany({ orderBy: { catalogueName: "asc" } }));
     case "service-request-types": return res.json(await prisma.serviceRequestType.findMany({ orderBy: { typeName: "asc" } }));
     case "work-order-types": return res.json(await prisma.$queryRaw<any[]>`
@@ -175,6 +218,26 @@ setupsRouter.post("/:resource", asyncRoute(async (req, res) => {
       case "routes": created = await prisma.route.create({ data }); break;
       case "customer-categories": created = await prisma.customerCategory.create({ data }); break;
       case "field-officers": created = await prisma.fieldOfficer.create({ data }); break;
+      case "route-coverages": {
+        const officerIds: bigint[] = data.fieldOfficerIds ?? [data.fieldOfficerId];
+        const routeIds: bigint[] = data.routeIds ?? [data.routeId];
+        const assignedBy = BigInt(req.user!.userId);
+        const assignments = officerIds.flatMap((fieldOfficerId) =>
+          routeIds.map((routeId) => Prisma.sql`(${fieldOfficerId}, ${routeId}, ${assignedBy}, ${data.status})`),
+        );
+        const rows = await prisma.$queryRaw<any[]>`
+          INSERT INTO aquaflow.field_officer_route_coverages
+            (field_officer_id, route_id, assigned_by, status)
+          VALUES ${Prisma.join(assignments)}
+          ON CONFLICT (field_officer_id, route_id) DO UPDATE SET
+            status = EXCLUDED.status,
+            assigned_by = EXCLUDED.assigned_by,
+            updated_at = CURRENT_TIMESTAMP
+          RETURNING route_coverage_id AS "routeCoverageId", field_officer_id AS "fieldOfficerId",
+                    route_id AS "routeId", status, assigned_at AS "assignedAt"`;
+        created = { created: rows.length, data: rows };
+        break;
+      }
       case "meter-catalogue": created = await prisma.meterCatalogueItem.create({ data }); break;
       case "service-request-types": created = await prisma.serviceRequestType.create({ data }); break;
       case "work-order-types": {
@@ -214,6 +277,19 @@ setupsRouter.patch("/:resource/:id", asyncRoute(async (req, res) => {
       case "routes": updated = await prisma.route.update({ where: { routeId: recordId.data }, data: { ...data, updatedAt: new Date() } }); break;
       case "customer-categories": updated = await prisma.customerCategory.update({ where: { categoryId: recordId.data }, data: { ...data, updatedAt: new Date() } }); break;
       case "field-officers": updated = await prisma.fieldOfficer.update({ where: { fieldOfficerId: recordId.data }, data: { ...data, updatedAt: new Date() } }); break;
+      case "route-coverages": {
+        if (!data.fieldOfficerId || !data.routeId) return res.status(400).json({ error: "Select one field officer and one route when editing an assignment" });
+        const rows = await prisma.$queryRaw<any[]>`
+          UPDATE aquaflow.field_officer_route_coverages
+          SET field_officer_id = ${data.fieldOfficerId}, route_id = ${data.routeId},
+              status = ${data.status}, updated_at = CURRENT_TIMESTAMP
+          WHERE route_coverage_id = ${recordId.data}
+          RETURNING route_coverage_id AS "routeCoverageId", field_officer_id AS "fieldOfficerId",
+                    route_id AS "routeId", status, assigned_at AS "assignedAt"`;
+        if (!rows[0]) return res.status(404).json({ error: "Setup record not found" });
+        updated = rows[0];
+        break;
+      }
       case "meter-catalogue": updated = await prisma.meterCatalogueItem.update({ where: { meterCatalogueItemId: recordId.data }, data }); break;
       case "service-request-types": updated = await prisma.serviceRequestType.update({ where: { serviceRequestTypeId: recordId.data }, data }); break;
       case "work-order-types": {
@@ -251,6 +327,7 @@ setupsRouter.delete("/:resource/:id", asyncRoute(async (req, res) => {
     case "routes": await prisma.route.update({ where: { routeId: recordId.data }, data: { status: "INACTIVE", updatedAt: new Date() } }); break;
     case "customer-categories": await prisma.customerCategory.update({ where: { categoryId: recordId.data }, data: { status: "INACTIVE", updatedAt: new Date() } }); break;
     case "field-officers": await prisma.fieldOfficer.update({ where: { fieldOfficerId: recordId.data }, data: { status: "INACTIVE", updatedAt: new Date() } }); break;
+    case "route-coverages": await prisma.$executeRaw`UPDATE aquaflow.field_officer_route_coverages SET status = 'INACTIVE', updated_at = CURRENT_TIMESTAMP WHERE route_coverage_id = ${recordId.data}`; break;
     case "meter-catalogue": await prisma.meterCatalogueItem.update({ where: { meterCatalogueItemId: recordId.data }, data: { status: "INACTIVE" } }); break;
     case "service-request-types": await prisma.serviceRequestType.update({ where: { serviceRequestTypeId: recordId.data }, data: { status: "INACTIVE" } }); break;
     case "work-order-types": await prisma.$executeRaw`UPDATE aquaflow.work_order_types SET status = 'INACTIVE', updated_at = CURRENT_TIMESTAMP WHERE work_order_type_id = ${recordId.data}`; break;

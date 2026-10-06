@@ -12,6 +12,11 @@ const canAssign = requirePermission("SERVICE_REQUEST_ASSIGN");
 const canResolve = requirePermission("SERVICE_REQUEST_RESOLVE");
 const id = z.coerce.bigint().positive();
 const requestStatuses = ["OPEN", "ASSIGNED", "IN_PROGRESS", "PENDING_CUSTOMER", "RESOLVED", "CLOSED", "CANCELLED"] as const;
+function isMissingRouteCoverageTable(error: unknown) {
+  return error instanceof Prisma.PrismaClientKnownRequestError &&
+    error.code === "P2010" &&
+    String(error.meta?.code) === "42P01";
+}
 const requestInclude = {
   customer: { select: { customerId: true, customerNumber: true, firstName: true, lastName: true, organizationName: true, phoneNumber: true } },
   account: {
@@ -62,30 +67,63 @@ serviceRequestsRouter.get("/targets", canCreate, async (req, res) => {
 });
 
 serviceRequestsRouter.get("/officers", canView, async (_req, res) => {
-  res.json(await prisma.user.findMany({
-    where: { status: "ACTIVE", userType: { in: ["STAFF", "SYSTEM"] } },
-    orderBy: [{ firstName: "asc" }, { lastName: "asc" }],
-    select: {
-      userId: true,
-      firstName: true,
-      lastName: true,
-      username: true,
-      fieldOfficer: {
-        select: {
-          homeZone: {
-            select: {
-              zoneName: true,
-              serviceAreas: {
-                where: { status: "ACTIVE" },
-                orderBy: { areaName: "asc" },
-                select: { serviceAreaId: true, areaCode: true, areaName: true },
-              },
-            },
+  const [officers, routeCoverages] = await Promise.all([
+    prisma.user.findMany({
+      where: {
+        status: "ACTIVE",
+        userType: { in: ["STAFF", "SYSTEM"] },
+        fieldOfficer: { is: { status: "ACTIVE" } },
+      },
+      orderBy: [{ firstName: "asc" }, { lastName: "asc" }],
+      select: {
+        userId: true,
+        firstName: true,
+        lastName: true,
+        username: true,
+        fieldOfficer: {
+          select: {
+            fieldOfficerId: true,
+            officerType: true,
+            availabilityStatus: true,
+            homeZone: { select: { zoneName: true } },
           },
         },
       },
-    },
-  }));
+    }),
+    prisma.$queryRaw<any[]>`
+      SELECT fo.user_id AS "userId", coverage.route_id AS "routeId",
+             r.route_code AS "routeCode", r.route_name AS "routeName",
+             z.zone_name AS "zoneName",
+             COALESCE((
+               SELECT jsonb_agg(area ORDER BY area->>'areaName')
+               FROM (
+                 SELECT DISTINCT jsonb_build_object(
+                   'serviceAreaId', sa.service_area_id::text,
+                   'areaCode', sa.area_code,
+                   'areaName', sa.area_name
+                 ) AS area
+                 FROM aquaflow.properties property
+                 JOIN aquaflow.service_areas sa ON sa.service_area_id = property.service_area_id
+                 WHERE property.route_id = coverage.route_id AND sa.status = 'ACTIVE'
+               ) service_areas
+             ), '[]'::jsonb) AS "serviceAreas"
+      FROM aquaflow.field_officer_route_coverages coverage
+      JOIN aquaflow.field_officers fo ON fo.field_officer_id = coverage.field_officer_id
+      JOIN aquaflow.routes r ON r.route_id = coverage.route_id
+      JOIN aquaflow.zones z ON z.zone_id = r.zone_id
+      WHERE coverage.status = 'ACTIVE' AND fo.status = 'ACTIVE' AND r.status = 'ACTIVE'
+      ORDER BY z.zone_name, r.route_name`.catch((error) => {
+        if (isMissingRouteCoverageTable(error)) return [];
+        throw error;
+      }),
+  ]);
+  res.json(officers.map((officer) => ({
+    ...officer,
+    fieldOfficer: officer.fieldOfficer ? {
+      ...officer.fieldOfficer,
+      routeAssignments: routeCoverages.filter((coverage) => coverage.userId === officer.userId),
+    } : null,
+  })));
 });
 
 serviceRequestsRouter.get("/", canView, async (req, res) => {
@@ -149,12 +187,22 @@ serviceRequestsRouter.patch("/bulk-assign", canAssign, async (req, res) => {
   const uniqueAssigneeIds = [...new Set(parsed.data.assigneeIds.map(String))].map(BigInt);
   const [assignees, requests] = await Promise.all([
     prisma.user.findMany({
-      where: { userId: { in: uniqueAssigneeIds }, status: "ACTIVE", userType: { in: ["STAFF", "SYSTEM"] } },
+      where: {
+        userId: { in: uniqueAssigneeIds },
+        status: "ACTIVE",
+        userType: { in: ["STAFF", "SYSTEM"] },
+        fieldOfficer: { is: { status: "ACTIVE" } },
+      },
       select: {
         userId: true,
         firstName: true,
         lastName: true,
-        fieldOfficer: { select: { homeZone: { select: { serviceAreas: { where: { status: "ACTIVE" }, select: { serviceAreaId: true } } } } } },
+        fieldOfficer: {
+          select: {
+            fieldOfficerId: true,
+            homeZone: { select: { serviceAreas: { where: { status: "ACTIVE" }, select: { serviceAreaId: true } } } },
+          },
+        },
       },
     }),
     prisma.serviceRequest.findMany({
@@ -162,24 +210,47 @@ serviceRequestsRouter.patch("/bulk-assign", canAssign, async (req, res) => {
       select: {
         serviceRequestId: true,
         status: true,
-        account: { select: { property: { select: { serviceAreaId: true, serviceArea: { select: { areaName: true } } } } } },
+        account: { select: { property: { select: { routeId: true, serviceAreaId: true, serviceArea: { select: { areaName: true } } } } } },
       },
     }),
   ]);
-  if (assignees.length !== uniqueAssigneeIds.length) return res.status(400).json({ error: "One or more selected staff users are no longer active" });
+  if (assignees.length !== uniqueAssigneeIds.length) return res.status(400).json({ error: "One or more selected users are not active field officers" });
   if (requests.length !== uniqueIds.length) return res.status(404).json({ error: "One or more selected tasks no longer exist" });
   if (requests.some((item) => !["OPEN", "ASSIGNED", "IN_PROGRESS", "PENDING_CUSTOMER"].includes(item.status))) {
     return res.status(400).json({ error: "Resolved, closed or cancelled tasks cannot be assigned" });
   }
+
+  const fieldOfficerIds = assignees.flatMap((assignee) => assignee.fieldOfficer?.fieldOfficerId ? [assignee.fieldOfficer.fieldOfficerId] : []);
+  const routeCoverages = fieldOfficerIds.length
+    ? await prisma.$queryRaw<{ fieldOfficerId: bigint; routeId: bigint }[]>`
+        SELECT field_officer_id AS "fieldOfficerId", route_id AS "routeId"
+        FROM aquaflow.field_officer_route_coverages
+        WHERE status = 'ACTIVE' AND field_officer_id IN (${Prisma.join(fieldOfficerIds)})`.catch((error) => {
+          if (isMissingRouteCoverageTable(error)) return [];
+          throw error;
+        })
+    : [];
+  const coverageByOfficer = new Map<string, Set<string>>();
+  routeCoverages.forEach((coverage) => {
+    const officerKey = String(coverage.fieldOfficerId);
+    const routes = coverageByOfficer.get(officerKey) ?? new Set<string>();
+    routes.add(String(coverage.routeId));
+    coverageByOfficer.set(officerKey, routes);
+  });
 
   const areaPositions = new Map<string, number>();
   const allocations = requests
     .sort((left, right) => (left.account?.property.serviceArea?.areaName ?? "").localeCompare(right.account?.property.serviceArea?.areaName ?? ""))
     .map((request) => {
       const serviceAreaId = request.account?.property.serviceAreaId;
-      const matchingAssignees = serviceAreaId
+      const routeId = request.account?.property.routeId;
+      const routeMatches = routeId
+        ? assignees.filter((assignee) => assignee.fieldOfficer && coverageByOfficer.get(String(assignee.fieldOfficer.fieldOfficerId))?.has(String(routeId)))
+        : [];
+      const serviceAreaMatches = serviceAreaId
         ? assignees.filter((assignee) => assignee.fieldOfficer?.homeZone?.serviceAreas.some((area) => area.serviceAreaId === serviceAreaId))
         : [];
+      const matchingAssignees = routeMatches.length ? routeMatches : serviceAreaMatches;
       const pool = matchingAssignees.length ? matchingAssignees : assignees;
       const areaKey = String(serviceAreaId ?? "UNASSIGNED");
       const position = areaPositions.get(areaKey) ?? 0;

@@ -494,6 +494,7 @@ const SETUP_MENU_GROUPS: ReadonlyArray<{
       ["Meter-reading routes", "/setups/routes"],
       ["Customer categories", "/setups/customer-categories"],
       ["Field officers", "/setups/field-officers"],
+      ["Officer route coverage", "/setups/route-coverages"],
     ],
   },
   {

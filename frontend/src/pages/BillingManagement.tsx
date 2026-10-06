@@ -542,8 +542,7 @@ export function BillingDashboard() {
   const postingInconsistencies = Number(data?.postingInconsistencies ?? 0);
   const unpostedNotifications = Number(data?.unpostedNotifications ?? 0);
   const eligibleNotBilled = Number(data?.eligibleNotBilled ?? 0);
-  const eligibleNotNotifiedMeterReplacement = Number(data?.eligibleNotNotifiedMeterReplacement ?? 0);
-  const eligibleNotNotifiedOther = Number(data?.eligibleNotNotifiedOther ?? 0);
+  const eligibleNotNotified = Number(data?.eligibleNotNotified ?? 0);
   return (
     <Page
       title="Billing management dashboard"
@@ -612,16 +611,10 @@ export function BillingDashboard() {
               to="/billing/generate"
             />
             <Kpi
-              label="MR bills not notified"
-              value={eligibleNotNotifiedMeterReplacement}
+              label="Bills not notified"
+              value={eligibleNotNotified}
               tone="text-orange-600"
-              to={`/billing/notifications?billingPeriodGroupId=${groupId}&billingCategory=MR&notificationStatus=NOT_NOTIFIED`}
-            />
-            <Kpi
-              label="Other bills not notified"
-              value={eligibleNotNotifiedOther}
-              tone="text-orange-600"
-              to={`/billing/notifications?billingPeriodGroupId=${groupId}&billingCategory=OTHER&notificationStatus=NOT_NOTIFIED`}
+              to={`/billing/notifications?billingPeriodGroupId=${groupId}&notificationStatus=NOT_NOTIFIED`}
             />
             <Kpi
               label="Pending adjustments"
@@ -4821,7 +4814,6 @@ export function BillNotifications() {
   const [search, setSearch] = useState("");
   const [appliedSearch, setAppliedSearch] = useState("");
   const [billStatus, setBillStatus] = useState("");
-  const [billingCategory, setBillingCategory] = useState(searchParams.get("billingCategory") ?? "");
   const [notificationStatus, setNotificationStatus] = useState(searchParams.get("notificationStatus") ?? "NOT_SENT");
   const [batchSize, setBatchSize] = useState("2000");
   const [selectedBillIds, setSelectedBillIds] = useState<string[]>([]);
@@ -4837,7 +4829,6 @@ export function BillNotifications() {
           ? { billingPeriodGroupId: groupId }
           : { billingCycleId: cycleId }),
       ...(billStatus ? { status: billStatus } : {}),
-      ...(billingCategory ? { billingCategory } : {}),
       ...(notificationStatus ? { notificationStatus } : {}),
       notificationEligible: "true",
       limit: "10000",
@@ -4900,16 +4891,14 @@ export function BillNotifications() {
     const timer = window.setTimeout(() => {
       api.listBills(notificationBillFilters(globalSearch))
         .then((rows) => active && setBills(rows.filter((bill: Row) =>
-          Boolean(groupId) || (
-            bill.billingCycle?.cycleType !== "METER_REPLACEMENT" &&
-            !String(bill.billingCycle?.cycleCode ?? "").toUpperCase().startsWith("MR-")
-          ),
+          bill.billingCycle?.cycleType !== "METER_REPLACEMENT" &&
+          !String(bill.billingCycle?.cycleCode ?? "").toUpperCase().startsWith("MR-"),
         )))
         .catch((e) => active && setError(e.message))
         .finally(() => active && setLoadingBills(false));
     }, globalSearch ? 250 : 0);
     return () => { active = false; window.clearTimeout(timer); };
-  }, [groupId, cycleId, appliedSearch, billStatus, billingCategory, notificationStatus]);
+  }, [groupId, cycleId, appliedSearch, billStatus, notificationStatus]);
   async function send() {
     if (!selectedBillIds.length) return;
     const confirmation = await Swal.fire({
@@ -4966,10 +4955,8 @@ export function BillNotifications() {
       setLoadingBills(true);
       const refreshed = await api.listBills(notificationBillFilters(appliedSearch));
       setBills(refreshed.filter((bill: Row) =>
-        Boolean(groupId) || (
-          bill.billingCycle?.cycleType !== "METER_REPLACEMENT" &&
-          !String(bill.billingCycle?.cycleCode ?? "").toUpperCase().startsWith("MR-")
-        ),
+        bill.billingCycle?.cycleType !== "METER_REPLACEMENT" &&
+        !String(bill.billingCycle?.cycleCode ?? "").toUpperCase().startsWith("MR-"),
       ));
     } catch (e: any) {
       setError(e.message);
@@ -5100,7 +5087,6 @@ export function BillNotifications() {
                   setCycleId(value);
                   if (value) {
                     setGroupId("");
-                    setBillingCategory("");
                   }
                 }}
                 disabled={loadingCycles || loadingBills || queueing}
@@ -5178,7 +5164,7 @@ export function BillNotifications() {
             Dear <strong>[Customer Name]</strong> A/C <strong>[Account Number without ACC-]</strong> your bill for <strong>[Billing Group Name]</strong>. Prev Read <strong>[Previous Reading]</strong> Curr Read <strong>[Current Reading]</strong> Consumption <strong>[Units]</strong> Arrears <strong>KSh [Arrears]</strong> Amount Paid <strong>KSh [Amount Paid]</strong> Current Bill <strong>KSh [Current Bill]</strong> Total Amount <strong>KSh [Total Amount]</strong>. Due date is <strong>[Due Date]</strong>. Reconnection Fee is <strong>KSh 1,155</strong>. Bills payable through PayBill No <strong>823496</strong> using <strong>[Account Number without ACC-]</strong> as the account number. WE MAKE IT SAFE BECAUSE WATER IS LIFE. THANK YOU.
             <div className="mt-3 font-semibold text-aqua-700">Pay now: [Secure Payment Link]</div>
           </div>
-          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             <Field label="Search bill, customer or account">
               <div className="flex gap-2">
                 <input
@@ -5207,13 +5193,6 @@ export function BillNotifications() {
                 <option value="PAID">Paid</option>
               </SearchableSelect>
             </Field>
-            <Field label="Billing type">
-              <SearchableSelect className={INPUT} disabled={loadingBills || queueing} value={billingCategory} onChange={(e) => setBillingCategory(e.target.value)}>
-                <option value="">All billing types</option>
-                <option value="MR">Meter replacement (MR)</option>
-                <option value="OTHER">Other billing</option>
-              </SearchableSelect>
-            </Field>
             <Field label="Notification status">
               <SearchableSelect className={INPUT} disabled={loadingBills || queueing} value={notificationStatus} onChange={(e) => setNotificationStatus(e.target.value)}>
                 <option value="">All notification statuses</option>
@@ -5227,7 +5206,7 @@ export function BillNotifications() {
           </div>
           <div className="mt-3 flex items-center justify-between text-sm text-slate-500">
             <span>Showing {filteredBills.length} of {selected.length} eligible bills</span>
-            {(search || appliedSearch || billStatus || billingCategory || notificationStatus !== "NOT_SENT") && <button type="button" className="font-semibold text-aqua-700 hover:text-aqua-600" onClick={() => { setSearch(""); setAppliedSearch(""); setBillStatus(""); setBillingCategory(""); setNotificationStatus("NOT_SENT"); }}>Reset filters</button>}
+            {(search || appliedSearch || billStatus || notificationStatus !== "NOT_SENT") && <button type="button" className="font-semibold text-aqua-700 hover:text-aqua-600" onClick={() => { setSearch(""); setAppliedSearch(""); setBillStatus(""); setNotificationStatus("NOT_SENT"); }}>Reset filters</button>}
           </div>
           <div className="relative mt-4 min-h-[260px] overflow-x-auto">
             {loadingBills && (

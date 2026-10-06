@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
+import { CheckboxMultiSelect } from "../components/CheckboxMultiSelect";
 import { SearchableSelect } from "../components/SearchableSelect";
 import { SweetAlertToast } from "../components/SweetAlertToast";
 import { api, getSessionUser } from "../lib/api";
@@ -10,7 +11,7 @@ type Field = {
   type?: "text" | "number" | "textarea" | "select" | "checkbox";
   required?: boolean;
   options?: readonly string[];
-  lookup?: "zones" | "users";
+  lookup?: "zones" | "users" | "routes" | "fieldOfficers";
   table?: boolean;
   wide?: boolean;
   min?: number;
@@ -88,6 +89,16 @@ const configs: Record<string, Config> = {
     ],
     initial: { userId: "", employeeNumber: "", officerType: "METER_READER", phoneNumber: "", homeZoneId: "", availabilityStatus: "AVAILABLE", status: "ACTIVE" },
   },
+  "route-coverages": {
+    title: "Officer route coverage", singular: "route assignment", idKey: "routeCoverageId",
+    description: "Assign meter readers and field operations technicians to the routes they cover.",
+    fields: [
+      { key: "fieldOfficerId", label: "Field officer or reader", type: "select", lookup: "fieldOfficers", required: true, table: true },
+      { key: "routeId", label: "Route", type: "select", lookup: "routes", required: true, table: true },
+      { key: "status", label: "Status", type: "select", options: statusOptions, required: true, table: true },
+    ],
+    initial: { fieldOfficerId: [], routeId: [], status: "ACTIVE" },
+  },
   "meter-catalogue": {
     title: "Meter catalogue", singular: "catalogue item", idKey: "meterCatalogueItemId",
     description: "Define standard meter configurations for consistent stock registration and installation.",
@@ -148,7 +159,7 @@ export default function SetupResourceManagement() {
   const config = configs[resource];
   const isAdmin = Boolean(getSessionUser()?.roles.includes("SYSTEM_ADMIN"));
   const [rows, setRows] = useState<any[]>([]);
-  const [lookups, setLookups] = useState<{ zones: any[]; users: any[] }>({ zones: [], users: [] });
+  const [lookups, setLookups] = useState<{ zones: any[]; users: any[]; routes: any[]; fieldOfficers: any[] }>({ zones: [], users: [], routes: [], fieldOfficers: [] });
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
@@ -187,11 +198,28 @@ export default function SetupResourceManagement() {
   const optionsFor = (field: Field) => {
     if (field.lookup === "zones") return lookups.zones.map((zone) => ({ value: String(zone.zoneId), label: zone.zoneCode ? `${zone.zoneCode} · ${zone.zoneName}` : zone.zoneName }));
     if (field.lookup === "users") return lookups.users.map((user) => ({ value: String(user.userId), label: `${user.firstName} ${user.lastName} (${user.username})` }));
+    if (field.lookup === "routes") return lookups.routes.map((route) => ({ value: String(route.routeId), label: `${route.routeCode} · ${route.routeName} · ${route.zone?.zoneName}` }));
+    if (field.lookup === "fieldOfficers") return lookups.fieldOfficers.map((officer) => ({ value: String(officer.fieldOfficerId), label: `${officer.user.firstName} ${officer.user.lastName} · ${pretty(officer.officerType)} · ${officer.employeeNumber}` }));
     return (field.options ?? []).map((value) => ({ value, label: pretty(value) }));
+  };
+  const multiOptionsFor = (field: Field) => {
+    if (field.lookup === "routes") return lookups.routes.map((route) => ({
+      value: String(route.routeId),
+      label: `${route.routeCode} · ${route.routeName}`,
+      group: route.zone?.zoneName || "No zone",
+    }));
+    if (field.lookup === "fieldOfficers") return lookups.fieldOfficers.map((officer) => ({
+      value: String(officer.fieldOfficerId),
+      label: `${officer.user.firstName} ${officer.user.lastName} · ${officer.employeeNumber}`,
+      group: pretty(officer.officerType),
+    }));
+    return optionsFor(field);
   };
   const display = (row: any, field: Field) => {
     if (field.key === "zoneId" || field.key === "homeZoneId") return row.zone?.zoneName ?? row.homeZone?.zoneName ?? optionsFor(field).find((option) => option.value === String(row[field.key]))?.label ?? "—";
     if (field.key === "userId") return row.user ? `${row.user.firstName} ${row.user.lastName}` : optionsFor(field).find((option) => option.value === String(row.userId))?.label ?? "—";
+    if (field.key === "fieldOfficerId") return row.officerName ? `${row.officerName} · ${pretty(row.officerType)}` : optionsFor(field).find((option) => option.value === String(row.fieldOfficerId))?.label ?? "—";
+    if (field.key === "routeId") return row.routeName ? `${row.routeCode} · ${row.routeName} · ${row.zoneName}` : optionsFor(field).find((option) => option.value === String(row.routeId))?.label ?? "—";
     if (field.type === "checkbox") return row[field.key] ? "Yes" : "No";
     if (field.type === "select") return pretty(row[field.key]);
     return row[field.key] === null || row[field.key] === "" || row[field.key] === undefined ? "—" : String(row[field.key]);
@@ -235,17 +263,28 @@ export default function SetupResourceManagement() {
 
   async function save(event: FormEvent) {
     event.preventDefault();
+    const bulkCoverage = resource === "route-coverages" && !editing;
+    const selectedOfficerIds = Array.isArray(form.fieldOfficerId) ? form.fieldOfficerId : [];
+    const selectedRouteIds = Array.isArray(form.routeId) ? form.routeId : [];
+    if (bulkCoverage && (!selectedOfficerIds.length || !selectedRouteIds.length)) {
+      setError("Select at least one field officer or reader and at least one route.");
+      return;
+    }
     setSaving(true); setError(""); setSuccess("");
-    const payload = Object.fromEntries(config.fields.map((field) => {
+    let payload = Object.fromEntries(config.fields.map((field) => {
       let value = form[field.key];
       if (field.type === "number") value = value === "" ? null : Number(value);
       if (field.lookup && value === "") value = null;
       return [field.key, value];
     }));
+    if (bulkCoverage) payload = { fieldOfficerIds: selectedOfficerIds, routeIds: selectedRouteIds, status: form.status };
     try {
-      if (editing) await api.updateSetupRecord(resource, String(editing[config.idKey]), payload);
-      else await api.createSetupRecord(resource, payload);
-      setSuccess(`${config.singular[0].toUpperCase()}${config.singular.slice(1)} ${editing ? "updated" : "created"} successfully.`);
+      const response: any = editing
+        ? await api.updateSetupRecord(resource, String(editing[config.idKey]), payload)
+        : await api.createSetupRecord(resource, payload);
+      setSuccess(bulkCoverage
+        ? `${Number(response?.created || selectedOfficerIds.length * selectedRouteIds.length).toLocaleString()} route assignment(s) saved successfully.`
+        : `${config.singular[0].toUpperCase()}${config.singular.slice(1)} ${editing ? "updated" : "created"} successfully.`);
       setEditing(null); setForm({});
       await load();
     } catch (requestError) {
@@ -319,14 +358,36 @@ export default function SetupResourceManagement() {
         <form onSubmit={save} className="flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-white/20 bg-white shadow-2xl">
           <div className="flex items-start justify-between gap-4 border-b border-slate-200 bg-slate-50/70 px-5 py-4 sm:px-6"><div><div className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-aqua-700">{editing ? "Update configuration" : "New configuration"}</div><h2 id="setup-form-title" className="mt-1 text-xl font-extrabold text-slate-900">{editing ? "Edit" : "Add"} {config.singular}</h2><p className="mt-1 text-xs text-slate-500">Complete the details below. Fields marked with <span className="text-red-500">*</span> are required.</p></div><button type="button" onClick={close} className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-slate-200 bg-white text-slate-500 shadow-sm transition hover:bg-slate-100 hover:text-slate-800" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="m6 6 12 12M18 6 6 18" strokeLinecap="round" /></svg></button></div>
           <div className="grid overflow-y-auto gap-4 p-5 sm:grid-cols-2 sm:p-6">
-            {config.fields.map((field) => <label key={field.key} className={field.wide ? "sm:col-span-2" : ""}>
-              {field.type === "checkbox" ? <span className="flex min-h-12 items-center gap-3 rounded-xl border border-slate-200 bg-slate-50/60 px-4 transition hover:bg-slate-50"><input type="checkbox" checked={Boolean(form[field.key])} onChange={(event) => setForm({ ...form, [field.key]: event.target.checked })} className="h-5 w-5 rounded border-slate-300 text-aqua-700 focus:ring-aqua-500" /><span className="text-sm font-semibold text-slate-700">{field.label}</span></span> : <><span className="mb-1.5 block text-sm font-semibold text-slate-700">{field.label}{field.required ? <span className="text-red-500"> *</span> : ""}</span>{field.type === "select" ? <SearchableSelect className={input} value={form[field.key] ?? ""} required={field.required} onChange={(event) => {
-                const next = { ...form, [field.key]: event.target.value };
-                if (field.key === "userId") { const user = lookups.users.find((item) => String(item.userId) === event.target.value); if (user?.phoneNumber && !next.phoneNumber) next.phoneNumber = user.phoneNumber; }
-                if (resource === "routes" && field.key === "zoneId" && !editing) next.routeCode = event.target.value ? nextRouteCode(event.target.value) : "";
-                setForm(next);
-              }}><option value="">Select {field.label.toLowerCase()}</option>{optionsFor(field).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</SearchableSelect> : field.type === "textarea" ? <textarea className={`${input} min-h-24 resize-y`} value={form[field.key] ?? ""} required={field.required} onChange={(event) => setForm({ ...form, [field.key]: event.target.value })} /> : <><input className={`${input} ${resource === "routes" && field.key === "routeCode" && !editing ? "bg-slate-50 font-semibold text-slate-700" : ""}`} type={field.type === "number" ? "number" : "text"} min={field.min} step={field.type === "number" ? "any" : undefined} value={form[field.key] ?? ""} placeholder={resource === "routes" && field.key === "routeCode" && !editing ? "Select a zone to generate" : undefined} required={field.required} readOnly={resource === "routes" && field.key === "routeCode" && !editing} onChange={(event) => setForm({ ...form, [field.key]: event.target.value })} />{resource === "routes" && field.key === "routeCode" && !editing && <span className="mt-1.5 block text-xs text-slate-500">Generated automatically from the selected zone.</span>}</>}</>}
-            </label>)}
+            {config.fields.map((field) => {
+              const bulkCoverageField = resource === "route-coverages" && !editing && ["fieldOfficerId", "routeId"].includes(field.key);
+              if (bulkCoverageField) return (
+                <div key={field.key} className={field.wide ? "sm:col-span-2" : ""}>
+                  <span className="mb-1.5 block text-sm font-semibold text-slate-700">{field.label}<span className="text-red-500"> *</span></span>
+                  <CheckboxMultiSelect
+                    className={input}
+                    value={Array.isArray(form[field.key]) ? form[field.key] : []}
+                    onChange={(values) => setForm({ ...form, [field.key]: values })}
+                    options={multiOptionsFor(field)}
+                    placeholder={`Select one or more ${field.key === "routeId" ? "routes" : "officers or readers"}`}
+                    searchPlaceholder={`Search ${field.key === "routeId" ? "routes by code, name or zone" : "officers and readers"}...`}
+                    emptyMessage={`No ${field.key === "routeId" ? "routes" : "field officers"} found`}
+                  />
+                  <span className="mt-1.5 block text-xs text-slate-500">
+                    {Array.isArray(form[field.key]) && form[field.key].length
+                      ? `${form[field.key].length} selected`
+                      : field.key === "routeId" ? "You can assign several routes at once." : "You can assign the same routes to several staff members."}
+                  </span>
+                </div>
+              );
+              return <label key={field.key} className={field.wide ? "sm:col-span-2" : ""}>
+                {field.type === "checkbox" ? <span className="flex min-h-12 items-center gap-3 rounded-xl border border-slate-200 bg-slate-50/60 px-4 transition hover:bg-slate-50"><input type="checkbox" checked={Boolean(form[field.key])} onChange={(event) => setForm({ ...form, [field.key]: event.target.checked })} className="h-5 w-5 rounded border-slate-300 text-aqua-700 focus:ring-aqua-500" /><span className="text-sm font-semibold text-slate-700">{field.label}</span></span> : <><span className="mb-1.5 block text-sm font-semibold text-slate-700">{field.label}{field.required ? <span className="text-red-500"> *</span> : ""}</span>{field.type === "select" ? <SearchableSelect className={input} value={form[field.key] ?? ""} required={field.required} onChange={(event) => {
+                  const next = { ...form, [field.key]: event.target.value };
+                  if (field.key === "userId") { const user = lookups.users.find((item) => String(item.userId) === event.target.value); if (user?.phoneNumber && !next.phoneNumber) next.phoneNumber = user.phoneNumber; }
+                  if (resource === "routes" && field.key === "zoneId" && !editing) next.routeCode = event.target.value ? nextRouteCode(event.target.value) : "";
+                  setForm(next);
+                }}><option value="">Select {field.label.toLowerCase()}</option>{optionsFor(field).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</SearchableSelect> : field.type === "textarea" ? <textarea className={`${input} min-h-24 resize-y`} value={form[field.key] ?? ""} required={field.required} onChange={(event) => setForm({ ...form, [field.key]: event.target.value })} /> : <><input className={`${input} ${resource === "routes" && field.key === "routeCode" && !editing ? "bg-slate-50 font-semibold text-slate-700" : ""}`} type={field.type === "number" ? "number" : "text"} min={field.min} step={field.type === "number" ? "any" : undefined} value={form[field.key] ?? ""} placeholder={resource === "routes" && field.key === "routeCode" && !editing ? "Select a zone to generate" : undefined} required={field.required} readOnly={resource === "routes" && field.key === "routeCode" && !editing} onChange={(event) => setForm({ ...form, [field.key]: event.target.value })} />{resource === "routes" && field.key === "routeCode" && !editing && <span className="mt-1.5 block text-xs text-slate-500">Generated automatically from the selected zone.</span>}</>}</>}
+              </label>;
+            })}
           </div>
           <div className="flex justify-end gap-3 border-t border-slate-200 bg-slate-50 px-5 py-4 sm:px-6"><button type="button" onClick={close} disabled={saving} className="rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-bold text-slate-700 transition hover:bg-slate-100 disabled:opacity-60">Cancel</button><button type="submit" disabled={saving} className="min-w-32 rounded-xl bg-aqua-700 px-5 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-aqua-600 disabled:cursor-not-allowed disabled:opacity-60">{saving ? "Saving..." : editing ? "Save changes" : `Add ${config.singular}`}</button></div>
         </form>

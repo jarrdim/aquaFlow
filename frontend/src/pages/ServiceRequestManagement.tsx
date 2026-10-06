@@ -35,10 +35,20 @@ type Officer = {
   username: string;
   emailAddress?: string;
   fieldOfficer?: {
+    fieldOfficerId?: string;
+    officerType?: string;
+    availabilityStatus?: string;
     homeZone?: {
       zoneName: string;
       serviceAreas: { serviceAreaId: string; areaCode: string; areaName: string }[];
     };
+    routeAssignments?: {
+      routeId: string;
+      routeCode: string;
+      routeName: string;
+      zoneName: string;
+      serviceAreas: { serviceAreaId: string; areaCode: string; areaName: string }[];
+    }[];
   };
 };
 type Item = {
@@ -864,8 +874,8 @@ function BulkAssignModal({
               emptyMessage="No matching staff found"
               options={officers.map((officer) => ({
                 value: officer.userId,
-                label: `${officer.firstName} ${officer.lastName} · @${officer.username}`,
-                group: officer.fieldOfficer?.homeZone?.serviceAreas?.map((area) => area.areaName).join(", ") || "No service area",
+                label: `${officer.firstName} ${officer.lastName} · @${officer.username}${officer.fieldOfficer?.routeAssignments?.length ? ` · ${officer.fieldOfficer.routeAssignments.map((assignment) => assignment.routeCode).join(", ")}` : ""}`,
+                group: [...new Set(officer.fieldOfficer?.routeAssignments?.flatMap((assignment) => assignment.serviceAreas.map((area) => area.areaName)) || [])].join(", ") || "No route coverage",
               }))}
             />
           </label>
