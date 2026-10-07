@@ -5187,6 +5187,16 @@ export function BillNotifications() {
               </div>
               {!!selectedBillIds.length && <button type="button" className="mt-2 text-sm font-semibold text-slate-600 hover:text-slate-900" onClick={() => setSelectedBillIds([])}>Clear selection</button>}
             </Field>
+            {!!selectedMeterReplacementBillIds.length && (
+              <Button
+                tone="slate"
+                className="w-full"
+                disabled={loadingBills || queueing || clearing}
+                onClick={() => clearNotifications(selectedMeterReplacementBillIds)}
+              >
+                {clearing ? "Clearing selected rows..." : `Clear selected rows (${selectedMeterReplacementBillIds.length})`}
+              </Button>
+            )}
             <div className={`rounded-lg p-3 text-sm ${notificationCyclesReady ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-800"}`}>
               {appliedSearch
                 ? groupId
@@ -5210,16 +5220,6 @@ export function BillNotifications() {
                 </span>
               ) : notificationCyclesReady ? `Queue ${selectedBillIds.length} selected bill(s)` : "Close reading cycle first"}
             </Button>
-            {billingCategory === "MR" && (
-              <Button
-                tone="slate"
-                className="w-full"
-                disabled={!selectedMeterReplacementBillIds.length || loadingBills || queueing || clearing}
-                onClick={() => clearNotifications(selectedMeterReplacementBillIds)}
-              >
-                {clearing ? "Clearing notifications..." : `Clear ${selectedMeterReplacementBillIds.length} selected notification(s)`}
-              </Button>
-            )}
             <DeliveryQueueLink className="flex w-full rounded-xl border border-emerald-600 bg-white px-4 py-2.5 text-[15px] font-semibold text-emerald-700 transition hover:bg-emerald-50" />
           </div>
         </Card>
