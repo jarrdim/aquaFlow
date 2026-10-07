@@ -682,6 +682,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify(data),
     }),
+  clearBillNotifications: (billIds: string[], reason: string) =>
+    request("/billing/notifications/clear", {
+      method: "PATCH",
+      body: JSON.stringify({ billIds, reason }),
+    }),
   getCustomerStatement: (accountId: string, from = "", to = "") =>
     request(
       `/billing/statements/${accountId}?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,

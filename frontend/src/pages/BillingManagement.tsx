@@ -177,6 +177,7 @@ const badges: Record<string, string> = {
   RETURNED: "bg-orange-50 text-orange-700",
   REJECTED: "bg-red-50 text-red-700",
   CANCELLED: "bg-red-50 text-red-700",
+  NOT_REQUIRED: "bg-slate-100 text-slate-600",
   NONE: "bg-slate-100 text-slate-600",
 };
 function pretty(value?: string | null) {
@@ -4828,6 +4829,7 @@ export function BillNotifications() {
   const [loadingCycles, setLoadingCycles] = useState(true);
   const [loadingBills, setLoadingBills] = useState(false);
   const [queueing, setQueueing] = useState(false);
+  const [clearing, setClearing] = useState(false);
   const [sendingBillId, setSendingBillId] = useState("");
   function notificationBillFilters(searchValue = "") {
     return {
@@ -5005,6 +5007,40 @@ export function BillNotifications() {
       setSendingBillId("");
     }
   }
+  async function clearNotifications(billIds: string[]) {
+    if (!billIds.length || clearing) return;
+    const confirmation = await Swal.fire({
+      icon: "warning",
+      title: billIds.length === 1 ? "Clear this MR notification?" : `Clear ${billIds.length.toLocaleString()} MR notifications?`,
+      html: "The selected meter-replacement bills will be marked <strong>Notification not required</strong>. No customer message will be sent.",
+      input: "text",
+      inputLabel: "Reason",
+      inputValue: "Meter replacement notification not required",
+      inputValidator: (value) => value.trim().length < 3 ? "Enter a reason" : undefined,
+      showCancelButton: true,
+      confirmButtonText: "Clear notification",
+      cancelButtonText: "Keep notification",
+      confirmButtonColor: "#475569",
+      reverseButtons: true,
+    });
+    if (!confirmation.isConfirmed) return;
+    try {
+      setError("");
+      setMessage("");
+      setClearing(true);
+      const result = await api.clearBillNotifications(billIds, String(confirmation.value).trim());
+      const clearedIds = new Set(billIds);
+      setBills((current) => current.map((bill) =>
+        clearedIds.has(String(bill.billId)) ? { ...bill, notificationStatus: "NOT_REQUIRED" } : bill,
+      ));
+      setSelectedBillIds((current) => current.filter((billId) => !clearedIds.has(billId)));
+      setMessage(`${Number(result.cleared ?? billIds.length).toLocaleString()} meter replacement notification(s) cleared. No message was sent.`);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setClearing(false);
+    }
+  }
   const selected = bills.filter((bill) =>
     ["POSTED", "PARTIALLY_PAID", "PAID"].includes(bill.status) &&
     Boolean(bill.readingId ?? bill.reading),
@@ -5021,15 +5057,19 @@ export function BillNotifications() {
         (!billStatus || bill.status === billStatus) &&
         (!notificationStatus ||
           (notificationStatus === "NOT_NOTIFIED"
-            ? !["QUEUED", "SENT"].includes(String(bill.notificationStatus))
+            ? !["QUEUED", "SENT", "NOT_REQUIRED"].includes(String(bill.notificationStatus))
             : bill.notificationStatus === notificationStatus));
     });
   }, [selected, appliedSearch, billStatus, notificationStatus]);
   const selectableBills = filteredBills.filter(
-    (bill) => !["QUEUED", "SENT"].includes(String(bill.notificationStatus)),
+    (bill) => !["QUEUED", "SENT", "NOT_REQUIRED"].includes(String(bill.notificationStatus)),
   );
   const selectedBillIdSet = new Set(selectedBillIds);
   const selectableBillIds = selectableBills.map((bill) => String(bill.billId));
+  const selectedMeterReplacementBillIds = selectedBillIds.filter((billId) => {
+    const bill = bills.find((item) => String(item.billId) === billId);
+    return bill?.billingCycle?.cycleType === "METER_REPLACEMENT";
+  });
   const allSelectableSelected = selectableBillIds.length > 0 && selectableBillIds.every((billId) => selectedBillIdSet.has(billId));
   const totalAmount = (bill: Row) =>
     Number(bill.previousBalance ?? 0) +
@@ -5170,6 +5210,16 @@ export function BillNotifications() {
                 </span>
               ) : notificationCyclesReady ? `Queue ${selectedBillIds.length} selected bill(s)` : "Close reading cycle first"}
             </Button>
+            {billingCategory === "MR" && (
+              <Button
+                tone="slate"
+                className="w-full"
+                disabled={!selectedMeterReplacementBillIds.length || loadingBills || queueing || clearing}
+                onClick={() => clearNotifications(selectedMeterReplacementBillIds)}
+              >
+                {clearing ? "Clearing notifications..." : `Clear ${selectedMeterReplacementBillIds.length} selected notification(s)`}
+              </Button>
+            )}
             <DeliveryQueueLink className="flex w-full rounded-xl border border-emerald-600 bg-white px-4 py-2.5 text-[15px] font-semibold text-emerald-700 transition hover:bg-emerald-50" />
           </div>
         </Card>
@@ -5222,6 +5272,7 @@ export function BillNotifications() {
                 <option value="QUEUED">Queued</option>
                 <option value="SENT">Sent</option>
                 <option value="FAILED">Failed</option>
+                <option value="NOT_REQUIRED">Not required</option>
               </SearchableSelect>
             </Field>
           </div>
@@ -5268,7 +5319,7 @@ export function BillNotifications() {
                       <input
                         type="checkbox"
                         aria-label={`Select ${bill.billNumber}`}
-                        disabled={["QUEUED", "SENT"].includes(String(bill.notificationStatus))}
+                        disabled={["QUEUED", "SENT", "NOT_REQUIRED"].includes(String(bill.notificationStatus))}
                         checked={selectedBillIdSet.has(String(bill.billId))}
                         onChange={(event) => toggleBill(bill.billId, event.target.checked)}
                       />
@@ -5281,22 +5332,34 @@ export function BillNotifications() {
                       <Badge value={bill.notificationStatus} />
                     </td>
                     <td className={TD}>
-                      <button
-                        type="button"
-                        disabled={!channels.length || Boolean(sendingBillId) || String(bill.notificationStatus) === "QUEUED"}
-                        className="rounded-lg border border-aqua-600 bg-white px-3 py-1.5 text-sm font-bold text-aqua-700 transition hover:bg-aqua-700 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
-                        onClick={() => sendNow(bill)}
-                      >
-                        {sendingBillId === String(bill.billId)
-                          ? "Sending…"
-                          : String(bill.notificationStatus) === "QUEUED"
-                            ? "Already queued"
-                          : String(bill.notificationStatus) === "NOT_SENT"
-                            ? "Send now"
-                            : String(bill.notificationStatus) === "FAILED"
-                              ? "Retry now"
-                            : "Resend"}
-                      </button>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          disabled={!channels.length || Boolean(sendingBillId) || clearing || ["QUEUED", "NOT_REQUIRED"].includes(String(bill.notificationStatus))}
+                          className="rounded-lg border border-aqua-600 bg-white px-3 py-1.5 text-sm font-bold text-aqua-700 transition hover:bg-aqua-700 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                          onClick={() => sendNow(bill)}
+                        >
+                          {sendingBillId === String(bill.billId)
+                            ? "Sending…"
+                            : String(bill.notificationStatus) === "QUEUED"
+                              ? "Already queued"
+                            : String(bill.notificationStatus) === "NOT_SENT"
+                              ? "Send now"
+                              : String(bill.notificationStatus) === "FAILED"
+                                ? "Retry now"
+                              : "Resend"}
+                        </button>
+                        {bill.billingCycle?.cycleType === "METER_REPLACEMENT" && !["SENT", "NOT_REQUIRED"].includes(String(bill.notificationStatus)) && (
+                          <button
+                            type="button"
+                            disabled={Boolean(sendingBillId) || queueing || clearing}
+                            className="rounded-lg border border-slate-400 bg-white px-3 py-1.5 text-sm font-bold text-slate-600 transition hover:bg-slate-600 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                            onClick={() => clearNotifications([String(bill.billId)])}
+                          >
+                            Clear
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}

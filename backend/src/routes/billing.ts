@@ -829,7 +829,7 @@ billingRouter.get("/bills", async (req, res, next) => {
         ...(notificationEligible ? { AND: [{ status: { in: [...postedBillStatuses] } }] } : {}),
         ...(notificationEligible ? { readingId: { not: null } } : {}),
         ...(notificationStatus === "NOT_NOTIFIED"
-          ? { notificationStatus: { notIn: ["QUEUED", "SENT"] } }
+          ? { notificationStatus: { notIn: ["QUEUED", "SENT", "NOT_REQUIRED"] } }
           : notificationStatus
             ? { notificationStatus }
             : {}),
@@ -1541,6 +1541,82 @@ billingRouter.post("/notifications", requireRole("SYSTEM_ADMIN", "BILLING_OFFICE
   } catch (error) { next(error); }
 });
 
+billingRouter.patch("/notifications/clear", requireRole("SYSTEM_ADMIN", "BILLING_OFFICER", "BILLING_SUPERVISOR"), async (req, res, next) => {
+  const data = parse(z.object({
+    billIds: z.array(id).min(1).max(2_000),
+    reason: z.string().trim().min(3).max(500).default("Meter replacement bill notification marked as not required"),
+  }), req.body, res);
+  if (!data) return;
+  try {
+    const billIds = [...new Set(data.billIds.map(String))].map(BigInt);
+    const bills = await prisma.bill.findMany({
+      where: { billId: { in: billIds } },
+      select: {
+        billId: true,
+        billingCycleId: true,
+        notificationStatus: true,
+        billingCycle: { select: { cycleType: true } },
+      },
+    });
+    if (bills.length !== billIds.length) {
+      return res.status(404).json({ error: "One or more selected bills were not found" });
+    }
+    if (bills.some((bill) => bill.billingCycle.cycleType !== "METER_REPLACEMENT")) {
+      return res.status(409).json({ error: "Only meter replacement bill notifications can be cleared" });
+    }
+    if (bills.some((bill) => bill.notificationStatus === "SENT")) {
+      return res.status(409).json({ error: "A notification that has already been sent cannot be cleared" });
+    }
+    const delivered = await prisma.notification.count({
+      where: {
+        billId: { in: billIds },
+        notificationType: "BILL_ISSUED",
+        deliveryStatus: { in: ["SENT", "DELIVERED"] },
+      },
+    });
+    if (delivered) {
+      return res.status(409).json({ error: "A notification that has already been delivered cannot be cleared" });
+    }
+
+    const clearedAt = new Date();
+    await prisma.$transaction(async (tx) => {
+      await tx.notification.updateMany({
+        where: {
+          billId: { in: billIds },
+          notificationType: "BILL_ISSUED",
+          deliveryStatus: { in: ["QUEUED", "FAILED"] },
+        },
+        data: {
+          deliveryStatus: "CANCELLED",
+          failureReason: data.reason,
+          updatedAt: clearedAt,
+        },
+      });
+      await tx.billNotification.updateMany({
+        where: { billId: { in: billIds }, status: { in: ["QUEUED", "FAILED"] } },
+        data: { status: "CANCELLED" },
+      });
+      await tx.bill.updateMany({
+        where: { billId: { in: billIds } },
+        data: { notificationStatus: "NOT_REQUIRED", updatedAt: clearedAt },
+      });
+      await tx.billingEvent.createMany({
+        data: bills.map((bill) => ({
+          billingCycleId: bill.billingCycleId,
+          billId: bill.billId,
+          eventType: "NOTIFICATION_NOT_REQUIRED",
+          previousStatus: bill.notificationStatus,
+          newStatus: "NOT_REQUIRED",
+          details: data.reason,
+          performedBy: uid(req),
+          createdAt: clearedAt,
+        })),
+      });
+    }, { maxWait: 10_000, timeout: 30_000 });
+    res.json({ cleared: bills.length });
+  } catch (error) { next(error); }
+});
+
 billingRouter.get("/statements/:accountId", requireScopedPermission(SCOPED_STAFF_ROLES, ["CUSTOMER_STATEMENT_VIEW"]), async (req, res, next) => {
   const accountId = parse(id, req.params.accountId, res); if (!accountId) return;
   try {
@@ -2188,7 +2264,7 @@ billingRouter.get("/dashboard", async (req, res, next) => {
     const eligibleNotNotifiedBills = bills.filter((bill) =>
       bill.readingId != null &&
       postedBillStatuses.includes(bill.status as (typeof postedBillStatuses)[number]) &&
-      !["QUEUED", "SENT"].includes(bill.notificationStatus),
+      !["QUEUED", "SENT", "NOT_REQUIRED"].includes(bill.notificationStatus),
     );
     const meterReplacementCycleIds = new Set(
       selectedCycles
