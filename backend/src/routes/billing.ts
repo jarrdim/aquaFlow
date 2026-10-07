@@ -826,10 +826,7 @@ billingRouter.get("/bills", async (req, res, next) => {
             : {}),
         ...(accountId ? { accountId } : {}),
         ...(status ? { status: status === "POSTED_GROUP" ? { in: [...postedBillStatuses] } : status } : {}),
-        ...(notificationEligible ? { AND: [
-          { status: { in: [...postedBillStatuses] } },
-          { billingCycle: { cycleType: { not: "METER_REPLACEMENT" } } },
-        ] } : {}),
+        ...(notificationEligible ? { AND: [{ status: { in: [...postedBillStatuses] } }] } : {}),
         ...(notificationEligible ? { readingId: { not: null } } : {}),
         ...(notificationStatus === "NOT_NOTIFIED"
           ? { notificationStatus: { notIn: ["QUEUED", "SENT"] } }
@@ -1427,9 +1424,6 @@ billingRouter.post("/notifications", requireRole("SYSTEM_ADMIN", "BILLING_OFFICE
       include: { readingCycles: true },
     });
     if (!billingCycle) return res.status(404).json({ error: "Billing period was not found" });
-    if (billingCycle.cycleType === "METER_REPLACEMENT") {
-      return res.status(409).json({ error: "Meter replacement bills do not require notifications" });
-    }
     const readingCycle = billingCycle.readingCycles[0];
     if (!readingCycle) return res.status(409).json({ error: "This billing period has no linked reading cycle" });
     if (readingCycle.status !== "CLOSED") return res.status(409).json({ error: "Close the linked reading cycle before sending bill notifications" });
@@ -2191,17 +2185,20 @@ billingRouter.get("/dashboard", async (req, res, next) => {
     ));
     const completionStatus = aggregateBillingGroupStatus(cycleCompletionStatuses);
     const eligibleNotBilled = candidateSets.reduce((total, candidates) => total + (candidates?.rows.filter((row) => row.eligible).length ?? 0), 0);
+    const eligibleNotNotifiedBills = bills.filter((bill) =>
+      bill.readingId != null &&
+      postedBillStatuses.includes(bill.status as (typeof postedBillStatuses)[number]) &&
+      !["QUEUED", "SENT"].includes(bill.notificationStatus),
+    );
     const meterReplacementCycleIds = new Set(
       selectedCycles
         .filter((item) => item.cycleType === "METER_REPLACEMENT")
         .map((item) => item.billingCycleId),
     );
-    const eligibleNotNotifiedBills = bills.filter((bill) =>
-      !meterReplacementCycleIds.has(bill.billingCycleId) &&
-      bill.readingId != null &&
-      postedBillStatuses.includes(bill.status as (typeof postedBillStatuses)[number]) &&
-      !["QUEUED", "SENT"].includes(bill.notificationStatus),
-    );
+    const eligibleNotNotifiedMeterReplacement = eligibleNotNotifiedBills.filter(
+      (bill) => meterReplacementCycleIds.has(bill.billingCycleId),
+    ).length;
+    const eligibleNotNotifiedOther = eligibleNotNotifiedBills.length - eligibleNotNotifiedMeterReplacement;
     const eligibleNotNotified = eligibleNotNotifiedBills.length;
     const totalCurrentBilling = round(bills.reduce(
       (sum, bill) => sum + Number(bill.totalCurrentCharges),
@@ -2215,6 +2212,8 @@ billingRouter.get("/dashboard", async (req, res, next) => {
       billsGenerated: statusSummary.generated,
       eligibleNotBilled,
       eligibleNotNotified,
+      eligibleNotNotifiedMeterReplacement,
+      eligibleNotNotifiedOther,
       pending: statusSummary.pendingApproval,
       approvedAwaitingPosting: statusSummary.approvedAwaitingPosting,
       posted: statusSummary.posted,
@@ -2223,11 +2222,7 @@ billingRouter.get("/dashboard", async (req, res, next) => {
       unpostedNotifications: bills.filter((bill) => bill.status === "APPROVED" && bill.notificationStatus === "SENT").length,
       other: statusSummary.other,
       totalBilling: totalCurrentBilling,
-      notified: bills.filter((bill) =>
-        !meterReplacementCycleIds.has(bill.billingCycleId) &&
-        postedBillStatuses.includes(bill.status as (typeof postedBillStatuses)[number]) &&
-        bill.notificationStatus === "SENT"
-      ).length,
+      notified: bills.filter((bill) => postedBillStatuses.includes(bill.status as (typeof postedBillStatuses)[number]) && bill.notificationStatus === "SENT").length,
       cancelled: statusSummary.cancelled,
       alerts,
       adjustments,
