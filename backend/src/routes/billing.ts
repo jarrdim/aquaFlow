@@ -1564,25 +1564,25 @@ billingRouter.patch("/notifications/clear", requireRole("SYSTEM_ADMIN", "BILLING
     if (bills.some((bill) => bill.billingCycle.cycleType !== "METER_REPLACEMENT")) {
       return res.status(409).json({ error: "Only meter replacement bill notifications can be cleared" });
     }
-    if (bills.some((bill) => bill.notificationStatus === "SENT")) {
+    const clearableBills = bills.filter((bill) => bill.notificationStatus !== "SENT");
+    const skippedAlreadySent = bills.length - clearableBills.length;
+    if (!clearableBills.length) {
       return res.status(409).json({ error: "A notification that has already been sent cannot be cleared" });
     }
-    const delivered = await prisma.notification.count({
+    const clearableBillIds = clearableBills.map((bill) => bill.billId);
+    const historicalDeliveriesPreserved = await prisma.notification.count({
       where: {
-        billId: { in: billIds },
+        billId: { in: clearableBillIds },
         notificationType: "BILL_ISSUED",
         deliveryStatus: { in: ["SENT", "DELIVERED"] },
       },
     });
-    if (delivered) {
-      return res.status(409).json({ error: "A notification that has already been delivered cannot be cleared" });
-    }
 
     const clearedAt = new Date();
     await prisma.$transaction(async (tx) => {
       await tx.notification.updateMany({
         where: {
-          billId: { in: billIds },
+          billId: { in: clearableBillIds },
           notificationType: "BILL_ISSUED",
           deliveryStatus: { in: ["QUEUED", "FAILED"] },
         },
@@ -1593,15 +1593,15 @@ billingRouter.patch("/notifications/clear", requireRole("SYSTEM_ADMIN", "BILLING
         },
       });
       await tx.billNotification.updateMany({
-        where: { billId: { in: billIds }, status: { in: ["QUEUED", "FAILED"] } },
+        where: { billId: { in: clearableBillIds }, status: { in: ["QUEUED", "FAILED"] } },
         data: { status: "CANCELLED" },
       });
       await tx.bill.updateMany({
-        where: { billId: { in: billIds } },
+        where: { billId: { in: clearableBillIds } },
         data: { notificationStatus: "NOT_REQUIRED", updatedAt: clearedAt },
       });
       await tx.billingEvent.createMany({
-        data: bills.map((bill) => ({
+        data: clearableBills.map((bill) => ({
           billingCycleId: bill.billingCycleId,
           billId: bill.billId,
           eventType: "NOTIFICATION_NOT_REQUIRED",
@@ -1613,7 +1613,12 @@ billingRouter.patch("/notifications/clear", requireRole("SYSTEM_ADMIN", "BILLING
         })),
       });
     }, { maxWait: 10_000, timeout: 30_000 });
-    res.json({ cleared: bills.length });
+    res.json({
+      cleared: clearableBills.length,
+      clearedBillIds: clearableBillIds.map(String),
+      skippedAlreadySent,
+      historicalDeliveriesPreserved,
+    });
   } catch (error) { next(error); }
 });
 

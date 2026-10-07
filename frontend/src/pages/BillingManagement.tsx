@@ -5029,12 +5029,18 @@ export function BillNotifications() {
       setMessage("");
       setClearing(true);
       const result = await api.clearBillNotifications(billIds, String(confirmation.value).trim());
-      const clearedIds = new Set(billIds);
+      const clearedIds = new Set<string>((result.clearedBillIds ?? billIds).map(String));
       setBills((current) => current.map((bill) =>
         clearedIds.has(String(bill.billId)) ? { ...bill, notificationStatus: "NOT_REQUIRED" } : bill,
       ));
       setSelectedBillIds((current) => current.filter((billId) => !clearedIds.has(billId)));
-      setMessage(`${Number(result.cleared ?? billIds.length).toLocaleString()} meter replacement notification(s) cleared. No message was sent.`);
+      const historicalDeliveries = Number(result.historicalDeliveriesPreserved ?? 0);
+      const skippedAlreadySent = Number(result.skippedAlreadySent ?? 0);
+      setMessage(
+        `${Number(result.cleared ?? billIds.length).toLocaleString()} meter replacement notification(s) cleared. No message was sent.` +
+        (skippedAlreadySent ? ` ${skippedAlreadySent.toLocaleString()} row(s) were skipped because they are already marked as sent.` : "") +
+        (historicalDeliveries ? ` ${historicalDeliveries.toLocaleString()} historical delivery record(s) were preserved.` : ""),
+      );
     } catch (e: any) {
       setError(e.message);
     } finally {
