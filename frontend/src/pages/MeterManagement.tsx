@@ -3116,7 +3116,8 @@ export function DirectMeterReplacement() {
   const [form, setForm] = useState({
     oldMeterId: "", replacementDate: today,
     oldFinalReading: "", newOpeningReading: "0", replacementReason: "",
-    newSerialNumber: "", remarks: "", confirmed: false,
+    newSerialNumber: "", remarks: "", applyMinimumCharge: true,
+    minimumChargeWaiverReason: "", confirmed: false,
   });
 
   async function loadOptions(filters: Record<string, string> = {}, background = false) {
@@ -3157,6 +3158,7 @@ export function DirectMeterReplacement() {
         const result = await api.previewDirectMeterReplacement({
           accountId: String(account.accountId), oldMeterId: form.oldMeterId,
           replacementDate: form.replacementDate, oldFinalReading: Number(form.oldFinalReading),
+          applyMinimumCharge: form.applyMinimumCharge,
         });
         setBillPreview(result);
       } catch (err: any) {
@@ -3167,7 +3169,7 @@ export function DirectMeterReplacement() {
       }
     }, 350);
     return () => window.clearTimeout(timer);
-  }, [account?.accountId, form.oldMeterId, form.replacementDate, form.oldFinalReading, previousReading]);
+  }, [account?.accountId, form.oldMeterId, form.replacementDate, form.oldFinalReading, form.applyMinimumCharge, previousReading]);
 
   function chooseOldMeter(meterId: string) {
     const meter = installed.find((item) => String(item.meterId) === meterId);
@@ -3193,11 +3195,14 @@ export function DirectMeterReplacement() {
         replacementDate: form.replacementDate, oldFinalReading: Number(form.oldFinalReading),
         newOpeningReading: Number(form.newOpeningReading), replacementReason: form.replacementReason,
         newSerialNumber: form.newSerialNumber,
+        applyMinimumCharge: form.applyMinimumCharge,
+        minimumChargeWaiverReason: form.applyMinimumCharge ? undefined : form.minimumChargeWaiverReason,
         remarks: form.remarks || undefined, confirmed: true,
       });
       setSuccess(`Meter replaced and billed successfully. Replacement REP-${String(result.replacementId).padStart(4, "0")}; bill ${result.bill?.billNumber ?? "created"} for KSh ${Number(result.bill?.totalCurrentCharges ?? 0).toLocaleString("en-KE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}.`);
       setForm({ oldMeterId: "", replacementDate: today, oldFinalReading: "",
-        newOpeningReading: "0", replacementReason: "", newSerialNumber: "", remarks: "", confirmed: false });
+        newOpeningReading: "0", replacementReason: "", newSerialNumber: "", remarks: "",
+        applyMinimumCharge: true, minimumChargeWaiverReason: "", confirmed: false });
       setInstalledSearch("");
       await loadOptions();
     } catch (err: any) { setError(err.message); }
@@ -3265,6 +3270,22 @@ export function DirectMeterReplacement() {
           <span className="grid h-8 w-8 place-items-center rounded-full bg-white text-aqua-700 shadow-sm">→</span>
           <div><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Replacement</p><p className="mt-1 text-sm font-extrabold text-slate-800">{oldMeter?.meterNumber || "Not selected"}</p><p className="mt-0.5 truncate text-[11px] text-slate-500">S/N {form.newSerialNumber || "not entered"}</p></div>
         </div>
+        <div className={`mb-4 rounded-xl border p-3 ${form.applyMinimumCharge ? "border-amber-200 bg-amber-50" : "border-emerald-200 bg-emerald-50"}`}>
+          <label className="flex cursor-pointer items-start gap-3 text-sm">
+            <input type="checkbox" className="mt-0.5 h-4 w-4" checked={form.applyMinimumCharge}
+              onChange={(event) => {
+                setBillPreview(null);
+                setPreviewError("");
+                setForm({ ...form, applyMinimumCharge: event.target.checked, confirmed: false });
+              }} />
+            <span><strong>Apply tariff minimum charge</strong><span className="mt-0.5 block text-xs text-slate-600">Selected by default. Clearing it waives only the minimum adjustment; actual consumption and other configured charges remain payable.</span></span>
+          </label>
+          {!form.applyMinimumCharge && <div className="mt-3"><Field label="Minimum-charge waiver reason" required>
+            <input className={INPUT} value={form.minimumChargeWaiverReason}
+              onChange={(event) => setForm({ ...form, minimumChargeWaiverReason: event.target.value, confirmed: false })}
+              placeholder="Explain why the minimum charge should not apply" minLength={5} maxLength={500} required />
+          </Field></div>}
+        </div>
         <div className="overflow-hidden rounded-xl border border-aqua-200">
           <div className="bg-gradient-to-br from-aqua-700 to-cyan-600 px-4 py-2.5 text-white">
             <div className="flex items-center justify-between gap-3"><p className="text-xs font-bold uppercase tracking-wider text-white/75">Immediate bill amount</p><span className="rounded-full bg-white/15 px-2 py-1 text-[10px] font-bold">POSTED ON SAVE</span></div>
@@ -3310,7 +3331,7 @@ export function DirectMeterReplacement() {
         </div>
         <label className="mt-5 flex cursor-pointer gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm"><input type="checkbox" className="mt-0.5 h-4 w-4" checked={form.confirmed} onChange={(e) => setForm({ ...form, confirmed: e.target.checked })} />
           <span>I confirm the physical replacement is complete, these readings are correct, and the customer should be billed immediately.</span></label>
-        <Button type="submit" tone="green" className="mt-4 w-full" disabled={saving || loading || previewLoading || !billPreview || !form.confirmed || !oldMeter}>{saving ? "Replacing and billing..." : "Replace and bill now"}</Button>
+        <Button type="submit" tone="green" className="mt-4 w-full" disabled={saving || loading || previewLoading || !billPreview || !form.confirmed || !oldMeter || (!form.applyMinimumCharge && form.minimumChargeWaiverReason.trim().length < 5)}>{saving ? "Replacing and billing..." : "Replace and bill now"}</Button>
       </Card></div>
     </form>
   </Page>;

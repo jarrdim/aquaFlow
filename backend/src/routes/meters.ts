@@ -262,7 +262,7 @@ function roundMoney(value: number) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 }
 
-function calculateReplacementBill(tariff: any, consumption: number) {
+export function calculateReplacementBill(tariff: any, consumption: number, applyMinimumCharge = true) {
   const items: ReplacementChargeItem[] = [];
   let consumptionCharge = 0;
   if (tariff.billingMethod === "FLAT") {
@@ -285,7 +285,9 @@ function calculateReplacementBill(tariff: any, consumption: number) {
     items.push({ chargeType: "CONSUMPTION", description: "Water consumption", quantity: consumption, unitRate: rate, amount: consumptionCharge });
   }
   consumptionCharge = roundMoney(consumptionCharge);
-  const minimumChargeAdjustment = roundMoney(Math.max(0, Number(tariff.minimumCharge) - consumptionCharge));
+  const minimumChargeAdjustment = applyMinimumCharge
+    ? roundMoney(Math.max(0, Number(tariff.minimumCharge) - consumptionCharge))
+    : 0;
   const standingCharge = roundMoney(Number(tariff.standingCharge));
   const meterRent = roundMoney(Number(tariff.meterRent));
   if (minimumChargeAdjustment) items.push({ chargeType: "MINIMUM_ADJUSTMENT", description: "Minimum charge adjustment", quantity: 1, unitRate: minimumChargeAdjustment, amount: minimumChargeAdjustment });
@@ -300,6 +302,7 @@ async function prepareReplacementBill(
   accountId: bigint,
   replacementDate: Date,
   consumption: number,
+  applyMinimumCharge = true,
 ) {
   const account = await tx.customerAccount.findUnique({
     where: { accountId },
@@ -318,7 +321,7 @@ async function prepareReplacementBill(
     orderBy: { effectiveFrom: "desc" },
   });
   if (!tariff) throw Object.assign(new Error("No active tariff covers this account on the action date. Immediate billing cannot continue."), { status: 409 });
-  const calculation = calculateReplacementBill(tariff, consumption);
+  const calculation = calculateReplacementBill(tariff, consumption, applyMinimumCharge);
   if (![consumption, calculation.totalCurrentCharges, ...calculation.items.flatMap((item) => [item.quantity, item.unitRate, item.amount])].every((value) => Number.isFinite(value) && value >= 0)) {
     throw Object.assign(new Error("The immediate bill calculation produced invalid amounts. The action cannot continue."), { status: 409 });
   }
@@ -843,13 +846,24 @@ const directReplacementInputSchema = z.object({
   replacementDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), oldFinalReading: z.coerce.number().min(0),
   newOpeningReading: z.coerce.number().min(0), replacementReason: z.string().trim().min(2).max(1000),
   newSerialNumber: z.string().trim().min(1, "Enter the new meter serial number").max(100),
+  applyMinimumCharge: z.boolean().default(true),
+  minimumChargeWaiverReason: z.string().trim().max(500).optional(),
   gpsLatitude: optNumber, gpsLongitude: optNumber, remarks: optText, confirmed: z.literal(true),
+}).superRefine((data, context) => {
+  if (!data.applyMinimumCharge && (!data.minimumChargeWaiverReason || data.minimumChargeWaiverReason.length < 5)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["minimumChargeWaiverReason"],
+      message: "Enter a reason of at least 5 characters for waiving the minimum charge",
+    });
+  }
 });
 
 const directReplacementPreviewSchema = z.object({
   accountId: z.string().min(1), oldMeterId: z.string().min(1),
   replacementDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   oldFinalReading: z.coerce.number().min(0),
+  applyMinimumCharge: z.boolean().default(true),
 });
 
 const directDisconnectionSchema = z.object({
@@ -1234,7 +1248,13 @@ metersRouter.post("/replacements/direct/preview", directReplacementAccess, async
         throw Object.assign(new Error(`Old final reading cannot be below the latest approved reading of ${previousReading}`), { status: 409 });
       }
       const consumption = roundMoney(parsed.data.oldFinalReading - previousReading);
-      const bill = await prepareReplacementBill(tx, accountId, replacementDate, consumption);
+      const bill = await prepareReplacementBill(
+        tx,
+        accountId,
+        replacementDate,
+        consumption,
+        parsed.data.applyMinimumCharge,
+      );
       return {
         previousReading, finalReading: parsed.data.oldFinalReading, consumption,
         categoryCode: bill.account.category.categoryCode, categoryName: bill.account.category.categoryName,
@@ -1252,8 +1272,11 @@ metersRouter.post("/replacements/direct/preview", directReplacementAccess, async
         minimumChargeAdjustment: bill.calculation.minimumChargeAdjustment,
         standingCharge: bill.calculation.standingCharge, meterRent: bill.calculation.meterRent,
         fixedCharges: bill.calculation.fixedCharges, totalCurrentCharges: bill.calculation.totalCurrentCharges,
+        applyMinimumCharge: parsed.data.applyMinimumCharge,
         minimumApplied: bill.calculation.minimumChargeAdjustment > 0,
-        minimumDecision: Number(bill.tariff.minimumCharge) <= 0
+        minimumDecision: !parsed.data.applyMinimumCharge
+          ? "Waived for this replacement. Actual consumption and other configured charges still apply."
+          : Number(bill.tariff.minimumCharge) <= 0
           ? "This tariff has no minimum charge."
           : bill.calculation.minimumChargeAdjustment > 0
             ? `Applied because the consumption charge of KSh ${bill.calculation.consumptionCharge.toFixed(2)} is below the tariff minimum of KSh ${Number(bill.tariff.minimumCharge).toFixed(2)}.`
@@ -1283,7 +1306,10 @@ metersRouter.post("/replacements/direct", directReplacementAccess, async (req, r
         retainedMeterNumber: true,
         replacementReason: data.replacementReason, requestStatus: "APPROVED", requestedBy: userId(req),
         replacedBy: userId(req), approvedBy: userId(req), decidedAt: new Date(),
-        decisionComments: "Completed directly without a work order", gpsLatitude: data.gpsLatitude,
+        decisionComments: data.applyMinimumCharge
+          ? "Completed directly without a work order; tariff minimum charge applied"
+          : `Completed directly without a work order; tariff minimum charge waived: ${data.minimumChargeWaiverReason}`,
+        gpsLatitude: data.gpsLatitude,
         gpsLongitude: data.gpsLongitude, remarks: data.remarks,
       } });
       const replacementReadingCycle = await tx.readingCycle.create({ data: {
@@ -1325,17 +1351,25 @@ metersRouter.post("/replacements/direct", directReplacementAccess, async (req, r
           reading: data.oldFinalReading, reason: data.replacementReason, remarks: data.remarks,
           gpsLatitude: data.gpsLatitude, gpsLongitude: data.gpsLongitude, performedBy: userId(req),
           metadata: { retainedMeterNumber: true, oldSerialNumber: ids.oldSerialNumber,
-            newSerialNumber: data.newSerialNumber, openingBaselineReadingId: openingBaseline.readingId.toString(), direct: true } },
+            newSerialNumber: data.newSerialNumber, openingBaselineReadingId: openingBaseline.readingId.toString(), direct: true,
+            applyMinimumCharge: data.applyMinimumCharge, minimumChargeWaiverReason: data.minimumChargeWaiverReason ?? null } },
         { meterId: ids.oldMeterId, assignmentId: ids.assignmentId, replacementId: replacement.replacementId,
           eventType: "INSTALLATION_UPDATED", previousStatus: ids.oldMeterStatus, newStatus: replacementMeterStatus,
           reading: data.newOpeningReading, reason: data.replacementReason, remarks: data.remarks,
           gpsLatitude: data.gpsLatitude, gpsLongitude: data.gpsLongitude, performedBy: userId(req),
           metadata: { retainedMeterNumber: true, oldSerialNumber: ids.oldSerialNumber,
-            newSerialNumber: data.newSerialNumber, replacementId: replacement.replacementId.toString(), direct: true } },
+            newSerialNumber: data.newSerialNumber, replacementId: replacement.replacementId.toString(), direct: true,
+            applyMinimumCharge: data.applyMinimumCharge, minimumChargeWaiverReason: data.minimumChargeWaiverReason ?? null } },
       ] });
 
       const consumption = roundMoney(data.oldFinalReading - ids.previousReading);
-      const preparedBill = await prepareReplacementBill(tx, ids.accountId, replacementDate, consumption);
+      const preparedBill = await prepareReplacementBill(
+        tx,
+        ids.accountId,
+        replacementDate,
+        consumption,
+        data.applyMinimumCharge,
+      );
       const { account, tariff, calculation, dueDate, previousBalance, totalAmountDue } = preparedBill;
       const postedAt = new Date();
       // Direct operational actions must never create accounting periods. Attach
@@ -1376,7 +1410,10 @@ metersRouter.post("/replacements/direct", directReplacementAccess, async (req, r
         standingCharge: calculation.standingCharge, meterRent: calculation.meterRent, fixedCharges: calculation.fixedCharges,
         penalties: 0, totalCurrentCharges: calculation.totalCurrentCharges, totalAmountDue,
         issueDate: replacementDate, dueDate, status: "POSTED", generatedBy: userId(req), approvedBy: userId(req),
-        approvedAt: postedAt, approvalComments: "Automatically approved during direct meter replacement",
+        approvedAt: postedAt,
+        approvalComments: data.applyMinimumCharge
+          ? "Automatically approved during direct meter replacement; tariff minimum charge applied"
+          : `Automatically approved during direct meter replacement; tariff minimum charge waived: ${data.minimumChargeWaiverReason}`,
         postedBy: userId(req), postedAt, exceptionType: "NONE", items: { create: calculation.items },
       } });
       await tx.customerAccount.update({
@@ -1385,7 +1422,7 @@ metersRouter.post("/replacements/direct", directReplacementAccess, async (req, r
       });
       await tx.billingEvent.createMany({ data: [
         { billingCycleId: billingCycle.billingCycleId, eventType: "PERIOD_CREATED", newStatus: "POSTED", details: `Created and posted automatically for REP-${replacement.replacementId}`, performedBy: userId(req), createdAt: postedAt },
-        { billingCycleId: billingCycle.billingCycleId, billId: bill.billId, eventType: "BILL_GENERATED", newStatus: "POSTED", details: "Generated from the replacement final reading", performedBy: userId(req), createdAt: postedAt },
+        { billingCycleId: billingCycle.billingCycleId, billId: bill.billId, eventType: "BILL_GENERATED", newStatus: "POSTED", details: data.applyMinimumCharge ? "Generated from the replacement final reading; tariff minimum charge applied" : `Generated from the replacement final reading; tariff minimum charge waived: ${data.minimumChargeWaiverReason}`, performedBy: userId(req), createdAt: postedAt, metadata: { applyMinimumCharge: data.applyMinimumCharge, minimumChargeWaiverReason: data.minimumChargeWaiverReason ?? null } },
         { billingCycleId: billingCycle.billingCycleId, billId: bill.billId, eventType: "BILL_POSTED", previousStatus: "APPROVED", newStatus: "POSTED", details: "Posted immediately during direct meter replacement", performedBy: userId(req), createdAt: postedAt },
       ] });
       return { ...replacement, bill };
