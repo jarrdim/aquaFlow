@@ -3496,14 +3496,24 @@ export function DebtWriteOffs() {
 export function DebtRecoveryReport() {
   const [data, setData] = useState<Row>();
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
   const [filters, setFilters] = useState<Row>({ from: "", to: isoToday() });
-  const load = () =>
-    api
-      .debtRecoveryReport(filters)
-      .then(setData)
-      .catch((e) => setError(e.message));
+  const requestSequence = useRef(0);
+  const load = async () => {
+    const requestId = ++requestSequence.current;
+    setLoading(true);
+    setError("");
+    try {
+      const result = await api.debtRecoveryReport(filters);
+      if (requestId === requestSequence.current) setData(result);
+    } catch (e: any) {
+      if (requestId === requestSequence.current) setError(e.message);
+    } finally {
+      if (requestId === requestSequence.current) setLoading(false);
+    }
+  };
   useEffect(() => {
-    load();
+    void load();
   }, [filters.from, filters.to]);
   const exportRows = (data?.rows ?? []).map((row: Row) => ({
     Account: row.accountNumber,
@@ -3520,14 +3530,14 @@ export function DebtRecoveryReport() {
         <>
           <Button
             tone="slate"
-            disabled={!exportRows.length}
+            disabled={loading || !exportRows.length}
             onClick={() =>
               exportExcel("debt-recovery-report", "Debt recovery", exportRows)
             }
           >
             Export Excel
           </Button>
-          <Button tone="slate" onClick={() => window.print()}>
+          <Button tone="slate" disabled={loading || !data} onClick={() => window.print()}>
             Print / Save PDF
           </Button>
         </>
@@ -3551,12 +3561,20 @@ export function DebtRecoveryReport() {
             />
           </Field>
           <div className="flex items-end">
-            <Button className="w-full" onClick={load}>
-              Generate report
+            <Button className="w-full" disabled={loading} aria-busy={loading} onClick={() => void load()}>
+              {loading ? <span className="inline-flex items-center justify-center gap-2"><span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden="true" />Generating report…</span> : "Generate report"}
             </Button>
           </div>
         </div>
       </Card>
+      <div className="relative min-h-72" aria-busy={loading}>
+      {loading && <div className="absolute inset-0 z-20 flex items-start justify-center rounded-2xl bg-slate-50/85 pt-20 backdrop-blur-[1px]">
+        <div className="rounded-2xl border border-slate-200 bg-white px-8 py-6 text-center shadow-lg">
+          <span className="mx-auto block h-9 w-9 animate-spin rounded-full border-4 border-sky-100 border-t-aqua-700" aria-hidden="true" />
+          <p className="mt-3 text-sm font-bold text-slate-700">Generating debt recovery report…</p>
+          <p className="mt-1 text-xs text-slate-500">Calculating arrears, recoveries and closing balances</p>
+        </div>
+      </div>}
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
         <Kpi label="Opening arrears" value={money(data?.openingArrears)} />
         <Kpi
@@ -3621,6 +3639,7 @@ export function DebtRecoveryReport() {
           </table>
         </div>
       </Card>
+      </div>
     </Page>
   );
 }
