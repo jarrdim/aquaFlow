@@ -374,6 +374,11 @@ const statusTone: Record<string, string> = {
   ACTIVE: "bg-emerald-100 text-emerald-800",
   REJECTED: "bg-red-50 text-red-700",
 };
+const removableStatuses = new Set([
+  "PARTIALLY_PAID",
+  "INSPECTION_SCHEDULED",
+  "INSTALLATION_ORDERED",
+]);
 
 function StatusBadge({ status }: { status: string }) {
   return (
@@ -582,8 +587,13 @@ export default function ConnectionDashboard() {
   }
 
   async function removeApplication(row: Application) {
+    const removesPendingInstallation = row.status === "INSTALLATION_ORDERED";
     const confirmed = window.confirm(
-      `Remove ${row.applicationNumber}?\n\nThe incomplete application will be deleted and cannot be restored. The ${money(row.amountPaid)} posted payment and its receipt will remain in the financial ledger.`,
+      `Remove ${row.applicationNumber}?\n\n${
+        removesPendingInstallation
+          ? `The incomplete application, pending account ${row.accountNumber || ""}, and unstarted installation work order will be deleted.`
+          : "The incomplete application and its workflow records will be deleted."
+      } This cannot be restored. The ${money(row.amountPaid)} posted payment and its receipt will remain in the financial ledger.`,
     );
     if (!confirmed) return;
 
@@ -758,7 +768,8 @@ export default function ConnectionDashboard() {
                           >
                             Review →
                           </Link>
-                          {row.status === "PARTIALLY_PAID" && !row.accountId && (
+                          {removableStatuses.has(row.status) &&
+                            (row.status === "INSTALLATION_ORDERED" || !row.accountId) && (
                             <button
                               type="button"
                               disabled={Boolean(removingId)}

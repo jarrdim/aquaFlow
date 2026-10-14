@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { initiateMpesaStk } from "../lib/mpesaStk";
@@ -21,6 +22,8 @@ const statuses = [
   "PARTIALLY_PAID", "PAID", "APPROVED", "CUSTOMER_CREATED",
   "INSTALLATION_ORDERED", "INSTALLATION_COMPLETED", "ACTIVE", "REJECTED",
 ] as const;
+const removableStatuses = new Set(["PARTIALLY_PAID", "INSPECTION_SCHEDULED", "INSTALLATION_ORDERED"]);
+const removableInstallationWorkOrderStatuses = new Set(["CREATED", "ASSIGNED"]);
 
 function normalizeKenyanPhone(value: unknown) {
   if (typeof value !== "string") return value;
@@ -138,11 +141,13 @@ connectionsRouter.delete("/:id", canProcess, async (req, res, next) => {
       },
     });
     if (!application) return res.status(404).json({ error: "Connection application not found" });
-    if (application.status !== "PARTIALLY_PAID") {
-      return res.status(409).json({ error: "Only partially paid applications can be removed here" });
+    if (!removableStatuses.has(application.status)) {
+      return res.status(409).json({
+        error: "Only partially paid, inspection scheduled, or installation ordered applications can be removed here",
+      });
     }
-    if (application.accountId || application.workOrderId) {
-      return res.status(409).json({ error: "Applications linked to an account or work order cannot be removed" });
+    if (application.status !== "INSTALLATION_ORDERED" && (application.accountId || application.workOrderId)) {
+      return res.status(409).json({ error: "This application has unexpected account or work-order links and cannot be removed safely" });
     }
     const pendingStkRequests = await prisma.mpesaStkRequest.count({
       where: {
@@ -155,18 +160,112 @@ connectionsRouter.delete("/:id", canProcess, async (req, res, next) => {
       return res.status(409).json({ error: "This application has a pending M-Pesa request. Wait for it to finish before removing the application" });
     }
 
+    let releasedAccountNumber: string | null = null;
     await prisma.$transaction(async (tx) => {
+      if (application.status === "INSTALLATION_ORDERED") {
+        if (!application.accountId || !application.workOrderId) {
+          throw new Error("The installation application is missing its account or work order and cannot be removed safely");
+        }
+
+        const [workOrder] = await tx.$queryRaw<Array<{
+          workOrderId: bigint;
+          accountId: bigint | null;
+          status: string;
+          startedAt: Date | null;
+          completedAt: Date | null;
+          typeCode: string;
+        }>>`
+          SELECT wo.work_order_id AS "workOrderId", wo.account_id AS "accountId",
+            wo.status, wo.started_at AS "startedAt", wo.completed_at AS "completedAt",
+            wt.type_code AS "typeCode"
+          FROM aquaflow.work_orders wo
+          JOIN aquaflow.work_order_types wt ON wt.work_order_type_id = wo.work_order_type_id
+          WHERE wo.work_order_id = ${application.workOrderId}
+          FOR UPDATE`;
+        if (!workOrder || workOrder.typeCode !== "NEW_CONNECTION" ||
+          workOrder.accountId !== application.accountId ||
+          !removableInstallationWorkOrderStatuses.has(workOrder.status) ||
+          workOrder.startedAt || workOrder.completedAt) {
+          throw new Error("The installation work order has already progressed and cannot be removed safely");
+        }
+
+        const account = await tx.customerAccount.findUnique({
+          where: { accountId: application.accountId },
+          select: { accountNumber: true, openingBalance: true, currentBalance: true },
+        });
+        if (!account) throw new Error("The linked customer account was not found");
+        if (Number(account.openingBalance) !== 0 || Number(account.currentBalance) !== 0) {
+          throw new Error("The linked customer account has a balance and cannot be removed safely");
+        }
+
+        const [dependencies] = await tx.$queryRaw<Array<{ hasOperationalActivity: boolean }>>`
+          SELECT (
+            EXISTS (SELECT 1 FROM aquaflow.meter_assignments WHERE account_id = ${application.accountId}) OR
+            EXISTS (SELECT 1 FROM aquaflow.meter_replacements WHERE account_id = ${application.accountId}) OR
+            EXISTS (SELECT 1 FROM aquaflow.meter_readings WHERE account_id = ${application.accountId}) OR
+            EXISTS (SELECT 1 FROM aquaflow.bills WHERE account_id = ${application.accountId}) OR
+            EXISTS (SELECT 1 FROM aquaflow.payments WHERE account_id = ${application.accountId}) OR
+            EXISTS (SELECT 1 FROM aquaflow.receipts WHERE account_id = ${application.accountId}) OR
+            EXISTS (SELECT 1 FROM aquaflow.suspense_payments WHERE resolved_account_id = ${application.accountId}) OR
+            EXISTS (SELECT 1 FROM aquaflow.mpesa_stk_requests WHERE account_id = ${application.accountId}) OR
+            EXISTS (SELECT 1 FROM aquaflow.payment_plans WHERE account_id = ${application.accountId}) OR
+            EXISTS (SELECT 1 FROM aquaflow.promises_to_pay WHERE account_id = ${application.accountId}) OR
+            EXISTS (SELECT 1 FROM aquaflow.debt_notices WHERE account_id = ${application.accountId}) OR
+            EXISTS (SELECT 1 FROM aquaflow.disconnection_list_items WHERE account_id = ${application.accountId}) OR
+            EXISTS (SELECT 1 FROM aquaflow.debt_write_offs WHERE account_id = ${application.accountId}) OR
+            EXISTS (SELECT 1 FROM aquaflow.arrears_actions WHERE account_id = ${application.accountId}) OR
+            EXISTS (SELECT 1 FROM aquaflow.service_requests WHERE account_id = ${application.accountId}) OR
+            EXISTS (SELECT 1 FROM aquaflow.account_balance_reconciliations WHERE account_id = ${application.accountId}) OR
+            EXISTS (SELECT 1 FROM aquaflow.account_adjustments WHERE account_id = ${application.accountId}) OR
+            EXISTS (SELECT 1 FROM aquaflow.reconnection_requests WHERE account_id = ${application.accountId}) OR
+            EXISTS (SELECT 1 FROM aquaflow.disconnection_postings WHERE account_id = ${application.accountId}) OR
+            EXISTS (
+              SELECT 1 FROM aquaflow.notifications
+              WHERE account_id = ${application.accountId} AND notification_type <> 'NEW_CUSTOMER_WELCOME'
+            ) OR
+            EXISTS (
+              SELECT 1 FROM aquaflow.work_orders
+              WHERE account_id = ${application.accountId} AND work_order_id <> ${application.workOrderId}
+            ) OR
+            EXISTS (
+              SELECT 1 FROM aquaflow.new_connection_applications
+              WHERE account_id = ${application.accountId}
+                AND connection_application_id <> ${application.connectionApplicationId}
+            )
+          ) AS "hasOperationalActivity"`;
+        if (dependencies?.hasOperationalActivity) {
+          throw new Error("The linked customer account has operational activity and cannot be removed safely");
+        }
+        releasedAccountNumber = account.accountNumber;
+      }
+
       await tx.newConnectionActivity.deleteMany({
         where: { connectionApplicationId: application.connectionApplicationId },
       });
       await tx.newConnectionApplication.delete({
         where: { connectionApplicationId: application.connectionApplicationId },
       });
+
+      if (application.status === "INSTALLATION_ORDERED" && application.accountId && application.workOrderId) {
+        // Keep the welcome-message audit, but release its foreign key to this pending account.
+        await tx.notification.updateMany({
+          where: { accountId: application.accountId, notificationType: "NEW_CUSTOMER_WELCOME" },
+          data: { accountId: null },
+        });
+        await tx.$executeRaw`DELETE FROM aquaflow.work_orders WHERE work_order_id = ${application.workOrderId}`;
+        await tx.customerAccount.delete({ where: { accountId: application.accountId } });
+      }
     });
     res.json({
-      message: `${application.applicationNumber} removed. Posted payments and receipts were retained in the financial ledger.`,
+      message: `${application.applicationNumber} removed${releasedAccountNumber ? ` with pending account ${releasedAccountNumber} and its unstarted work order` : ""}. Posted payments and receipts were retained in the financial ledger.`,
     });
   } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2003") {
+      return res.status(409).json({ error: "This application has linked operational records and cannot be removed safely" });
+    }
+    if (error instanceof Error && error.message.includes("cannot be removed safely")) {
+      return res.status(409).json({ error: error.message });
+    }
     next(error);
   }
 });
