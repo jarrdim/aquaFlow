@@ -28,6 +28,9 @@ const removableInstallationWorkOrderStatuses = new Set([
   "ASSIGNED",
   "ACCEPTED",
   "IN_PROGRESS",
+  "COMPLETED",
+  "VERIFIED",
+  "CLOSED",
   "REOPENED",
   "CANCELLED",
 ]);
@@ -178,20 +181,18 @@ connectionsRouter.delete("/:id", canProcess, async (req, res, next) => {
           workOrderId: bigint;
           accountId: bigint | null;
           status: string;
-          completedAt: Date | null;
           typeCode: string;
         }>>`
           SELECT wo.work_order_id AS "workOrderId", wo.account_id AS "accountId",
-            wo.status, wo.completed_at AS "completedAt",
-            wt.type_code AS "typeCode"
+            wo.status, wt.type_code AS "typeCode"
           FROM aquaflow.work_orders wo
           JOIN aquaflow.work_order_types wt ON wt.work_order_type_id = wo.work_order_type_id
           WHERE wo.work_order_id = ${application.workOrderId}
           FOR UPDATE`;
         if (!workOrder || workOrder.typeCode !== "NEW_CONNECTION" ||
           workOrder.accountId !== application.accountId ||
-          !removableInstallationWorkOrderStatuses.has(workOrder.status) || workOrder.completedAt) {
-          throw new Error("The installation work order is completed, verified, or closed and cannot be removed safely");
+          !removableInstallationWorkOrderStatuses.has(workOrder.status)) {
+          throw new Error("The installation work order has an unsupported status and cannot be removed safely");
         }
 
         const account = await tx.customerAccount.findUnique({
