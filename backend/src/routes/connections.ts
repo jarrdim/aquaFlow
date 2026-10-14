@@ -258,6 +258,18 @@ connectionsRouter.delete("/:id", canProcess, async (req, res, next) => {
           where: { accountId: application.accountId, notificationType: "NEW_CUSTOMER_WELCOME" },
           data: { accountId: null },
         });
+        // Some upgraded installations retain legacy work-order foreign keys
+        // without ON DELETE CASCADE. Remove owned workflow rows explicitly so
+        // this rollback behaves consistently on both old and current schemas.
+        await tx.$executeRaw`DELETE FROM aquaflow.work_order_materials WHERE work_order_id = ${application.workOrderId}`;
+        await tx.$executeRaw`DELETE FROM aquaflow.field_work_order_completion_reports WHERE work_order_id = ${application.workOrderId}`;
+        await tx.$executeRaw`DELETE FROM aquaflow.field_disconnection_reports WHERE work_order_id = ${application.workOrderId}`;
+        await tx.$executeRaw`DELETE FROM aquaflow.field_reconnection_reports WHERE work_order_id = ${application.workOrderId}`;
+        await tx.$executeRaw`DELETE FROM aquaflow.work_order_consumables WHERE work_order_id = ${application.workOrderId}`;
+        await tx.$executeRaw`DELETE FROM aquaflow.work_order_evidence WHERE work_order_id = ${application.workOrderId}`;
+        await tx.$executeRaw`DELETE FROM aquaflow.work_order_updates WHERE work_order_id = ${application.workOrderId}`;
+        await tx.$executeRaw`DELETE FROM aquaflow.work_order_assignments WHERE work_order_id = ${application.workOrderId}`;
+        await tx.$executeRaw`UPDATE aquaflow.meter_alerts SET work_order_id = NULL WHERE work_order_id = ${application.workOrderId}`;
         await tx.$executeRaw`DELETE FROM aquaflow.work_orders WHERE work_order_id = ${application.workOrderId}`;
         await tx.customerAccount.delete({ where: { accountId: application.accountId } });
       }
@@ -268,6 +280,9 @@ connectionsRouter.delete("/:id", canProcess, async (req, res, next) => {
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2003") {
       return res.status(409).json({ error: "This application has linked operational records and cannot be removed safely" });
+    }
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2010" && error.meta?.code === "23503") {
+      return res.status(409).json({ error: "This application still has a linked operational record and cannot be removed safely" });
     }
     if (error instanceof Error && error.message.includes("cannot be removed safely")) {
       return res.status(409).json({ error: error.message });
