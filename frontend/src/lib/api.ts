@@ -211,6 +211,8 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(data),
     }),
+  removeCustomer: (id: string) =>
+    request(`/customers/${id}`, { method: "DELETE" }),
   createCustomerPortalAccess: (id: string, data: { phoneNumber: string; password: string }) =>
     request(`/customers/${id}/portal-access`, {
       method: "POST",

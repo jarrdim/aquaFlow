@@ -152,6 +152,78 @@ customersRouter.get("/", customerViewAccess, async (req, res) => {
   });
 });
 
+customersRouter.delete("/:id", customerManageAccess, async (req, res, next) => {
+  if (!/^\d+$/.test(req.params.id)) return res.status(400).json({ error: "Invalid customer id" });
+  const customerId = BigInt(req.params.id);
+
+  try {
+    const customer = await prisma.customer.findUnique({
+      where: { customerId },
+      select: { customerId: true, customerNumber: true },
+    });
+    if (!customer) return res.status(404).json({ error: "Customer not found" });
+
+    const [dependencies] = await prisma.$queryRaw<Array<{ hasOperationalActivity: boolean }>>`
+      SELECT (
+        EXISTS (SELECT 1 FROM aquaflow.customer_accounts WHERE customer_id = ${customerId}) OR
+        EXISTS (SELECT 1 FROM aquaflow.users WHERE customer_id = ${customerId}) OR
+        EXISTS (SELECT 1 FROM aquaflow.service_requests WHERE customer_id = ${customerId}) OR
+        EXISTS (SELECT 1 FROM aquaflow.new_connection_applications WHERE customer_id = ${customerId}) OR
+        EXISTS (SELECT 1 FROM aquaflow.reconnection_requests WHERE customer_id = ${customerId}) OR
+        EXISTS (
+          SELECT 1 FROM aquaflow.notifications
+          WHERE customer_id = ${customerId} AND notification_type <> 'NEW_CUSTOMER_WELCOME'
+        ) OR
+        EXISTS (
+          SELECT 1
+          FROM aquaflow.properties property
+          WHERE property.owner_customer_id = ${customerId}
+            AND (
+              EXISTS (SELECT 1 FROM aquaflow.customer_accounts account WHERE account.property_id = property.property_id) OR
+              EXISTS (SELECT 1 FROM aquaflow.work_orders work_order WHERE work_order.property_id = property.property_id)
+            )
+        )
+      ) AS "hasOperationalActivity"`;
+    if (dependencies?.hasOperationalActivity) {
+      return res.status(409).json({
+        error: "This customer has an account, login, service request, or other operational record and cannot be removed safely",
+      });
+    }
+
+    const removed = await prisma.$transaction(async (tx) => {
+      const properties = await tx.property.findMany({
+        where: { ownerCustomerId: customerId },
+        select: { propertyId: true },
+      });
+
+      // Retain delivery history without retaining a foreign key to the removed profile.
+      await tx.notification.updateMany({
+        where: { customerId, notificationType: "NEW_CUSTOMER_WELCOME" },
+        data: { customerId: null },
+      });
+      // Explicit deletes support upgraded databases whose legacy foreign keys
+      // predate the current ON DELETE CASCADE definitions.
+      await tx.customerDocument.deleteMany({ where: { customerId } });
+      await tx.customerProfileChange.deleteMany({ where: { customerId } });
+      await tx.property.deleteMany({ where: { ownerCustomerId: customerId } });
+      await tx.customer.delete({ where: { customerId } });
+      return properties.length;
+    });
+
+    res.json({
+      message: `${customer.customerNumber} removed${removed ? ` with ${removed} unused ${removed === 1 ? "property" : "properties"}` : ""}.`,
+    });
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2003") {
+      return res.status(409).json({ error: "This customer still has a linked operational record and cannot be removed safely" });
+    }
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2010" && error.meta?.code === "23503") {
+      return res.status(409).json({ error: "This customer still has a linked operational record and cannot be removed safely" });
+    }
+    next(error);
+  }
+});
+
 customersRouter.get("/:id", customerViewAccess, async (req, res) => {
   const customer = await prisma.customer.findUnique({
     where: { customerId: BigInt(req.params.id) },

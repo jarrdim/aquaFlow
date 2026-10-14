@@ -174,6 +174,7 @@ export default function Customers() {
   const [selected, setSelected] = useState<string[]>([]);
   const [bulkStatus, setBulkStatus] = useState("ACTIVE");
   const [updating, setUpdating] = useState(false);
+  const [removingCustomerId, setRemovingCustomerId] = useState("");
   const [withoutActiveMeter, setWithoutActiveMeter] = useState(0);
   const [showImport, setShowImport] = useState(false);
   const [importRows, setImportRows] = useState<Record<string, unknown>[]>([]);
@@ -317,6 +318,28 @@ export default function Customers() {
       );
     } finally {
       setUpdating(false);
+    }
+  }
+
+  async function removeCustomer(customer: Customer) {
+    const confirmed = window.confirm(
+      `Remove ${customerName(customer)} (${customer.customerNumber})?\n\nThe customer profile, customer-only documents/history, and unused properties will be deleted. This cannot be restored. Financial audit records will be retained.`,
+    );
+    if (!confirmed) return;
+
+    setRemovingCustomerId(customer.customerId);
+    setError("");
+    setSuccess("");
+    try {
+      const result = await api.removeCustomer(customer.customerId);
+      setSuccess(result.message ?? `${customer.customerNumber} removed.`);
+      const nextPage = customers.length === 1 && page > 1 ? page - 1 : page;
+      if (nextPage !== page) setPage(nextPage);
+      else await load(search, statusFilter, meterAssignmentFilter, nextPage);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "The customer could not be removed.");
+    } finally {
+      setRemovingCustomerId("");
     }
   }
 
@@ -1287,15 +1310,27 @@ export default function Customers() {
                         <StatusBadge status={customer.status} />
                       </td>
                       <td className="px-4 py-3.5">
-                        <Link
-                          to={detailPath}
-                          className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-bold text-aqua-700 transition hover:bg-sky-50"
-                        >
-                          View
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
-                            <path d="M5 12h14m-6-6 6 6-6 6" strokeLinecap="round" strokeLinejoin="round" />
-                          </svg>
-                        </Link>
+                        <div className="flex flex-wrap items-center gap-1">
+                          <Link
+                            to={detailPath}
+                            className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-bold text-aqua-700 transition hover:bg-sky-50"
+                          >
+                            View
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+                              <path d="M5 12h14m-6-6 6 6-6 6" strokeLinecap="round" strokeLinejoin="round" />
+                            </svg>
+                          </Link>
+                          {customer.accountCount === 0 && (
+                            <button
+                              type="button"
+                              disabled={Boolean(removingCustomerId)}
+                              onClick={() => void removeCustomer(customer)}
+                              className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-700 transition hover:border-red-300 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {removingCustomerId === customer.customerId ? "Removing…" : "Remove"}
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );
