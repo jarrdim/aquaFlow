@@ -591,7 +591,7 @@ export default function ConnectionDashboard() {
     const confirmed = window.confirm(
       `Remove ${row.applicationNumber}?\n\n${
         removesPendingInstallation
-          ? `The incomplete application, pending account ${row.accountNumber || ""}, and unstarted installation work order will be deleted.`
+          ? `The incomplete application, pending account ${row.accountNumber || ""}, installation work order, and pending field records will be deleted.`
           : "The incomplete application and its workflow records will be deleted."
       } This cannot be restored. The ${money(row.amountPaid)} posted payment and its receipt will remain in the financial ledger.`,
     );

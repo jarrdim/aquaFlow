@@ -23,7 +23,14 @@ const statuses = [
   "INSTALLATION_ORDERED", "INSTALLATION_COMPLETED", "ACTIVE", "REJECTED",
 ] as const;
 const removableStatuses = new Set(["PARTIALLY_PAID", "INSPECTION_SCHEDULED", "INSTALLATION_ORDERED"]);
-const removableInstallationWorkOrderStatuses = new Set(["CREATED", "ASSIGNED"]);
+const removableInstallationWorkOrderStatuses = new Set([
+  "CREATED",
+  "ASSIGNED",
+  "ACCEPTED",
+  "IN_PROGRESS",
+  "REOPENED",
+  "CANCELLED",
+]);
 
 function normalizeKenyanPhone(value: unknown) {
   if (typeof value !== "string") return value;
@@ -171,12 +178,11 @@ connectionsRouter.delete("/:id", canProcess, async (req, res, next) => {
           workOrderId: bigint;
           accountId: bigint | null;
           status: string;
-          startedAt: Date | null;
           completedAt: Date | null;
           typeCode: string;
         }>>`
           SELECT wo.work_order_id AS "workOrderId", wo.account_id AS "accountId",
-            wo.status, wo.started_at AS "startedAt", wo.completed_at AS "completedAt",
+            wo.status, wo.completed_at AS "completedAt",
             wt.type_code AS "typeCode"
           FROM aquaflow.work_orders wo
           JOIN aquaflow.work_order_types wt ON wt.work_order_type_id = wo.work_order_type_id
@@ -184,9 +190,8 @@ connectionsRouter.delete("/:id", canProcess, async (req, res, next) => {
           FOR UPDATE`;
         if (!workOrder || workOrder.typeCode !== "NEW_CONNECTION" ||
           workOrder.accountId !== application.accountId ||
-          !removableInstallationWorkOrderStatuses.has(workOrder.status) ||
-          workOrder.startedAt || workOrder.completedAt) {
-          throw new Error("The installation work order has already progressed and cannot be removed safely");
+          !removableInstallationWorkOrderStatuses.has(workOrder.status) || workOrder.completedAt) {
+          throw new Error("The installation work order is completed, verified, or closed and cannot be removed safely");
         }
 
         const account = await tx.customerAccount.findUnique({
@@ -257,7 +262,7 @@ connectionsRouter.delete("/:id", canProcess, async (req, res, next) => {
       }
     });
     res.json({
-      message: `${application.applicationNumber} removed${releasedAccountNumber ? ` with pending account ${releasedAccountNumber} and its unstarted work order` : ""}. Posted payments and receipts were retained in the financial ledger.`,
+      message: `${application.applicationNumber} removed${releasedAccountNumber ? ` with pending account ${releasedAccountNumber} and its installation work order` : ""}. Posted payments and receipts were retained in the financial ledger.`,
     });
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2003") {
