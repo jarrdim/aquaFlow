@@ -9,6 +9,7 @@ import {
   postOfflineNewConnectionPayment,
 } from "../lib/newConnectionPayment";
 import { paymentPersistenceError, roundMoney } from "../lib/paymentAllocation";
+import { queueQuoteRevisionSms } from "../lib/connectionQuoteNotification";
 
 export const connectionsRouter = Router();
 connectionsRouter.use(requireAuth);
@@ -583,6 +584,13 @@ const actionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("RECORD_INSPECTION"), outcome: z.enum(["FEASIBLE", "NOT_FEASIBLE", "REVISIT"]), notes: z.string().trim().min(2).max(2000) }),
   z.object({ action: z.literal("ISSUE_QUOTATION"), materialsCost: z.coerce.number().min(0), labourCost: z.coerce.number().min(0), connectionFee: z.coerce.number().min(0).optional(), feeOverrideReason: z.string().trim().max(500).optional().nullable() }),
   z.object({
+    action: z.literal("REVISE_QUOTATION"),
+    connectionFee: z.coerce.number().min(0),
+    materialsCost: z.coerce.number().min(0),
+    labourCost: z.coerce.number().min(0),
+    reason: z.string().trim().min(2).max(500),
+  }),
+  z.object({
     action: z.literal("RECORD_PAYMENT"),
     amount: z.coerce.number().positive(),
     reference: z.string().trim().min(2).max(120).regex(
@@ -610,6 +618,7 @@ connectionsRouter.patch("/:id/action", canProcess, async (req, res, next) => {
     SCHEDULE_INSPECTION: ["SUBMITTED"],
     RECORD_INSPECTION: ["INSPECTION_SCHEDULED"],
     ISSUE_QUOTATION: ["INSPECTED"],
+    REVISE_QUOTATION: ["QUOTED"],
     RECORD_PAYMENT: ["QUOTED", "PARTIALLY_PAID"],
     APPROVE: ["PAID"],
     REJECT: ["PAID"],
@@ -621,6 +630,101 @@ connectionsRouter.patch("/:id/action", canProcess, async (req, res, next) => {
     return res.status(409).json({
       error: `This action is not available while the application is ${String(current[0].status).toLowerCase().replace(/_/g, " ")}. Refresh the application to see its current action.`,
     });
+  }
+  if (data.action === "REVISE_QUOTATION") {
+    try {
+      const result = await prisma.$transaction(async (tx) => {
+        const rows = await tx.$queryRaw<any[]>`
+          SELECT connection_application_id, application_number, customer_id,
+            phone_number, status, connection_fee, materials_cost, labour_cost,
+            quotation_total, amount_paid
+          FROM aquaflow.new_connection_applications
+          WHERE connection_application_id=${applicationId}
+          FOR UPDATE`;
+        const application = rows[0];
+        if (!application)
+          throw Object.assign(new Error("Connection application not found"), { status: 404 });
+        if (application.status !== "QUOTED")
+          throw Object.assign(new Error("Only an unpaid quotation can be revised"), { status: 409 });
+        if (Number(application.amount_paid) !== 0)
+          throw Object.assign(new Error("A quotation with a recorded payment cannot be revised. Use an adjustment workflow instead"), { status: 409 });
+
+        const activePrompt = await tx.mpesaStkRequest.findFirst({
+          where: {
+            purposeType: "NEW_CONNECTION_FEE",
+            purposeReference: application.application_number,
+            status: "PENDING",
+            createdAt: { gte: new Date(Date.now() - 5 * 60 * 1000) },
+          },
+          select: { stkRequestId: true },
+        });
+        if (activePrompt)
+          throw Object.assign(new Error("Wait for the active M-Pesa prompt to finish or expire before revising the quotation"), { status: 409 });
+
+        const oldFee = Number(application.connection_fee);
+        const oldMaterials = Number(application.materials_cost);
+        const oldLabour = Number(application.labour_cost);
+        const oldTotal = Number(application.quotation_total);
+        const newTotal = roundMoney(data.connectionFee + data.materialsCost + data.labourCost);
+        if (
+          oldFee === data.connectionFee &&
+          oldMaterials === data.materialsCost &&
+          oldLabour === data.labourCost
+        ) throw Object.assign(new Error("Change at least one quotation amount before saving the revision"), { status: 400 });
+
+        await tx.mpesaStkRequest.updateMany({
+          where: {
+            purposeType: "NEW_CONNECTION_FEE",
+            purposeReference: application.application_number,
+            status: "PENDING",
+          },
+          data: {
+            status: "CANCELLED",
+            resultDescription: "Superseded by a revised quotation",
+            completedAt: new Date(),
+            updatedAt: new Date(),
+          },
+        });
+        await tx.$executeRaw`
+          UPDATE aquaflow.new_connection_applications
+          SET connection_fee=${data.connectionFee},
+            connection_fee_overridden=(connection_fee_overridden OR ${oldFee !== data.connectionFee}),
+            fee_override_reason=CASE WHEN ${oldFee !== data.connectionFee} THEN ${data.reason} ELSE fee_override_reason END,
+            materials_cost=${data.materialsCost}, labour_cost=${data.labourCost},
+            quotation_total=${newTotal}, updated_at=NOW()
+          WHERE connection_application_id=${applicationId}`;
+        const note = `Quotation revised: KSh ${oldTotal.toFixed(2)} (fee ${oldFee.toFixed(2)}, materials ${oldMaterials.toFixed(2)}, labour ${oldLabour.toFixed(2)}) to KSh ${newTotal.toFixed(2)} (fee ${data.connectionFee.toFixed(2)}, materials ${data.materialsCost.toFixed(2)}, labour ${data.labourCost.toFixed(2)}). Reason: ${data.reason}`;
+        await tx.newConnectionActivity.create({
+          data: {
+            connectionApplicationId: applicationId,
+            activityType: "QUOTATION_REVISED",
+            notes: note,
+            performedBy: currentUserId(req),
+          },
+        });
+        return {
+          applicationNumber: String(application.application_number),
+          customerId: application.customer_id ? BigInt(application.customer_id) : null,
+          phoneNumber: String(application.phone_number),
+          oldTotal,
+          newTotal,
+        };
+      }, { maxWait: 10_000, timeout: 15_000 });
+
+      await queueQuoteRevisionSms({
+        applicationId,
+        applicationNumber: result.applicationNumber,
+        customerId: result.customerId,
+        recipient: result.phoneNumber,
+        oldTotal: result.oldTotal,
+        newTotal: result.newTotal,
+        requestedBy: currentUserId(req),
+      });
+      return res.json({ ok: true, quotationTotal: result.newTotal });
+    } catch (error: any) {
+      if (error.status) return res.status(error.status).json({ error: error.message });
+      return next(error);
+    }
   }
   if (data.action === "RECORD_PAYMENT") {
     try {

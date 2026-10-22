@@ -1220,6 +1220,7 @@ export function ConnectionProfile() {
   const [checkedC2b, setCheckedC2b] = useState(false);
   const [applyingC2bId, setApplyingC2bId] = useState("");
   const [form, setForm] = useState<Record<string, string>>({});
+  const [revisingQuote, setRevisingQuote] = useState(false);
   const [linkCustomerOpen, setLinkCustomerOpen] = useState(false);
   const [customerSearch, setCustomerSearch] = useState("");
   const [customerResults, setCustomerResults] = useState<ExistingCustomer[]>(
@@ -1364,6 +1365,7 @@ export function ConnectionProfile() {
       showToast(success, "success");
       setForm({});
       await load();
+      return true;
     } catch (error) {
       showToast(
         error instanceof Error
@@ -1371,6 +1373,7 @@ export function ConnectionProfile() {
           : "Unable to update application.",
         "error",
       );
+      return false;
     } finally {
       setSaving(false);
     }
@@ -1449,6 +1452,14 @@ export function ConnectionProfile() {
     manualPaymentReference.length >= 2 &&
     /^[A-Za-z0-9](?:[A-Za-z0-9 ./_-]*[A-Za-z0-9])?$/.test(manualPaymentReference);
   const staleStkRequest = stkRequestIsStale(stkRequest);
+  const revisedQuoteTotal =
+    Number(form.revisedConnectionFee || 0) +
+    Number(form.revisedMaterialsCost || 0) +
+    Number(form.revisedLabourCost || 0);
+  const revisionChanged =
+    Number(form.revisedConnectionFee) !== Number(application.connectionFee) ||
+    Number(form.revisedMaterialsCost) !== Number(application.materialsCost || 0) ||
+    Number(form.revisedLabourCost) !== Number(application.labourCost || 0);
   const gpsPoints = applicationGpsPoints(application);
   const primaryGps = gpsPoints[0];
   const mapUrl = primaryGps
@@ -1774,6 +1785,84 @@ export function ConnectionProfile() {
             )}
             {(status === "QUOTED" || status === "PARTIALLY_PAID") && (
               <div className="space-y-3">
+                {status === "QUOTED" && Number(application.amountPaid) === 0 && (
+                  <div className="rounded-xl border border-amber-200 bg-amber-50/60 p-4">
+                    {!revisingQuote ? (
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-bold text-amber-950">Wrong quotation amount?</p>
+                          <p className="mt-1 text-xs text-amber-800">Revise it before accepting payment. The previous amount remains in the audit history.</p>
+                        </div>
+                        <button
+                          type="button"
+                          className={secondary}
+                          onClick={() => {
+                            setForm((current) => ({
+                              ...current,
+                              revisedConnectionFee: String(application.connectionFee),
+                              revisedMaterialsCost: String(application.materialsCost || 0),
+                              revisedLabourCost: String(application.labourCost || 0),
+                              revisionReason: "",
+                            }));
+                            setRevisingQuote(true);
+                          }}
+                        >
+                          Revise quotation
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        <div>
+                          <p className="text-sm font-bold text-amber-950">Revise quotation</p>
+                          <p className="mt-1 text-xs text-amber-800">The customer will be notified by SMS after the revision is saved.</p>
+                        </div>
+                        <div className="grid gap-3 sm:grid-cols-3">
+                          <Field label="Connection fee" required>
+                            <input type="number" min={0} step="0.01" className={input} value={form.revisedConnectionFee || ""} onChange={(e) => set("revisedConnectionFee", e.target.value)} />
+                          </Field>
+                          <Field label="Materials" required>
+                            <input type="number" min={0} step="0.01" className={input} value={form.revisedMaterialsCost || ""} onChange={(e) => set("revisedMaterialsCost", e.target.value)} />
+                          </Field>
+                          <Field label="Labour" required>
+                            <input type="number" min={0} step="0.01" className={input} value={form.revisedLabourCost || ""} onChange={(e) => set("revisedLabourCost", e.target.value)} />
+                          </Field>
+                        </div>
+                        <div className="rounded-lg bg-white px-3 py-2 text-sm text-slate-700 ring-1 ring-amber-200">
+                          Revised total: <strong className="text-slate-950">{money(revisedQuoteTotal)}</strong>
+                        </div>
+                        <Field label="Reason for revision" required>
+                          <textarea
+                            className={input}
+                            maxLength={500}
+                            value={form.revisionReason || ""}
+                            placeholder="Explain why the original quotation was incorrect"
+                            onChange={(e) => set("revisionReason", e.target.value)}
+                          />
+                        </Field>
+                        <div className="flex gap-2">
+                          <button type="button" className={`${secondary} flex-1`} disabled={saving} onClick={() => setRevisingQuote(false)}>Cancel</button>
+                          <button
+                            type="button"
+                            className={`${primary} flex-1`}
+                            disabled={saving || revisedQuoteTotal < 0 || !revisionChanged || (form.revisionReason || "").trim().length < 2}
+                            onClick={() => void (async () => {
+                              const updated = await action({
+                                action: "REVISE_QUOTATION",
+                                connectionFee: form.revisedConnectionFee,
+                                materialsCost: form.revisedMaterialsCost,
+                                labourCost: form.revisedLabourCost,
+                                reason: form.revisionReason,
+                              }, "Quotation revised and customer notification queued.");
+                              if (updated) setRevisingQuote(false);
+                            })()}
+                          >
+                            {saving ? "Saving revision..." : "Save revised quotation"}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
                 <Field label="Payment method" required>
                   <select
                     className={input}
