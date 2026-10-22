@@ -1136,7 +1136,12 @@ export const api = {
     request(`/reconnections/${id}/work-order`, { method: "POST", body: JSON.stringify(data) }),
   workOrderDashboard: () => request("/work-orders/dashboard"),
   workOrderLookups: () => request("/work-orders/lookups"),
-  listWorkOrderTargets: (q = "") => request(`/work-orders/targets${q ? `?q=${encodeURIComponent(q)}` : ""}`),
+  listWorkOrderTargets: (q = "", connectionApplicationId = "") => {
+    const query = new URLSearchParams();
+    if (q) query.set("q", q);
+    if (connectionApplicationId) query.set("connectionApplicationId", connectionApplicationId);
+    return request(`/work-orders/targets${query.size ? `?${query.toString()}` : ""}`);
+  },
   listWorkOrders: (filters: Record<string, string> = {}) => {
     const query = new URLSearchParams(Object.entries(filters).filter(([, value]) => value)).toString();
     return request(`/work-orders${query ? `?${query}` : ""}`);
@@ -1170,6 +1175,8 @@ export const api = {
     request(`/connections/${id}/stk`, { method: "POST", body: JSON.stringify(data) }),
   listConnectionC2bPayments: (id: string, reference = "") =>
     request(`/connections/${id}/c2b-payments${reference ? `?reference=${encodeURIComponent(reference)}` : ""}`),
+  listConnectionCustomerCandidates: (id: string, search = "") =>
+    request(`/connections/${id}/customer-candidates${search ? `?search=${encodeURIComponent(search)}` : ""}`),
   applyConnectionC2bPayment: (id: string, paymentId: string) =>
     request(`/connections/${id}/c2b-payments/${paymentId}/apply`, { method: "POST", body: "{}" }),
   linkConnectionCustomer: (id: string, customerId: string) =>

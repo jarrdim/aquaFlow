@@ -148,6 +148,7 @@ export default function WorkOrderManagement() {
   const creating = routeCreating || createOpen;
   const sourceRequestId = params.get("serviceRequestId") || "";
   const connectionApplicationId = params.get("connectionId") || "";
+  const linkedConnectionCreation = routeCreating && Boolean(connectionApplicationId);
   const selectedWorkOrderId = params.get("workOrderId") || "";
   const [lookups, setLookups] = useState<Lookup>({
     types: [],
@@ -260,6 +261,10 @@ export default function WorkOrderManagement() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
+      if (linkedConnectionCreation) {
+        setLookups(await api.workOrderLookups());
+        return;
+      }
       const [lookupData, dashboardData, rows] = await Promise.all([
         api.workOrderLookups(),
         api.workOrderDashboard(),
@@ -273,7 +278,7 @@ export default function WorkOrderManagement() {
     } finally {
       setLoading(false);
     }
-  }, [filters]);
+  }, [filters, linkedConnectionCreation]);
 
   // Register data depends on filters, not on whether the create modal is open.
   // Reloading on modal visibility also refreshes lookups and can restart the
@@ -287,7 +292,7 @@ export default function WorkOrderManagement() {
     let active = true;
     setTargetsLoading(true);
     Promise.all([
-      api.listWorkOrderTargets(),
+      api.listWorkOrderTargets("", connectionApplicationId),
       sourceRequestId
         ? api.getServiceRequest(sourceRequestId)
         : Promise.resolve(null),
@@ -403,7 +408,7 @@ export default function WorkOrderManagement() {
     targetSearchTimerRef.current = window.setTimeout(async () => {
       setTargetsLoading(true);
       try {
-        const rows = await api.listWorkOrderTargets(query.trim());
+        const rows = await api.listWorkOrderTargets(query.trim(), connectionApplicationId);
         setTargets((current) => {
           const selectedTarget = current.find(
             (target) => form.accountId
@@ -653,6 +658,10 @@ export default function WorkOrderManagement() {
       });
       showToast(`Work order ${created.work_order_number} created.`, "success");
       setCreateOpen(false);
+      if (connectionApplicationId) {
+        navigate(`/connections/${connectionApplicationId}`, { replace: true });
+        return;
+      }
       const createdId = created.work_order_id || created.workOrderId;
       navigate(
         createdId

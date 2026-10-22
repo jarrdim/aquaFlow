@@ -3,7 +3,7 @@ import { Prisma } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
-import { requireAuth, requireRoleOrPermission, requireScopedPermission, SCOPED_STAFF_ROLES } from "../middleware/auth";
+import { isSystemAdmin, requireAuth, requireRoleOrPermission, requireScopedPermission, SCOPED_STAFF_ROLES } from "../middleware/auth";
 import {
   buildCustomerProfileChanges,
   compareCustomerActivityNewestFirst,
@@ -51,6 +51,7 @@ const createCustomerSchema = z
       fileSize: z.number().int().positive().max(5 * 1024 * 1024),
       data: z.string().startsWith("data:").max(7_000_000),
     })).max(6).default([]),
+    connectionApplicationId: z.coerce.bigint().positive().optional(),
   })
   .refine(
     (data) =>
@@ -872,7 +873,10 @@ customersRouter.patch("/:id", customerManageAccess, async (req, res, next) => {
   }
 });
 
-customersRouter.post("/", customerManageAccess, async (req, res) => {
+customersRouter.post(
+  "/",
+  requireScopedPermission(SCOPED_STAFF_ROLES, ["CUSTOMER_MANAGE", "CONNECTION_PROCESS"]),
+  async (req, res) => {
   const parsed = createCustomerSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: parsed.error.flatten() });
@@ -880,6 +884,33 @@ customersRouter.post("/", customerManageAccess, async (req, res) => {
   const data = parsed.data;
 
   try {
+    const isScopedStaff = !isSystemAdmin(req) && Boolean(
+      req.user?.roles.some((role) => SCOPED_STAFF_ROLES.includes(role)),
+    );
+    if (isScopedStaff) {
+      const canManageCustomers = Boolean(await prisma.rolePermission.count({
+        where: {
+          permission: { permissionCode: "CUSTOMER_MANAGE" },
+          role: {
+            status: "ACTIVE",
+            userRoles: { some: { userId: BigInt(req.user!.userId), status: "ACTIVE" } },
+          },
+        },
+      }));
+      if (!canManageCustomers) {
+        if (!data.connectionApplicationId) {
+          return res.status(403).json({ error: "Customer creation is allowed only from an approved new connection" });
+        }
+        const application = await prisma.newConnectionApplication.findUnique({
+          where: { connectionApplicationId: data.connectionApplicationId },
+          select: { status: true, customerId: true },
+        });
+        if (!application) return res.status(404).json({ error: "Connection application not found" });
+        if (application.status !== "APPROVED" || application.customerId) {
+          return res.status(409).json({ error: "Only an approved application without a linked customer can create a customer" });
+        }
+      }
+    }
     const customer = await prisma.$transaction(async (tx) => {
       // Serialize number allocation and derive the next value from the highest
       // number for this year. A row count is unsafe after imports/deletions and

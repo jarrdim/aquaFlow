@@ -12,6 +12,8 @@ workOrdersRouter.use(requireAuth);
 
 const canView = requirePermission("WORK_ORDER_VIEW");
 const canCreate = requirePermission("WORK_ORDER_CREATE");
+const canViewOrProcessConnection = requirePermission("WORK_ORDER_VIEW", "CONNECTION_PROCESS");
+const canCreateOrProcessConnection = requirePermission("WORK_ORDER_CREATE", "CONNECTION_PROCESS");
 const canAssign = requirePermission("WORK_ORDER_ASSIGN");
 const canExecute = requirePermission("WORK_ORDER_EXECUTE");
 const canVerify = requirePermission("WORK_ORDER_VERIFY");
@@ -34,6 +36,19 @@ function csv(value: unknown) {
 
 function userId(req: Express.Request) {
   return BigInt(req.user!.userId);
+}
+
+async function hasPermission(req: Request, permissionCode: string) {
+  if (isSystemAdmin(req)) return true;
+  return Boolean(await prisma.rolePermission.count({
+    where: {
+      permission: { permissionCode },
+      role: {
+        status: "ACTIVE",
+        userRoles: { some: { userId: userId(req), status: "ACTIVE" } },
+      },
+    },
+  }));
 }
 
 function roundMoney(value: number) {
@@ -117,7 +132,7 @@ workOrdersRouter.get("/dashboard", canView, async (_req, res) => {
   res.json(rows[0] ?? { total: 0, open: 0, unassigned: 0, overdue: 0, awaiting_verification: 0, verified: 0 });
 });
 
-workOrdersRouter.get("/lookups", canView, async (_req, res) => {
+workOrdersRouter.get("/lookups", canViewOrProcessConnection, async (_req, res) => {
   const [types, zones, officers, categories] = await Promise.all([
     prisma.$queryRaw<any[]>`
       SELECT work_order_type_id AS "workOrderTypeId", type_code AS "typeCode",
@@ -147,14 +162,37 @@ workOrdersRouter.get("/lookups", canView, async (_req, res) => {
   res.json({ types, zones, officers, categories, priorities, statuses, sourceTypes });
 });
 
-workOrdersRouter.get("/targets", canCreate, async (req, res) => {
+workOrdersRouter.get("/targets", canCreateOrProcessConnection, async (req, res) => {
   const q = String(req.query.q ?? "").trim();
+  const connectionId = req.query.connectionApplicationId
+    ? id.safeParse(req.query.connectionApplicationId)
+    : null;
+  if (req.query.connectionApplicationId && !connectionId?.success) {
+    return res.status(400).json({ error: "Invalid connection application" });
+  }
+  const canCreateAnyWorkOrder = await hasPermission(req, "WORK_ORDER_CREATE");
+  if (!canCreateAnyWorkOrder && !connectionId?.success) {
+    return res.status(403).json({ error: "Work-order targets are available only for the selected new connection" });
+  }
+  let connectionCustomerId: bigint | null = null;
+  if (connectionId?.success) {
+    const application = await prisma.newConnectionApplication.findUnique({
+      where: { connectionApplicationId: connectionId.data },
+      select: { customerId: true, status: true },
+    });
+    if (!application) return res.status(404).json({ error: "Connection application not found" });
+    if (application.status !== "CUSTOMER_CREATED" || !application.customerId) {
+      return res.status(409).json({ error: "The connection must have a linked customer before an installation target is selected" });
+    }
+    connectionCustomerId = application.customerId;
+  }
   const pattern = `%${q}%`;
   const rows = await prisma.$queryRaw<any[]>`
     WITH candidates AS MATERIALIZED (
       SELECT c.*
       FROM aquaflow.customers c
-      WHERE (${q} = '' OR c.customer_number ILIKE ${pattern}
+      WHERE (${connectionCustomerId}::bigint IS NULL OR c.customer_id = ${connectionCustomerId})
+        AND (${q} = '' OR c.customer_number ILIKE ${pattern}
         OR c.phone_number ILIKE ${pattern}
         OR COALESCE(c.national_id, '') ILIKE ${pattern}
         OR c.first_name ILIKE ${pattern} OR c.middle_name ILIKE ${pattern}
@@ -466,9 +504,13 @@ const createInput = z.object({
   dueDate: z.coerce.date().optional().nullable(),
 });
 
-workOrdersRouter.post("/", canCreate, asyncRoute(async (req, res) => {
+workOrdersRouter.post("/", canCreateOrProcessConnection, asyncRoute(async (req, res) => {
   const parsed = createInput.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message });
+  const canCreateAnyWorkOrder = await hasPermission(req, "WORK_ORDER_CREATE");
+  if (!canCreateAnyWorkOrder && !parsed.data.connectionApplicationId) {
+    return res.status(403).json({ error: "You can create a work order only for the selected new connection" });
+  }
   let accountId = parsed.data.accountId ?? null;
   let customerId = parsed.data.customerId ?? null;
   let serviceRequest: any = null;
@@ -541,12 +583,15 @@ workOrdersRouter.post("/", canCreate, asyncRoute(async (req, res) => {
     SELECT work_order_type_id,type_code FROM aquaflow.work_order_types
     WHERE work_order_type_id = ${parsed.data.workOrderTypeId} AND status = 'ACTIVE'`;
   if (!type[0]) return res.status(404).json({ error: "Work order type not found" });
+  if (!canCreateAnyWorkOrder && type[0].type_code !== "NEW_CONNECTION") {
+    return res.status(403).json({ error: "Connection processing can create only a new-connection installation work order" });
+  }
   const fieldOfficerIds = [...new Set([
     ...parsed.data.fieldOfficerIds,
     ...(parsed.data.fieldOfficerId ? [parsed.data.fieldOfficerId] : []),
   ])];
   if (fieldOfficerIds.length) {
-    const mayAssign = isSystemAdmin(req) || Boolean(await prisma.rolePermission.count({
+    const mayAssign = Boolean(connectionApplication) || isSystemAdmin(req) || Boolean(await prisma.rolePermission.count({
       where: {
         permission: { permissionCode: "WORK_ORDER_ASSIGN" },
         role: {

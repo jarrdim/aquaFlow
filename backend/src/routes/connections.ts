@@ -347,6 +347,48 @@ connectionsRouter.get("/:id", canView, async (req, res) => {
   res.json({ ...applications[0], activities, latestStkRequest });
 });
 
+connectionsRouter.get("/:id/customer-candidates", canProcess, async (req, res) => {
+  const applicationId = positiveId.safeParse(req.params.id);
+  if (!applicationId.success) return res.status(400).json({ error: "Invalid connection application" });
+  const application = await prisma.newConnectionApplication.findUnique({
+    where: { connectionApplicationId: applicationId.data },
+    select: { status: true },
+  });
+  if (!application) return res.status(404).json({ error: "Connection application not found" });
+  if (application.status !== "APPROVED") {
+    return res.status(409).json({ error: "Existing customers can only be linked to an approved application" });
+  }
+  const search = String(req.query.search ?? "").trim();
+  const pattern = `%${search}%`;
+  const customers = await prisma.$queryRaw<any[]>`
+    SELECT c.customer_id AS "customerId", c.customer_number AS "customerNumber",
+      c.customer_type AS "customerType", c.first_name AS "firstName",
+      c.middle_name AS "middleName", c.last_name AS "lastName",
+      c.organization_name AS "organizationName", c.phone_number AS "phoneNumber",
+      c.email_address AS "emailAddress", c.status,
+      COUNT(DISTINCT ca.account_id)::int AS "accountCount",
+      COALESCE(
+        jsonb_agg(DISTINCT jsonb_build_object('meterId', m.meter_id::text, 'meterNumber', m.meter_number))
+          FILTER (WHERE m.meter_id IS NOT NULL),
+        '[]'::jsonb
+      ) AS "activeMeters"
+    FROM aquaflow.customers c
+    LEFT JOIN aquaflow.customer_accounts ca ON ca.customer_id = c.customer_id
+    LEFT JOIN aquaflow.meter_assignments ma ON ma.account_id = ca.account_id AND ma.assignment_status = 'ACTIVE'
+    LEFT JOIN aquaflow.meters m ON m.meter_id = ma.meter_id
+    WHERE (${search} = '' OR c.customer_number ILIKE ${pattern}
+      OR c.phone_number ILIKE ${pattern} OR COALESCE(c.national_id, '') ILIKE ${pattern}
+      OR COALESCE(c.registration_number, '') ILIKE ${pattern}
+      OR COALESCE(c.first_name, '') ILIKE ${pattern}
+      OR COALESCE(c.middle_name, '') ILIKE ${pattern}
+      OR COALESCE(c.last_name, '') ILIKE ${pattern}
+      OR COALESCE(c.organization_name, '') ILIKE ${pattern})
+    GROUP BY c.customer_id
+    ORDER BY c.created_at DESC
+    LIMIT 20`;
+  res.json({ items: customers });
+});
+
 connectionsRouter.get("/:id/c2b-payments", canView, async (req, res, next) => {
   const applicationId = positiveId.safeParse(req.params.id);
   const reference = z.string().trim().max(100).optional().safeParse(req.query.reference ? String(req.query.reference) : undefined);

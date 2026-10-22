@@ -204,7 +204,7 @@ class PageErrorBoundary extends Component<
 function Protected({ children }: { children: React.ReactNode }) {
   const location = useLocation();
   if (!hasSession()) return <Navigate to="/login" replace />;
-  if (!canAccessPath(location.pathname)) {
+  if (!canAccessPath(`${location.pathname}${location.search}`)) {
     return <Navigate to={defaultAuthorizedPath()} replace />;
   }
   return <>{children}</>;

@@ -276,6 +276,7 @@ export default function NewCustomer() {
     let createdCustomer: any = null;
     try {
       const payload: Record<string, unknown> = {
+        connectionApplicationId: connectionId || undefined,
         customerType,
         phoneNumber:      normalizeKenyanPhone(form.phoneNumber),
         alternativePhone: form.alternativePhone  || undefined,

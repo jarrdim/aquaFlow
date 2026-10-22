@@ -1314,7 +1314,7 @@ export function ConnectionProfile() {
   async function searchExistingCustomers(query = customerSearch) {
     setSearchingCustomers(true);
     try {
-      const response = (await api.listCustomers(query.trim(), 1)) as {
+      const response = (await api.listConnectionCustomerCandidates(id, query.trim())) as {
         items?: ExistingCustomer[];
       };
       setCustomerResults(response.items || []);
