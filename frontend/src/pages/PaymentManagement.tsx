@@ -32,25 +32,39 @@ const customerDisplayName = (customer: any) =>
   [customer?.firstName, customer?.middleName, customer?.lastName]
     .filter(Boolean)
     .join(" ");
+const paymentEvidence = (value: unknown): string => {
+  if (value == null) return "";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (Array.isArray(value)) return value.map(paymentEvidence).join(" ");
+  if (typeof value === "object") {
+    return Object.entries(value as Record<string, unknown>)
+      .flatMap(([key, entry]) => [key, paymentEvidence(entry)])
+      .join(" ");
+  }
+  return "";
+};
 const paymentModeLabel = (payment: Row) => {
   const evidence = [
     payment.channel?.channelCode,
     payment.channel?.channelName,
     payment.remarks,
-    payment.externalPayload?.paymentMethod,
-    payment.externalPayload?.source,
-    ...(payment.events ?? []).flatMap((event: Row) => [
-      event.eventType,
-      event.details,
-      event.metadata?.paymentMethod,
-      event.metadata?.source,
-    ]),
+    payment.externalPayload,
+    payment.events,
   ]
     .filter(Boolean)
+    .map(paymentEvidence)
     .join(" ");
 
   if (/MPESA[_\s-]*SEND[_\s-]*MONEY|M[\s-]*PESA\s+SEND\s+MONEY|\bSEND\s+MONEY\b/i.test(evidence)) {
     return "M-Pesa Send Money";
+  }
+  if (/MPESA[_\s-]*C2B|CUSTOMER\s*PAY\s*BILL\s*ONLINE|\bPAY\s*BILL\b|\bPAYBILL\b|\bC2B\b/i.test(evidence)) {
+    return "M-Pesa Paybill";
+  }
+  if (/MPESA[_\s-]*STK|STK\s*PUSH|M[\s-]*PESA\s+EXPRESS|CHECKOUTREQUESTID/i.test(evidence)) {
+    return "M-Pesa STK Push";
   }
   return payment.channel?.channelName || payment.channel?.channelCode || "—";
 };
