@@ -755,6 +755,21 @@ export const api = {
     return request(`/payments/dashboard/summary${query ? `?${query}` : ""}`);
   },
   listPaymentChannels: () => request("/payments/channels"),
+  listManualInvoices: (filters: Record<string, string> = {}) => {
+    const query = new URLSearchParams(Object.entries(filters).filter(([, value]) => value)).toString();
+    return request(`/invoices${query ? `?${query}` : ""}`);
+  },
+  getManualInvoice: (id: string) => request(`/invoices/${id}`),
+  createManualInvoice: (data: Record<string, unknown>) =>
+    request("/invoices", { method: "POST", body: JSON.stringify(data) }),
+  approveManualInvoice: (id: string) =>
+    request(`/invoices/${id}/approve`, { method: "POST" }),
+  issueManualInvoice: (id: string) =>
+    request(`/invoices/${id}/issue`, { method: "POST" }),
+  cancelManualInvoice: (id: string, reason: string) =>
+    request(`/invoices/${id}/cancel`, { method: "POST", body: JSON.stringify({ reason }) }),
+  payManualInvoice: (id: string, data: Record<string, unknown>) =>
+    request(`/invoices/${id}/payments`, { method: "POST", body: JSON.stringify(data) }),
   unmatchedPaymentCount: () => request("/payments/unmatched/count"),
   listUnmatchedPayments: () => request("/payments/unmatched"),
   createPaymentChannel: (data: Record<string, unknown>) =>

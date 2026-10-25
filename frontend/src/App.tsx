@@ -108,6 +108,7 @@ import {
   ReversalApprovals,
   UnmatchedPayments,
 } from "./pages/PaymentManagement";
+import { ManualInvoiceDetail, ManualInvoices } from "./pages/InvoiceManagement";
 import {
   NotificationDashboard,
   NotificationHistory,
@@ -413,10 +414,12 @@ const NEW_SIDEBAR_ROUTES = new Set([
   "/meters/direct-replacement",
   "/meters/direct-service",
   "/payments/reports/receipt-detail",
+  "/payments/invoices",
 ]);
 
 const PAYMENT_MENU = [
   ["Revenue Dashboard", "/payments"],
+  ["Invoices", "/payments/invoices"],
   ["M-Pesa Express", "/payments/mpesa"],
   ["M-Pesa C2B Integration", "/payments/mpesa/c2b"],
   ["Record Payment", "/payments/record"],
@@ -624,6 +627,7 @@ function detailPageLabel(pathname: string) {
   if (/^\/customers\/[^/]+$/.test(pathname)) return "Customer Profile";
   if (/^\/connections\/[^/]+$/.test(pathname)) return "Connection application";
   if (/^\/billing\/invoices\/[^/]+$/.test(pathname)) return "Invoice Details";
+  if (/^\/payments\/invoices\/[^/]+$/.test(pathname)) return "Invoice Details";
   if (/^\/payments\/receipts\/[^/]+$/.test(pathname)) return "Payment Receipt";
   if (/^\/meters\/[^/]+\/history$/.test(pathname)) return "Meter History";
   if (/^\/meters\/[^/]+\/installation$/.test(pathname)) return "Installation Details";
@@ -2273,6 +2277,26 @@ export default function App() {
           <Protected>
             <Shell>
               <MpesaStkPush />
+            </Shell>
+          </Protected>
+        }
+      />
+      <Route
+        path="/payments/invoices"
+        element={
+          <Protected>
+            <Shell>
+              <ManualInvoices />
+            </Shell>
+          </Protected>
+        }
+      />
+      <Route
+        path="/payments/invoices/:id"
+        element={
+          <Protected>
+            <Shell>
+              <ManualInvoiceDetail />
             </Shell>
           </Protected>
         }

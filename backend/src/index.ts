@@ -22,6 +22,7 @@ import { workOrdersRouter } from "./routes/workOrders";
 import { connectionsRouter } from "./routes/connections";
 import { reportsRouter } from "./routes/reports";
 import { setupsRouter } from "./routes/setups";
+import { invoicesRouter } from "./routes/invoices";
 import { prisma } from "./lib/prisma";
 
 // BigInt IDs (from BIGSERIAL columns) don't serialize to JSON by default.
@@ -121,6 +122,7 @@ app.use("/api/work-orders", workOrdersRouter);
 app.use("/api/connections", connectionsRouter);
 app.use("/api/reports", reportsRouter);
 app.use("/api/setups", setupsRouter);
+app.use("/api/invoices", invoicesRouter);
 
 app.use(
   (

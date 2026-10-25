@@ -17,10 +17,14 @@ const importedAccountStatus = z
 const roundMoney = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
 
 async function accountLedgerBalance(client: any, accountId: bigint, openingBalance: number) {
-  const [bills, payments, disconnectionPostings, accountAdjustments] = await Promise.all([
+  const [bills, manualInvoices, payments, disconnectionPostings, accountAdjustments] = await Promise.all([
     client.bill.aggregate({
       where: { accountId, status: { in: ledgerBillStatuses } },
       _sum: { totalCurrentCharges: true },
+    }),
+    client.manualInvoice.aggregate({
+      where: { accountId, status: { in: ["ISSUED", "PARTIALLY_PAID", "PAID"] } },
+      _sum: { totalAmount: true },
     }),
     client.payment.aggregate({
       where: {
@@ -40,7 +44,7 @@ async function accountLedgerBalance(client: any, accountId: bigint, openingBalan
       select: { adjustmentType: true, amount: true },
     }),
   ]);
-  const postedBillTotal = roundMoney(Number(bills._sum.totalCurrentCharges ?? 0));
+  const postedBillTotal = roundMoney(Number(bills._sum.totalCurrentCharges ?? 0) + Number(manualInvoices._sum.totalAmount ?? 0));
   const postedServiceChargeTotal = roundMoney(Number(disconnectionPostings[0]?.total ?? 0));
   const postedPaymentTotal = roundMoney(Number(payments._sum.amount ?? 0));
   const approvedAccountAdjustmentTotal = roundMoney(
@@ -142,11 +146,16 @@ accountsRouter.post(
       }
 
       const accountIds = existing.map((row) => row.accountId);
-      const [billTotals, paymentTotals] = await Promise.all([
+      const [billTotals, invoiceTotals, paymentTotals] = await Promise.all([
         prisma.bill.groupBy({
           by: ["accountId"],
           where: { accountId: { in: accountIds }, status: { in: ledgerBillStatuses } },
           _sum: { totalCurrentCharges: true },
+        }),
+        prisma.manualInvoice.groupBy({
+          by: ["accountId"],
+          where: { accountId: { in: accountIds }, status: { in: ["ISSUED", "PARTIALLY_PAID", "PAID"] } },
+          _sum: { totalAmount: true },
         }),
         prisma.payment.groupBy({
           by: ["accountId"],
@@ -160,6 +169,7 @@ accountsRouter.post(
       ]);
       const accountsByNumber = new Map(existing.map((row) => [row.accountNumber, row]));
       const billsByAccount = new Map(billTotals.map((row) => [row.accountId, Number(row._sum.totalCurrentCharges ?? 0)]));
+      invoiceTotals.forEach((row) => billsByAccount.set(row.accountId, (billsByAccount.get(row.accountId) ?? 0) + Number(row._sum.totalAmount ?? 0)));
       const paymentsByAccount = new Map(paymentTotals.map((row) => [row.accountId, Number(row._sum.amount ?? 0)]));
       const inconsistent = rows.flatMap((row) => {
         const account = accountsByNumber.get(row.accountNumber)!;

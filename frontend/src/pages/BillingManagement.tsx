@@ -11,6 +11,7 @@ import Swal from "sweetalert2";
 import { DateInput } from "../components/DateInput";
 import { DeliveryQueueLink } from "../components/DeliveryQueueLink";
 import { billingCycleLabel } from "../lib/billingPeriod";
+import { nextCycleIdentity } from "../lib/cycleIdentity";
 
 type Row = Record<string, any>;
 const INPUT =
@@ -887,6 +888,37 @@ export function IndividualBillingWorkspace() {
 
   const selectedReadingCycle = readingCycles.find((cycle) => String(cycle.readingCycleId) === readingCycleId);
   const selectedBillingCycle = billingCycles.find((cycle) => String(cycle.billingCycleId) === billingCycleId);
+  const readingSetupGroup = periodGroups.find((group) =>
+    String(group.billingPeriodGroupId) === String(readingForm.billingPeriodGroupId ?? ""),
+  );
+  const billingSetupGroup = periodGroups.find((group) =>
+    String(group.billingPeriodGroupId) === String(selectedReadingCycle?.billingPeriodGroupId ?? billingForm.billingPeriodGroupId ?? ""),
+  );
+  const automaticReadingIdentity = useMemo(
+    () => nextCycleIdentity("reading", readingSetupGroup, readingCycles),
+    [readingSetupGroup, readingCycles],
+  );
+  const automaticBillingIdentity = useMemo(
+    () => nextCycleIdentity("billing", billingSetupGroup, billingCycles),
+    [billingSetupGroup, billingCycles],
+  );
+  useEffect(() => {
+    if (!readingSetupGroup) return;
+    setReadingForm((current: Row) => current.cycleCode === automaticReadingIdentity.code && current.cycleName === automaticReadingIdentity.name
+      ? current
+      : { ...current, cycleCode: automaticReadingIdentity.code, cycleName: automaticReadingIdentity.name });
+  }, [readingSetupGroup, automaticReadingIdentity.code, automaticReadingIdentity.name]);
+  useEffect(() => {
+    if (!billingSetupGroup) return;
+    setBillingForm((current: Row) => current.cycleCode === automaticBillingIdentity.code && current.cycleName === automaticBillingIdentity.name
+      ? current
+      : {
+          ...current,
+          billingPeriodGroupId: String(billingSetupGroup.billingPeriodGroupId),
+          cycleCode: automaticBillingIdentity.code,
+          cycleName: automaticBillingIdentity.name,
+        });
+  }, [billingSetupGroup, automaticBillingIdentity.code, automaticBillingIdentity.name]);
   const accountOptions = accounts.filter((account) => ["ACTIVE", "SUSPENDED"].includes(account.accountStatus)).map((account) => ({
     value: String(account.accountId), label: `${account.accountNumber} · ${accountCustomerName(account)}`,
   }));
@@ -1109,12 +1141,12 @@ export function IndividualBillingWorkspace() {
           <button type="button" onClick={() => setShowSetup(true)} className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-bold text-white shadow-sm hover:bg-amber-700">Create billing period</button>
         </div>}
         {showSetup && <div className={`grid gap-4 border-t border-slate-100 bg-slate-50/60 p-4 ${needsBillingPeriod || needsReadingCycle ? "" : "xl:grid-cols-2"}`}>
-          {!needsBillingPeriod && <div><div className="mb-3 flex items-center justify-between"><div><h3 className="font-bold text-slate-900">New reading cycle</h3><p className="text-xs text-slate-500">Create it open so readings can be captured</p></div><Badge value={readingForm.status} /></div><div className="grid gap-3 sm:grid-cols-2"><Field label="Period group" required><SearchableSelect className={INPUT} value={readingForm.billingPeriodGroupId ?? ""} onChange={(e) => { const billingPeriodGroupId = e.target.value; setReadingForm({ ...readingForm, billingPeriodGroupId }); setBillingForm({ ...billingForm, billingPeriodGroupId }); }}><option value="">Select period group</option>{periodGroups.map((group) => <option key={group.billingPeriodGroupId} value={group.billingPeriodGroupId}>{group.groupCode} — {group.groupName}</option>)}</SearchableSelect></Field><Field label="Cycle code" required><input className={INPUT} value={readingForm.cycleCode} onChange={(e) => setReadingForm({ ...readingForm, cycleCode: e.target.value })} /></Field><Field label="Cycle name" required><input className={INPUT} value={readingForm.cycleName} onChange={(e) => setReadingForm({ ...readingForm, cycleName: e.target.value })} /></Field><Field label="Start date" required><DateInput className={INPUT} value={readingForm.startDate} onChange={(e) => setReadingForm({ ...readingForm, startDate: e.target.value })} /></Field><Field label="End date" required><DateInput className={INPUT} value={readingForm.endDate} onChange={(e) => setReadingForm({ ...readingForm, endDate: e.target.value })} /></Field></div>{!periodGroups.length && <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">Create a period group from Meter Readings → Reading Cycles first.</p>}<div className="mt-3">{actionButton("Create and select reading cycle", "creating-reading-cycle", !canManageReadingCycles || !readingForm.billingPeriodGroupId || !readingForm.cycleCode || !readingForm.cycleName, createReadingCycle, "slate")}</div></div>}
+          {!needsBillingPeriod && <div><div className="mb-3 flex items-center justify-between"><div><h3 className="font-bold text-slate-900">New reading cycle</h3><p className="text-xs text-slate-500">Create it open so readings can be captured</p></div><Badge value={readingForm.status} /></div><div className="grid gap-3 sm:grid-cols-2"><Field label="Period group" required><SearchableSelect className={INPUT} value={readingForm.billingPeriodGroupId ?? ""} onChange={(e) => { const billingPeriodGroupId = e.target.value; setReadingForm({ ...readingForm, billingPeriodGroupId }); setBillingForm({ ...billingForm, billingPeriodGroupId }); }}><option value="">Select period group</option>{periodGroups.map((group) => <option key={group.billingPeriodGroupId} value={group.billingPeriodGroupId}>{group.groupCode} — {group.groupName}</option>)}</SearchableSelect></Field><Field label="Cycle code"><div className={`${INPUT} cursor-default bg-slate-50 font-mono font-semibold`}>{readingForm.cycleCode || "Select a period group"}</div><span className="mt-1 block text-[11px] text-slate-400">Generated and incremented automatically.</span></Field><Field label="Cycle name"><div className={`${INPUT} cursor-default bg-slate-50`}>{readingForm.cycleName || "Select a period group"}</div></Field><Field label="Start date" required><DateInput className={INPUT} value={readingForm.startDate} onChange={(e) => setReadingForm({ ...readingForm, startDate: e.target.value })} /></Field><Field label="End date" required><DateInput className={INPUT} value={readingForm.endDate} onChange={(e) => setReadingForm({ ...readingForm, endDate: e.target.value })} /></Field></div>{!periodGroups.length && <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">Create a period group from Meter Readings → Reading Cycles first.</p>}<div className="mt-3">{actionButton("Create and select reading cycle", "creating-reading-cycle", !canManageReadingCycles || !readingForm.billingPeriodGroupId || !readingForm.cycleCode || !readingForm.cycleName, createReadingCycle, "slate")}</div></div>}
           {!needsReadingCycle && <div>
             <div className="mb-3 flex items-center justify-between"><div><h3 className="font-bold text-slate-900">New billing period</h3><p className="text-xs text-slate-500">Links to the selected closed reading cycle</p></div><Badge value={billingForm.status} /></div>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              <Field label="Period code" required><input className={INPUT} value={billingForm.cycleCode} onChange={(e) => setBillingForm({ ...billingForm, cycleCode: e.target.value })} /></Field>
-              <Field label="Period name" required><input className={INPUT} value={billingForm.cycleName} onChange={(e) => setBillingForm({ ...billingForm, cycleName: e.target.value })} /></Field>
+              <Field label="Period code"><div className={`${INPUT} cursor-default bg-slate-50 font-mono font-semibold`}>{billingForm.cycleCode || "Select a period group"}</div><span className="mt-1 block text-[11px] text-slate-400">Generated and incremented automatically.</span></Field>
+              <Field label="Period name"><div className={`${INPUT} cursor-default bg-slate-50`}>{billingForm.cycleName || "Select a period group"}</div></Field>
               <Field label="Period start" required><DateInput className={INPUT} value={billingForm.periodStart} onChange={(e) => setBillingForm({ ...billingForm, periodStart: e.target.value })} /></Field>
               <Field label="Period end" required><DateInput min={billingForm.periodStart} className={INPUT} value={billingForm.periodEnd} onChange={(e) => setBillingForm({ ...billingForm, periodEnd: e.target.value })} /></Field>
               <Field label="Due date" required><DateInput min={billingForm.periodEnd} className={INPUT} value={billingForm.dueDate} onChange={(e) => setBillingForm({ ...billingForm, dueDate: e.target.value })} /></Field>
@@ -1281,6 +1313,16 @@ export function BillingPeriods() {
   const selectedGroupEnd = selectedPeriodGroup
     ? String(selectedPeriodGroup.periodEnd).slice(0, 10)
     : undefined;
+  const automaticPeriodIdentity = useMemo(
+    () => nextCycleIdentity("billing", selectedPeriodGroup, cycles),
+    [selectedPeriodGroup, cycles],
+  );
+  useEffect(() => {
+    if (!selectedPeriodGroup) return;
+    setForm((current: Row) => current.cycleCode === automaticPeriodIdentity.code && current.cycleName === automaticPeriodIdentity.name
+      ? current
+      : { ...current, cycleCode: automaticPeriodIdentity.code, cycleName: automaticPeriodIdentity.name });
+  }, [selectedPeriodGroup, automaticPeriodIdentity.code, automaticPeriodIdentity.name]);
   function selectBillingPeriodGroup(billingPeriodGroupId: string) {
     const group = periodGroups.find(
       (item) => String(item.billingPeriodGroupId) === billingPeriodGroupId,
@@ -1405,8 +1447,6 @@ export function BillingPeriods() {
       await load();
       setForm({
         ...form,
-        cycleCode: "",
-        cycleName: "",
         readingCycleId: "",
         remarks: "",
       });
@@ -1506,15 +1546,11 @@ export function BillingPeriods() {
               </span>
             </Field>
             <div className="grid grid-cols-2 gap-3">
-              <Field label="Period code" required>
-                <input
-                  required
-                  className={INPUT}
-                  value={form.cycleCode}
-                  onChange={(e) =>
-                    setForm({ ...form, cycleCode: e.target.value })
-                  }
-                />
+              <Field label="Period code">
+                <div className={`${INPUT} cursor-default bg-slate-50 font-mono font-semibold text-slate-700`}>
+                  {form.cycleCode || "Select a billing period group"}
+                </div>
+                <span className="mt-1 block text-[11px] text-slate-400">Generated automatically and incremented for additional periods.</span>
               </Field>
               <Field label="Frequency">
                 <SearchableSelect
@@ -1530,15 +1566,10 @@ export function BillingPeriods() {
                 </SearchableSelect>
               </Field>
             </div>
-            <Field label="Period name" required>
-              <input
-                required
-                className={INPUT}
-                value={form.cycleName}
-                onChange={(e) =>
-                  setForm({ ...form, cycleName: e.target.value })
-                }
-              />
+            <Field label="Period name">
+              <div className={`${INPUT} cursor-default bg-slate-50 text-slate-700`}>
+                {form.cycleName || "Select a billing period group"}
+              </div>
             </Field>
             <Field label="Closed reading cycle" required>
               <SearchableSelect

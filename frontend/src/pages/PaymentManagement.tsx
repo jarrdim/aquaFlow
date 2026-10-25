@@ -32,6 +32,28 @@ const customerDisplayName = (customer: any) =>
   [customer?.firstName, customer?.middleName, customer?.lastName]
     .filter(Boolean)
     .join(" ");
+const paymentModeLabel = (payment: Row) => {
+  const evidence = [
+    payment.channel?.channelCode,
+    payment.channel?.channelName,
+    payment.remarks,
+    payment.externalPayload?.paymentMethod,
+    payment.externalPayload?.source,
+    ...(payment.events ?? []).flatMap((event: Row) => [
+      event.eventType,
+      event.details,
+      event.metadata?.paymentMethod,
+      event.metadata?.source,
+    ]),
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  if (/MPESA[_\s-]*SEND[_\s-]*MONEY|M[\s-]*PESA\s+SEND\s+MONEY|\bSEND\s+MONEY\b/i.test(evidence)) {
+    return "M-Pesa Send Money";
+  }
+  return payment.channel?.channelName || payment.channel?.channelCode || "—";
+};
 const usablePhone = (value: any) => {
   const phone = String(value ?? "").trim();
   return /^[+\d][\d\s()-]{6,19}$/.test(phone) ? phone : "";
@@ -1944,10 +1966,10 @@ export function PaymentReceipt() {
       .catch((e) => setError(e.message));
   }, [id]);
   function print() {
-    document.body.classList.add("printing-invoice");
+    document.body.classList.add("printing-receipt");
     window.addEventListener(
       "afterprint",
-      () => document.body.classList.remove("printing-invoice"),
+      () => document.body.classList.remove("printing-receipt"),
       { once: true },
     );
     window.print();
@@ -1960,7 +1982,7 @@ export function PaymentReceipt() {
     );
   return (
     <Page
-      className="invoice-print-page"
+      className="receipt-print-page"
       title="Payment receipt"
       subtitle={r.receiptNumber}
       actions={
@@ -1969,25 +1991,25 @@ export function PaymentReceipt() {
         </Button>
       }
     >
-      <Card className="invoice-print-document mx-auto max-w-3xl">
-        <div className="flex justify-between border-b pb-4">
+      <Card className="receipt-print-document mx-auto max-w-md font-mono text-slate-900">
+        <div className="receipt-header flex justify-between border-b pb-4">
           <img
             src="/samdamte-water-logo-print.png"
             alt="Samdamte Water Utility Management"
-            className="invoice-brand-logo h-auto w-[260px] max-w-[55%] object-contain"
+            className="receipt-brand-logo h-auto w-[260px] max-w-[55%] object-contain"
           />
-          <div className="text-right">
+          <div className="receipt-title text-right">
             <h2 className="text-xl font-bold">PAYMENT RECEIPT</h2>
             <div>{r.receiptNumber}</div>
             <Badge value={r.receiptStatus} />
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-3 py-5">
+        <div className="receipt-details grid grid-cols-2 gap-3 py-5">
           {[
-            ["Date", date(r.issueDate)],
-            ["Customer", r.customerName],
-            ["Account", r.account?.accountNumber],
-            ["Payment channel", r.payment.channel.channelName],
+            ["Date", dateTime(r.issueDate)],
+            ["Customer", r.customerName || customerDisplayName(r.account?.customer) || "—"],
+            ["Account", r.account?.accountNumber || "—"],
+            ["Payment channel", paymentModeLabel(r.payment)],
             ["Payment reference", r.payment.transactionReference],
             ["Amount paid", money(r.amount)],
             ["Received by", person(r.issuer)],
@@ -1999,13 +2021,13 @@ export function PaymentReceipt() {
                 : pretty(r.payment.matchingStatus),
             ],
           ].map(([label, value]) => (
-            <div key={label}>
+            <div className="receipt-detail" key={label}>
               <div className="text-sm text-slate-500">{label}</div>
               <strong>{value}</strong>
             </div>
           ))}
         </div>
-        <div className="border-t pt-4 text-center text-sm text-slate-500">
+        <div className="receipt-footer border-t pt-4 text-center text-sm text-slate-500">
           Thank you for your payment. This system-generated receipt is valid
           without a signature.
         </div>
@@ -2416,6 +2438,7 @@ export function DailyReceiptsReport() {
   }, [channelId, fromDate, toDate]);
   const filteredRows = rows;
   const paymentHead = (payment: Row) => {
+    if (payment.paymentType === "INVOICE_PAYMENT") return "Invoice payment";
     if (payment.paymentType === "NEW_CONNECTION_FEE") return "New connection fee";
     if (payment.paymentType === "RECONNECTION_FEE") return "Reconnection / disconnection service fee";
     if (payment.paymentType === "ADVANCE_PAYMENT") return "Advance payment";
@@ -2433,7 +2456,7 @@ export function DailyReceiptsReport() {
     receiptNumber: payment.receipt?.receiptNumber ?? "—",
     accountName: payment.customerName || customerDisplayName(payment.account?.customer) || payment.payerName || "Unmatched payer",
     accountNumber: payment.account?.accountNumber || payment.customerReference || "—",
-    payMode: payment.channel?.channelName || payment.channel?.channelCode || "—",
+    payMode: paymentModeLabel(payment),
     transactionHead: paymentHead(payment),
   })), [filteredRows]);
   const reportRows = useMemo(() => {

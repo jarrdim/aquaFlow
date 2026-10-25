@@ -1989,7 +1989,7 @@ paymentsRouter.patch(
     try {
       const reversal = await prisma.paymentReversal.findUnique({
         where: { reversalId },
-        include: { payment: { include: { allocations: { where: { status: "ACTIVE" } } } } },
+        include: { payment: { include: { allocations: { where: { status: "ACTIVE" } }, manualInvoicePayment: { include: { invoice: true } } } } },
       });
       if (!reversal || reversal.status !== "PENDING")
         return res
@@ -2032,6 +2032,26 @@ paymentsRouter.patch(
               paidAmount: reversed.paidAmount,
               status: reversed.status,
               updatedAt: new Date(),
+            },
+          });
+        }
+        const invoicePayment = reversal.payment.manualInvoicePayment;
+        if (invoicePayment) {
+          const paidAmount = round(Math.max(0, Number(invoicePayment.invoice.paidAmount) - Number(invoicePayment.amount)));
+          const balanceAmount = round(Number(invoicePayment.invoice.totalAmount) - paidAmount);
+          const invoiceStatus = paidAmount > 0 ? "PARTIALLY_PAID" : "ISSUED";
+          await tx.manualInvoice.update({
+            where: { invoiceId: invoicePayment.invoiceId },
+            data: { paidAmount, balanceAmount, status: invoiceStatus },
+          });
+          await tx.manualInvoiceEvent.create({
+            data: {
+              invoiceId: invoicePayment.invoiceId,
+              eventType: "PAYMENT_REVERSED",
+              previousStatus: invoicePayment.invoice.status,
+              newStatus: invoiceStatus,
+              details: data.comments,
+              performedBy: uid(req),
             },
           });
         }

@@ -264,6 +264,7 @@ model CustomerAccount {
   portalAccess           CustomerAccountAccess[]
   balanceReconciliations AccountBalanceReconciliation[]
   accountAdjustments     AccountAdjustment[]
+  manualInvoices         ManualInvoice[]
 
   @@map("customer_accounts")
   @@schema("aquaflow")
@@ -1570,9 +1571,98 @@ model Payment {
   stkRequest    MpesaStkRequest?
   parentPayment Payment?            @relation("PaymentSplits", fields: [parentPaymentId], references: [paymentId])
   splitPayments Payment[]           @relation("PaymentSplits")
+  manualInvoicePayment ManualInvoicePayment?
 
   @@index([parentPaymentId])
   @@map("payments")
+  @@schema("aquaflow")
+}
+
+model ManualInvoice {
+  invoiceId          BigInt    @id @default(autoincrement()) @map("invoice_id")
+  invoiceNumber      String    @unique @map("invoice_number")
+  accountId          BigInt    @map("account_id")
+  invoiceDate        DateTime  @map("invoice_date") @db.Date
+  dueDate            DateTime  @map("due_date") @db.Date
+  status             String    @default("DRAFT")
+  subtotal           Decimal   @default(0) @db.Decimal(18, 2)
+  discountAmount     Decimal   @default(0) @map("discount_amount") @db.Decimal(18, 2)
+  taxAmount          Decimal   @default(0) @map("tax_amount") @db.Decimal(18, 2)
+  totalAmount        Decimal   @default(0) @map("total_amount") @db.Decimal(18, 2)
+  paidAmount         Decimal   @default(0) @map("paid_amount") @db.Decimal(18, 2)
+  balanceAmount      Decimal   @default(0) @map("balance_amount") @db.Decimal(18, 2)
+  customerReference  String?   @map("customer_reference")
+  notes              String?
+  terms              String?
+  createdBy          BigInt?   @map("created_by")
+  approvedBy         BigInt?   @map("approved_by")
+  approvedAt         DateTime? @map("approved_at")
+  issuedBy           BigInt?   @map("issued_by")
+  issuedAt           DateTime? @map("issued_at")
+  cancelledBy        BigInt?   @map("cancelled_by")
+  cancelledAt        DateTime? @map("cancelled_at")
+  cancellationReason String?   @map("cancellation_reason")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  account  CustomerAccount        @relation(fields: [accountId], references: [accountId])
+  items    ManualInvoiceItem[]
+  payments ManualInvoicePayment[]
+  events   ManualInvoiceEvent[]
+
+  @@index([accountId, invoiceDate(sort: Desc)])
+  @@index([status, dueDate])
+  @@map("manual_invoices")
+  @@schema("aquaflow")
+}
+
+model ManualInvoiceItem {
+  invoiceItemId BigInt  @id @default(autoincrement()) @map("invoice_item_id")
+  invoiceId     BigInt  @map("invoice_id")
+  description   String
+  quantity      Decimal @default(1) @db.Decimal(18, 3)
+  unitPrice     Decimal @default(0) @map("unit_price") @db.Decimal(18, 2)
+  taxRate       Decimal @default(0) @map("tax_rate") @db.Decimal(7, 4)
+  lineSubtotal  Decimal @map("line_subtotal") @db.Decimal(18, 2)
+  taxAmount     Decimal @default(0) @map("tax_amount") @db.Decimal(18, 2)
+  lineTotal     Decimal @map("line_total") @db.Decimal(18, 2)
+  sortOrder     Int     @default(0) @map("sort_order")
+
+  invoice ManualInvoice @relation(fields: [invoiceId], references: [invoiceId], onDelete: Cascade)
+
+  @@map("manual_invoice_items")
+  @@schema("aquaflow")
+}
+
+model ManualInvoicePayment {
+  invoicePaymentId BigInt   @id @default(autoincrement()) @map("invoice_payment_id")
+  invoiceId        BigInt   @map("invoice_id")
+  paymentId        BigInt   @unique @map("payment_id")
+  amount           Decimal  @db.Decimal(18, 2)
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  invoice ManualInvoice @relation(fields: [invoiceId], references: [invoiceId])
+  payment Payment       @relation(fields: [paymentId], references: [paymentId])
+
+  @@index([invoiceId, createdAt])
+  @@map("manual_invoice_payments")
+  @@schema("aquaflow")
+}
+
+model ManualInvoiceEvent {
+  invoiceEventId BigInt   @id @default(autoincrement()) @map("invoice_event_id")
+  invoiceId      BigInt   @map("invoice_id")
+  eventType      String   @map("event_type")
+  previousStatus String?  @map("previous_status")
+  newStatus      String?  @map("new_status")
+  details        String?
+  performedBy    BigInt?  @map("performed_by")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  invoice ManualInvoice @relation(fields: [invoiceId], references: [invoiceId], onDelete: Cascade)
+
+  @@index([invoiceId, createdAt])
+  @@map("manual_invoice_events")
   @@schema("aquaflow")
 }
 

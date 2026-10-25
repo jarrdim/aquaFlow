@@ -1655,7 +1655,7 @@ billingRouter.get("/statements/:accountId", requireScopedPermission(SCOPED_STAFF
     }
     const [bills, payments, otherServicePayments, priorBills, priorPayments, latestBill, settings,
       disconnectionPostings, priorDisconnectionPostings, meterReplacements, accountAdjustments,
-      priorAccountAdjustments, newConnectionApplications] = await Promise.all([
+      priorAccountAdjustments, newConnectionApplications, manualInvoices, priorManualInvoices] = await Promise.all([
       prisma.bill.findMany({
         where: { accountId, status: { in: ["POSTED", "PARTIALLY_PAID", "PAID"] }, postedAt: { gte: from, lte: to } },
         include: { billingCycle: { include: { billingPeriodGroup: true } }, tariff: true, reading: true },
@@ -1754,6 +1754,14 @@ billingRouter.get("/statements/:accountId", requireScopedPermission(SCOPED_STAFF
           createdAt: true,
         },
         orderBy: { createdAt: "asc" },
+      }),
+      prisma.manualInvoice.findMany({
+        where: { accountId, status: { in: ["ISSUED", "PARTIALLY_PAID", "PAID"] }, issuedAt: { gte: from, lte: to } },
+        orderBy: { issuedAt: "asc" },
+      }),
+      prisma.manualInvoice.aggregate({
+        where: { accountId, status: { in: ["ISSUED", "PARTIALLY_PAID", "PAID"] }, issuedAt: { lt: from } },
+        _sum: { totalAmount: true },
       }),
     ]);
     const postedNewConnectionReferences = new Set(
@@ -1905,13 +1913,26 @@ billingRouter.get("/statements/:accountId", requireScopedPermission(SCOPED_STAFF
         debit: adjustment.adjustmentType === "DEBIT" ? Number(adjustment.amount) : 0,
         credit: adjustment.adjustmentType === "CREDIT" ? Number(adjustment.amount) : 0,
       })),
+      ...manualInvoices.map((invoice: any) => ({
+        id: `I${invoice.invoiceId}`,
+        sourceType: "MANUAL_INVOICE",
+        sourceId: invoice.invoiceId,
+        date: invoice.issuedAt,
+        particulars: "Invoice",
+        reference: invoice.invoiceNumber,
+        period: "-",
+        details: invoice.notes || `Customer invoice due ${invoice.dueDate.toISOString().slice(0, 10)}`,
+        description: `Invoice ${invoice.invoiceNumber}`,
+        debit: Number(invoice.totalAmount),
+        credit: 0,
+      })),
     ].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
     const priorAccountAdjustmentTotal = priorAccountAdjustments.reduce(
       (total, adjustment) => total + (adjustment.adjustmentType === "DEBIT" ? Number(adjustment.amount) : -Number(adjustment.amount)),
       0,
     );
     const openingBalance = round(Number(account.openingBalance) + Number(priorBills._sum.totalCurrentCharges ?? 0)
-      + Number(priorDisconnectionPostings[0]?.total ?? 0) + priorAccountAdjustmentTotal
+      + Number(priorDisconnectionPostings[0]?.total ?? 0) + priorAccountAdjustmentTotal + Number(priorManualInvoices._sum.totalAmount ?? 0)
       - Number(priorPayments._sum.amount ?? 0));
     let balance = openingBalance;
     const statement = entries.map((entry) => { balance = round(balance + entry.debit - entry.credit); return { ...entry, balance }; });

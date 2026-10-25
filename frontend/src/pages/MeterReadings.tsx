@@ -14,6 +14,7 @@ import { SearchableSelect } from "../components/SearchableSelect";
 import { SweetAlertToast } from "../components/SweetAlertToast";
 import { GpsMap } from "../components/GpsMap";
 import { DateInput, DateTimeInput, formatDmyDate } from "../components/DateInput";
+import { nextCycleIdentity } from "../lib/cycleIdentity";
 
 type Row = Record<string, any>;
 
@@ -1110,6 +1111,16 @@ export function ReadingCycles() {
   const selectedPeriodGroupExpired = Boolean(
     selectedGroupEnd && selectedGroupEnd < todayIso,
   );
+  const automaticCycleIdentity = useMemo(
+    () => nextCycleIdentity("reading", selectedPeriodGroup, cycles),
+    [selectedPeriodGroup, cycles],
+  );
+  useEffect(() => {
+    if (editingId || !selectedPeriodGroup) return;
+    setForm((current) => current.cycleCode === automaticCycleIdentity.code && current.cycleName === automaticCycleIdentity.name
+      ? current
+      : { ...current, cycleCode: automaticCycleIdentity.code, cycleName: automaticCycleIdentity.name });
+  }, [editingId, selectedPeriodGroup, automaticCycleIdentity.code, automaticCycleIdentity.name]);
   const visiblePeriodGroups = useMemo(() => {
     const query = groupSearch.trim().toLocaleLowerCase();
     if (!query) return periodGroups;
@@ -1184,7 +1195,7 @@ export function ReadingCycles() {
       }
       await load();
       setEditingId("");
-      setForm({ ...form, cycleCode: "", cycleName: "", remarks: "" });
+      setForm((current) => ({ ...current, remarks: "" }));
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -1440,25 +1451,16 @@ export function ReadingCycles() {
                 <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-slate-600 ring-1 ring-inset ring-slate-200">{selectedPeriodGroup._count?.readingCycles ?? 0} existing</span>
               </div>
             )}
-            <Field label="Cycle code" required>
-              <input
-                required
-                className={INPUT}
-                value={form.cycleCode}
-                onChange={(e) =>
-                  setForm({ ...form, cycleCode: e.target.value })
-                }
-              />
+            <Field label="Cycle code">
+              <div className={`${INPUT} cursor-default bg-slate-50 font-mono font-semibold text-slate-700`}>
+                {form.cycleCode || "Select a billing period group"}
+              </div>
+              {!editingId && <span className="mt-1 block text-[11px] text-slate-400">Generated automatically and incremented for follow-up cycles.</span>}
             </Field>
-            <Field label="Cycle name" required>
-              <input
-                required
-                className={INPUT}
-                value={form.cycleName}
-                onChange={(e) =>
-                  setForm({ ...form, cycleName: e.target.value })
-                }
-              />
+            <Field label="Cycle name">
+              <div className={`${INPUT} cursor-default bg-slate-50 text-slate-700`}>
+                {form.cycleName || "Select a billing period group"}
+              </div>
             </Field>
             <div className="col-span-2 grid grid-cols-2 gap-3">
               <Field label="Start date" required>
