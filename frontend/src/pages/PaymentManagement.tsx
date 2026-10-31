@@ -216,9 +216,11 @@ function Kpi({ label, value }: { label: string; value: ReactNode }) {
 
 function CollectionTrendChart({ rows }: { rows: Row[] }) {
   const points = rows;
+  const scrollRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(700);
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const chartContentWidth = Math.max(760, 100 + Math.max(0, points.length - 1) * 30);
   const height = width < 640 ? 250 : 310;
   const left = width < 480 ? 52 : 68;
   const right = width < 480 ? 18 : 32;
@@ -232,7 +234,14 @@ function CollectionTrendChart({ rows }: { rows: Row[] }) {
     const observer = new ResizeObserver(updateWidth);
     observer.observe(element);
     return () => observer.disconnect();
-  }, []);
+  }, [points.length]);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      const scroller = scrollRef.current;
+      if (scroller) scroller.scrollLeft = scroller.scrollWidth - scroller.clientWidth;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [points.length]);
   const rawMax = Math.max(1, ...points.map((row) => Number(row.amount ?? 0)));
   const magnitude = 10 ** Math.floor(Math.log10(rawMax));
   const step = magnitude / (rawMax / magnitude >= 5 ? 1 : 2);
@@ -293,18 +302,25 @@ function CollectionTrendChart({ rows }: { rows: Row[] }) {
         <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">{period}</span>
       </div>
       {coordinates.length ? (
-        <div
-          ref={chartRef}
-          className="min-h-[250px] w-full min-w-0 flex-1 overflow-hidden rounded-xl border border-slate-200 bg-white"
-          onPointerLeave={() => setActiveIndex(null)}
-        >
-          <svg
-            viewBox={`0 0 ${width} ${height}`}
-            className="block h-full min-h-[250px] w-full touch-pan-y select-none"
-            role="img"
-            aria-label={`Daily collection trend from ${period}. Move across the chart or focus a data point for daily details.`}
-            onPointerMove={activateNearestPoint}
+        <div className="min-h-[250px] w-full min-w-0 flex-1 overflow-hidden rounded-xl border border-slate-200 bg-white">
+          <div
+            ref={scrollRef}
+            className="h-full w-full overflow-x-auto overflow-y-hidden overscroll-x-contain [scrollbar-gutter:stable]"
+            aria-label="Collection trend timeline. Showing the latest dates; scroll horizontally for earlier dates."
           >
+            <div
+              ref={chartRef}
+              className="h-full min-h-[250px]"
+              style={{ width: chartContentWidth }}
+              onPointerLeave={() => setActiveIndex(null)}
+            >
+              <svg
+                viewBox={`0 0 ${width} ${height}`}
+                className="block h-full min-h-[250px] w-full touch-pan-y select-none"
+                role="img"
+                aria-label={`Daily collection trend from ${period}. Move across the chart or focus a data point for daily details.`}
+                onPointerMove={activateNearestPoint}
+              >
             <defs>
               <linearGradient id="payment-area" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor="#10b981" stopOpacity="0.18" />
@@ -390,10 +406,12 @@ function CollectionTrendChart({ rows }: { rows: Row[] }) {
                 </g>
               </g>
             )}
-          </svg>
-          <span className="sr-only" aria-live="polite">
-            {activePoint ? `${fullDate(String(activePoint.date))}: ${money(activePoint.amount)} from ${Number(activePoint.count ?? 0)} payments.` : ""}
-          </span>
+              </svg>
+              <span className="sr-only" aria-live="polite">
+                {activePoint ? `${fullDate(String(activePoint.date))}: ${money(activePoint.amount)} from ${Number(activePoint.count ?? 0)} payments.` : ""}
+              </span>
+            </div>
+          </div>
         </div>
       ) : (
         <div className="grid min-h-[250px] flex-1 place-items-center rounded-xl border border-dashed border-slate-200 bg-slate-50 text-sm text-slate-400">Collection activity will appear here.</div>
