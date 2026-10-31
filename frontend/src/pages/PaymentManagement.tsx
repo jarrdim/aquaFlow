@@ -219,9 +219,9 @@ function CollectionTrendChart({ rows }: { rows: Row[] }) {
   const chartRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(700);
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
-  const height = width < 640 ? 250 : 300;
+  const height = width < 640 ? 250 : 310;
   const left = width < 480 ? 52 : 68;
-  const right = width < 480 ? 16 : 24;
+  const right = width < 480 ? 18 : 32;
   const top = 34;
   const bottom = 42;
   useEffect(() => {
@@ -295,7 +295,7 @@ function CollectionTrendChart({ rows }: { rows: Row[] }) {
       {coordinates.length ? (
         <div
           ref={chartRef}
-          className="min-h-[250px] w-full min-w-0 flex-1 overflow-hidden rounded-xl border border-emerald-100/70 bg-gradient-to-b from-emerald-50/80 to-white"
+          className="min-h-[250px] w-full min-w-0 flex-1 overflow-hidden rounded-xl border border-slate-200 bg-white"
           onPointerLeave={() => setActiveIndex(null)}
         >
           <svg
@@ -307,27 +307,28 @@ function CollectionTrendChart({ rows }: { rows: Row[] }) {
           >
             <defs>
               <linearGradient id="payment-area" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#10b981" stopOpacity="0.3" />
-                <stop offset="100%" stopColor="#10b981" stopOpacity="0.02" />
+                <stop offset="0%" stopColor="#10b981" stopOpacity="0.18" />
+                <stop offset="100%" stopColor="#10b981" stopOpacity="0.015" />
               </linearGradient>
             </defs>
             {[1, 0.75, 0.5, 0.25, 0].map((ratio) => {
               const y = top + (1 - ratio) * plotHeight;
               return (
                 <g key={ratio}>
-                  <line x1={left} x2={width - right} y1={y} y2={y} stroke="#cbd5e1" strokeDasharray={ratio === 0 ? undefined : "4 6"} opacity={ratio === 0 ? 0.9 : 0.55} />
+                  <line x1={left} x2={width - right} y1={y} y2={y} stroke="#e2e8f0" strokeDasharray={ratio === 0 ? undefined : "3 6"} />
                   <text x={left - 10} y={y + 4} textAnchor="end" className="fill-slate-400 text-[10px] font-medium">{ratio === 0 ? "0" : compact(max * ratio)}</text>
                 </g>
               );
             })}
             {average > 0 && (
               <g>
-                <line x1={left} x2={width - right} y1={averageY} y2={averageY} stroke="#0f766e" strokeDasharray="7 5" opacity="0.55" />
-                <text x={width - right} y={Math.max(top + 10, averageY - 6)} textAnchor="end" className="fill-teal-700 text-[10px] font-semibold">Avg {compact(average)}</text>
+                <line x1={left} x2={width - right} y1={averageY} y2={averageY} stroke="#0d9488" strokeDasharray="6 6" opacity="0.55" />
+                <rect x={width - right - 75} y={Math.max(top + 2, averageY - 23)} width="75" height="19" rx="9.5" fill="white" stroke="#99f6e4" />
+                <text x={width - right - 8} y={Math.max(top + 15, averageY - 10)} textAnchor="end" className="fill-teal-700 text-[9px] font-semibold">Avg {compact(average)}</text>
               </g>
             )}
             <path d={area} fill="url(#payment-area)" />
-            {coordinates.length > 1 && <polyline points={line} fill="none" stroke="#059669" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />}
+            {coordinates.length > 1 && <polyline points={line} fill="none" stroke="#059669" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />}
             {coordinates.map((point, index) => {
               const hitStart = index === 0 ? left : (coordinates[index - 1].x + point.x) / 2;
               const hitEnd = index === coordinates.length - 1 ? width - right : (point.x + coordinates[index + 1].x) / 2;
@@ -347,22 +348,24 @@ function CollectionTrendChart({ rows }: { rows: Row[] }) {
                   onBlur={() => setActiveIndex(null)}
                   onPointerDown={() => setActiveIndex(index)}
                 />
-                <circle
-                  cx={point.x}
-                  cy={point.y}
-                  r={activeIndex === index ? 7 : index === peakIndex ? 6 : 4.5}
-                  fill="white"
-                  stroke={activeIndex === index ? "#047857" : "#059669"}
-                  strokeWidth={activeIndex === index ? 4 : index === peakIndex ? 3.5 : 2.5}
-                  className="pointer-events-none transition-all"
-                />
+                {(activeIndex === index || index === peakIndex || index === coordinates.length - 1) && (
+                  <circle
+                    cx={point.x}
+                    cy={point.y}
+                    r={activeIndex === index ? 6.5 : index === peakIndex ? 5.5 : 4}
+                    fill="white"
+                    stroke={activeIndex === index ? "#047857" : "#059669"}
+                    strokeWidth={activeIndex === index ? 3.5 : 3}
+                    className="pointer-events-none transition-all"
+                  />
+                )}
                 {(index % labelStride === 0 || index === coordinates.length - 1) && (
                   <text x={point.x} y={height - 15} textAnchor="middle" className="fill-slate-500 text-[10px] font-medium">
                     {shortDate(String(point.date))}
                   </text>
                 )}
-                {(index === peakIndex || index === coordinates.length - 1) && (
-                  <text x={point.x} y={Math.max(17, point.y - 11)} textAnchor={index === coordinates.length - 1 ? "end" : "middle"} className="fill-slate-700 text-[10px] font-bold">
+                {index === peakIndex && (
+                  <text x={point.x} y={Math.max(17, point.y - 12)} textAnchor="middle" className="fill-slate-700 text-[10px] font-bold">
                     {compact(Number(point.amount))}
                   </text>
                 )}
