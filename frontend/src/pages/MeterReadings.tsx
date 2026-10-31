@@ -5375,25 +5375,33 @@ export function ReadingRegister({
 }) {
   const [params] = useSearchParams();
   const [cycles, setCycles] = useState<Row[]>([]);
+  const [periodGroups, setPeriodGroups] = useState<Row[]>([]);
   const [items, setItems] = useState<Row[]>([]);
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
-  const pageSize = 25;
   const [error, setError] = useState("");
   const [evidenceReading, setEvidenceReading] = useState<Row | null>(null);
   const [filters, setFilters] = useState({
     cycleId: params.get("cycleId") ?? "",
+    billingPeriodGroupId: "",
     approvalStatus: "",
     readingType: "",
     readingValue: "",
+    exceptionType: "",
     fromDate: "",
     toDate: "",
     search: params.get("search") ?? "",
   });
   useEffect(() => {
-    api.listReadingCycles().then(setCycles);
+    Promise.all([api.listReadingCycles(), api.listReadingPeriodGroups()])
+      .then(([cycleRows, groupRows]) => {
+        setCycles(cycleRows);
+        setPeriodGroups(groupRows);
+      })
+      .catch((e) => setError(e.message));
   }, []);
   useEffect(() => {
     let cancelled = false;
@@ -5424,7 +5432,7 @@ export function ReadingRegister({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [filters, exceptions, page]);
+  }, [filters, exceptions, page, pageSize]);
   const pages = Math.max(1, Math.ceil(total / pageSize));
   const shownStart = total ? (page - 1) * pageSize + 1 : 0;
   const shownEnd = Math.min(page * pageSize, total);
@@ -5461,6 +5469,10 @@ export function ReadingRegister({
         "Meter Readings",
         exportItems.map((r: Row) => ({
           Cycle: r.cycle?.cycleName,
+          Group:
+            r.cycle?.billingPeriodGroup?.groupName ||
+            r.cycle?.billingPeriodGroup?.groupCode ||
+            "",
           "Reading Date": formatDmyDate(r.readingDate),
           Meter: r.meter?.meterNumber,
           Account: r.account?.accountNumber,
@@ -5546,7 +5558,30 @@ export function ReadingRegister({
     >
       {error && <Notice>{error}</Notice>}
       <section className="mb-4 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_16px_42px_-30px_rgba(15,32,56,0.45)]">
-        <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-5">
+        <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-4">
+          <Field label="Group">
+            <SearchableSelect
+              className={INPUT}
+              value={filters.billingPeriodGroupId}
+              onChange={(e) =>
+                updateFilters({
+                  ...filters,
+                  billingPeriodGroupId: e.target.value,
+                  cycleId: "",
+                })
+              }
+            >
+              <option value="">All groups</option>
+              {periodGroups.map((group) => (
+                <option
+                  key={group.billingPeriodGroupId}
+                  value={group.billingPeriodGroupId}
+                >
+                  {group.groupCode} — {group.groupName}
+                </option>
+              ))}
+            </SearchableSelect>
+          </Field>
           <Field label="Cycle">
             <SearchableSelect
               className={INPUT}
@@ -5557,9 +5592,13 @@ export function ReadingRegister({
             >
               <option value="">All cycles</option>
               {cycles.map((c) => (
+                !filters.billingPeriodGroupId ||
+                String(c.billingPeriodGroupId ?? "") ===
+                  filters.billingPeriodGroupId ? (
                 <option key={c.readingCycleId} value={c.readingCycleId}>
                   {c.cycleName}
                 </option>
+                ) : null
               ))}
             </SearchableSelect>
           </Field>
@@ -5606,6 +5645,22 @@ export function ReadingRegister({
               <option value="NEGATIVE_CONSUMPTION">Negative consumption</option>
             </SearchableSelect>
           </Field>
+          <Field label="Exception">
+            <SearchableSelect
+              className={INPUT}
+              value={filters.exceptionType}
+              onChange={(e) =>
+                updateFilters({ ...filters, exceptionType: e.target.value })
+              }
+            >
+              <option value="">All exception types</option>
+              <option value="HIGH">High consumption</option>
+              <option value="LOW">Low consumption</option>
+              <option value="ZERO">Zero consumption</option>
+              <option value="NEGATIVE">Negative consumption</option>
+              <option value="TAMPERED">Tampered meter</option>
+            </SearchableSelect>
+          </Field>
           <Field label="Search">
             <input
               className={INPUT}
@@ -5635,6 +5690,22 @@ export function ReadingRegister({
                 updateFilters({ ...filters, toDate: e.target.value })
               }
             />
+          </Field>
+          <Field label="Page size">
+            <SearchableSelect
+              className={INPUT}
+              value={String(pageSize)}
+              onChange={(e) => {
+                setPage(1);
+                setPageSize(Number(e.target.value));
+              }}
+            >
+              {[25, 50, 100, 250, 500].map((size) => (
+                <option key={size} value={size}>
+                  {size} per page
+                </option>
+              ))}
+            </SearchableSelect>
           </Field>
           <div className="flex items-end">
             <button
@@ -5710,6 +5781,7 @@ export function ReadingRegister({
 
 export function ReadingApprovals() {
   const [items, setItems] = useState<Row[]>([]);
+  const [queueStatus, setQueueStatus] = useState<"PENDING" | "REJECTED">("PENDING");
   const [selected, setSelected] = useState<Row | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [page, setPage] = useState(1);
@@ -5719,6 +5791,7 @@ export function ReadingApprovals() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [comments, setComments] = useState("");
+  const [correctedCurrentReading, setCorrectedCurrentReading] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
@@ -5732,7 +5805,7 @@ export function ReadingApprovals() {
     setLoading(true);
     return api
       .listReadings({
-        approvalStatus: "PENDING",
+        approvalStatus: queueStatus,
         page: String(pageValue),
         pageSize: String(pageSizeValue),
         search: searchValue,
@@ -5757,7 +5830,10 @@ export function ReadingApprovals() {
       search ? 250 : 0,
     );
     return () => window.clearTimeout(timer);
-  }, [page, pageSize, search]);
+  }, [page, pageSize, search, queueStatus]);
+  useEffect(() => {
+    setCorrectedCurrentReading(selected ? String(Number(selected.currentReading)) : "");
+  }, [selected]);
   const pages = Math.max(1, Math.ceil(total / pageSize));
   const selectedRows = useMemo(
     () => items.filter((item) => selectedIds.has(String(item.readingId))),
@@ -5803,6 +5879,32 @@ export function ReadingApprovals() {
       setSaving(false);
     }
   }
+  async function resubmitRejected() {
+    if (!selected || selected.approvalStatus !== "REJECTED") return;
+    const corrected = Number(correctedCurrentReading);
+    if (!Number.isFinite(corrected) || corrected < Number(selected.previousReading)) {
+      return setError(`Enter a reading equal to or above ${number(selected.previousReading)}.`);
+    }
+    if (comments.trim().length < 3) return setError("Enter correction notes before resubmitting the reading.");
+    setSaving(true);
+    setError("");
+    setMessage("");
+    try {
+      await api.resubmitRejectedReading(String(selected.readingId), corrected, comments);
+      window.dispatchEvent(new Event("sidebar-counts:refresh"));
+      setMessage("The corrected reading was resubmitted for approval.");
+      setComments("");
+      setCorrectedCurrentReading("");
+      setSelectedIds(new Set());
+      setSelected(null);
+      setSearchSelection("");
+      await load(1, pageSize, search);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  }
   return (
     <Page
       title="Reading approvals"
@@ -5813,8 +5915,27 @@ export function ReadingApprovals() {
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px] 2xl:grid-cols-[minmax(0,1fr)_460px]">
         <Card
           className="min-w-0"
-          title={`${total.toLocaleString()} pending reading(s)`}
+          title={`${total.toLocaleString()} ${queueStatus === "PENDING" ? "pending" : "rejected"} reading(s)`}
         >
+          <div className="mb-3 inline-flex rounded-xl border border-slate-200 bg-slate-100 p-1">
+            {(["PENDING", "REJECTED"] as const).map((status) => (
+              <button
+                key={status}
+                type="button"
+                onClick={() => {
+                  setQueueStatus(status);
+                  setPage(1);
+                  setSelectedIds(new Set());
+                  setSelected(null);
+                  setSearchSelection("");
+                  setComments("");
+                }}
+                className={`rounded-lg px-4 py-2 text-xs font-bold transition ${queueStatus === status ? "bg-white text-aqua-800 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+              >
+                {status === "PENDING" ? "Pending approval" : "Rejected readings"}
+              </button>
+            ))}
+          </div>
           <div className="mb-3 overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
             <div className="grid gap-2 p-3 lg:grid-cols-[minmax(320px,1fr)_150px_auto]">
               <SearchableSelect
@@ -5880,10 +6001,10 @@ export function ReadingApprovals() {
                 <div className="text-sm font-bold text-slate-800">
                   {selectedIds.size
                     ? `${selectedIds.size.toLocaleString()} reading${selectedIds.size === 1 ? "" : "s"} selected`
-                    : "Select readings for an approval decision"}
+                    : queueStatus === "PENDING" ? "Select readings for an approval decision" : "Select a rejected reading to correct"}
                 </div>
                 <p className="mt-0.5 text-xs text-slate-500">
-                  The header checkbox selects all {items.length.toLocaleString()} readings currently shown.
+                  {queueStatus === "PENDING" ? `The header checkbox selects all ${items.length.toLocaleString()} readings currently shown.` : "Rejected readings can be corrected and resubmitted one at a time."}
                 </p>
               </div>
               <div className="flex items-center gap-2">
@@ -5900,19 +6021,29 @@ export function ReadingApprovals() {
             rowNumberStart={(page - 1) * pageSize + 1}
             selectedIds={selectedIds}
             onToggle={(row, checked) => {
+              if (queueStatus === "REJECTED") {
+                applySelection(checked ? new Set([String(row.readingId)]) : new Set());
+                return;
+              }
               const next = new Set(selectedIds);
               checked ? next.add(String(row.readingId)) : next.delete(String(row.readingId));
               applySelection(next);
             }}
             onToggleAll={(checked) => {
               applySelection(
-                checked
+                queueStatus === "REJECTED"
+                  ? checked && items[0] ? new Set([String(items[0].readingId)]) : new Set()
+                  : checked
                   ? new Set(items.map((item) => String(item.readingId)))
                   : new Set(),
               );
             }}
             onRowClick={(row) => {
               const id = String(row.readingId);
+              if (queueStatus === "REJECTED") {
+                applySelection(selectedIds.has(id) ? new Set() : new Set([id]));
+                return;
+              }
               const next = new Set(selectedIds);
               next.has(id) ? next.delete(id) : next.add(id);
               applySelection(next);
@@ -5925,7 +6056,7 @@ export function ReadingApprovals() {
                   applySelection(new Set([String(r.readingId)]));
                 }}
               >
-                Review
+                {queueStatus === "PENDING" ? "Review" : "Correct"}
               </button>
             )}
           />
@@ -5933,7 +6064,9 @@ export function ReadingApprovals() {
         <Card
           className="min-w-0 xl:sticky xl:top-24 xl:self-start"
           title={
-            selectedIds.size > 1
+            queueStatus === "REJECTED"
+              ? selectedIds.size ? "Correct rejected reading" : "Reading correction"
+              : selectedIds.size > 1
               ? `Bulk approval decision · ${selectedIds.size.toLocaleString()} selected`
               : selectedIds.size === 1
                 ? "Approval decision · 1 selected"
@@ -5970,6 +6103,12 @@ export function ReadingApprovals() {
                 </>
               ) : selected ? (
                 <>
+              {queueStatus === "REJECTED" && selected.approvalComments && (
+                <Notice>Rejection reason: {selected.approvalComments}</Notice>
+              )}
+              {queueStatus === "PENDING" && String(selected.approvalComments ?? "").startsWith("Corrected and resubmitted:") && (
+                <Notice tone="blue">{selected.approvalComments}</Notice>
+              )}
               <div className="rounded-xl bg-slate-50 p-4">
                 <div className="flex items-start justify-between">
                   <div>
@@ -6058,18 +6197,32 @@ export function ReadingApprovals() {
                   Estimation reason: {selected.estimationReason}
                 </Notice>
               )}
+              {queueStatus === "REJECTED" && (
+                <Field label="Correct current reading" required>
+                  <input
+                    type="number"
+                    min={Number(selected.previousReading)}
+                    step="0.001"
+                    className={INPUT}
+                    value={correctedCurrentReading}
+                    onChange={(event) => setCorrectedCurrentReading(event.target.value)}
+                    placeholder={`Minimum ${number(selected.previousReading)}`}
+                  />
+                </Field>
+              )}
                 </>
               ) : null}
-              <Field label="Approval comments" required>
+              <Field label={queueStatus === "PENDING" ? "Approval comments" : "Correction notes"} required>
                 <textarea
                   rows={3}
                   className={INPUT}
                   value={comments}
                   onChange={(e) => setComments(e.target.value)}
-                  placeholder="Record the reason for this decision"
+                  placeholder={queueStatus === "PENDING" ? "Record the reason for this decision" : "Explain what was corrected before resubmitting"}
                 />
               </Field>
               <div className="flex justify-end gap-2">
+                {queueStatus === "PENDING" ? <>
                 <Button
                   tone="red"
                   disabled={saving}
@@ -6086,6 +6239,15 @@ export function ReadingApprovals() {
                     ? "Processing…"
                     : "Approve selected"}
                 </Button>
+                </> : (
+                  <Button
+                    tone="green"
+                    disabled={saving || !correctedCurrentReading || comments.trim().length < 3}
+                    onClick={resubmitRejected}
+                  >
+                    {saving ? "Resubmitting…" : "Save correction and resubmit"}
+                  </Button>
+                )}
               </div>
             </div>
           ) : (

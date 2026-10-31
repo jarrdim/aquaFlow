@@ -532,6 +532,11 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ readingIds, decision, comments }),
     }),
+  resubmitRejectedReading: (id: string, currentReading: number, comments: string) =>
+    request(`/readings/${encodeURIComponent(id)}/resubmit`, {
+      method: "PATCH",
+      body: JSON.stringify({ currentReading, comments }),
+    }),
   readingProgress: (cycleId: string) =>
     request(
       `/readings/reports/progress?cycleId=${encodeURIComponent(cycleId)}`,
@@ -659,6 +664,12 @@ export const api = {
   listReadingCorrectionCandidates: (search = "") => request(`/billing/reading-corrections/candidates${search ? `?search=${encodeURIComponent(search)}` : ""}`),
   previewReadingCorrection: (data: Record<string, unknown>) => request("/billing/reading-corrections/preview", { method: "POST", body: JSON.stringify(data) }),
   correctReading: (data: Record<string, unknown>) => request("/billing/reading-corrections", { method: "POST", body: JSON.stringify(data) }),
+  getDisconnectionReadingCorrection: (sourceId: string) => request(`/billing/reading-corrections/disconnections/${encodeURIComponent(sourceId)}`),
+  previewDisconnectionReadingCorrection: (data: Record<string, unknown>) => request("/billing/reading-corrections/disconnections/preview", { method: "POST", body: JSON.stringify(data) }),
+  correctDisconnectionReading: (data: Record<string, unknown>) => request("/billing/reading-corrections/disconnections", { method: "POST", body: JSON.stringify(data) }),
+  getReplacementReadingCorrection: (sourceId: string) => request(`/billing/reading-corrections/replacements/${encodeURIComponent(sourceId)}`),
+  previewReplacementReadingCorrection: (data: Record<string, unknown>) => request("/billing/reading-corrections/replacements/preview", { method: "POST", body: JSON.stringify(data) }),
+  correctReplacementReading: (data: Record<string, unknown>) => request("/billing/reading-corrections/replacements", { method: "POST", body: JSON.stringify(data) }),
   listReadingCorrections: () => request("/billing/reading-corrections"),
   decideBills: (
     billIds: string[],
@@ -766,6 +777,8 @@ export const api = {
     request(`/invoices/${id}/approve`, { method: "POST" }),
   issueManualInvoice: (id: string) =>
     request(`/invoices/${id}/issue`, { method: "POST" }),
+  sendManualInvoiceNotification: (id: string, channels: string[]) =>
+    request(`/invoices/${id}/notifications`, { method: "POST", body: JSON.stringify({ channels }) }),
   cancelManualInvoice: (id: string, reason: string) =>
     request(`/invoices/${id}/cancel`, { method: "POST", body: JSON.stringify({ reason }) }),
   payManualInvoice: (id: string, data: Record<string, unknown>) =>

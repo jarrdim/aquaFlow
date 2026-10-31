@@ -2185,6 +2185,8 @@ export function BillingPeriodRecords() {
 export function ReadingCorrections() {
   const [searchParams] = useSearchParams();
   const requestedBillId = searchParams.get("billId") ?? "";
+  const requestedDisconnectionId = searchParams.get("disconnectionPostingId") ?? "";
+  const requestedReplacementId = searchParams.get("replacementId") ?? "";
   const [search, setSearch] = useState(searchParams.get("billNumber") ?? "");
   const [candidates, setCandidates] = useState<Row[]>([]);
   const [selected, setSelected] = useState<Row | null>(null);
@@ -2265,12 +2267,28 @@ export function ReadingCorrections() {
       if (requested) chooseBill(requested);
     }
   }, [candidates, requestedBillId, selected]);
+  useEffect(() => {
+    if (selected || (!requestedDisconnectionId && !requestedReplacementId)) return;
+    const loadOperationalReading = requestedDisconnectionId
+      ? api.getDisconnectionReadingCorrection(requestedDisconnectionId)
+      : api.getReplacementReadingCorrection(requestedReplacementId);
+    loadOperationalReading
+      .then((record) => chooseBill(record))
+      .catch((e) => setError(e.message));
+  }, [requestedDisconnectionId, requestedReplacementId, selected]);
   async function previewCorrection() {
     if (!selected) return;
     setWorking(true);
     setError("");
     try {
-      setPreview(await api.previewReadingCorrection({ billId: selected.billId, correctedPreviousReading, correctedCurrentReading }));
+      const payload = selected.correctionKind
+        ? { sourceId: selected.sourceId, correctedPreviousReading, correctedCurrentReading }
+        : { billId: selected.billId, correctedPreviousReading, correctedCurrentReading };
+      setPreview(selected.correctionKind === "DISCONNECTION"
+        ? await api.previewDisconnectionReadingCorrection(payload)
+        : selected.correctionKind === "METER_REPLACEMENT"
+          ? await api.previewReplacementReadingCorrection(payload)
+          : await api.previewReadingCorrection(payload));
     } catch (e: any) { setError(e.message); }
     finally { setWorking(false); }
   }
@@ -2288,7 +2306,14 @@ export function ReadingCorrections() {
     setWorking(true);
     setError("");
     try {
-      const result = await api.correctReading({ billId: selected.billId, correctedPreviousReading, correctedCurrentReading, reason });
+      const payload = selected.correctionKind
+        ? { sourceId: selected.sourceId, correctedPreviousReading, correctedCurrentReading, reason }
+        : { billId: selected.billId, correctedPreviousReading, correctedCurrentReading, reason };
+      const result = selected.correctionKind === "DISCONNECTION"
+        ? await api.correctDisconnectionReading(payload)
+        : selected.correctionKind === "METER_REPLACEMENT"
+          ? await api.correctReplacementReading(payload)
+          : await api.correctReading(payload);
       let notificationWarning = "";
       if (sendCorrectedBill) {
         const byCycle = new Map<string, string[]>();
@@ -2313,7 +2338,7 @@ export function ReadingCorrections() {
     finally { setWorking(false); }
   }
   return (
-    <Page title="Reading corrections" subtitle="Correct an approved or posted billed reading in one audited transaction">
+    <Page title="Reading corrections" subtitle="Correct a billed, disconnection, or replacement reading in one audited transaction">
       {error && <Notice>{error}</Notice>}
       {message && <Notice tone="green">{message}</Notice>}
       <div className="grid gap-4 xl:grid-cols-[minmax(360px,0.8fr)_minmax(0,1.2fr)]">
@@ -2345,7 +2370,7 @@ export function ReadingCorrections() {
             </div>
             <Field label="Correction reason" required><textarea rows={2} className={INPUT} value={reason} placeholder="Why was the original reading incorrect?" onChange={(event) => setReason(event.target.value)} /></Field>
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <label className="flex items-center gap-2 text-sm font-semibold text-slate-700"><input type="checkbox" checked={sendCorrectedBill} onChange={(event) => setSendCorrectedBill(event.target.checked)} /> Queue corrected bill SMS after saving</label>
+              <label className="flex items-center gap-2 text-sm font-semibold text-slate-700"><input type="checkbox" checked={sendCorrectedBill} onChange={(event) => setSendCorrectedBill(event.target.checked)} /> Queue corrected bill SMS after saving{selected.correctionKind ? " (when a bill is affected)" : ""}</label>
               <Button tone="slate" disabled={working || correctedPreviousReading === "" || correctedCurrentReading === ""} onClick={previewCorrection}>{working ? "Calculating…" : "Preview correction"}</Button>
             </div>
             {preview && <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
@@ -4776,7 +4801,11 @@ export function CustomerStatements() {
                         {money(entry.balance)}
                       </td>
                       {canCorrectStatements && <td className={`${TD} statement-correction-actions whitespace-nowrap text-right`}>
-                        {entry.sourceType === "BILL" ? <div className="flex justify-end gap-1.5">
+                        {entry.sourceType === "DISCONNECTION" && entry.hasReading ? (
+                          <Link to={`/billing/reading-corrections?disconnectionPostingId=${encodeURIComponent(String(entry.sourceId))}`} className="rounded-lg border border-sky-200 bg-sky-50 px-2.5 py-1.5 text-xs font-bold text-sky-700 transition hover:bg-sky-100">Correct reading</Link>
+                        ) : entry.sourceType === "METER_REPLACEMENT" && entry.hasReading ? (
+                          <Link to={`/billing/reading-corrections?replacementId=${encodeURIComponent(String(entry.sourceId))}`} className="rounded-lg border border-sky-200 bg-sky-50 px-2.5 py-1.5 text-xs font-bold text-sky-700 transition hover:bg-sky-100">Correct reading</Link>
+                        ) : entry.sourceType === "BILL" ? <div className="flex justify-end gap-1.5">
                           {entry.hasReading && <Link to={`/billing/reading-corrections?billId=${encodeURIComponent(String(entry.billId))}&billNumber=${encodeURIComponent(String(entry.reference ?? ""))}`} className="rounded-lg border border-sky-200 bg-sky-50 px-2.5 py-1.5 text-xs font-bold text-sky-700 transition hover:bg-sky-100">Correct reading</Link>}
                           <Link to={`/billing/adjustments?billId=${encodeURIComponent(String(entry.billId))}`} className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs font-bold text-amber-700 transition hover:bg-amber-100">Adjust / cancel</Link>
                         </div> : <span className="text-slate-300">—</span>}

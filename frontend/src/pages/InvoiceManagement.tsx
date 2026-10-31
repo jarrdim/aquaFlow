@@ -166,6 +166,8 @@ export function ManualInvoices() {
     discountAmount: "0",
     notes: "",
     terms: "Payment is due by the date shown above.",
+    notifyOnIssue: true,
+    notificationChannels: ["SMS"] as string[],
   });
   const [items, setItems] = useState<InvoiceItem[]>([emptyItem()]);
 
@@ -633,6 +635,55 @@ export function ManualInvoices() {
                   </div>
                 </div>
               </div>
+              <div className="rounded-xl border border-cyan-200 bg-cyan-50/60 p-4">
+                <label className="flex cursor-pointer items-start gap-3">
+                  <input
+                    type="checkbox"
+                    className="mt-1 h-4 w-4 accent-cyan-700"
+                    checked={form.notifyOnIssue}
+                    onChange={(e) =>
+                      setForm({ ...form, notifyOnIssue: e.target.checked })
+                    }
+                  />
+                  <span>
+                    <span className="block font-bold text-slate-900">
+                      Notify customer when this invoice is issued
+                    </span>
+                    <span className="mt-0.5 block text-sm text-slate-600">
+                      Creating the draft does not send anything. The customer is
+                      notified after the invoice is approved and issued.
+                    </span>
+                  </span>
+                </label>
+                {form.notifyOnIssue && (
+                  <div className="ml-7 mt-3 flex flex-wrap gap-4 text-sm font-semibold text-slate-700">
+                    {["SMS", "EMAIL"].map((channel) => (
+                      <label key={channel} className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 accent-cyan-700"
+                          checked={form.notificationChannels.includes(channel)}
+                          disabled={
+                            form.notificationChannels.length === 1 &&
+                            form.notificationChannels.includes(channel)
+                          }
+                          onChange={(e) =>
+                            setForm({
+                              ...form,
+                              notificationChannels: e.target.checked
+                                ? [...form.notificationChannels, channel]
+                                : form.notificationChannels.filter(
+                                    (value) => value !== channel,
+                                  ),
+                            })
+                          }
+                        />
+                        {channel === "SMS" ? "SMS" : "Email"}
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
             <div className="flex justify-end gap-2 border-t bg-slate-50 px-5 py-4">
               <Button
@@ -663,6 +714,10 @@ export function ManualInvoiceDetail() {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [showPayment, setShowPayment] = useState(false);
+  const [showNotification, setShowNotification] = useState(false);
+  const [notificationChannels, setNotificationChannels] = useState<string[]>([
+    "SMS",
+  ]);
   const paymentDay = today();
   const [payment, setPayment] = useState({
     channelId: "",
@@ -707,8 +762,54 @@ export function ManualInvoiceDetail() {
   };
   const approve = () =>
     action(() => api.approveManualInvoice(id), "Invoice approved successfully.");
-  const issue = () =>
-    action(() => api.issueManualInvoice(id), "Invoice issued successfully.");
+  const issue = async () => {
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const result = await api.issueManualInvoice(id);
+      const notifications = result.notificationResult?.created ?? [];
+      const sent = notifications.filter((entry: Row) =>
+        ["SENT", "DELIVERED"].includes(entry.deliveryStatus),
+      ).length;
+      const failed = notifications.filter(
+        (entry: Row) => entry.deliveryStatus === "FAILED",
+      ).length;
+      await load();
+      setMessage(
+        result.notificationResult
+          ? `Invoice issued. ${sent} notification(s) sent${failed ? `; ${failed} failed` : ""}.`
+          : "Invoice issued successfully.",
+      );
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const sendNotification = (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    setMessage("");
+    void api
+      .sendManualInvoiceNotification(id, notificationChannels)
+      .then(async (result) => {
+        const sent = result.created.filter((entry: Row) =>
+          ["SENT", "DELIVERED"].includes(entry.deliveryStatus),
+        ).length;
+        const failed = result.created.filter(
+          (entry: Row) => entry.deliveryStatus === "FAILED",
+        ).length;
+        await load();
+        setShowNotification(false);
+        setMessage(
+          `${sent} notification(s) sent${failed ? `; ${failed} failed` : ""}.`,
+        );
+      })
+      .catch((e: any) => setError(e.message))
+      .finally(() => setBusy(false));
+  };
   const cancel = () => {
     const reason = window.prompt("Reason for cancelling this invoice:");
     if (reason?.trim())
@@ -768,6 +869,21 @@ export function ManualInvoiceDetail() {
           {invoice.status === "APPROVED" && (
             <Button disabled={busy} onClick={issue}>
               Issue invoice
+            </Button>
+          )}
+          {["ISSUED", "PARTIALLY_PAID", "PAID"].includes(invoice.status) && (
+            <Button
+              disabled={busy}
+              onClick={() => {
+                const preferred = [
+                  invoice.account?.customer?.phoneNumber ? "SMS" : "",
+                  invoice.account?.customer?.emailAddress ? "EMAIL" : "",
+                ].filter(Boolean);
+                setNotificationChannels(preferred.length ? preferred : ["SMS"]);
+                setShowNotification(true);
+              }}
+            >
+              Send notification
             </Button>
           )}
           {["ISSUED", "PARTIALLY_PAID"].includes(invoice.status) && (
@@ -1036,6 +1152,107 @@ export function ManualInvoiceDetail() {
               </Button>
               <Button tone="green" disabled={busy}>
                 {busy ? "Posting…" : "Post payment & receipt"}
+              </Button>
+            </div>
+          </form>
+        </div>
+      )}
+      {showNotification && (
+        <div className="fixed inset-0 z-[100] grid place-items-center bg-slate-950/55 p-4">
+          <form
+            onSubmit={sendNotification}
+            className="w-full max-w-lg rounded-2xl bg-white shadow-2xl"
+          >
+            <div className="border-b px-5 py-4">
+              <h2 className="text-lg font-extrabold">
+                Send invoice notification
+              </h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Send {invoice.invoiceNumber} and its secure payment link to the
+                customer.
+              </p>
+            </div>
+            <div className="space-y-3 p-5">
+              {[
+                {
+                  value: "SMS",
+                  label: "SMS",
+                  contact: invoice.account?.customer?.phoneNumber,
+                },
+                {
+                  value: "EMAIL",
+                  label: "Email",
+                  contact: invoice.account?.customer?.emailAddress,
+                },
+              ].map((option) => {
+                const available = Boolean(option.contact);
+                return (
+                  <label
+                    key={option.value}
+                    className={`flex items-start gap-3 rounded-xl border p-4 ${
+                      available
+                        ? "cursor-pointer border-slate-200"
+                        : "border-slate-100 bg-slate-50 opacity-60"
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      className="mt-1 h-4 w-4 accent-cyan-700"
+                      disabled={!available}
+                      checked={
+                        available &&
+                        notificationChannels.includes(option.value)
+                      }
+                      onChange={(e) =>
+                        setNotificationChannels(
+                          e.target.checked
+                            ? [...notificationChannels, option.value]
+                            : notificationChannels.filter(
+                                (value) => value !== option.value,
+                              ),
+                        )
+                      }
+                    />
+                    <span>
+                      <span className="block font-bold text-slate-800">
+                        {option.label}
+                      </span>
+                      <span className="block text-sm text-slate-500">
+                        {option.contact || `No ${option.label.toLowerCase()} contact saved`}
+                      </span>
+                    </span>
+                  </label>
+                );
+              })}
+              {!notificationChannels.some((channel) =>
+                channel === "SMS"
+                  ? Boolean(invoice.account?.customer?.phoneNumber)
+                  : Boolean(invoice.account?.customer?.emailAddress),
+              ) && (
+                <p className="text-sm font-semibold text-amber-700">
+                  Select an available notification channel to continue.
+                </p>
+              )}
+            </div>
+            <div className="flex justify-end gap-2 border-t bg-slate-50 px-5 py-4">
+              <Button
+                type="button"
+                tone="slate"
+                onClick={() => setShowNotification(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                disabled={
+                  busy ||
+                  !notificationChannels.some((channel) =>
+                    channel === "SMS"
+                      ? Boolean(invoice.account?.customer?.phoneNumber)
+                      : Boolean(invoice.account?.customer?.emailAddress),
+                  )
+                }
+              >
+                {busy ? "Sendingâ€¦" : "Send notification"}
               </Button>
             </div>
           </form>

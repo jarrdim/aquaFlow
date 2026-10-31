@@ -1065,7 +1065,9 @@ model BillItem {
 model ReadingCorrection {
   correctionId             BigInt   @id @default(autoincrement()) @map("correction_id")
   readingId                BigInt   @map("reading_id")
-  billId                   BigInt   @map("bill_id")
+  billId                   BigInt?  @map("bill_id")
+  sourceType               String   @default("BILL") @map("source_type")
+  sourceId                 BigInt?  @map("source_id")
   originalPreviousReading  Decimal? @map("original_previous_reading") @db.Decimal(18, 3)
   correctedPreviousReading Decimal? @map("corrected_previous_reading") @db.Decimal(18, 3)
   originalCurrentReading   Decimal  @map("original_current_reading") @db.Decimal(18, 3)
@@ -1078,7 +1080,7 @@ model ReadingCorrection {
   correctedAt              DateTime @default(now()) @map("corrected_at")
 
   reading   MeterReading @relation(fields: [readingId], references: [readingId])
-  bill      Bill         @relation(fields: [billId], references: [billId])
+  bill      Bill?        @relation(fields: [billId], references: [billId])
   corrector User         @relation("ReadingCorrectionUser", fields: [correctedBy], references: [userId])
 
   @@index([readingId, correctedAt])
@@ -1602,6 +1604,8 @@ model ManualInvoice {
   cancelledBy        BigInt?   @map("cancelled_by")
   cancelledAt        DateTime? @map("cancelled_at")
   cancellationReason String?   @map("cancellation_reason")
+  notifyOnIssue      Boolean   @default(false) @map("notify_on_issue")
+  notificationChannels Json?   @map("notification_channels")
   createdAt          DateTime  @default(now()) @map("created_at")
   updatedAt          DateTime  @default(now()) @updatedAt @map("updated_at")
 

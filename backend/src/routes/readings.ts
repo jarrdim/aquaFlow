@@ -1476,11 +1476,15 @@ readingsRouter.post("/bulk-import-current", async (req, res, next) => {
 readingsRouter.get("/", async (req, res, next) => {
   try {
     const cycleId = req.query.cycleId ? BigInt(String(req.query.cycleId)) : undefined;
+    const billingPeriodGroupId = req.query.billingPeriodGroupId
+      ? BigInt(String(req.query.billingPeriodGroupId))
+      : undefined;
     const routeId = req.query.routeId ? BigInt(String(req.query.routeId)) : undefined;
     const approvalStatus = String(req.query.approvalStatus ?? "");
     const exceptionOnly = String(req.query.exceptionOnly ?? "") === "true";
     const readingType = String(req.query.readingType ?? "");
     const readingValue = String(req.query.readingValue ?? "").toUpperCase();
+    const exceptionType = String(req.query.exceptionType ?? "").toUpperCase();
     const fromDate = String(req.query.fromDate ?? "");
     const toDate = String(req.query.toDate ?? "");
     const search = String(req.query.search ?? "");
@@ -1500,6 +1504,9 @@ readingsRouter.get("/", async (req, res, next) => {
     };
     const where: Prisma.MeterReadingWhereInput = {
       ...(cycleId ? { readingCycleId: cycleId } : {}),
+      ...(billingPeriodGroupId
+        ? { cycle: { billingPeriodGroupId } }
+        : {}),
       ...(approvalStatus ? { approvalStatus } : {}),
       ...(exceptionOnly ? { abnormalFlag: true } : {}),
       ...(readingType ? { readingType } : {}),
@@ -1507,6 +1514,7 @@ readingsRouter.get("/", async (req, res, next) => {
       ...(readingValue === "ZERO_CURRENT" ? { currentReading: { equals: 0 } } : {}),
       ...(readingValue === "POSITIVE_CONSUMPTION" ? { consumption: { gt: 0 } } : {}),
       ...(readingValue === "NEGATIVE_CONSUMPTION" ? { consumption: { lt: 0 } } : {}),
+      ...(exceptionType ? { exceptionType } : {}),
       ...(validFromDate || validToDate ? { readingDate: readingDateFilter } : {}),
       ...(routeId ? { account: { OR: [{ routeId }, { property: { routeId } }] } } : {}),
       ...(search ? { OR: [
@@ -1530,7 +1538,14 @@ readingsRouter.get("/", async (req, res, next) => {
           readingType: true,
           exceptionType: true,
           approvalStatus: true,
-          cycle: { select: { cycleName: true } },
+          cycle: {
+            select: {
+              cycleName: true,
+              billingPeriodGroup: {
+                select: { groupCode: true, groupName: true },
+              },
+            },
+          },
           meter: { select: { meterNumber: true } },
           account: {
             select: {
@@ -1636,6 +1651,115 @@ readingsRouter.patch("/bulk-decision", requireRole("SYSTEM_ADMIN", "SUPERVISOR",
       });
     });
     res.json({ updated: readings.length, decision: data.decision });
+  } catch (error: any) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    next(error);
+  }
+});
+
+readingsRouter.patch("/:id/resubmit", requireRole("SYSTEM_ADMIN", "SUPERVISOR", "METER_SUPERVISOR", "BILLING_SUPERVISOR"), async (req, res, next) => {
+  const readingId = parse(id, req.params.id, res);
+  const data = parse(z.object({
+    currentReading: z.coerce.number().finite().min(0),
+    comments: z.string().trim().min(3).max(2000),
+  }), req.body, res);
+  if (!readingId || !data) return;
+  try {
+    const existing = await prisma.meterReading.findUnique({
+      where: { readingId },
+      include: { meter: true, bills: { select: { billId: true } } },
+    });
+    if (!existing) return res.status(404).json({ error: "Reading not found" });
+    if (existing.approvalStatus !== "REJECTED") {
+      return res.status(409).json({ error: "Only a rejected reading can be corrected and resubmitted" });
+    }
+    if (existing.bills.length) {
+      return res.status(409).json({ error: "This reading is already linked to a bill and must use the billing correction workflow" });
+    }
+    const laterApproved = await prisma.meterReading.findFirst({
+      where: {
+        meterId: existing.meterId,
+        approvalStatus: "APPROVED",
+        OR: [
+          { readingDate: { gt: existing.readingDate } },
+          { readingDate: existing.readingDate, readingId: { gt: existing.readingId } },
+        ],
+      },
+      select: { readingId: true },
+    });
+    if (laterApproved) {
+      return res.status(409).json({ error: "A later approved reading already exists. Use the reading correction workflow to preserve the meter sequence." });
+    }
+    const previousApproved = await prisma.meterReading.findFirst({
+      where: {
+        meterId: existing.meterId,
+        approvalStatus: "APPROVED",
+        OR: [
+          { readingDate: { lt: existing.readingDate } },
+          { readingDate: existing.readingDate, readingId: { lt: existing.readingId } },
+        ],
+      },
+      select: { currentReading: true },
+      orderBy: [{ readingDate: "desc" }, { readingId: "desc" }],
+    });
+    const previousReading = Number(previousApproved?.currentReading ?? existing.meter.openingReading);
+    if (data.currentReading < previousReading) {
+      return res.status(400).json({ error: `Corrected reading cannot be below the previous approved reading of ${previousReading}` });
+    }
+    const consumption = data.currentReading - previousReading;
+    const history = await prisma.meterReading.findMany({
+      where: { meterId: existing.meterId, approvalStatus: "APPROVED", consumption: { gt: 0 } },
+      select: { consumption: true },
+      orderBy: { readingDate: "desc" },
+      take: 6,
+    });
+    const average = history.length ? history.reduce((sum, row) => sum + Number(row.consumption), 0) / history.length : 0;
+    const exceptionType = consumption === 0
+      ? "ZERO"
+      : (average && consumption > average * 2) || (!average && consumption > 100)
+        ? "HIGH"
+        : average && consumption < average * 0.25
+          ? "LOW"
+          : "NONE";
+    const original = {
+      previousReading: Number(existing.previousReading),
+      currentReading: Number(existing.currentReading),
+      approvalComments: existing.approvalComments,
+    };
+    const updated = await prisma.$transaction(async (tx) => {
+      const reading = await tx.meterReading.update({
+        where: { readingId },
+        data: {
+          previousReading,
+          currentReading: data.currentReading,
+          abnormalFlag: exceptionType !== "NONE",
+          exceptionType,
+          approvalStatus: "PENDING",
+          approvalComments: `Corrected and resubmitted: ${data.comments}`,
+          approvedBy: null,
+          approvedAt: null,
+          updatedAt: new Date(),
+        },
+        include: readingInclude,
+      });
+      await tx.meterReadingEvent.create({ data: {
+        readingId,
+        eventType: "RESUBMITTED",
+        remarks: data.comments,
+        performedBy: userId(req),
+        metadata: { original, corrected: { previousReading, currentReading: data.currentReading }, previousStatus: "REJECTED", newStatus: "PENDING" },
+      } });
+      await tx.meterEvent.create({ data: {
+        meterId: existing.meterId,
+        eventType: "READING_CAPTURED",
+        reading: data.currentReading,
+        remarks: data.comments,
+        performedBy: userId(req),
+        metadata: { readingId: readingId.toString(), resubmitted: true, originalCurrentReading: original.currentReading },
+      } });
+      return reading;
+    });
+    res.json(updated);
   } catch (error: any) {
     if (error.status) return res.status(error.status).json({ error: error.message });
     next(error);

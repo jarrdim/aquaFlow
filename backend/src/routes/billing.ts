@@ -344,6 +344,140 @@ async function prepareReadingCorrection(client: any, billId: bigint, correctedPr
   };
 }
 
+async function prepareDisconnectionReadingCorrection(
+  client: any,
+  postingId: bigint,
+  correctedPreviousReading: number,
+  correctedCurrentReading: number,
+) {
+  const postings = await client.$queryRaw(Prisma.sql`
+    SELECT dp.*, wo.work_order_number
+    FROM aquaflow.disconnection_postings dp
+    JOIN aquaflow.work_orders wo ON wo.work_order_id=dp.work_order_id
+    WHERE dp.disconnection_posting_id=${postingId}
+    LIMIT 1`);
+  const posting = postings[0];
+  if (!posting) throw Object.assign(new Error("Disconnection reading was not found"), { status: 404 });
+  const reading = await client.meterReading.findUnique({
+    where: { readingId: posting.reading_id },
+    include: { meter: true },
+  });
+  if (!reading) throw Object.assign(new Error("The disconnection meter reading was not found"), { status: 404 });
+  const originalPreviousReading = Number(reading.previousReading);
+  const originalCurrentReading = Number(reading.currentReading);
+  if (correctedCurrentReading < correctedPreviousReading) {
+    throw Object.assign(new Error("Corrected current reading cannot be below the corrected previous reading"), { status: 400 });
+  }
+  if (correctedPreviousReading === originalPreviousReading && correctedCurrentReading === originalCurrentReading) {
+    throw Object.assign(new Error("Change the previous reading, current reading, or both"), { status: 400 });
+  }
+  const account = await client.customerAccount.findUnique({
+    where: { accountId: posting.account_id },
+    include: { customer: true, category: true },
+  });
+  if (!account) throw Object.assign(new Error("Customer account was not found"), { status: 404 });
+  const tariff = await client.tariff.findFirst({
+    where: {
+      categoryId: account.categoryId,
+      status: "ACTIVE",
+      effectiveFrom: { lte: posting.posted_at },
+      OR: [{ effectiveTo: null }, { effectiveTo: { gte: posting.posted_at } }],
+    },
+    include: { bands: { where: { status: "ACTIVE" }, orderBy: { bandSequence: "asc" } } },
+    orderBy: { effectiveFrom: "desc" },
+  });
+  if (!tariff) throw Object.assign(new Error("No active tariff covers the disconnection date"), { status: 409 });
+  const correctedConsumption = round(correctedCurrentReading - correctedPreviousReading, 3);
+  const calculation = calculateTariff(tariff, correctedConsumption);
+  if (!hasValidBillAmounts(calculation)) throw Object.assign(new Error("The corrected reading produced invalid charges"), { status: 409 });
+  const correctedFee = posting.fee_overridden ? Number(posting.disconnection_fee) : calculation.totalCurrentCharges;
+  const feeAdjustment = round(correctedFee - Number(posting.disconnection_fee));
+  const currentReadingDelta = round(correctedCurrentReading - originalCurrentReading, 3);
+  const nextReading = currentReadingDelta === 0 ? null : await client.meterReading.findFirst({
+    where: {
+      meterId: reading.meterId,
+      accountId: reading.accountId,
+      approvalStatus: "APPROVED",
+      previousReading: reading.currentReading,
+      OR: [
+        { readingDate: { gt: reading.readingDate } },
+        { readingDate: reading.readingDate, readingId: { gt: reading.readingId } },
+      ],
+    },
+    include: {
+      bills: {
+        where: { status: { in: correctableBillStatuses } },
+        include: { tariff: { include: { bands: { orderBy: { bandSequence: "asc" } } } }, items: true },
+      },
+    },
+    orderBy: [{ readingDate: "asc" }, { readingId: "asc" }],
+  });
+  const nextBill = nextReading?.bills?.[0];
+  const nextImpact = nextBill ? correctedBillImpact(nextBill, Number(nextBill.consumptionUnits) - currentReadingDelta) : null;
+  const adjustmentAmount = round(feeAdjustment + (nextImpact?.adjustmentAmount ?? 0));
+  return {
+    posting, reading, account, calculation, correctedFee, feeAdjustment,
+    nextReading, impacts: nextImpact ? [nextImpact] : [], adjustmentAmount,
+    originalPreviousReading, correctedPreviousReading, originalCurrentReading, correctedCurrentReading,
+  };
+}
+
+async function prepareReplacementReadingCorrection(
+  client: any,
+  replacementId: bigint,
+  correctedPreviousReading: number,
+  correctedCurrentReading: number,
+) {
+  const replacement = await client.meterReplacement.findUnique({
+    where: { replacementId },
+    include: { account: { include: { customer: true } }, oldMeter: true, newMeter: true },
+  });
+  if (!replacement || replacement.requestStatus !== "APPROVED") {
+    throw Object.assign(new Error("Approved meter replacement was not found"), { status: 404 });
+  }
+  const reading = await client.meterReading.findUnique({
+    where: { syncId: `METER_REPLACEMENT:${replacementId}` },
+    include: {
+      meter: true,
+      cycle: true,
+      bills: {
+        where: { status: { in: correctableBillStatuses } },
+        include: { tariff: { include: { bands: { orderBy: { bandSequence: "asc" } } } }, items: true },
+      },
+    },
+  });
+  if (!reading) throw Object.assign(new Error("The replacement final reading was not found"), { status: 404 });
+  const originalPreviousReading = Number(reading.previousReading);
+  const originalCurrentReading = Number(reading.currentReading);
+  if (correctedCurrentReading < correctedPreviousReading) {
+    throw Object.assign(new Error("Corrected final reading cannot be below the corrected previous reading"), { status: 400 });
+  }
+  if (correctedPreviousReading === originalPreviousReading && correctedCurrentReading === originalCurrentReading) {
+    throw Object.assign(new Error("Change the previous reading, final reading, or both"), { status: 400 });
+  }
+  let bill = reading.bills[0] ?? null;
+  if (!bill && reading.cycle?.billingCycleId) {
+    bill = await client.bill.findFirst({
+      where: {
+        accountId: replacement.accountId,
+        billingCycleId: reading.cycle.billingCycleId,
+        status: { in: correctableBillStatuses },
+      },
+      include: { tariff: { include: { bands: { orderBy: { bandSequence: "asc" } } } }, items: true },
+      orderBy: { billId: "asc" },
+    });
+  }
+  const originalConsumption = round(originalCurrentReading - originalPreviousReading, 3);
+  const correctedConsumption = round(correctedCurrentReading - correctedPreviousReading, 3);
+  const readingDelta = round(correctedConsumption - originalConsumption, 3);
+  const impact = bill ? correctedBillImpact(bill, Number(bill.consumptionUnits) + readingDelta) : null;
+  return {
+    replacement, reading, impacts: impact ? [impact] : [],
+    adjustmentAmount: impact?.adjustmentAmount ?? 0,
+    originalPreviousReading, correctedPreviousReading, originalCurrentReading, correctedCurrentReading,
+  };
+}
+
 function isSkippableBillRowError(error: any) {
   const text = `${error?.message ?? ""} ${error?.meta?.message ?? ""}`;
   return error?.code === "P2002" || text.includes("23514") || text.includes("ck_bill_amounts");
@@ -1089,6 +1223,323 @@ billingRouter.get("/bills/:id", async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+billingRouter.get("/reading-corrections/replacements/:id", requireRole("SYSTEM_ADMIN"), async (req, res, next) => {
+  const replacementId = parse(id, req.params.id, res); if (!replacementId) return;
+  try {
+    const replacement = await prisma.meterReplacement.findUnique({
+      where: { replacementId },
+      include: { account: { include: { customer: true } }, oldMeter: true },
+    });
+    if (!replacement || replacement.requestStatus !== "APPROVED") return res.status(404).json({ error: "Approved meter replacement was not found" });
+    const reading = await prisma.meterReading.findUnique({ where: { syncId: `METER_REPLACEMENT:${replacementId}` } });
+    if (!reading) return res.status(404).json({ error: "The replacement final reading was not found" });
+    res.json({
+      correctionKind: "METER_REPLACEMENT",
+      sourceId: replacement.replacementId,
+      billNumber: `REP-${replacement.replacementId}`,
+      status: "POSTED",
+      issueDate: replacement.replacementDate,
+      totalCurrentCharges: 0,
+      customerName: customerName(replacement.account.customer),
+      account: { accountId: replacement.accountId, accountNumber: replacement.account.accountNumber },
+      reading: {
+        readingId: reading.readingId,
+        previousReading: Number(reading.previousReading),
+        currentReading: Number(reading.currentReading),
+        meter: { meterNumber: replacement.oldMeter.meterNumber },
+      },
+    });
+  } catch (error) { next(error); }
+});
+
+billingRouter.post("/reading-corrections/replacements/preview", requireRole("SYSTEM_ADMIN"), async (req, res, next) => {
+  const data = parse(z.object({ sourceId: id, correctedPreviousReading: z.coerce.number().min(0), correctedCurrentReading: z.coerce.number().min(0) }), req.body, res);
+  if (!data) return;
+  try {
+    const preview = await prepareReplacementReadingCorrection(prisma, data.sourceId, data.correctedPreviousReading, data.correctedCurrentReading);
+    res.json({
+      correctedPreviousReading: preview.correctedPreviousReading,
+      correctedCurrentReading: preview.correctedCurrentReading,
+      adjustmentAmount: preview.adjustmentAmount,
+      affectsNextReading: false,
+      impactedBills: preview.impacts.map((impact: any) => ({
+        billId: impact.bill.billId, billNumber: impact.bill.billNumber, billingCycleId: impact.bill.billingCycleId,
+        previousConsumptionUnits: Number(impact.bill.consumptionUnits), correctedConsumptionUnits: impact.consumptionUnits,
+        previousCurrentCharges: Number(impact.bill.totalCurrentCharges), correctedCurrentCharges: impact.totalCurrentCharges,
+      })),
+    });
+  } catch (error: any) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    next(error);
+  }
+});
+
+billingRouter.post("/reading-corrections/replacements", requireRole("SYSTEM_ADMIN"), async (req, res, next) => {
+  const data = parse(z.object({
+    sourceId: id, correctedPreviousReading: z.coerce.number().min(0), correctedCurrentReading: z.coerce.number().min(0),
+    reason: z.string().trim().min(3).max(2000),
+  }), req.body, res);
+  if (!data) return;
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      const correction = await prepareReplacementReadingCorrection(tx, data.sourceId, data.correctedPreviousReading, data.correctedCurrentReading);
+      const correctedAt = new Date();
+      const beforeSnapshot = {
+        sourceType: "METER_REPLACEMENT", sourceId: data.sourceId.toString(),
+        reading: { readingId: correction.reading.readingId.toString(), previousReading: correction.originalPreviousReading, currentReading: correction.originalCurrentReading },
+        bills: correction.impacts.map((impact: any) => ({ billId: impact.bill.billId.toString(), consumptionUnits: Number(impact.bill.consumptionUnits), totalCurrentCharges: Number(impact.bill.totalCurrentCharges) })),
+      };
+      await tx.meterReading.update({ where: { readingId: correction.reading.readingId }, data: {
+        previousReading: data.correctedPreviousReading, currentReading: data.correctedCurrentReading, updatedAt: correctedAt,
+      } });
+      await tx.meterReplacement.update({ where: { replacementId: data.sourceId }, data: { oldFinalReading: data.correctedCurrentReading } });
+      await tx.meterEvent.updateMany({ where: { replacementId: data.sourceId, reading: correction.originalCurrentReading }, data: { reading: data.correctedCurrentReading } });
+      for (const impact of correction.impacts) {
+        await tx.billItem.deleteMany({ where: { billId: impact.bill.billId } });
+        await tx.bill.update({ where: { billId: impact.bill.billId }, data: {
+          consumptionUnits: impact.consumptionUnits, consumptionCharge: impact.calculation.consumptionCharge,
+          minimumChargeAdjustment: impact.calculation.minimumChargeAdjustment, standingCharge: impact.calculation.standingCharge,
+          meterRent: impact.calculation.meterRent, fixedCharges: impact.calculation.fixedCharges,
+          totalCurrentCharges: impact.totalCurrentCharges, totalAmountDue: impact.totalAmountDue, status: impact.status,
+          notificationStatus: "NOT_SENT", revisionNumber: { increment: 1 }, correctedAt, updatedAt: correctedAt,
+          items: { create: impact.calculation.items },
+        } });
+        await tx.billingEvent.create({ data: {
+          billingCycleId: impact.bill.billingCycleId, billId: impact.bill.billId, eventType: "READING_CORRECTED",
+          previousStatus: impact.bill.status, newStatus: impact.status, details: data.reason, performedBy: uid(req), createdAt: correctedAt,
+          metadata: { sourceType: "METER_REPLACEMENT", sourceId: data.sourceId.toString(), adjustmentAmount: impact.adjustmentAmount },
+        } });
+      }
+      const postedAdjustment = correction.impacts
+        .filter((impact: any) => ["POSTED", "PARTIALLY_PAID", "PAID"].includes(impact.bill.status))
+        .reduce((sum: number, impact: any) => sum + impact.adjustmentAmount, 0);
+      if (postedAdjustment) await tx.customerAccount.update({ where: { accountId: correction.replacement.accountId }, data: {
+        currentBalance: { increment: round(postedAdjustment) }, updatedAt: correctedAt,
+      } });
+      await tx.meterReadingEvent.create({ data: {
+        readingId: correction.reading.readingId, eventType: "READING_CORRECTED", remarks: data.reason, performedBy: uid(req),
+        metadata: { sourceType: "METER_REPLACEMENT", sourceId: data.sourceId.toString(), adjustmentAmount: correction.adjustmentAmount },
+      } });
+      const afterSnapshot = {
+        sourceType: "METER_REPLACEMENT", sourceId: data.sourceId.toString(),
+        reading: { readingId: correction.reading.readingId.toString(), previousReading: data.correctedPreviousReading, currentReading: data.correctedCurrentReading },
+        bills: correction.impacts.map((impact: any) => ({ billId: impact.bill.billId.toString(), consumptionUnits: impact.consumptionUnits, totalCurrentCharges: impact.totalCurrentCharges })),
+      };
+      const linkedBill = correction.impacts[0]?.bill ?? null;
+      const audit = await tx.readingCorrection.create({ data: {
+        readingId: correction.reading.readingId, billId: linkedBill?.billId ?? null,
+        sourceType: "METER_REPLACEMENT", sourceId: data.sourceId,
+        originalPreviousReading: correction.originalPreviousReading, correctedPreviousReading: data.correctedPreviousReading,
+        originalCurrentReading: correction.originalCurrentReading, correctedCurrentReading: data.correctedCurrentReading,
+        adjustmentAmount: correction.adjustmentAmount, reason: data.reason, beforeSnapshot, afterSnapshot,
+        correctedBy: uid(req)!, correctedAt,
+      } });
+      return { audit, adjustmentAmount: correction.adjustmentAmount, impactedBills: correction.impacts.map((impact: any) => ({
+        billId: impact.bill.billId, billingCycleId: impact.bill.billingCycleId, billNumber: impact.bill.billNumber,
+      })) };
+    }, { maxWait: 10_000, timeout: 30_000 });
+    res.status(201).json(result);
+  } catch (error: any) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    next(error);
+  }
+});
+
+billingRouter.get("/reading-corrections/disconnections/:id", requireRole("SYSTEM_ADMIN"), async (req, res, next) => {
+  const postingId = parse(id, req.params.id, res); if (!postingId) return;
+  try {
+    const rows = await prisma.$queryRaw<any[]>`
+      SELECT dp.disconnection_posting_id AS "sourceId",dp.disconnection_fee AS "totalCurrentCharges",
+        dp.posted_at AS "issueDate",wo.work_order_number AS "billNumber",mr.reading_id AS "readingId",
+        mr.previous_reading AS "previousReading",mr.current_reading AS "currentReading",
+        m.meter_number AS "meterNumber",ca.account_id AS "accountId",ca.account_number AS "accountNumber",
+        COALESCE(NULLIF(TRIM(CONCAT_WS(' ',c.first_name,c.middle_name,c.last_name)),''),c.organization_name,c.customer_number) AS "customerName"
+      FROM aquaflow.disconnection_postings dp
+      JOIN aquaflow.work_orders wo ON wo.work_order_id=dp.work_order_id
+      JOIN aquaflow.meter_readings mr ON mr.reading_id=dp.reading_id
+      JOIN aquaflow.meters m ON m.meter_id=dp.meter_id
+      JOIN aquaflow.customer_accounts ca ON ca.account_id=dp.account_id
+      JOIN aquaflow.customers c ON c.customer_id=ca.customer_id
+      WHERE dp.disconnection_posting_id=${postingId}
+      LIMIT 1`;
+    if (!rows[0]) return res.status(404).json({ error: "Disconnection reading was not found" });
+    const row = rows[0];
+    res.json({
+      correctionKind: "DISCONNECTION",
+      sourceId: row.sourceId,
+      billNumber: row.billNumber,
+      status: "POSTED",
+      issueDate: row.issueDate,
+      totalCurrentCharges: Number(row.totalCurrentCharges),
+      customerName: row.customerName,
+      account: { accountId: row.accountId, accountNumber: row.accountNumber },
+      reading: {
+        readingId: row.readingId,
+        previousReading: Number(row.previousReading),
+        currentReading: Number(row.currentReading),
+        meter: { meterNumber: row.meterNumber },
+      },
+    });
+  } catch (error) { next(error); }
+});
+
+billingRouter.post("/reading-corrections/disconnections/preview", requireRole("SYSTEM_ADMIN"), async (req, res, next) => {
+  const data = parse(z.object({
+    sourceId: id,
+    correctedPreviousReading: z.coerce.number().min(0),
+    correctedCurrentReading: z.coerce.number().min(0),
+  }), req.body, res);
+  if (!data) return;
+  try {
+    const preview = await prepareDisconnectionReadingCorrection(
+      prisma, data.sourceId, data.correctedPreviousReading, data.correctedCurrentReading,
+    );
+    res.json({
+      correctedPreviousReading: preview.correctedPreviousReading,
+      correctedCurrentReading: preview.correctedCurrentReading,
+      previousCharge: Number(preview.posting.disconnection_fee),
+      correctedCharge: preview.correctedFee,
+      adjustmentAmount: preview.adjustmentAmount,
+      affectsNextReading: Boolean(preview.nextReading),
+      impactedBills: preview.impacts.map((impact: any) => ({
+        billId: impact.bill.billId,
+        billNumber: impact.bill.billNumber,
+        billingCycleId: impact.bill.billingCycleId,
+        previousConsumptionUnits: Number(impact.bill.consumptionUnits),
+        correctedConsumptionUnits: impact.consumptionUnits,
+        previousCurrentCharges: Number(impact.bill.totalCurrentCharges),
+        correctedCurrentCharges: impact.totalCurrentCharges,
+      })),
+    });
+  } catch (error: any) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    next(error);
+  }
+});
+
+billingRouter.post("/reading-corrections/disconnections", requireRole("SYSTEM_ADMIN"), async (req, res, next) => {
+  const data = parse(z.object({
+    sourceId: id,
+    correctedPreviousReading: z.coerce.number().min(0),
+    correctedCurrentReading: z.coerce.number().min(0),
+    reason: z.string().trim().min(3).max(2000),
+  }), req.body, res);
+  if (!data) return;
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      const correction = await prepareDisconnectionReadingCorrection(
+        tx, data.sourceId, data.correctedPreviousReading, data.correctedCurrentReading,
+      );
+      const correctedAt = new Date();
+      const beforeSnapshot = {
+        sourceType: "DISCONNECTION",
+        sourceId: data.sourceId.toString(),
+        reading: { readingId: correction.reading.readingId.toString(), previousReading: correction.originalPreviousReading, currentReading: correction.originalCurrentReading },
+        disconnectionFee: Number(correction.posting.disconnection_fee),
+        bills: correction.impacts.map((impact: any) => ({ billId: impact.bill.billId.toString(), consumptionUnits: Number(impact.bill.consumptionUnits), totalCurrentCharges: Number(impact.bill.totalCurrentCharges) })),
+      };
+      await tx.meterReading.update({
+        where: { readingId: correction.reading.readingId },
+        data: { previousReading: data.correctedPreviousReading, currentReading: data.correctedCurrentReading, updatedAt: correctedAt },
+      });
+      if (correction.nextReading) {
+        await tx.meterReading.update({
+          where: { readingId: correction.nextReading.readingId },
+          data: { previousReading: data.correctedCurrentReading, updatedAt: correctedAt },
+        });
+      }
+      await tx.$executeRaw`
+        UPDATE aquaflow.disconnection_postings
+        SET previous_reading=${data.correctedPreviousReading},current_reading=${data.correctedCurrentReading},
+          default_disconnection_fee=${correction.calculation.totalCurrentCharges},
+          disconnection_fee=${correction.correctedFee}
+        WHERE disconnection_posting_id=${data.sourceId}`;
+      for (const impact of correction.impacts) {
+        await tx.billItem.deleteMany({ where: { billId: impact.bill.billId } });
+        await tx.bill.update({
+          where: { billId: impact.bill.billId },
+          data: {
+            consumptionUnits: impact.consumptionUnits,
+            consumptionCharge: impact.calculation.consumptionCharge,
+            minimumChargeAdjustment: impact.calculation.minimumChargeAdjustment,
+            standingCharge: impact.calculation.standingCharge,
+            meterRent: impact.calculation.meterRent,
+            fixedCharges: impact.calculation.fixedCharges,
+            totalCurrentCharges: impact.totalCurrentCharges,
+            totalAmountDue: impact.totalAmountDue,
+            status: impact.status,
+            notificationStatus: "NOT_SENT",
+            revisionNumber: { increment: 1 },
+            correctedAt,
+            updatedAt: correctedAt,
+            items: { create: impact.calculation.items },
+          },
+        });
+        await tx.billingEvent.create({ data: {
+          billingCycleId: impact.bill.billingCycleId,
+          billId: impact.bill.billId,
+          eventType: "READING_CORRECTED",
+          previousStatus: impact.bill.status,
+          newStatus: impact.status,
+          details: data.reason,
+          performedBy: uid(req),
+          createdAt: correctedAt,
+          metadata: { sourceType: "DISCONNECTION", sourceId: data.sourceId.toString(), adjustmentAmount: impact.adjustmentAmount },
+        } });
+      }
+      const postedAdjustment = round(correction.feeAdjustment + correction.impacts
+        .filter((impact: any) => ["POSTED", "PARTIALLY_PAID", "PAID"].includes(impact.bill.status))
+        .reduce((sum: number, impact: any) => sum + impact.adjustmentAmount, 0));
+      if (postedAdjustment) {
+        await tx.customerAccount.update({
+          where: { accountId: correction.posting.account_id },
+          data: { currentBalance: { increment: postedAdjustment }, updatedAt: correctedAt },
+        });
+      }
+      await tx.meterReadingEvent.create({ data: {
+        readingId: correction.reading.readingId,
+        eventType: "READING_CORRECTED",
+        remarks: data.reason,
+        performedBy: uid(req),
+        metadata: { sourceType: "DISCONNECTION", sourceId: data.sourceId.toString(), adjustmentAmount: correction.adjustmentAmount },
+      } });
+      const afterSnapshot = {
+        sourceType: "DISCONNECTION",
+        sourceId: data.sourceId.toString(),
+        reading: { readingId: correction.reading.readingId.toString(), previousReading: data.correctedPreviousReading, currentReading: data.correctedCurrentReading },
+        disconnectionFee: correction.correctedFee,
+        bills: correction.impacts.map((impact: any) => ({ billId: impact.bill.billId.toString(), consumptionUnits: impact.consumptionUnits, totalCurrentCharges: impact.totalCurrentCharges })),
+      };
+      const linkedBill = correction.impacts[0]?.bill ?? null;
+      const audit = await tx.readingCorrection.create({ data: {
+        readingId: correction.reading.readingId,
+        billId: linkedBill?.billId ?? null,
+        sourceType: "DISCONNECTION",
+        sourceId: data.sourceId,
+        originalPreviousReading: correction.originalPreviousReading,
+        correctedPreviousReading: data.correctedPreviousReading,
+        originalCurrentReading: correction.originalCurrentReading,
+        correctedCurrentReading: data.correctedCurrentReading,
+        adjustmentAmount: correction.adjustmentAmount,
+        reason: data.reason,
+        beforeSnapshot,
+        afterSnapshot,
+        correctedBy: uid(req)!,
+        correctedAt,
+      } });
+      return {
+        audit,
+        adjustmentAmount: correction.adjustmentAmount,
+        impactedBills: correction.impacts.map((impact: any) => ({ billId: impact.bill.billId, billingCycleId: impact.bill.billingCycleId, billNumber: impact.bill.billNumber })),
+      };
+    }, { maxWait: 10_000, timeout: 30_000 });
+    res.status(201).json(result);
+  } catch (error: any) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    next(error);
+  }
+});
+
 billingRouter.get("/reading-corrections/candidates", requireRole("SYSTEM_ADMIN"), async (req, res, next) => {
   try {
     const search = String(req.query.search ?? "").trim();
@@ -1224,6 +1675,8 @@ billingRouter.post("/reading-corrections", requireRole("SYSTEM_ADMIN"), async (r
       const audit = await tx.readingCorrection.create({ data: {
         readingId: correction.bill.reading.readingId,
         billId: correction.bill.billId,
+        sourceType: "BILL",
+        sourceId: correction.bill.billId,
         originalPreviousReading: correction.originalPreviousReading,
         correctedPreviousReading: data.correctedPreviousReading,
         originalCurrentReading: correction.originalCurrentReading,
@@ -1723,13 +2176,25 @@ billingRouter.get("/statements/:accountId", requireScopedPermission(SCOPED_STAFF
           old_meter.meter_number AS old_meter_number,
           new_meter.meter_number AS new_meter_number,
           final_reading.previous_reading,
+          final_reading.reading_id,
           final_reading.consumption AS final_consumption,
+          correction_bill.bill_id AS correction_bill_id,
           wo.work_order_number
         FROM aquaflow.meter_replacements mr
         JOIN aquaflow.meters old_meter ON old_meter.meter_id=mr.old_meter_id
         JOIN aquaflow.meters new_meter ON new_meter.meter_id=mr.new_meter_id
         LEFT JOIN aquaflow.meter_readings final_reading
           ON final_reading.sync_id='METER_REPLACEMENT:' || mr.replacement_id::text
+        LEFT JOIN LATERAL (
+          SELECT b.bill_id
+          FROM aquaflow.bills b
+          LEFT JOIN aquaflow.reading_cycles rc ON rc.billing_cycle_id=b.billing_cycle_id
+          WHERE b.account_id=mr.account_id
+            AND b.status IN ('APPROVED','POSTED','PARTIALLY_PAID','PAID')
+            AND (b.reading_id=final_reading.reading_id OR rc.reading_cycle_id=final_reading.reading_cycle_id)
+          ORDER BY CASE WHEN b.reading_id=final_reading.reading_id THEN 0 ELSE 1 END,b.bill_id
+          LIMIT 1
+        ) correction_bill ON TRUE
         LEFT JOIN aquaflow.work_orders wo ON wo.work_order_id=mr.work_order_id
         WHERE mr.account_id=${accountId} AND mr.request_status='APPROVED'
           AND mr.replacement_date>=${from} AND mr.replacement_date<=${to}
@@ -1867,8 +2332,12 @@ billingRouter.get("/statements/:accountId", requireScopedPermission(SCOPED_STAFF
         }),
       ...disconnectionPostings.flatMap((posting: any) => {
         const readingDetails = `Meter ${posting.meter_number} - Prev: ${Number(posting.previous_reading)} - Curr: ${Number(posting.current_reading)} - Units: ${Number(posting.current_reading) - Number(posting.previous_reading)}`;
-        const rows = [{
+        const rows: any[] = [{
           id: `D${posting.disconnection_posting_id}`,
+          sourceType: "DISCONNECTION",
+          sourceId: posting.disconnection_posting_id,
+          readingId: posting.reading_id,
+          hasReading: true,
           date: posting.posted_at,
           particulars: "Disconnection reading charge",
           reference: posting.work_order_number,
@@ -1893,6 +2362,11 @@ billingRouter.get("/statements/:accountId", requireScopedPermission(SCOPED_STAFF
       }),
       ...meterReplacements.map((replacement: any) => ({
         id: `MR${replacement.replacement_id}`,
+        sourceType: "METER_REPLACEMENT",
+        sourceId: replacement.replacement_id,
+        readingId: replacement.reading_id,
+        billId: replacement.correction_bill_id,
+        hasReading: Boolean(replacement.reading_id),
         date: replacement.replacement_date,
         particulars: "Meter replacement",
         reference: replacement.work_order_number ?? `REP-${replacement.replacement_id}`,

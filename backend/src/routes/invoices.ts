@@ -3,6 +3,8 @@ import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { isSystemAdmin, requireAuth, requireRole } from "../middleware/auth";
+import { createPaymentLinkToken, publicAppUrl } from "../lib/paymentLink";
+import { processOne } from "./notifications";
 
 export const invoicesRouter = Router();
 invoicesRouter.use(requireAuth);
@@ -26,6 +28,8 @@ const invoiceSchema = z.object({
   discountAmount: money,
   notes: z.string().trim().max(2000).optional(),
   terms: z.string().trim().max(2000).optional(),
+  notifyOnIssue: z.boolean().default(false),
+  notificationChannels: z.array(z.enum(["SMS", "EMAIL"])).min(1).max(2).default(["SMS"]),
   items: z.array(itemSchema).min(1).max(100),
 }).refine((value) => value.dueDate >= value.invoiceDate, {
   path: ["dueDate"],
@@ -51,7 +55,71 @@ function asDay(value: string) {
 function round(value: number) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 }
-function parse<T>(schema: z.ZodType<T>, value: unknown, res: any): T | undefined {
+function customerName(customer: any) {
+  return customer?.organizationName || [customer?.firstName, customer?.middleName, customer?.lastName].filter(Boolean).join(" ") || customer?.customerNumber || "Customer";
+}
+function invoiceMoney(value: unknown) {
+  return Number(value ?? 0).toLocaleString("en-KE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function invoiceDate(value: Date) {
+  return value.toLocaleDateString("en-KE", { timeZone: "Africa/Nairobi" });
+}
+async function sendInvoiceNotifications(invoiceId: bigint, channels: Array<"SMS" | "EMAIL">, requestedBy: bigint | null) {
+  const invoice = await prisma.manualInvoice.findUnique({
+    where: { invoiceId },
+    include: { account: { include: { customer: true } } },
+  });
+  if (!invoice) throw Object.assign(new Error("Invoice not found"), { status: 404 });
+  if (!["ISSUED", "PARTIALLY_PAID", "PAID"].includes(invoice.status)) {
+    throw Object.assign(new Error("Notifications can only be sent for an issued invoice"), { status: 409 });
+  }
+  const expiresAt = new Date(Math.max(invoice.dueDate.getTime() + 30 * 86_400_000, Date.now() + 14 * 86_400_000));
+  const token = createPaymentLinkToken({ accountId: invoice.accountId.toString(), expiresAt: expiresAt.toISOString() });
+  const paymentUrl = `${publicAppUrl()}/pay/${token}`;
+  const name = customerName(invoice.account.customer);
+  const message = `Dear ${name}, invoice ${invoice.invoiceNumber} for KSh ${invoiceMoney(invoice.totalAmount)} has been issued for account ${invoice.account.accountNumber}. Balance due: KSh ${invoiceMoney(invoice.balanceAmount)} by ${invoiceDate(invoice.dueDate)}. Pay securely: ${paymentUrl}. Thank you.`;
+  const created: any[] = [];
+  const skipped: Array<{ channel: string; reason: string }> = [];
+  for (const channel of [...new Set(channels)]) {
+    const recipient = channel === "SMS" ? invoice.account.customer.phoneNumber : invoice.account.customer.emailAddress;
+    if (!recipient) {
+      skipped.push({ channel, reason: `Customer has no ${channel === "SMS" ? "phone number" : "email address"}.` });
+      continue;
+    }
+    const notification = await prisma.notification.create({ data: {
+      customerId: invoice.account.customerId,
+      accountId: invoice.accountId,
+      notificationType: "INVOICE_ISSUED",
+      channel,
+      recipient,
+      subject: channel === "EMAIL" ? `Invoice ${invoice.invoiceNumber}` : undefined,
+      messageBody: message,
+      requestedBy,
+      metadata: { targetType: "MANUAL_INVOICE", targetId: invoice.invoiceId.toString(), invoiceNumber: invoice.invoiceNumber },
+    } });
+    const processed = await processOne(notification.notificationId);
+    created.push(processed);
+    if (processed?.deliveryStatus === "FAILED") {
+      skipped.push({
+        channel,
+        reason: processed.failureReason || `${channel} delivery failed.`,
+      });
+    }
+  }
+  const sent = created.filter((entry) => entry && ["SENT", "DELIVERED"].includes(entry.deliveryStatus)).length;
+  await prisma.manualInvoiceEvent.create({ data: {
+    invoiceId,
+    eventType: "INVOICE_NOTIFICATION_SENT",
+    details: `${sent} sent; ${skipped.length} failed or skipped; channels: ${channels.join(", ")}`,
+    performedBy: requestedBy,
+  } });
+  return { created, skipped };
+}
+function parse<T extends z.ZodTypeAny>(
+  schema: T,
+  value: unknown,
+  res: any,
+): z.output<T> | undefined {
   const result = schema.safeParse(value);
   if (!result.success) {
     res.status(400).json({ error: result.error.flatten() });
@@ -126,6 +194,8 @@ invoicesRouter.post("/", manager, async (req, res, next) => {
           customerReference: data.customerReference || undefined,
           notes: data.notes || undefined,
           terms: data.terms || undefined,
+          notifyOnIssue: data.notifyOnIssue,
+          notificationChannels: data.notificationChannels,
           createdBy: actor(req),
           items: { create: calculated.items },
         },
@@ -176,7 +246,32 @@ invoicesRouter.post("/:id/issue", manager, async (req, res, next) => {
       await tx.manualInvoiceEvent.create({ data: { invoiceId, eventType: "INVOICE_ISSUED", previousStatus: "APPROVED", newStatus: "ISSUED", performedBy: actor(req) } });
       return updated;
     });
-    res.json(result);
+    const channels = Array.isArray(result.notificationChannels)
+      ? result.notificationChannels.filter((value): value is "SMS" | "EMAIL" => value === "SMS" || value === "EMAIL")
+      : [];
+    let notificationResult = null;
+    if (result.notifyOnIssue && channels.length) {
+      try {
+        notificationResult = await sendInvoiceNotifications(invoiceId, channels, actor(req));
+      } catch (error: any) {
+        notificationResult = { created: [], skipped: channels.map((channel) => ({ channel, reason: error.message ?? "Notification could not be sent." })) };
+      }
+    }
+    res.json({ ...result, notificationResult });
+  } catch (error: any) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    next(error);
+  }
+});
+
+invoicesRouter.post("/:id/notifications", manager, async (req, res, next) => {
+  const invoiceId = parse(id, req.params.id, res);
+  const data = parse(z.object({ channels: z.array(z.enum(["SMS", "EMAIL"])).min(1).max(2) }), req.body, res);
+  if (!invoiceId || !data) return;
+  try {
+    const result = await sendInvoiceNotifications(invoiceId, data.channels, actor(req));
+    if (!result.created.length) return res.status(409).json({ error: result.skipped.map((item) => item.reason).join(" "), ...result });
+    res.status(201).json(result);
   } catch (error: any) {
     if (error.status) return res.status(error.status).json({ error: error.message });
     next(error);
