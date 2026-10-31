@@ -173,9 +173,11 @@ function ColumnChart({ items }: { items: ChartItem[] }) {
 }
 
 function CollectionTrend({ rows }: { rows: Row[] }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(1000);
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const chartContentWidth = Math.max(900, 110 + Math.max(0, rows.length - 1) * 34);
   const height = 280;
   const left = width < 520 ? 52 : 70;
   const right = 22;
@@ -190,7 +192,15 @@ function CollectionTrend({ rows }: { rows: Row[] }) {
     const observer = new ResizeObserver(updateWidth);
     observer.observe(element);
     return () => observer.disconnect();
-  }, []);
+  }, [rows.length]);
+
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      const scroller = scrollRef.current;
+      if (scroller) scroller.scrollLeft = scroller.scrollWidth - scroller.clientWidth;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [rows.length]);
 
   const maximumValue = Math.max(1, ...rows.map((row) => number(row.amount)));
   const magnitude = 10 ** Math.floor(Math.log10(maximumValue));
@@ -244,9 +254,15 @@ function CollectionTrend({ rows }: { rows: Row[] }) {
         <div><span className="text-xs text-slate-500">Month total</span><strong className="ml-2 text-lg text-slate-900">{money(total)}</strong></div>
         <div><span className="text-xs text-slate-500">Posted payments</span><strong className="ml-2 text-lg text-slate-900">{payments.toLocaleString()}</strong></div>
       </div>
-      <div ref={chartRef} className="w-full overflow-hidden rounded-xl border border-emerald-100 bg-gradient-to-b from-emerald-50/70 to-white">
+      <div className="w-full overflow-hidden rounded-xl border border-emerald-100 bg-gradient-to-b from-emerald-50/70 to-white">
         {points.length ? (
-          <svg viewBox={`0 0 ${width} ${height}`} className="block h-[280px] w-full" role="img" aria-label="Daily collection trend for all days in the current month" onMouseLeave={() => setActiveIndex(null)}>
+          <div
+            ref={scrollRef}
+            className="w-full overflow-x-auto overflow-y-hidden overscroll-x-contain [scrollbar-gutter:stable]"
+            aria-label="Collection trend timeline. Showing the latest dates; scroll horizontally for earlier dates."
+          >
+            <div ref={chartRef} style={{ width: chartContentWidth }}>
+              <svg viewBox={`0 0 ${width} ${height}`} className="block h-[280px] w-full" role="img" aria-label="Daily collection trend for all days in the current month" onMouseLeave={() => setActiveIndex(null)}>
             <defs>
               <linearGradient id="dashboard-collection-area" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor="#10b981" stopOpacity="0.28" />
@@ -295,7 +311,9 @@ function CollectionTrend({ rows }: { rows: Row[] }) {
                 </text>
               </g>
             )}
-          </svg>
+              </svg>
+            </div>
+          </div>
         ) : (
           <div className="grid h-[280px] place-items-center text-sm text-slate-400">No collection data is available.</div>
         )}
